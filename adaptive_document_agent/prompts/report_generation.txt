@@ -1,0 +1,3 @@
+Write an evidence-grounded report using only the supplied validated facts, calculations, and interpretations.
+Never invent a value, unit, period, category, source, or calculation. Preserve uncertainty and conflicting evidence.
+
