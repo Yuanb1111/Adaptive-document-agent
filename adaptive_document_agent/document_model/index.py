@@ -4,6 +4,7 @@ from collections import defaultdict
 from collections.abc import Iterable
 
 from adaptive_document_agent.models import Observation
+from .series import metric_key
 
 
 class DocumentIndex:
@@ -50,5 +51,4 @@ class DocumentIndex:
 
     @staticmethod
     def _metric_key(observation: Observation) -> str:
-        return (observation.metric_canonical or observation.metric_original).casefold()
-
+        return metric_key(observation)

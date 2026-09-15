@@ -2,7 +2,7 @@
 
 import re
 
-from adaptive_document_agent.document_model import DocumentIndex, best_period_series, conflicting_groups, metric_key, paired_observations, period_sort_key
+from adaptive_document_agent.document_model import DocumentIndex, best_period_series, conflicting_groups, metric_key, metric_label, paired_observations, period_sort_key
 from adaptive_document_agent.models import AnalysisResult, AnalysisTask, ChartPlan, ChartType, Observation
 from adaptive_document_agent.utils.ids import stable_id
 
@@ -118,7 +118,7 @@ class ChartPlanner:
         for _, metric, series in sorted(candidates, key=lambda item: (item[0], item[1]), reverse=True)[:maximum]:
             identifiers = [item.id for item in series]
             pages = sorted({source.page for item in series for source in item.evidence})
-            label = series[0].metric_canonical or series[0].metric_original
+            label = metric_label(series[0])
             table_context = series[0].dimensions.get("table_context")
             title = f"{table_context} — {label}" if self._displayable_context(table_context, label) else label
             default_type: ChartType = "line" if len(series) >= 4 else "bar"

@@ -10,8 +10,30 @@ from math import isclose
 from adaptive_document_agent.models import Observation
 
 
+def metric_label(observation: Observation) -> str:
+    """Return the most specific trustworthy display name for a metric.
+
+    Semantic resolution may map a qualified source label such as
+    ``Revenue: % of Revenue`` to the broader canonical name ``Revenue``.
+    Keeping the source qualifier prevents amounts, margins, shares, and
+    per-unit values from collapsing into one analytical series.
+    """
+    original = " ".join(observation.metric_original.split()).strip()
+    canonical = " ".join((observation.metric_canonical or "").split()).strip()
+    if not canonical:
+        return original
+    original_folded = original.casefold()
+    canonical_folded = canonical.casefold()
+    if original_folded == canonical_folded:
+        return canonical
+    qualifier_terms = ("%", "percent", "percentage", "margin", "rate", "ratio", "share", " per ", " of ")
+    if canonical_folded in original_folded or any(term in original_folded for term in qualifier_terms):
+        return original
+    return canonical
+
+
 def metric_key(observation: Observation) -> str:
-    return (observation.metric_canonical or observation.metric_original).casefold()
+    return metric_label(observation).casefold()
 
 
 def context_key(observation: Observation) -> tuple[object, ...]:

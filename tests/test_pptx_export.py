@@ -96,3 +96,15 @@ def test_pptx_export_contains_editable_chart_and_table() -> None:
         chart_xml = b"".join(archive.read(name) for name in names if name.startswith("ppt/charts/chart"))
         assert b'axId val="-' not in chart_xml
         assert b'crossAx val="-' not in chart_xml
+
+
+def test_pptx_export_skips_constant_period_chart() -> None:
+    result = _result()
+    for observation in result.observations:
+        observation.value = 100.0
+        observation.raw_value = "100"
+
+    payload = export_pptx(result)
+    deck = Presentation(io.BytesIO(payload))
+
+    assert not any(shape.has_chart for slide in deck.slides for shape in slide.shapes)

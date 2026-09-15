@@ -6,21 +6,24 @@ import io
 from collections import defaultdict
 from typing import Any, Iterable
 
-from adaptive_document_agent.document_model import DocumentIndex, paired_observations, period_sort_key
+from adaptive_document_agent.document_model import DocumentIndex, metric_key, metric_label, paired_observations, period_sort_key
 from adaptive_document_agent.models import ChartPlan, Observation, PipelineResult
 
 
 SLIDE_WIDTH = 13.333
 SLIDE_HEIGHT = 7.5
-NAVY = "102A43"
-INK = "243B53"
-MUTED = "627D98"
-TEAL = "169C8C"
-AMBER = "F4B942"
-PALE = "EAF2F8"
+NAVY = "142442"
+MIDNIGHT = "08162F"
+INK = "1B2A41"
+MUTED = "617083"
+BLUE = "0874E8"
+TEAL = "13A6B8"
+VIOLET = "7A3FF2"
+AMBER = "F2B544"
+CORAL = "E9634C"
 WHITE = "FFFFFF"
-LIGHT = "F7F9FC"
-RED = "C84B31"
+IVORY = "F3F2EA"
+STONE = "D8D6CA"
 FONT = "Aptos"
 TITLE_FONT = "Aptos Display"
 
@@ -41,8 +44,8 @@ def build_presentation(result: PipelineResult) -> bytes:
     _add_evidence_overview(presentation, result)
     index = DocumentIndex(result.observations)
     usable_charts = _usable_charts(result)
-    for plan in usable_charts[:8]:
-        _add_chart_slide(presentation, plan, index)
+    for ordinal, plan in enumerate(usable_charts[:8]):
+        _add_chart_slide(presentation, plan, index, ordinal=ordinal)
     if not usable_charts:
         _add_no_chart_slide(presentation, result)
     _add_findings_slide(presentation, result)
@@ -60,25 +63,32 @@ def _add_cover(presentation: Any, result: PipelineResult) -> None:
     from pptx.util import Inches
 
     slide = presentation.slides.add_slide(presentation.slide_layouts[6])
-    _background(slide, NAVY)
-    accent = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0), Inches(0), Inches(0.18), Inches(SLIDE_HEIGHT))
+    _background(slide, MIDNIGHT)
+    accent = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0), Inches(0), Inches(4.55), Inches(0.13))
+    _solid_shape(accent, BLUE)
+    accent = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(4.55), Inches(0), Inches(2.35), Inches(0.13))
     _solid_shape(accent, TEAL)
+    accent = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(6.9), Inches(0), Inches(1.25), Inches(0.13))
+    _solid_shape(accent, VIOLET)
+    _text(slide, "DOCUMENT INTELLIGENCE", 0.78, 0.62, 4.4, 0.28, size=12, color=TEAL, bold=True)
+    _text(slide, f"{result.document.page_count:03d}", 9.25, 0.48, 3.3, 1.25, size=62, color="263958", bold=True, font=TITLE_FONT, align="right")
     title = result.report_plan.title or "Adaptive Document Analysis"
-    _text(slide, title, 0.8, 1.45, 11.3, 1.45, size=34, color=WHITE, bold=True, font=TITLE_FONT)
-    _text(slide, result.profile.document_type, 0.82, 3.05, 8.8, 0.45, size=18, color="BFD7EA", bold=True)
-    purpose = _truncate(result.profile.document_purpose, 260)
-    _text(slide, purpose, 0.82, 3.62, 10.9, 1.25, size=17, color=WHITE)
+    _text(slide, title, 0.78, 1.45, 11.25, 1.55, size=38, color=WHITE, bold=True, font=TITLE_FONT)
+    _text(slide, result.profile.document_type, 0.8, 3.2, 8.8, 0.45, size=18, color="A9C7E4", bold=True)
+    purpose = _summary_text(result.profile.document_purpose, 300)
+    _text(slide, purpose, 0.8, 3.78, 10.8, 1.3, size=18, color=WHITE)
     ranges = _page_ranges(result)
-    _text(slide, f"Analysis scope: {ranges}", 0.82, 6.35, 5.8, 0.35, size=12, color="BFD7EA")
-    _text(slide, "Evidence-grounded presentation", 8.2, 6.35, 4.25, 0.35, size=12, color="BFD7EA", align="right")
+    _rule(slide, 0.8, 6.05, 11.75, 0.012, "344B6D")
+    _text(slide, f"Analysis scope  {ranges}", 0.8, 6.28, 5.8, 0.35, size=12, color="A9C7E4")
+    _text(slide, "Evidence-grounded presentation", 8.15, 6.28, 4.4, 0.35, size=12, color="A9C7E4", align="right")
 
 
 def _add_evidence_overview(presentation: Any, result: PipelineResult) -> None:
-    slide = _base_slide(presentation, "Evidence overview", "What the analysis retained and validated")
+    slide = _base_slide(presentation, "Analysis at a glance", "The retained evidence and current analytical scope", background=IVORY)
     metrics = {
-        (item.metric_canonical or item.metric_original).casefold()
+        metric_key(item)
         for item in result.observations
-        if (item.metric_canonical or item.metric_original).casefold() not in {"page", "pages"}
+        if metric_key(item) not in {"page", "pages"}
     }
     source_pages = {source.page for item in result.observations for source in item.evidence}
     values = [
@@ -87,34 +97,55 @@ def _add_evidence_overview(presentation: Any, result: PipelineResult) -> None:
         (str(len(result.charts)), "validated charts"),
         (str(len(source_pages)), "evidence pages"),
     ]
+    colors = (BLUE, TEAL, VIOLET, CORAL)
     for index, (value, label) in enumerate(values):
         left = 0.75 + index * 3.08
-        _text(slide, value, left, 1.75, 2.45, 0.8, size=34, color=TEAL, bold=True, font=TITLE_FONT)
-        _text(slide, label, left, 2.52, 2.45, 0.4, size=15, color=MUTED)
+        _text(slide, value, left, 1.68, 2.45, 0.8, size=36, color=colors[index], bold=True, font=TITLE_FONT)
+        _text(slide, label, left, 2.46, 2.45, 0.4, size=15, color=INK, bold=True)
         if index < len(values) - 1:
-            _rule(slide, left + 2.55, 1.75, 0.02, 1.2, PALE)
-    _text(slide, "Document purpose", 0.75, 3.55, 3.0, 0.4, size=17, color=INK, bold=True)
-    _text(slide, _truncate(result.profile.document_purpose, 420), 0.75, 4.05, 11.7, 1.15, size=17, color=INK)
-    focus = _truncate(result.profile.analysis_focus or "Automatic discovery", 280)
-    _text(slide, "Analysis focus", 0.75, 5.55, 2.2, 0.35, size=15, color=MUTED, bold=True)
-    _text(slide, focus, 2.35, 5.5, 10.0, 0.7, size=16, color=INK)
+            _rule(slide, left + 2.55, 1.72, 0.018, 1.15, STONE)
+    _rule(slide, 0.75, 3.12, 11.85, 0.018, STONE)
+    _text(slide, "Document purpose", 0.75, 3.48, 2.6, 0.35, size=14, color=BLUE, bold=True)
+    _text(slide, _summary_text(result.profile.document_purpose, 460), 0.75, 3.9, 7.55, 1.55, size=19, color=INK, bold=True)
+    focus = _summary_text(result.profile.analysis_focus or "Automatic discovery", 280)
+    _text(slide, "Analysis focus", 9.05, 3.48, 2.8, 0.35, size=14, color=VIOLET, bold=True)
+    _text(slide, focus, 9.05, 3.9, 3.15, 1.42, size=17, color=INK)
+    _text(slide, f"Pages reviewed  { _page_ranges(result) }", 9.05, 5.55, 3.15, 0.4, size=13, color=MUTED)
 
 
-def _add_chart_slide(presentation: Any, plan: ChartPlan, index: DocumentIndex) -> None:
+def _add_chart_slide(presentation: Any, plan: ChartPlan, index: DocumentIndex, *, ordinal: int) -> None:
     from pptx.chart.data import CategoryChartData, XyChartData
     from pptx.enum.chart import XL_CHART_TYPE, XL_DATA_LABEL_POSITION, XL_LEGEND_POSITION
     from pptx.util import Inches, Pt
 
-    slide = _base_slide(presentation, _presentation_chart_title(plan.title), _truncate(plan.question, 150))
     observations = [index.get(identifier) for identifier in plan.observation_ids]
     values = [item for item in observations if item and item.value is not None]
+    title = _presentation_chart_title(plan.title, values)
+    layout = ordinal % 3
+    if layout == 0:
+        slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+        _background(slide, MIDNIGHT)
+        _text(slide, "ANALYSIS", 0.72, 0.48, 2.0, 0.28, size=11, color=TEAL, bold=True)
+        _text(slide, title, 0.72, 1.03, 4.0, 1.18, size=29, color=WHITE, bold=True, font=TITLE_FONT)
+        _text(slide, _summary_text(plan.question, 180), 0.74, 2.36, 3.85, 1.05, size=15, color="BBD0E6")
+        chart_box = (4.72, 0.7, 7.9, 5.92)
+        _panel(slide, *chart_box, fill=WHITE)
+        chart_bounds = (5.02, 1.05, 7.3, 5.05)
+    elif layout == 1:
+        slide = _base_slide(presentation, title, background=IVORY)
+        chart_bounds = (0.72, 1.45, 8.35, 5.15)
+        _text(slide, "KEY MOVEMENT", 9.45, 1.62, 2.6, 0.28, size=11, color=VIOLET, bold=True)
+        _rule(slide, 9.43, 2.02, 2.9, 0.02, STONE)
+    else:
+        slide = _base_slide(presentation, title, _summary_text(plan.question, 150), background=WHITE)
+        chart_bounds = (0.72, 1.58, 11.85, 4.82)
     if not values:
         _text(slide, "The chart plan contains no usable values.", 0.85, 2.4, 11.4, 0.8, size=22, color=MUTED, align="center")
         return
 
     max_abs = max(abs(float(item.value or 0)) for item in values)
     scale, scale_label = _display_scale(values, max_abs)
-    chart_left, chart_top, chart_width, chart_height = Inches(0.78), Inches(1.65), Inches(11.82), Inches(4.65)
+    chart_left, chart_top, chart_width, chart_height = (Inches(value) for value in chart_bounds)
 
     if plan.chart_type == "scatter" and plan.x_metric and plan.y_metric:
         data = XyChartData()
@@ -148,7 +179,7 @@ def _add_chart_slide(presentation: Any, plan: ChartPlan, index: DocumentIndex) -
         chart.legend.font.size = Pt(11)
     chart.chart_style = 10
     for series_index, series in enumerate(chart.series):
-        color = (TEAL, NAVY, AMBER, RED)[series_index % 4]
+        color = (BLUE, TEAL, VIOLET, CORAL)[series_index % 4]
         try:
             series.format.fill.solid()
             series.format.fill.fore_color.rgb = _rgb(color)
@@ -160,7 +191,7 @@ def _add_chart_slide(presentation: Any, plan: ChartPlan, index: DocumentIndex) -
         labels = chart.plots[0].data_labels
         labels.position = XL_DATA_LABEL_POSITION.OUTSIDE_END if plan.chart_type not in {"line", "area", "pie"} else XL_DATA_LABEL_POSITION.ABOVE
         labels.font.name = FONT
-        labels.font.size = Pt(10)
+        labels.font.size = Pt(11)
         labels.number_format = "0.0"
     except (AttributeError, ValueError):
         pass
@@ -175,79 +206,106 @@ def _add_chart_slide(presentation: Any, plan: ChartPlan, index: DocumentIndex) -
         pass
 
     unit = _unit_label(values, scale_label)
-    _text(slide, unit, 0.82, 6.35, 5.4, 0.35, size=11, color=MUTED)
     pages = ", ".join(map(str, plan.source_pages)) or "not available"
-    _text(slide, f"Source pages: {pages}", 7.0, 6.35, 5.55, 0.35, size=11, color=MUTED, align="right")
+    movement = _change_summary(values, scale)
+    if layout == 0:
+        if movement:
+            _text(slide, movement[0], 0.72, 4.1, 3.9, 0.8, size=30, color=AMBER, bold=True, font=TITLE_FONT)
+            _text(slide, movement[1], 0.74, 4.92, 3.82, 0.72, size=14, color=WHITE)
+        _text(slide, unit, 0.74, 6.25, 3.4, 0.3, size=11, color="9CB6D0")
+        _text(slide, f"Source pages  {pages}", 8.25, 6.83, 4.35, 0.25, size=10, color="9CB6D0", align="right")
+    elif layout == 1:
+        if movement:
+            _text(slide, movement[0], 9.42, 2.35, 3.0, 0.82, size=31, color=VIOLET, bold=True, font=TITLE_FONT)
+            _text(slide, movement[1], 9.44, 3.2, 2.85, 1.05, size=15, color=INK)
+        else:
+            _text(slide, f"{len(values)}", 9.42, 2.35, 3.0, 0.82, size=31, color=VIOLET, bold=True, font=TITLE_FONT)
+            _text(slide, "comparable reported observations", 9.44, 3.2, 2.85, 0.72, size=15, color=INK)
+        _text(slide, unit, 9.44, 5.2, 2.85, 0.35, size=12, color=MUTED)
+        _text(slide, f"Source pages  {pages}", 9.44, 5.72, 2.85, 0.55, size=11, color=MUTED)
+    else:
+        _text(slide, unit, 0.76, 6.48, 5.4, 0.35, size=11, color=MUTED)
+        if movement:
+            _text(slide, f"{movement[0]}  {movement[1]}", 4.0, 6.43, 5.7, 0.42, size=13, color=BLUE, bold=True, align="center")
+        _text(slide, f"Source pages  {pages}", 9.2, 6.48, 3.35, 0.35, size=11, color=MUTED, align="right")
 
 
 def _add_no_chart_slide(presentation: Any, result: PipelineResult) -> None:
-    slide = _base_slide(presentation, "Chart availability", "Why no visual passed the evidence checks")
-    _text(slide, "No chart met the current usefulness and evidence thresholds.", 0.9, 2.0, 11.4, 0.8, size=26, color=INK, bold=True, align="center")
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    _background(slide, MIDNIGHT)
+    _text(slide, "0", 0.72, 0.85, 3.2, 1.5, size=72, color=TEAL, bold=True, font=TITLE_FONT)
+    _text(slide, "No chart passed the evidence checks", 3.25, 1.18, 8.7, 0.9, size=30, color=WHITE, bold=True, font=TITLE_FONT)
     _text(
         slide,
         "The presentation preserves this outcome instead of drawing unsupported comparisons. Review the extracted periods, units and validation warnings before using the data for decisions.",
-        1.45,
-        3.15,
-        10.4,
-        1.35,
-        size=19,
-        color=MUTED,
-        align="center",
+        3.27,
+        2.45,
+        8.6,
+        1.55,
+        size=18,
+        color="BBD0E6",
     )
-    _text(slide, f"Retained observations: {len(result.observations)}", 4.15, 5.2, 5.0, 0.45, size=17, color=TEAL, bold=True, align="center")
+    _rule(slide, 3.27, 4.45, 8.6, 0.015, "344B6D")
+    _text(slide, f"{len(result.observations)} retained observations remain available in the evidence appendix", 3.27, 4.75, 8.6, 0.55, size=16, color=AMBER, bold=True)
 
 
 def _add_findings_slide(presentation: Any, result: PipelineResult) -> None:
-    slide = _base_slide(presentation, "Key findings", "Evidence-backed conclusions from the analysis")
-    findings = sorted(result.insights, key=lambda item: (item.importance, item.confidence), reverse=True)[:5]
+    slide = _base_slide(presentation, "Key findings", "Evidence-backed conclusions from the analysis", background=IVORY)
+    findings = sorted(result.insights, key=lambda item: (item.importance, item.confidence), reverse=True)[:4]
     if not findings:
         _text(slide, "No validated analytical findings were produced.", 0.9, 2.4, 11.4, 0.8, size=22, color=MUTED, align="center")
         return
-    top = 1.55
+    top = 1.48
+    colors = (BLUE, TEAL, VIOLET, CORAL)
     for number, finding in enumerate(findings, start=1):
-        _text(slide, f"{number:02d}", 0.78, top + 0.04, 0.52, 0.35, size=14, color=TEAL, bold=True)
-        _text(slide, _truncate(finding.title, 90), 1.38, top, 4.1, 0.43, size=17, color=INK, bold=True)
+        color = colors[(number - 1) % len(colors)]
+        _text(slide, f"{number:02d}", 0.76, top, 0.62, 0.45, size=16, color=color, bold=True)
+        _text(slide, _summary_text(finding.title, 130), 1.48, top - 0.02, 3.95, 0.68, size=18, color=INK, bold=True)
         pages = sorted({source.page for source in finding.evidence})
         source = f"Pages {', '.join(map(str, pages))}" if pages else "Calculated from retained evidence"
-        _text(slide, _truncate(finding.narrative, 250), 5.5, top, 5.85, 0.77, size=15, color=INK)
-        _text(slide, source, 11.35, top + 0.03, 1.15, 0.55, size=9, color=MUTED, align="right")
-        _rule(slide, 1.38, top + 0.86, 11.1, 0.012, PALE)
-        top += 1.0
+        _text(slide, _summary_text(finding.narrative, 330), 5.58, top - 0.01, 5.65, 0.92, size=15, color=INK)
+        _text(slide, source, 11.25, top + 0.02, 1.2, 0.55, size=9, color=MUTED, align="right")
+        _rule(slide, 1.48, top + 1.05, 10.98, 0.012, STONE)
+        top += 1.25
 
 
 def _add_quality_slide(presentation: Any, result: PipelineResult) -> None:
-    slide = _base_slide(presentation, "Data quality and limitations", "Items that affect interpretation")
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    _background(slide, NAVY)
+    _text(slide, "DATA QUALITY", 0.75, 0.55, 2.8, 0.3, size=11, color=AMBER, bold=True)
+    _text(slide, "Limits that affect interpretation", 0.75, 1.02, 8.9, 0.75, size=31, color=WHITE, bold=True, font=TITLE_FONT)
     messages = list(dict.fromkeys([
         *result.profile.data_quality_notes,
         *(warning.message for warning in result.validation_warnings if warning.severity in {"error", "warning"}),
-    ]))[:7]
+    ]))[:5]
     if not messages:
         messages = ["No material data-quality warning was retained for this analysis."]
-    top = 1.55
-    for message in messages:
-        _text(slide, "•", 0.85, top, 0.25, 0.35, size=18, color=AMBER, bold=True)
-        _text(slide, _truncate(message, 280), 1.18, top, 11.0, 0.62, size=15, color=INK)
-        top += 0.74
+    top = 2.08
+    for index, message in enumerate(messages, start=1):
+        _text(slide, f"{index:02d}", 0.78, top, 0.55, 0.38, size=14, color=AMBER, bold=True)
+        _text(slide, _summary_text(message, 360), 1.5, top - 0.03, 10.55, 0.78, size=16, color=WHITE)
+        _rule(slide, 1.5, top + 0.77, 10.65, 0.01, "3B506D")
+        top += 0.93
 
 
 def _add_evidence_table_slide(presentation: Any, result: PipelineResult) -> None:
     from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
     from pptx.util import Inches, Pt
 
-    slide = _base_slide(presentation, "Evidence appendix", "Selected reported values with page-level provenance")
-    observations = _representative_observations(result, maximum=10)
+    slide = _base_slide(presentation, "Evidence appendix", "Selected reported values with page-level provenance", background=IVORY)
+    observations = _representative_observations(result, maximum=9)
     headers = ["Metric", "Period", "Reported value", "Unit", "Page"]
     rows = [
         [
-            _truncate(item.metric_canonical or item.metric_original, 48),
-            item.period or "—",
+            _summary_text(metric_label(item), 58),
+            item.period or "-",
             item.raw_value,
             "percent" if item.unit == "percent" else item.raw_unit or _unit_label([item], ""),
             ", ".join(map(str, sorted({source.page for source in item.evidence}))),
         ]
         for item in observations
     ]
-    table_shape = slide.shapes.add_table(len(rows) + 1, len(headers), Inches(0.72), Inches(1.55), Inches(11.9), Inches(5.15))
+    table_shape = slide.shapes.add_table(len(rows) + 1, len(headers), Inches(0.72), Inches(1.55), Inches(11.9), Inches(4.95))
     table = table_shape.table
     widths = [4.55, 1.28, 2.05, 2.7, 0.95]
     for column, width in zip(table.columns, widths):
@@ -255,26 +313,26 @@ def _add_evidence_table_slide(presentation: Any, result: PipelineResult) -> None
     for column, header in enumerate(headers):
         cell = table.cell(0, column)
         cell.text = header
-        _cell_style(cell, fill=NAVY, color=WHITE, bold=True, size=13)
+        _cell_style(cell, fill=NAVY, color=WHITE, bold=True, size=12)
     for row_index, values in enumerate(rows, start=1):
         for column, value in enumerate(values):
             cell = table.cell(row_index, column)
             cell.text = str(value)
-            _cell_style(cell, fill=WHITE if row_index % 2 else LIGHT, color=INK, bold=False, size=11)
+            _cell_style(cell, fill=WHITE if row_index % 2 else "E9E8DF", color=INK, bold=False, size=11)
             cell.vertical_anchor = MSO_ANCHOR.MIDDLE
             cell.text_frame.paragraphs[0].alignment = PP_ALIGN.RIGHT if column in {2, 4} else PP_ALIGN.LEFT
     for row in table.rows:
-        row.height = Inches(0.45)
-    _text(slide, "Values remain traceable to the original PDF pages. See the JSON and CSV exports for the complete retained fact base.", 0.76, 6.78, 11.75, 0.28, size=10, color=MUTED)
+        row.height = Inches(0.47)
+    _text(slide, "The JSON and CSV exports contain the complete retained fact base.", 0.76, 6.72, 11.75, 0.28, size=10, color=MUTED)
 
 
-def _base_slide(presentation: Any, title: str, subtitle: str = "") -> Any:
+def _base_slide(presentation: Any, title: str, subtitle: str = "", *, background: str = WHITE) -> Any:
     slide = presentation.slides.add_slide(presentation.slide_layouts[6])
-    _background(slide, WHITE)
-    _text(slide, title, 0.72, 0.38, 11.7, 0.58, size=27, color=NAVY, bold=True, font=TITLE_FONT)
+    _background(slide, background)
+    _text(slide, title, 0.72, 0.34, 11.7, 0.66, size=29, color=NAVY, bold=True, font=TITLE_FONT)
     if subtitle:
-        _text(slide, subtitle, 0.74, 1.0, 11.4, 0.3, size=12, color=MUTED)
-    _rule(slide, 0.72, 1.34, 11.9, 0.025, TEAL)
+        _text(slide, subtitle, 0.74, 1.02, 11.4, 0.3, size=12, color=MUTED)
+    _rule(slide, 0.72, 1.31, 11.9, 0.025, BLUE)
     return slide
 
 
@@ -320,6 +378,15 @@ def _rule(slide: Any, left: float, top: float, width: float, height: float, colo
     _solid_shape(shape, color)
 
 
+def _panel(slide: Any, left: float, top: float, width: float, height: float, *, fill: str) -> Any:
+    from pptx.enum.shapes import MSO_SHAPE
+    from pptx.util import Inches
+
+    shape = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(left), Inches(top), Inches(width), Inches(height))
+    _solid_shape(shape, fill)
+    return shape
+
+
 def _solid_shape(shape: Any, color: str) -> None:
     shape.fill.solid()
     shape.fill.fore_color.rgb = _rgb(color)
@@ -352,7 +419,7 @@ def _series_rows(plan: ChartPlan, observations: list[Observation]) -> list[tuple
     for item in sorted(observations, key=lambda value: period_sort_key(value.period)):
         label = item.dimensions.get(plan.x_dimension) if plan.x_dimension else None
         label = label or item.period or next(iter(item.dimensions.values()), item.entity or item.metric_original)
-        series = item.entity or (item.metric_canonical or item.metric_original)
+        series = item.entity or metric_label(item)
         rows.append((str(label), str(series), float(item.value or 0)))
     return rows
 
@@ -383,12 +450,12 @@ def _representative_observations(result: PipelineResult, *, maximum: int) -> lis
     groups: dict[str, list[Observation]] = defaultdict(list)
     for item in result.observations:
         if item.value is not None and item.evidence:
-            groups[(item.metric_canonical or item.metric_original).casefold()].append(item)
+            groups[metric_key(item)].append(item)
     preferred = [metric.casefold().strip() for metric in result.profile.metrics if metric.strip()]
     ordered = sorted(
         groups.values(),
         key=lambda items: (
-            any(name in (items[0].metric_canonical or items[0].metric_original).casefold() for name in preferred),
+            any(name in metric_key(items[0]) for name in preferred),
             len({item.period for item in items if item.period}),
             max(item.confidence for item in items),
         ),
@@ -396,7 +463,11 @@ def _representative_observations(result: PipelineResult, *, maximum: int) -> lis
     )
     output: list[Observation] = []
     for items in ordered:
-        output.extend(sorted(items, key=lambda item: period_sort_key(item.period))[:3])
+        distinct: dict[tuple[object, ...], Observation] = {}
+        for item in sorted(items, key=lambda value: (period_sort_key(value.period), -value.confidence)):
+            key = (item.period, item.raw_value, item.unit, item.currency)
+            distinct.setdefault(key, item)
+        output.extend(list(distinct.values())[:3])
         if len(output) >= maximum:
             break
     return output[:maximum]
@@ -425,19 +496,67 @@ def _number_slides(presentation: Any) -> None:
 
 def _page_ranges(result: PipelineResult) -> str:
     ranges = result.profile.analysis_page_ranges
-    return ", ".join(f"{start}–{end}" for start, end in ranges) if ranges else f"1–{result.document.page_count}"
+    return ", ".join(f"{start}-{end}" for start, end in ranges) if ranges else f"1-{result.document.page_count}"
 
 
-def _truncate(value: str, maximum: int) -> str:
-    clean = " ".join(value.split())
-    return clean if len(clean) <= maximum else clean[: maximum - 1].rstrip() + "…"
+def _summary_text(value: str, maximum: int) -> str:
+    clean = " ".join(value.replace("—", "-").replace("–", "-").split())
+    if len(clean) <= maximum:
+        return clean
+    clipped = clean[:maximum].rsplit(" ", 1)[0].rstrip(" ,:;-")
+    sentence = max(clipped.rfind(". "), clipped.rfind("? "), clipped.rfind("! "))
+    return clipped[: sentence + 1] if sentence >= maximum // 2 else clipped
 
 
-def _presentation_chart_title(value: str) -> str:
-    title = value.replace(" — Reported Values", "").strip()
-    if " — " in title and len(title) > 66:
+def _presentation_chart_title(value: str, observations: list[Observation]) -> str:
+    title = value.replace(" — Reported Values", "").replace(" - Reported Values", "").strip()
+    labels = list(dict.fromkeys(metric_label(item) for item in observations))
+    if len(labels) == 1:
+        source_label = labels[0]
+        canonical_names = {(item.metric_canonical or "").casefold() for item in observations}
+        if any(name and name in title.casefold() for name in canonical_names) and source_label.casefold() not in title.casefold():
+            title = source_label
+    if " — " in title and len(title) > 72:
         title = title.split(" — ", 1)[1]
-    return _truncate(title, 66)
+    return _summary_text(title, 78)
+
+
+def _change_summary(observations: list[Observation], scale: float) -> tuple[str, str] | None:
+    series_names = {metric_key(item) for item in observations}
+    if len(series_names) != 1:
+        return None
+    by_period: dict[str, Observation] = {}
+    for item in observations:
+        if item.period and item.value is not None:
+            current = by_period.get(item.period)
+            if current is None or item.confidence > current.confidence:
+                by_period[item.period] = item
+    ordered = sorted(by_period.values(), key=lambda item: period_sort_key(item.period))
+    if len(ordered) < 2:
+        return None
+    first, last = ordered[0], ordered[-1]
+    start, end = float(first.value or 0), float(last.value or 0)
+    if start < 0 <= end:
+        headline = "Turned positive"
+    elif start > 0 >= end:
+        headline = "Turned negative"
+    elif first.unit == "percent" or last.unit == "percent":
+        headline = f"{end - start:+.1f} pp"
+    elif start:
+        headline = f"{(end / start - 1) * 100:+.1f}%"
+    else:
+        headline = f"{(end - start) / scale:+,.1f}"
+    detail = f"{_format_scaled(start, scale)} in {first.period} to {_format_scaled(end, scale)} in {last.period}"
+    return headline, detail
+
+
+def _format_scaled(value: float, scale: float) -> str:
+    scaled = value / scale
+    if abs(scaled) >= 100:
+        return f"{scaled:,.0f}"
+    if abs(scaled) >= 10:
+        return f"{scaled:,.1f}"
+    return f"{scaled:,.2f}"
 
 
 def _usable_charts(result: PipelineResult) -> list[ChartPlan]:
@@ -450,6 +569,12 @@ def _usable_charts(result: PipelineResult) -> list[ChartPlan]:
             for item in observations
             if item and item.value is not None
         }
-        if len(contexts) >= 2:
+        numeric = [float(item.value) for item in observations if item and item.value is not None]
+        # A constant time series communicates no movement and often reflects a
+        # tautological percentage row. Keep category comparisons, but avoid
+        # spending a presentation slide on a flat period chart.
+        has_periods = len({item.period for item in observations if item and item.period}) >= 2
+        has_movement = len({round(value, 12) for value in numeric}) >= 2
+        if len(contexts) >= 2 and (not has_periods or has_movement):
             output.append(plan)
     return output

@@ -4,6 +4,7 @@ from collections.abc import Iterable
 
 from adaptive_document_agent.models import Observation
 from .index import DocumentIndex
+from .series import metric_key
 
 
 class DocumentModelBuilder:
@@ -11,7 +12,7 @@ class DocumentModelBuilder:
         unique: dict[tuple[object, ...], Observation] = {}
         for observation in observations:
             key = (
-                (observation.metric_canonical or observation.metric_original).casefold(),
+                metric_key(observation),
                 observation.period,
                 observation.entity,
                 tuple(sorted(observation.dimensions.items())),
@@ -25,4 +26,3 @@ class DocumentModelBuilder:
             elif existing:
                 existing.evidence.extend(item for item in observation.evidence if item not in existing.evidence)
         return DocumentIndex(unique.values())
-

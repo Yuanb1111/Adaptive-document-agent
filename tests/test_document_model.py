@@ -1,4 +1,4 @@
-from adaptive_document_agent.document_model import DocumentIndex, DocumentModelBuilder
+from adaptive_document_agent.document_model import DocumentIndex, DocumentModelBuilder, metric_key, metric_label
 from adaptive_document_agent.models import Observation, SourceEvidence
 
 
@@ -27,3 +27,33 @@ def test_builder_keeps_higher_confidence_duplicate_and_merges_evidence() -> None
     assert len(index.observations) == 1
     assert index.observations[0].id == "high"
 
+
+def test_qualified_source_metric_is_not_collapsed_into_broader_canonical_name() -> None:
+    amount = Observation(
+        id="amount",
+        metric_original="Revenue",
+        metric_canonical="Revenue",
+        value=100,
+        raw_value="100",
+        unit="currency",
+        currency="CNY",
+        period="2025",
+        confidence=0.9,
+    )
+    share = Observation(
+        id="share",
+        metric_original="Revenue: % of Revenue",
+        metric_canonical="Revenue",
+        value=100,
+        raw_value="100%",
+        unit="percent",
+        period="2025",
+        confidence=0.9,
+    )
+
+    index = DocumentIndex([amount, share])
+
+    assert metric_label(share) == "Revenue: % of Revenue"
+    assert metric_key(amount) != metric_key(share)
+    assert index.for_metric("revenue") == [amount]
+    assert index.for_metric("revenue: % of revenue") == [share]

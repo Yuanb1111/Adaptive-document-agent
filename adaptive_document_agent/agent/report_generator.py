@@ -2,7 +2,7 @@
 
 from collections import defaultdict
 
-from adaptive_document_agent.document_model import period_sort_key
+from adaptive_document_agent.document_model import metric_key, period_sort_key
 from adaptive_document_agent.models import ChartPlan, DocumentProfile, Insight, Observation, ReportPlan, ValidationIssue
 from adaptive_document_agent.validation.coverage_validator import assess_coverage
 
@@ -50,10 +50,10 @@ class ReportGenerator:
     def _coverage(profile: DocumentProfile, observations: list[Observation], charts: list[ChartPlan]) -> list[str]:
         if not observations:
             return []
-        metrics = {(item.metric_canonical or item.metric_original).casefold() for item in observations}
+        metrics = {metric_key(item) for item in observations}
         tables = {source.table_id for item in observations for source in item.evidence if source.table_id}
         evidence_pages = {source.page for item in observations for source in item.evidence}
-        ranges = ", ".join(f"{start}–{end}" for start, end in profile.analysis_page_ranges) or "complete document"
+        ranges = ", ".join(f"{start}-{end}" for start, end in profile.analysis_page_ranges) or "complete document"
         return [
             "## Evidence Coverage",
             "",
@@ -77,7 +77,7 @@ class ReportGenerator:
             return []
         groups: dict[str, list[Observation]] = defaultdict(list)
         for item in eligible:
-            key = (item.metric_canonical or item.metric_original).casefold()
+            key = metric_key(item)
             if key not in {"page", "pages"}:
                 groups[key].append(item)
         purpose = " ".join([profile.document_purpose, *profile.metrics]).casefold()
