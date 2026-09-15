@@ -77,7 +77,7 @@ class DocumentOrchestrator:
                 else None
             )
             scope = sha256_bytes(str(profile.analysis_page_ranges or "all").encode("utf-8"))[:16]
-            cached_tables = self.cache.get_model(f"tables-v4-{digest}-{scope}", ParsedDocument) if self.cache else None
+            cached_tables = self.cache.get_model(f"tables-v5-{digest}-{scope}", ParsedDocument) if self.cache else None
             if cached_tables is not None:
                 document = cached_tables
             else:
@@ -86,7 +86,7 @@ class DocumentOrchestrator:
                     page.tables = tables_by_page.get(page.page_number, [])
                 self._reconstruct_tables(document)
                 if self.cache:
-                    self.cache.set_model(f"tables-v4-{digest}-{scope}", document)
+                    self.cache.set_model(f"tables-v5-{digest}-{scope}", document)
 
         notify("Extracting structured observations")
         with record_timing(timings, "observation_extraction"):
