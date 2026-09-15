@@ -25,7 +25,7 @@ class BorderlessTableExtractor:
 
     def extract(self, page: object, page_number: int) -> list[ExtractedTable]:
         text = page.extract_text(x_tolerance=2, y_tolerance=3) or ""
-        lines = [" ".join(line.split()) for line in text.splitlines()]
+        lines = [self._clean_line(" ".join(line.split())) for line in text.splitlines()]
         candidates = [row for index, line in enumerate(lines) if (row := self._parse_row(index, line))]
         groups = self._groups(candidates, lines)
         tables: list[ExtractedTable] = []
@@ -89,6 +89,13 @@ class BorderlessTableExtractor:
         ):
             return None
         return _CandidateRow(index, label, values)
+
+    @staticmethod
+    def _clean_line(line: str) -> str:
+        """Remove PDF glyph placeholders without altering reported values."""
+        cleaned = re.sub(r"\s*\(cid(?::|\s)*\d+\)\s*", " ", line, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\ufffdC(?=\s|$)", "—", cleaned)
+        return " ".join(cleaned.split())
 
     @staticmethod
     def _groups(candidates: list[_CandidateRow], lines: list[str]) -> list[list[_CandidateRow]]:
@@ -163,6 +170,21 @@ class BorderlessTableExtractor:
         if year_index is None:
             return [f"column_{index + 2}" for index in range(width)]
         context_lines = lines[year_index + 1 : first_row]
+        years = _YEAR.findall(lines[year_index])
+        if years and width % len(years) == 0:
+            measure_count = width // len(years)
+            repeated_phrases = [
+                phrase
+                for line in context_lines
+                if not line.startswith("(") and (phrase := BorderlessTableExtractor._phrase_repeated(line, len(years)))
+            ]
+            repeated_phrases = list(dict.fromkeys(repeated_phrases))
+            if (
+                len(repeated_phrases) == measure_count
+                and all(len(_WORD.findall(phrase)) >= 2 for phrase in repeated_phrases)
+                and any(left.casefold() in right.casefold() for left in repeated_phrases for right in repeated_phrases if left != right)
+            ):
+                return [phrase for _ in years for phrase in repeated_phrases]
         for line in reversed(context_lines):
             if line.startswith("("):
                 continue
@@ -172,6 +194,17 @@ class BorderlessTableExtractor:
                     words = [word if word.casefold() in {"amount", "value"} or word.startswith("%") else f"% of {word}" for word in words]
                 return words
         return [f"column_{index + 2}" for index in range(width)]
+
+    @staticmethod
+    def _phrase_repeated(line: str, repeats: int) -> str | None:
+        words = _WORD.findall(line)
+        if repeats < 2 or not words or len(words) % repeats:
+            return None
+        size = len(words) // repeats
+        chunks = [words[index * size : (index + 1) * size] for index in range(repeats)]
+        if any([word.casefold() for word in chunk] != [word.casefold() for word in chunks[0]] for chunk in chunks[1:]):
+            return None
+        return " ".join(chunks[0])
 
     @staticmethod
     def _rows_with_sections(group: list[_CandidateRow], lines: list[str], width: int) -> list[tuple[list[str | None], list[str | None]]]:

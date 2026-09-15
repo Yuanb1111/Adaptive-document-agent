@@ -41,8 +41,7 @@ class ObservationExtractor:
             for header in table.headers[1:]
             if self._meaningful_header(header)
         ]
-        header_pattern_repeats = len(set(meaningful_header_list)) < len(meaningful_header_list)
-        column_metric_mode = len(meaningful_header_list) >= 2 and not header_pattern_repeats
+        column_metric_mode = len(set(meaningful_header_list)) >= 2
         current_section: str | None = None
         for row_index, row in enumerate(table.rows):
             if not row.cells:
@@ -130,7 +129,7 @@ class ObservationExtractor:
             confidence=confidence,
         )
         return Observation(
-            id=stable_id("observation", table.table_id, row_index, column_label, raw),
+            id=stable_id("observation", table.table_id, row_index, column, column_label, period, raw),
             metric_original=metric,
             value=value,
             raw_value=raw,

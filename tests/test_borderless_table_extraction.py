@@ -184,3 +184,59 @@ def test_wrapped_first_data_label_is_not_mistaken_for_column_headers() -> None:
     metrics = {item.metric_original for item in ObservationExtractor()._table_observations(table)}
     assert "Operating loss before changes in working capital" in metrics
     assert "Operating" not in metrics
+
+
+def test_cid_dot_leaders_do_not_destroy_financial_period_series() -> None:
+    class CidLeaderPage:
+        def extract_text(self, **_: object) -> str:
+            return """FINANCIAL INFORMATION
+RESULTS OF OPERATIONS
+Year ended December 31,
+2023 2024 2025
+% of % of % of
+Amount Revenue Amount Revenue Amount Revenue
+(RMB in thousands, except for percentages)
+Revenue (cid:2) (cid:2) (cid:2) 267,025 100.0 325,257 100.0 521,747 100.0
+Cost of revenue (cid:2) (cid:2) (236,454) (88.6) (254,065) (78.1) (407,579) (78.1)
+Gross profit (cid:2) (cid:2) 30,571 11.4 71,192 21.9 114,168 21.9
+Listing expenses (cid:2) (cid:2) �C �C �C �C (15,356) (2.9)
+"""
+
+    table = BorderlessTableExtractor().extract(CidLeaderPage(), 234)[0]
+
+    assert table.column_periods[1:] == ["FY2023", "FY2023", "FY2024", "FY2024", "FY2025", "FY2025"]
+    assert table.headers[1:3] == ["Amount", "% of Revenue"]
+    assert [row.cells[0] for row in table.rows] == ["Revenue", "Cost of revenue", "Gross profit", "Listing expenses"]
+    assert table.rows[-1].cells[1:] == ["—", "—", "—", "—", "(15,356)", "(2.9)"]
+
+    observations = ObservationExtractor()._table_observations(table)
+    revenue = [item for item in observations if item.metric_original == "Revenue"]
+    assert [item.period for item in revenue] == ["FY2023", "FY2024", "FY2025"]
+    assert [item.value for item in revenue] == [267_025_000, 325_257_000, 521_747_000]
+    percentages = [item for item in observations if item.metric_original == "Revenue: % of Revenue"]
+    assert len({item.id for item in percentages}) == 3
+
+
+def test_repeated_multiline_measure_headers_are_reconstructed() -> None:
+    class GeographicMarginPage:
+        def extract_text(self, **_: object) -> str:
+            return """FINANCIAL INFORMATION
+Year ended December 31,
+2023 2024 2025
+Gross profit Gross profit Gross profit
+Gross profit margin Gross profit margin Gross profit margin
+(RMB in thousands, except for percentages)
+Mainland 28,991 12.7% 65,837 22.2% 98,471 20.73%
+Overseas market 16,064 42.1% 13,567 46.4% 21,969 47.12%
+"""
+
+    table = BorderlessTableExtractor().extract(GeographicMarginPage(), 239)[0]
+
+    assert table.headers[1:] == [
+        "Gross profit", "Gross profit margin",
+        "Gross profit", "Gross profit margin",
+        "Gross profit", "Gross profit margin",
+    ]
+    observations = ObservationExtractor()._table_observations(table)
+    assert {item.metric_original for item in observations} == {"Gross profit", "Gross profit margin"}
+    assert {item.dimensions["category"] for item in observations} == {"Mainland", "Overseas market"}

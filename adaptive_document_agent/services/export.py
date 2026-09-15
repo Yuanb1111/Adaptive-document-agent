@@ -5,6 +5,8 @@ import io
 
 from adaptive_document_agent.models import PipelineResult
 
+from .pptx_export import build_presentation
+
 
 def export_markdown(result: PipelineResult) -> bytes:
     return result.report_markdown.encode("utf-8")
@@ -39,3 +41,7 @@ def export_csv(result: PipelineResult) -> bytes:
             }
         )
     return stream.getvalue().encode("utf-8-sig")
+
+
+def export_pptx(result: PipelineResult) -> bytes:
+    return build_presentation(result)
