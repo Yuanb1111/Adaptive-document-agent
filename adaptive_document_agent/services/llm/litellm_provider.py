@@ -1,6 +1,7 @@
 """Lazy LiteLLM adapter; no analysis module imports LiteLLM directly."""
 
 import json
+import re
 import time
 from typing import Any
 
@@ -14,6 +15,19 @@ from .usage import LLMUsage
 
 
 class LiteLLMProvider(LLMClient):
+    _OPTIONAL_GENERATION_PARAMS = {
+        "frequency_penalty",
+        "logprobs",
+        "max_tokens",
+        "presence_penalty",
+        "reasoning_effort",
+        "seed",
+        "stop",
+        "temperature",
+        "top_logprobs",
+        "top_p",
+    }
+
     def __init__(self, settings: LLMSettings, capabilities: ModelCapabilities | None = None) -> None:
         self.settings = settings
         self._capabilities = capabilities or ModelCapabilities(json_mode=True)
@@ -34,8 +48,10 @@ class LiteLLMProvider(LLMClient):
         model = self._litellm_model(kwargs.pop("model") or self.settings.model)
         if not model:
             raise LLMConfigurationError("No LLM model is configured.")
-        last_error: Exception | None = None
-        for attempt in range(2):
+        request_kwargs = {name: value for name, value in kwargs.items() if value is not None}
+        transient_retries = 0
+        compatibility_retry_used = False
+        while True:
             try:
                 return completion(
                     model=model,
@@ -44,15 +60,31 @@ class LiteLLMProvider(LLMClient):
                     api_base=self.settings.base_url,
                     timeout=self.settings.timeout_seconds,
                     num_retries=0,
-                    **kwargs,
+                    **request_kwargs,
                 )
             except Exception as exc:
-                last_error = exc
+                rejected_params = self._rejected_optional_params(exc, request_kwargs)
+                if rejected_params and not compatibility_retry_used:
+                    for param in rejected_params:
+                        request_kwargs.pop(param, None)
+                    compatibility_retry_used = True
+                    continue
                 transient = any(marker in type(exc).__name__.casefold() for marker in ("timeout", "rate", "connection", "serviceunavailable"))
-                if not transient or attempt == 1:
+                if not transient or transient_retries == 1:
                     raise
+                transient_retries += 1
                 time.sleep(0.25)
-        raise last_error or RuntimeError("Unknown model error")
+
+    @classmethod
+    def _rejected_optional_params(cls, exc: Exception, request_kwargs: dict[str, Any]) -> set[str]:
+        if type(exc).__name__ != "UnsupportedParamsError":
+            return set()
+        message = str(exc).casefold()
+        return {
+            param
+            for param in request_kwargs.keys() & cls._OPTIONAL_GENERATION_PARAMS
+            if re.search(rf"(?<![a-z0-9_]){re.escape(param)}(?![a-z0-9_])", message)
+        }
 
     def _litellm_model(self, model: str) -> str:
         if "/" in model or self.settings.provider.value == "openai":
