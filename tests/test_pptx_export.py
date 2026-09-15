@@ -4,6 +4,7 @@ import io
 import zipfile
 
 from pptx import Presentation
+from pptx.enum.chart import XL_CHART_TYPE
 
 from adaptive_document_agent.models import (
     ChartPlan,
@@ -108,3 +109,17 @@ def test_pptx_export_skips_constant_period_chart() -> None:
     deck = Presentation(io.BytesIO(payload))
 
     assert not any(shape.has_chart for slide in deck.slides for shape in slide.shapes)
+
+
+def test_pptx_export_keeps_the_planned_chart_mix_editable() -> None:
+    result = _result()
+    base = result.charts[0]
+    result.charts = [
+        base.model_copy(update={"id": f"chart-{chart_type}", "chart_type": chart_type, "title": f"Revenue {chart_type}"})
+        for chart_type in ("line", "bar", "area")
+    ]
+
+    deck = Presentation(io.BytesIO(export_pptx(result)))
+    chart_types = [shape.chart.chart_type for slide in deck.slides for shape in slide.shapes if shape.has_chart]
+
+    assert chart_types == [XL_CHART_TYPE.LINE_MARKERS, XL_CHART_TYPE.COLUMN_CLUSTERED, XL_CHART_TYPE.AREA]

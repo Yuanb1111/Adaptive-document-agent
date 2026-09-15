@@ -42,7 +42,7 @@ def test_complete_reported_series_adds_charts_beyond_successful_calculations() -
     assert len(charts) == 2
     assert all(chart.analysis_task_id is None for chart in charts)
     assert all(chart.chart_type == "bar" for chart in charts)
-    assert all(set(chart.available_chart_types) == {"line", "bar", "area", "table"} for chart in charts)
+    assert all(set(chart.available_chart_types) == {"line", "bar", "table"} for chart in charts)
 
 
 def test_true_cross_source_conflict_blocks_reported_series_chart() -> None:
@@ -68,8 +68,77 @@ def test_chart_planner_deduplicates_same_series_and_bounds_output() -> None:
     results = [AnalysisResult(task_id=task.id, title=task.title, result=20, evidence=evidence) for task in tasks]
     charts = ChartPlanner().plan(tasks, results, index, maximum=2)
     assert len(charts) == 1
-    assert charts[0].chart_type == "line"
+    assert charts[0].chart_type == "bar"
     assert {"line", "bar", "area", "table"} == set(charts[0].available_chart_types)
+
+
+def test_long_positive_period_series_use_a_balanced_chart_mix() -> None:
+    evidence = [SourceEvidence(page=3, text="reported", extraction_method="digital_table", confidence=0.9)]
+    observations = []
+    tasks = []
+    results = []
+    for metric_index, metric in enumerate(("Revenue", "Cash", "Borrowings")):
+        identifiers = []
+        for year in range(2021, 2026):
+            identifier = f"{metric.casefold()}-{year}"
+            identifiers.append(identifier)
+            observations.append(
+                Observation(
+                    id=identifier,
+                    metric_original=metric,
+                    value=float(100 + metric_index * 20 + year - 2021),
+                    raw_value=str(100 + metric_index * 20 + year - 2021),
+                    period=str(year),
+                    confidence=0.9,
+                    evidence=evidence,
+                )
+            )
+        task = AnalysisTask(
+            id=f"task-{metric_index}",
+            title=f"{metric} trend",
+            description="d",
+            analysis_type="linear_trend",
+            tool_name="linear_trend",
+            required_metrics=[metric.casefold()],
+            observation_query={"observation_ids": identifiers},
+            reason="why",
+            expected_output="trend",
+        )
+        tasks.append(task)
+        results.append(AnalysisResult(task_id=task.id, title=task.title, result=1.0, evidence=evidence))
+    charts = ChartPlanner().plan(tasks, results, DocumentIndex(observations), maximum=3)
+    assert [chart.chart_type for chart in charts] == ["line", "bar", "area"]
+
+
+def test_long_category_labels_default_to_horizontal_bar() -> None:
+    evidence = [SourceEvidence(page=4, text="reported", extraction_method="digital_table", confidence=0.9)]
+    observations = [
+        Observation(
+            id=f"category-{index}",
+            metric_original="Revenue",
+            value=float(100 - index),
+            raw_value=str(100 - index),
+            dimensions={"market": label},
+            confidence=0.9,
+            evidence=evidence,
+        )
+        for index, label in enumerate(("Mainland China market", "Southeast Asia market", "European market"))
+    ]
+    task = AnalysisTask(
+        id="categories",
+        title="Revenue by market",
+        description="d",
+        analysis_type="rank_values",
+        tool_name="rank_values",
+        required_metrics=["revenue"],
+        required_dimensions=["market"],
+        observation_query={"observation_ids": [item.id for item in observations]},
+        reason="why",
+        expected_output="ranking",
+    )
+    result = AnalysisResult(task_id=task.id, title=task.title, result=[100, 99, 98], evidence=evidence)
+    plan = ChartPlanner().plan([task], [result], DocumentIndex(observations))[0]
+    assert plan.chart_type == "horizontal_bar"
 
 
 def test_report_includes_reported_fact_overview_and_coverage() -> None:

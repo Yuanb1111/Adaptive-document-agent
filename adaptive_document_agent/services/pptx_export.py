@@ -189,7 +189,12 @@ def _add_chart_slide(presentation: Any, plan: ChartPlan, index: DocumentIndex, *
     try:
         chart.plots[0].has_data_labels = True
         labels = chart.plots[0].data_labels
-        labels.position = XL_DATA_LABEL_POSITION.OUTSIDE_END if plan.chart_type not in {"line", "area", "pie"} else XL_DATA_LABEL_POSITION.ABOVE
+        if plan.chart_type == "pie":
+            labels.position = XL_DATA_LABEL_POSITION.BEST_FIT
+        elif plan.chart_type in {"line", "area"}:
+            labels.position = XL_DATA_LABEL_POSITION.ABOVE
+        else:
+            labels.position = XL_DATA_LABEL_POSITION.OUTSIDE_END
         labels.font.name = FONT
         labels.font.size = Pt(11)
         labels.number_format = "0.0"
