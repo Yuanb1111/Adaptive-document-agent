@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import io
 from collections import defaultdict
+import io
+import re
 from typing import Any, Iterable
 
 from adaptive_document_agent.document_model import DocumentIndex, metric_key, metric_label, paired_observations, period_sort_key
@@ -41,16 +42,19 @@ def build_presentation(result: PipelineResult) -> bytes:
     presentation.slide_height = Inches(SLIDE_HEIGHT)
 
     _add_cover(presentation, result)
+    if result.profile.document_summary.strip():
+        _add_document_overview(presentation, result)
     _add_evidence_overview(presentation, result)
     index = DocumentIndex(result.observations)
     usable_charts = _usable_charts(result)
-    for ordinal, plan in enumerate(usable_charts[:8]):
+    presentation_charts = usable_charts[:8]
+    for ordinal, plan in enumerate(presentation_charts):
         _add_chart_slide(presentation, plan, index, ordinal=ordinal)
     if not usable_charts:
         _add_no_chart_slide(presentation, result)
     _add_findings_slide(presentation, result)
     _add_quality_slide(presentation, result)
-    _add_evidence_table_slide(presentation, result)
+    _add_evidence_table_slides(presentation, result, presentation_charts)
     _number_slides(presentation)
 
     stream = io.BytesIO()
@@ -111,6 +115,19 @@ def _add_evidence_overview(presentation: Any, result: PipelineResult) -> None:
     _text(slide, "Analysis focus", 9.05, 3.48, 2.8, 0.35, size=14, color=VIOLET, bold=True)
     _text(slide, focus, 9.05, 3.9, 3.15, 1.42, size=17, color=INK)
     _text(slide, f"Pages reviewed  { _page_ranges(result) }", 9.05, 5.55, 3.15, 0.4, size=13, color=MUTED)
+
+
+def _add_document_overview(presentation: Any, result: PipelineResult) -> None:
+    title = _summary_text(result.profile.overview_title.strip() or "Document overview", 60)
+    slide = _base_slide(presentation, title, result.profile.document_type, background=WHITE)
+    _text(slide, _summary_text(result.profile.document_summary, 650), 0.78, 1.72, 7.45, 4.15, size=19, color=INK, bold=True)
+    _text(slide, "Topics covered", 9.05, 1.75, 2.7, 0.35, size=13, color=VIOLET, bold=True)
+    sections = [item for item in result.profile.important_sections if item.strip()][:5]
+    section_text = "\n".join(f"{index:02d}  {_summary_text(section, 80)}" for index, section in enumerate(sections, start=1))
+    _text(slide, section_text or "The analysis follows the document's discovered structure.", 9.05, 2.28, 3.05, 2.7, size=16, color=INK)
+    pages = ", ".join(map(str, sorted(set(result.profile.document_summary_pages))))
+    if pages:
+        _text(slide, f"Overview source pages  {pages}", 0.8, 6.45, 11.5, 0.3, size=10, color=MUTED)
 
 
 def _add_chart_slide(presentation: Any, plan: ChartPlan, index: DocumentIndex, *, ordinal: int) -> None:
@@ -293,42 +310,48 @@ def _add_quality_slide(presentation: Any, result: PipelineResult) -> None:
         top += 0.93
 
 
-def _add_evidence_table_slide(presentation: Any, result: PipelineResult) -> None:
+def _add_evidence_table_slides(presentation: Any, result: PipelineResult, charts: list[ChartPlan]) -> None:
     from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
     from pptx.util import Inches, Pt
 
-    slide = _base_slide(presentation, "Evidence appendix", "Selected reported values with page-level provenance", background=IVORY)
-    observations = _representative_observations(result, maximum=9)
+    observations = _appendix_observations(result, charts)
+    page_size = 9
+    pages = [observations[index:index + page_size] for index in range(0, len(observations), page_size)] or [[]]
     headers = ["Metric", "Period", "Reported value", "Unit", "Page"]
-    rows = [
-        [
-            _summary_text(metric_label(item), 58),
-            item.period or "-",
-            item.raw_value,
-            "percent" if item.unit == "percent" else item.raw_unit or _unit_label([item], ""),
-            ", ".join(map(str, sorted({source.page for source in item.evidence}))),
+    for page_number, page_observations in enumerate(pages, start=1):
+        subtitle = "Exact reported values used by the presentation charts, with page-level provenance"
+        if len(pages) > 1:
+            subtitle += f" | Appendix {page_number} of {len(pages)}"
+        slide = _base_slide(presentation, "Key data appendix", subtitle, background=IVORY)
+        rows = [
+            [
+                _summary_text(metric_label(item), 58),
+                item.period or item.entity or "-",
+                item.raw_value,
+                _display_source_unit(item),
+                ", ".join(map(str, sorted({source.page for source in item.evidence}))),
+            ]
+            for item in page_observations
         ]
-        for item in observations
-    ]
-    table_shape = slide.shapes.add_table(len(rows) + 1, len(headers), Inches(0.72), Inches(1.55), Inches(11.9), Inches(4.95))
-    table = table_shape.table
-    widths = [4.55, 1.28, 2.05, 2.7, 0.95]
-    for column, width in zip(table.columns, widths):
-        column.width = Inches(width)
-    for column, header in enumerate(headers):
-        cell = table.cell(0, column)
-        cell.text = header
-        _cell_style(cell, fill=NAVY, color=WHITE, bold=True, size=12)
-    for row_index, values in enumerate(rows, start=1):
-        for column, value in enumerate(values):
-            cell = table.cell(row_index, column)
-            cell.text = str(value)
-            _cell_style(cell, fill=WHITE if row_index % 2 else "E9E8DF", color=INK, bold=False, size=11)
-            cell.vertical_anchor = MSO_ANCHOR.MIDDLE
-            cell.text_frame.paragraphs[0].alignment = PP_ALIGN.RIGHT if column in {2, 4} else PP_ALIGN.LEFT
-    for row in table.rows:
-        row.height = Inches(0.47)
-    _text(slide, "The JSON and CSV exports contain the complete retained fact base.", 0.76, 6.72, 11.75, 0.28, size=10, color=MUTED)
+        table_shape = slide.shapes.add_table(len(rows) + 1, len(headers), Inches(0.72), Inches(1.55), Inches(11.9), Inches(4.95))
+        table = table_shape.table
+        widths = [4.55, 1.28, 2.05, 2.7, 0.95]
+        for column, width in zip(table.columns, widths):
+            column.width = Inches(width)
+        for column, header in enumerate(headers):
+            cell = table.cell(0, column)
+            cell.text = header
+            _cell_style(cell, fill=NAVY, color=WHITE, bold=True, size=12)
+        for row_index, values in enumerate(rows, start=1):
+            for column, value in enumerate(values):
+                cell = table.cell(row_index, column)
+                cell.text = str(value)
+                _cell_style(cell, fill=WHITE if row_index % 2 else "E9E8DF", color=INK, bold=False, size=11)
+                cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+                cell.text_frame.paragraphs[0].alignment = PP_ALIGN.RIGHT if column in {2, 4} else PP_ALIGN.LEFT
+        for row in table.rows:
+            row.height = Inches(0.47)
+        _text(slide, "The CSV export contains the complete retained fact base.", 0.76, 6.72, 11.75, 0.28, size=10, color=MUTED)
 
 
 def _base_slide(presentation: Any, title: str, subtitle: str = "", *, background: str = WHITE) -> Any:
@@ -476,6 +499,30 @@ def _representative_observations(result: PipelineResult, *, maximum: int) -> lis
         if len(output) >= maximum:
             break
     return output[:maximum]
+
+
+def _appendix_observations(result: PipelineResult, charts: list[ChartPlan]) -> list[Observation]:
+    """Return every distinct observation used by the charts shown in the deck."""
+    by_id = {item.id: item for item in result.observations}
+    output: list[Observation] = []
+    seen: set[str] = set()
+    for chart in charts:
+        for identifier in chart.observation_ids:
+            item = by_id.get(identifier)
+            if not item or item.value is None or not item.evidence or identifier in seen:
+                continue
+            seen.add(identifier)
+            output.append(item)
+    return output or _representative_observations(result, maximum=18)
+
+
+def _display_source_unit(item: Observation) -> str:
+    if item.unit == "percent":
+        return "percent"
+    value = item.raw_unit or _unit_label([item], "")
+    clean = re.sub(r"\ufffd+", "'", value)
+    clean = re.sub(r"(?i)\bRMB\s*'+\s*000\b", "RMB '000", clean)
+    return clean
 
 
 def _cell_style(cell: Any, *, fill: str, color: str, bold: bool, size: float) -> None:

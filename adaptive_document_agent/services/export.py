@@ -1,10 +1,11 @@
-"""Markdown, JSON, and CSV export without losing raw values or evidence."""
+"""User-facing and structured exports without losing raw values or evidence."""
 
 import csv
 import io
 
 from adaptive_document_agent.models import PipelineResult
 
+from .pdf_export import build_report_pdf
 from .pptx_export import build_presentation
 
 
@@ -45,3 +46,7 @@ def export_csv(result: PipelineResult) -> bytes:
 
 def export_pptx(result: PipelineResult) -> bytes:
     return build_presentation(result)
+
+
+def export_pdf(result: PipelineResult) -> bytes:
+    return build_report_pdf(result)

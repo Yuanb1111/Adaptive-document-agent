@@ -20,6 +20,10 @@ class ReportGenerator:
     ) -> str:
         by_id = {insight.id: insight for insight in insights}
         lines = [f"# {plan.title}", "", f"**Document purpose:** {profile.document_purpose}", ""]
+        if profile.document_summary.strip():
+            pages = ", ".join(map(str, sorted(set(profile.document_summary_pages))))
+            source = f" (Sources: pages {pages})" if pages else ""
+            lines.extend([f"## {profile.overview_title.strip() or 'Document overview'}", "", profile.document_summary.strip() + source, ""])
         lines.extend(self._coverage(profile, observations or [], charts or []))
         lines.extend(self._topic_coverage(profile, observations or []))
         lines.extend(self._reported_facts(profile, observations or []))
@@ -60,7 +64,7 @@ class ReportGenerator:
             f"- Confirmed analysis scope: pages {ranges}.",
             f"- Retained fact base: {len(observations)} observations across {len(metrics)} metrics and {len(tables)} source tables.",
             f"- Page-level evidence is retained from {len(evidence_pages)} pages; {len(charts)} validated visualisations were planned.",
-            "- The selected facts below are a readable overview; the complete retained fact base remains available in JSON and CSV exports.",
+            "- The selected facts below are a readable overview; the complete retained fact base remains available in the CSV export.",
             "",
         ]
 
@@ -172,5 +176,5 @@ class ReportGenerator:
                 omitted[warning.code] = omitted.get(warning.code, 0) + 1
             counts[warning.code] = count + 1
         for code, count in omitted.items():
-            output.append(ValidationIssue(code=code, message=f"{count} additional '{code}' issue(s) are retained in the JSON export.", stage="report", severity="info"))
+            output.append(ValidationIssue(code=code, message=f"{count} additional '{code}' issue(s) are retained in the technical result data.", stage="report", severity="info"))
         return output

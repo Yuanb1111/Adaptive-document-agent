@@ -44,6 +44,9 @@ def _result() -> PipelineResult:
         profile=DocumentProfile(
             document_type="Prospectus",
             document_purpose="Review historical financial performance for investor assessment.",
+            overview_title="Company overview",
+            document_summary="The company develops automation products for industrial customers and sells them across several markets.",
+            document_summary_pages=[8, 9],
             metrics=["Revenue"],
             analysis_page_ranges=[(227, 263)],
             analysis_focus="Financial information",
@@ -86,9 +89,10 @@ def test_pptx_export_contains_editable_chart_and_table() -> None:
 
     assert payload.startswith(b"PK")
     deck = Presentation(io.BytesIO(payload))
-    assert len(deck.slides) == 6
+    assert len(deck.slides) == 7
     assert any(shape.has_chart for slide in deck.slides for shape in slide.shapes)
     assert any(shape.has_table for slide in deck.slides for shape in slide.shapes)
+    assert any("Company overview" in shape.text for slide in deck.slides for shape in slide.shapes if shape.has_text_frame)
 
     with zipfile.ZipFile(io.BytesIO(payload)) as archive:
         names = archive.namelist()
@@ -123,3 +127,42 @@ def test_pptx_export_keeps_the_planned_chart_mix_editable() -> None:
     chart_types = [shape.chart.chart_type for slide in deck.slides for shape in slide.shapes if shape.has_chart]
 
     assert chart_types == [XL_CHART_TYPE.LINE_MARKERS, XL_CHART_TYPE.COLUMN_CLUSTERED, XL_CHART_TYPE.AREA]
+
+
+def test_pptx_appendix_paginates_all_chart_observations_and_cleans_units() -> None:
+    result = _result()
+    evidence = result.observations[0].evidence
+    result.observations = [
+        Observation(
+            id=f"revenue-{year}",
+            metric_original="Revenue",
+            value=float(year),
+            raw_value=str(year),
+            raw_unit="RMB\ufffd\ufffd000",
+            currency="CNY",
+            unit="currency",
+            period=f"FY{year}",
+            evidence=evidence,
+            confidence=0.9,
+        )
+        for year in range(2010, 2022)
+    ]
+    result.charts[0] = result.charts[0].model_copy(update={"observation_ids": [item.id for item in result.observations]})
+
+    deck = Presentation(io.BytesIO(export_pptx(result)))
+    appendix_slides = [
+        slide
+        for slide in deck.slides
+        if any(shape.has_text_frame and "Key data appendix" in shape.text for shape in slide.shapes)
+    ]
+    assert len(appendix_slides) == 2
+    appendix_values = [
+        cell.text
+        for slide in appendix_slides
+        for shape in slide.shapes
+        if shape.has_table
+        for row in shape.table.rows
+        for cell in row.cells
+    ]
+    assert all(str(year) in appendix_values for year in range(2010, 2022))
+    assert "RMB '000" in appendix_values

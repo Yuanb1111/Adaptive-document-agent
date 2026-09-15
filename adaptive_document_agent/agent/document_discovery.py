@@ -80,6 +80,14 @@ class DocumentDiscovery:
             DocumentProfile,
             stage="discovery",
         )
+        reviewed_pages = {
+            page
+            for chunk in chunks
+            for page in range(chunk.start_page, chunk.end_page + 1)
+        }
+        profile.document_summary_pages = sorted({
+            page for page in profile.document_summary_pages if page in reviewed_pages
+        })
         profile.analysis_focus = analysis_focus.strip() if analysis_focus and analysis_focus.strip() else None
         profile.analysis_page_ranges = [(item.start_page, item.end_page) for item in routed_ranges]
         for item in routed_ranges:

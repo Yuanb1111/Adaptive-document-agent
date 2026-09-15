@@ -74,7 +74,15 @@ def test_complete_pipeline_with_mock_llm_controls_semantic_selection() -> None:
     task = baseline.analysis_plan[0]
     responses = [
         {"summary": "Three-year revenue series", "metrics": ["Revenue"], "time_periods": ["2023", "2024", "2025"]},
-        {"document_type": "Revenue performance report", "document_purpose": "Review revenue changes", "metrics": ["Revenue"], "detected_time_periods": ["2023", "2024", "2025"]},
+        {
+            "document_type": "Revenue performance report",
+            "document_purpose": "Review revenue changes",
+            "overview_title": "Revenue overview",
+            "document_summary": "The document reports a three-year revenue series.",
+            "document_summary_pages": [1],
+            "metrics": ["Revenue"],
+            "detected_time_periods": ["2023", "2024", "2025"],
+        },
         {"mappings": [{"original_name": "Revenue", "canonical_name": "revenue", "confidence": 0.95, "reason": "Explicit context"}]},
         {"selected_candidate_ids": candidate_ids, "rationale": ["Revenue change is central to the document purpose."]},
         {"scores": [{"candidate_id": identifier, "score": 0.9, "reasons": ["Relevant and complete"], "rejected": False} for identifier in candidate_ids]},
@@ -88,4 +96,5 @@ def test_complete_pipeline_with_mock_llm_controls_semantic_selection() -> None:
     assert result.analysis_plan
     assert result.insights[0].evidence
     assert result.report_plan.sections[0].title == "Revenue Performance"
+    assert "## Revenue overview" in result.report_markdown
     assert len(client.calls) == 7

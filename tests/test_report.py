@@ -17,6 +17,20 @@ def test_dynamic_report_preserves_fact_type_and_pages() -> None:
     assert "Trends and Changes" in markdown
 
 
+def test_report_places_document_summary_near_the_beginning() -> None:
+    profile = DocumentProfile(
+        document_type="Prospectus",
+        document_purpose="Explain the issuer and its performance.",
+        overview_title="Company overview",
+        document_summary="Example Robotics develops collaborative robots for manufacturing customers.",
+        document_summary_pages=[6, 7],
+    )
+    markdown = ReportGenerator().generate(profile, DynamicReportPlanner().plan(profile, []), [], [])
+    assert "## Company overview" in markdown
+    assert "Example Robotics develops collaborative robots" in markdown
+    assert "Sources: pages 6, 7" in markdown
+
+
 def test_invalid_calculation_can_only_produce_a_reported_fact_chart() -> None:
     evidence = [SourceEvidence(page=1, text="reported", table_id="table", extraction_method="digital_table", confidence=0.9)]
     observations = [Observation(id="a", metric_original="Revenue", value=100, raw_value="100", period="2024", confidence=0.9, evidence=evidence), Observation(id="b", metric_original="Revenue", value=120, raw_value="120", period="2025", confidence=0.9, evidence=evidence)]

@@ -2,7 +2,7 @@
 
 from adaptive_document_agent.agent.orchestrator import DocumentOrchestrator
 from adaptive_document_agent.document_model import DocumentIndex
-from adaptive_document_agent.services.export import export_csv, export_json, export_markdown, export_pptx
+from adaptive_document_agent.services.export import export_csv, export_markdown, export_pdf, export_pptx
 from adaptive_document_agent.services.llm import LLMGateway
 from adaptive_document_agent.services.llm.routing import create_llm_client
 from adaptive_document_agent.utils.hashing import sha256_bytes
@@ -166,5 +166,5 @@ def run_app() -> None:
         type="primary",
     )
     st.download_button("Download Markdown", export_markdown(result), "analysis_report.md", "text/markdown")
-    st.download_button("Download JSON", export_json(result), "analysis_data.json", "application/json")
+    st.download_button("Download report (.pdf)", export_pdf(result), "analysis_report.pdf", "application/pdf")
     st.download_button("Download CSV", export_csv(result), "extracted_observations.csv", "text/csv")

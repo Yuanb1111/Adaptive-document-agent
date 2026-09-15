@@ -22,13 +22,19 @@ def test_large_document_routes_to_user_relevant_page_ranges_before_deep_discover
         },
         {"summary": "Page 10 evidence"},
         {"summary": "Page 11 evidence"},
-        {"document_type": "Unseen document", "document_purpose": "Evaluate selected evidence"},
+        {
+            "document_type": "Unseen document",
+            "document_purpose": "Evaluate selected evidence",
+            "document_summary": "The selected pages describe the relevant evidence.",
+            "document_summary_pages": [10, 99],
+        },
     ]
     client = MockLLMClient(responses)
     gateway = LLMGateway(client, LLMSettings(provider=ProviderName.MOCK, model="mock"))
     profile = DocumentDiscovery(gateway, target_tokens=20).discover(document, analysis_focus="Find the relevant evidence")
     assert profile.analysis_page_ranges == [(10, 11)]
     assert profile.analysis_focus == "Find the relevant evidence"
+    assert profile.document_summary_pages == [10]
     assert "Relevant evidence" in profile.important_sections
     assert len(client.calls) == 4
     assert "Analysis focus supplied by the user" in client.calls[0][1]["content"]

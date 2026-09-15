@@ -169,7 +169,8 @@ Delete `.adaptive_document_cache/` if local extraction caching is not desired be
 10. Validate extraction, semantics, calculations, mathematical consistency, evidence, and report language.
 11. Generate evidence-backed insights and a document-specific report structure.
 12. Plan charts only where they answer a useful analytical question, show direct value labels and provenance, and offer compatible line, bar, area, pie, scatter, horizontal-bar, and data-table views.
-13. Export an editable widescreen PowerPoint with evidence coverage, native charts, findings, limitations, and a page-referenced data appendix.
+13. Export an editable widescreen PowerPoint with a document or company overview, evidence coverage, native charts, findings, limitations, and paginated chart-data appendices.
+14. Export the generated analysis as a readable PDF while retaining CSV for the complete structured fact base and JSON for internal integrations.
 
 ## Data Model
 
@@ -197,7 +198,7 @@ A failed or uncertain stage produces a visible warning or excludes the result. I
 python -m streamlit run app.py
 ```
 
-Configure a provider and model in the sidebar. Optionally describe an analysis focus in plain language, upload one PDF, select **Review analysis scope**, inspect the proposed page ranges, and then select **Analyse selected pages** after confirmation. Leaving the focus blank uses automatic discovery. The results area contains Overview, Analysis, Charts, Extracted Data, Sources, Data Quality, and Technical Details tabs, followed by editable PowerPoint, Markdown, JSON, and CSV downloads.
+Configure a provider and model in the sidebar. Optionally describe an analysis focus in plain language, upload one PDF, select **Review analysis scope**, inspect the proposed page ranges, and then select **Analyse selected pages** after confirmation. Leaving the focus blank uses automatic discovery. The results area contains Overview, Analysis, Charts, Extracted Data, Sources, Data Quality, and Technical Details tabs, followed by editable PowerPoint, formatted PDF, Markdown, and CSV downloads. Structured JSON remains available to developers through the export service.
 
 ## Streamlit Community Cloud
 
