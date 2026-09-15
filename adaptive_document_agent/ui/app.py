@@ -5,11 +5,11 @@ from adaptive_document_agent.document_model import DocumentIndex
 from adaptive_document_agent.services.export import export_csv, export_json, export_markdown
 from adaptive_document_agent.services.llm import LLMGateway
 from adaptive_document_agent.services.llm.routing import create_llm_client
-from adaptive_document_agent.utils.caching import DiskCache
 from adaptive_document_agent.utils.hashing import sha256_bytes
 
 from . import analysis, data, overview, quality, sources, technical
 from .charts import chart_rows, render_chart
+from .deployment import cache_for_session, is_public_deployment
 from .sidebar import render_sidebar
 
 
@@ -25,7 +25,9 @@ def run_app() -> None:
         "Upload a PDF and the Agent will understand the document, discover useful data, "
         "run deterministic calculations, validate results, and preserve page-level evidence."
     )
-    settings = render_sidebar(st)
+    public_deployment = is_public_deployment()
+    settings = render_sidebar(st, public_deployment=public_deployment)
+    cache = cache_for_session(st.session_state, public_deployment=public_deployment)
     analysis_focus = st.text_area(
         "Analysis focus (optional)",
         placeholder="Describe what you want the Agent to find and analyse. Leave blank for automatic discovery.",
@@ -58,7 +60,7 @@ def run_app() -> None:
             def update(stage: str) -> None:
                 status.write(stage)
 
-            preview = DocumentOrchestrator(gateway, cache=DiskCache()).preview_scope(
+            preview = DocumentOrchestrator(gateway, cache=cache).preview_scope(
                 raw_pdf,
                 progress=update,
                 analysis_focus=analysis_focus,
@@ -97,7 +99,7 @@ def run_app() -> None:
                 def update_analysis(stage: str) -> None:
                     status.write(stage)
 
-                result = DocumentOrchestrator(gateway, cache=DiskCache()).analyse_pdf(
+                result = DocumentOrchestrator(gateway, cache=cache).analyse_pdf(
                     raw_pdf,
                     progress=update_analysis,
                     analysis_focus=analysis_focus,

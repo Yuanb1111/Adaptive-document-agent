@@ -198,6 +198,18 @@ python -m streamlit run app.py
 
 Configure a provider and model in the sidebar. Optionally describe an analysis focus in plain language, upload one PDF, select **Review analysis scope**, inspect the proposed page ranges, and then select **Analyse selected pages** after confirmation. Leaving the focus blank uses automatic discovery. The results area contains Overview, Analysis, Charts, Extracted Data, Sources, Data Quality, and Technical Details tabs, followed by Markdown, JSON, and CSV downloads.
 
+## Streamlit Community Cloud
+
+Deploy `app.py` from the repository root and set the following safe, non-secret value in Advanced settings → Secrets:
+
+```toml
+PUBLIC_DEPLOYMENT = "true"
+```
+
+Do not add a provider API key to the hosted app's secrets. In public deployment mode, local providers and Local Only mode are unavailable, environment-backed API keys are ignored, and every visitor must enter their own cloud-provider key. The key remains in that visitor's current Streamlit session and is not written to disk, logs, reports, or exports.
+
+Public deployment mode also assigns each Streamlit session its own temporary extraction cache. This prevents visitors from sharing the normal local content-addressed cache; the temporary directory is removed on a best-effort basis when its session object is released.
+
 ## Testing
 
 Tests use generated PDFs and `MockLLMClient`; no real API key is required.
