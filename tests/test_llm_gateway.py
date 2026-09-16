@@ -18,17 +18,25 @@ def test_mock_structured_output() -> None:
     assert gateway.usage[0]["provider"] == "mock"
 
 
-def test_one_repair_attempt() -> None:
+def test_structured_output_repairs_once_when_the_first_response_is_invalid() -> None:
     client = MockLLMClient(["not-json", {"value": 7}])
     gateway = LLMGateway(client, LLMSettings(provider=ProviderName.MOCK, model="mock"))
     assert gateway.generate_structured([], Answer, stage="discovery").value == 7
     assert len(client.calls) == 2
 
 
-def test_malformed_json_fails_after_repair() -> None:
-    client = MockLLMClient(["bad", "still bad"])
+def test_structured_output_accepts_fenced_json_without_a_repair() -> None:
+    client = MockLLMClient(['Here is the result:\n```json\n{"value": 9}\n```'])
     gateway = LLMGateway(client, LLMSettings(provider=ProviderName.MOCK, model="mock"))
-    with pytest.raises(LLMResponseError):
+
+    assert gateway.generate_structured([], Answer, stage="discovery").value == 9
+    assert len(client.calls) == 1
+
+
+def test_malformed_json_fails_after_two_repairs_and_names_the_stage() -> None:
+    client = MockLLMClient(["bad", "still bad", "also bad"])
+    gateway = LLMGateway(client, LLMSettings(provider=ProviderName.MOCK, model="mock"))
+    with pytest.raises(LLMResponseError, match="stage 'discovery'.*two repair attempts"):
         gateway.generate_structured([], Answer, stage="discovery")
 
 

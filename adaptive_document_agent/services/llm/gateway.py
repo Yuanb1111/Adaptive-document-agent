@@ -3,11 +3,12 @@
 import json
 from typing import Any, TypeVar
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from .base import LLMClient, LLMResponse
 from .config import LLMSettings, PrivacyMode
 from .exceptions import LLMResponseError, PrivacyViolationError
+from .structured import validate_structured_text
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -42,29 +43,55 @@ class LLMGateway:
             self._record(response)
             return value  # type: ignore[return-value]
         except LLMResponseError:
-            return self._repair_once(messages, response_model, stage=stage)
+            return self._repair_structured(messages, response_model, stage=stage)
 
-    def _repair_once(self, messages: list[dict[str, Any]], response_model: type[T], *, stage: str) -> T:
+    def _repair_structured(self, messages: list[dict[str, Any]], response_model: type[T], *, stage: str) -> T:
+        schema = json.dumps(response_model.model_json_schema(), separators=(",", ":"))
         repair_messages = [
             *messages,
             {
                 "role": "system",
-                "content": "The prior answer was invalid. Return JSON only, matching this schema exactly. Do not add or invent facts: "
-                + json.dumps(response_model.model_json_schema()),
+                "content": (
+                    "The prior answer was invalid. Return one complete JSON value only. "
+                    "Match the schema exactly, use only supplied IDs and facts, and do not wrap JSON in markdown. Schema: "
+                    + schema
+                ),
             },
         ]
-        response = self.client.generate_text(
-            repair_messages,
-            temperature=0,
-            model=self.settings.model_for(stage),
-        )
-        self._record(response)
-        try:
-            return response_model.model_validate_json(response.text)
-        except ValidationError as exc:
-            raise LLMResponseError("Structured response remained invalid after one repair attempt.") from exc
+        last_error: Exception | None = None
+        prior_text = ""
+        for attempt in range(2):
+            attempt_messages = list(repair_messages)
+            if attempt and prior_text:
+                attempt_messages.extend(
+                    [
+                        {"role": "assistant", "content": prior_text[:12_000]},
+                        {
+                            "role": "system",
+                            "content": (
+                                "The previous repair still failed parsing or schema validation. "
+                                "Return a shorter but complete JSON value. Omit optional detail before omitting required fields."
+                            ),
+                        },
+                    ]
+                )
+            try:
+                response = self.client.generate_text(
+                    attempt_messages,
+                    temperature=0,
+                    max_tokens=8_000 if stage == "presentation" else None,
+                    model=self.settings.model_for(stage),
+                )
+                self._record(response)
+                prior_text = response.text
+                return validate_structured_text(response.text, response_model)
+            except (LLMResponseError, ValueError, TypeError) as exc:
+                last_error = exc
+        detail = type(last_error).__name__ if last_error is not None else "unknown validation error"
+        raise LLMResponseError(
+            f"Structured response for stage '{stage}' remained invalid after two repair attempts ({detail})."
+        ) from last_error
 
     def _record(self, response: LLMResponse) -> None:
         if response.usage:
             self.usage.append(response.usage.model_dump())
-

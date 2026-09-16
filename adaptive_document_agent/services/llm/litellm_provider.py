@@ -5,12 +5,13 @@ import re
 import time
 from typing import Any
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from .base import LLMClient, LLMResponse
 from .capabilities import ModelCapabilities
 from .config import LLMSettings
 from .exceptions import LLMConfigurationError, LLMResponseError
+from .structured import validate_structured_text
 from .usage import LLMUsage
 
 
@@ -125,6 +126,6 @@ class LiteLLMProvider(LLMClient):
         }
         response = self.generate_text([schema_instruction, *messages], temperature=temperature, model=model)
         try:
-            return response_model.model_validate_json(response.text), response
-        except ValidationError as exc:
+            return validate_structured_text(response.text, response_model), response
+        except (ValueError, TypeError) as exc:
             raise LLMResponseError("Structured response failed schema validation.") from exc

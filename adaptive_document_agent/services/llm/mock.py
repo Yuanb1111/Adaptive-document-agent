@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from .base import LLMClient, LLMResponse
 from .capabilities import ModelCapabilities
 from .exceptions import LLMResponseError
+from .structured import validate_structured_text
 from .usage import LLMUsage
 
 
@@ -38,7 +39,6 @@ class MockLLMClient(LLMClient):
     def generate_structured(self, messages: list[dict[str, Any]], response_model: type[BaseModel], *, temperature: float = 0, model: str | None = None) -> tuple[BaseModel, LLMResponse]:
         response = self.generate_text(messages, temperature=temperature, model=model)
         try:
-            return response_model.model_validate_json(response.text), response
+            return validate_structured_text(response.text, response_model), response
         except Exception as exc:
             raise LLMResponseError("Mock structured response is invalid.") from exc
-
