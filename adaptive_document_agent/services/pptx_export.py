@@ -47,9 +47,13 @@ def build_presentation(result: PipelineResult) -> bytes:
     _add_evidence_overview(presentation, result)
     index = DocumentIndex(result.observations)
     usable_charts = _usable_charts(result)
-    presentation_charts = usable_charts[:8]
-    for ordinal, plan in enumerate(presentation_charts):
-        _add_chart_slide(presentation, plan, index, ordinal=ordinal)
+    presentation_charts = usable_charts[:10]
+    chart_groups = _group_chart_plans(presentation_charts, index)
+    for ordinal, group in enumerate(chart_groups):
+        if len(group) == 1:
+            _add_chart_slide(presentation, group[0], index, ordinal=ordinal)
+        else:
+            _add_chart_cluster_slide(presentation, group, index)
     if not usable_charts:
         _add_no_chart_slide(presentation, result)
     _add_findings_slide(presentation, result, presentation_charts, index)
@@ -131,10 +135,6 @@ def _add_document_overview(presentation: Any, result: PipelineResult) -> None:
 
 
 def _add_chart_slide(presentation: Any, plan: ChartPlan, index: DocumentIndex, *, ordinal: int) -> None:
-    from pptx.chart.data import CategoryChartData, XyChartData
-    from pptx.enum.chart import XL_CHART_TYPE, XL_DATA_LABEL_POSITION, XL_LEGEND_POSITION
-    from pptx.util import Inches, Pt
-
     observations = [index.get(identifier) for identifier in plan.observation_ids]
     values = [item for item in observations if item and item.value is not None]
     title = _presentation_chart_title(plan.title, values)
@@ -160,10 +160,83 @@ def _add_chart_slide(presentation: Any, plan: ChartPlan, index: DocumentIndex, *
         _text(slide, "The chart plan contains no usable values.", 0.85, 2.4, 11.4, 0.8, size=22, color=MUTED, align="center")
         return
 
+    scale, scale_label = _add_native_chart(slide, plan, values, chart_bounds)
+
+    unit = _unit_label(values, scale_label)
+    pages = ", ".join(map(str, plan.source_pages)) or "not available"
+    movement = _change_summary(values, scale)
+    if layout == 0:
+        if movement:
+            _text(slide, movement[0], 0.72, 4.1, 3.9, 0.8, size=30, color=AMBER, bold=True, font=TITLE_FONT)
+            _text(slide, movement[1], 0.74, 4.92, 3.82, 0.72, size=14, color=WHITE)
+        _text(slide, unit, 0.74, 6.25, 3.4, 0.3, size=11, color="9CB6D0")
+        _text(slide, f"Source pages  {pages}", 8.25, 6.83, 4.35, 0.25, size=10, color="9CB6D0", align="right")
+    elif layout == 1:
+        if movement:
+            _text(slide, movement[0], 9.42, 2.35, 3.0, 0.82, size=31, color=VIOLET, bold=True, font=TITLE_FONT)
+            _text(slide, movement[1], 9.44, 3.2, 2.85, 1.05, size=15, color=INK)
+        else:
+            _text(slide, f"{len(values)}", 9.42, 2.35, 3.0, 0.82, size=31, color=VIOLET, bold=True, font=TITLE_FONT)
+            _text(slide, "comparable reported observations", 9.44, 3.2, 2.85, 0.72, size=15, color=INK)
+        _text(slide, unit, 9.44, 5.2, 2.85, 0.35, size=12, color=MUTED)
+        _text(slide, f"Source pages  {pages}", 9.44, 5.72, 2.85, 0.55, size=11, color=MUTED)
+    else:
+        _text(slide, unit, 0.76, 6.48, 5.4, 0.35, size=11, color=MUTED)
+        if movement:
+            _text(slide, f"{movement[0]}  {movement[1]}", 4.0, 6.43, 5.7, 0.42, size=13, color=BLUE, bold=True, align="center")
+        _text(slide, f"Source pages  {pages}", 9.2, 6.48, 3.35, 0.35, size=11, color=MUTED, align="right")
+
+
+def _add_chart_cluster_slide(presentation: Any, plans: list[ChartPlan], index: DocumentIndex) -> None:
+    """Place related, comparable charts on one analytical story slide."""
+    slide = _base_slide(
+        presentation,
+        _chart_group_title(plans, index),
+        "A coordinated view across comparable reported periods",
+        background=IVORY,
+    )
+    count = len(plans)
+    gap = 0.28
+    panel_width = (11.9 - gap * (count - 1)) / count
+    colors = (BLUE, TEAL, VIOLET)
+    for position, plan in enumerate(plans):
+        observations = [index.get(identifier) for identifier in plan.observation_ids]
+        values = [item for item in observations if item and item.value is not None]
+        left = 0.72 + position * (panel_width + gap)
+        _panel(slide, left, 1.55, panel_width, 5.18, fill=WHITE)
+        title = _presentation_chart_title(plan.title, values)
+        _text(slide, _summary_text(title, 48), left + 0.2, 1.76, panel_width - 0.4, 0.56, size=16, color=INK, bold=True)
+        if not values:
+            _text(slide, "No usable values", left + 0.2, 3.25, panel_width - 0.4, 0.4, size=13, color=MUTED, align="center")
+            continue
+        chart_bounds = (left + 0.18, 2.34, panel_width - 0.36, 3.05)
+        scale, scale_label = _add_native_chart(slide, plan, values, chart_bounds, compact=True)
+        movement = _change_summary(values, scale)
+        if movement:
+            _text(slide, movement[0], left + 0.2, 5.48, 1.22, 0.36, size=15, color=colors[position], bold=True)
+            _text(slide, _summary_text(movement[1], 62), left + 1.45, 5.5, panel_width - 1.65, 0.34, size=10, color=INK, align="right")
+        unit = _unit_label(values, scale_label)
+        pages = ", ".join(map(str, plan.source_pages)) or "not available"
+        _text(slide, _summary_text(unit, 42), left + 0.2, 6.12, panel_width - 1.25, 0.26, size=9, color=MUTED)
+        _text(slide, f"p. {pages}", left + panel_width - 1.05, 6.12, 0.82, 0.26, size=9, color=MUTED, align="right")
+
+
+def _add_native_chart(
+    slide: Any,
+    plan: ChartPlan,
+    values: list[Observation],
+    bounds: tuple[float, float, float, float],
+    *,
+    compact: bool = False,
+) -> tuple[float, str]:
+    """Add one editable Office chart and return its display scale metadata."""
+    from pptx.chart.data import CategoryChartData, XyChartData
+    from pptx.enum.chart import XL_CHART_TYPE, XL_DATA_LABEL_POSITION, XL_LEGEND_POSITION
+    from pptx.util import Inches, Pt
+
     max_abs = max(abs(float(item.value or 0)) for item in values)
     scale, scale_label = _display_scale(values, max_abs)
-    chart_left, chart_top, chart_width, chart_height = (Inches(value) for value in chart_bounds)
-
+    chart_left, chart_top, chart_width, chart_height = (Inches(value) for value in bounds)
     if plan.chart_type == "scatter" and plan.x_metric and plan.y_metric:
         data = XyChartData()
         series = data.add_series("Observed pairs")
@@ -193,7 +266,7 @@ def _add_chart_slide(presentation: Any, plan: ChartPlan, index: DocumentIndex, *
     if chart.has_legend:
         chart.legend.position = XL_LEGEND_POSITION.BOTTOM
         chart.legend.font.name = FONT
-        chart.legend.font.size = Pt(11)
+        chart.legend.font.size = Pt(8 if compact else 11)
     chart.chart_style = 10
     for series_index, series in enumerate(chart.series):
         color = (BLUE, TEAL, VIOLET, CORAL)[series_index % 4]
@@ -204,7 +277,7 @@ def _add_chart_slide(presentation: Any, plan: ChartPlan, index: DocumentIndex, *
         except (AttributeError, ValueError):
             pass
     try:
-        chart.plots[0].has_data_labels = True
+        chart.plots[0].has_data_labels = plan.show_data_labels
         labels = chart.plots[0].data_labels
         if plan.chart_type == "pie":
             labels.position = XL_DATA_LABEL_POSITION.BEST_FIT
@@ -213,43 +286,20 @@ def _add_chart_slide(presentation: Any, plan: ChartPlan, index: DocumentIndex, *
         else:
             labels.position = XL_DATA_LABEL_POSITION.OUTSIDE_END
         labels.font.name = FONT
-        labels.font.size = Pt(11)
+        labels.font.size = Pt(8 if compact else 11)
         labels.number_format = "0.0"
     except (AttributeError, ValueError):
         pass
     try:
         chart.category_axis.tick_labels.font.name = FONT
-        chart.category_axis.tick_labels.font.size = Pt(11)
+        chart.category_axis.tick_labels.font.size = Pt(8 if compact else 11)
         chart.value_axis.tick_labels.font.name = FONT
-        chart.value_axis.tick_labels.font.size = Pt(10)
+        chart.value_axis.tick_labels.font.size = Pt(8 if compact else 10)
         chart.value_axis.has_major_gridlines = True
         chart.value_axis.axis_title.text_frame.paragraphs[0].text = ""
     except (AttributeError, ValueError):
         pass
-
-    unit = _unit_label(values, scale_label)
-    pages = ", ".join(map(str, plan.source_pages)) or "not available"
-    movement = _change_summary(values, scale)
-    if layout == 0:
-        if movement:
-            _text(slide, movement[0], 0.72, 4.1, 3.9, 0.8, size=30, color=AMBER, bold=True, font=TITLE_FONT)
-            _text(slide, movement[1], 0.74, 4.92, 3.82, 0.72, size=14, color=WHITE)
-        _text(slide, unit, 0.74, 6.25, 3.4, 0.3, size=11, color="9CB6D0")
-        _text(slide, f"Source pages  {pages}", 8.25, 6.83, 4.35, 0.25, size=10, color="9CB6D0", align="right")
-    elif layout == 1:
-        if movement:
-            _text(slide, movement[0], 9.42, 2.35, 3.0, 0.82, size=31, color=VIOLET, bold=True, font=TITLE_FONT)
-            _text(slide, movement[1], 9.44, 3.2, 2.85, 1.05, size=15, color=INK)
-        else:
-            _text(slide, f"{len(values)}", 9.42, 2.35, 3.0, 0.82, size=31, color=VIOLET, bold=True, font=TITLE_FONT)
-            _text(slide, "comparable reported observations", 9.44, 3.2, 2.85, 0.72, size=15, color=INK)
-        _text(slide, unit, 9.44, 5.2, 2.85, 0.35, size=12, color=MUTED)
-        _text(slide, f"Source pages  {pages}", 9.44, 5.72, 2.85, 0.55, size=11, color=MUTED)
-    else:
-        _text(slide, unit, 0.76, 6.48, 5.4, 0.35, size=11, color=MUTED)
-        if movement:
-            _text(slide, f"{movement[0]}  {movement[1]}", 4.0, 6.43, 5.7, 0.42, size=13, color=BLUE, bold=True, align="center")
-        _text(slide, f"Source pages  {pages}", 9.2, 6.48, 3.35, 0.35, size=11, color=MUTED, align="right")
+    return scale, scale_label
 
 
 def _add_no_chart_slide(presentation: Any, result: PipelineResult) -> None:
@@ -273,22 +323,32 @@ def _add_no_chart_slide(presentation: Any, result: PipelineResult) -> None:
 
 def _add_findings_slide(presentation: Any, result: PipelineResult, charts: list[ChartPlan], index: DocumentIndex) -> None:
     slide = _base_slide(presentation, "Key findings", "Evidence-backed conclusions from the analysis", background=IVORY)
-    findings = [
+    # Lead with conclusions that can be reproduced directly from the charts in
+    # the deck. Model-written insights then add context without displacing the
+    # most auditable findings.
+    findings = _chart_findings(charts, index)[:4]
+    seen_titles = {str(item["title"]).casefold() for item in findings}
+    model_findings = [
         {
             "title": finding.title,
             "narrative": finding.narrative,
             "pages": sorted({source.page for source in finding.evidence}),
         }
-        for finding in sorted(result.insights, key=lambda item: (item.importance, item.confidence), reverse=True)[:4]
+        for finding in sorted(result.insights, key=lambda item: (item.importance, item.confidence), reverse=True)
     ]
-    seen_titles = {str(item["title"]).casefold() for item in findings}
-    for derived in _chart_findings(charts, index):
+    for finding in model_findings:
         if len(findings) >= 4:
             break
-        if str(derived["title"]).casefold() in seen_titles:
+        candidate_title = str(finding["title"]).casefold()
+        if any(
+            candidate_title == existing
+            or candidate_title.startswith(f"{existing} ")
+            or existing.startswith(f"{candidate_title} ")
+            for existing in seen_titles
+        ):
             continue
-        findings.append(derived)
-        seen_titles.add(str(derived["title"]).casefold())
+        findings.append(finding)
+        seen_titles.add(str(finding["title"]).casefold())
     if not findings:
         _text(slide, "No validated analytical findings were produced.", 0.9, 2.4, 11.4, 0.8, size=22, color=MUTED, align="center")
         return
@@ -297,10 +357,10 @@ def _add_findings_slide(presentation: Any, result: PipelineResult, charts: list[
     for number, finding in enumerate(findings, start=1):
         color = colors[(number - 1) % len(colors)]
         _text(slide, f"{number:02d}", 0.76, top, 0.62, 0.45, size=16, color=color, bold=True)
-        _text(slide, _summary_text(str(finding["title"]), 130), 1.48, top - 0.02, 3.95, 0.68, size=18, color=INK, bold=True)
+        _text(slide, _summary_text(str(finding["title"]), 60), 1.48, top - 0.02, 3.95, 0.68, size=17, color=INK, bold=True)
         pages = list(finding["pages"])
         source = f"Pages {', '.join(map(str, pages))}" if pages else "Calculated from retained evidence"
-        _text(slide, _summary_text(str(finding["narrative"]), 330), 5.58, top - 0.01, 5.65, 0.92, size=15, color=INK)
+        _text(slide, _summary_text(str(finding["narrative"]), 160), 5.58, top - 0.01, 5.65, 0.84, size=14, color=INK)
         _text(slide, source, 11.25, top + 0.02, 1.2, 0.55, size=9, color=MUTED, align="right")
         _rule(slide, 1.48, top + 1.05, 10.98, 0.012, STONE)
         top += 1.25
@@ -623,6 +683,120 @@ def _format_scaled(value: float, scale: float) -> str:
     if abs(scaled) >= 10:
         return f"{scaled:,.1f}"
     return f"{scaled:,.2f}"
+
+
+def _group_chart_plans(plans: list[ChartPlan], index: DocumentIndex) -> list[list[ChartPlan]]:
+    """Build evidence-led slide stories of one to three compatible charts.
+
+    A shared slide is earned by comparable periods plus a shared source-table
+    context (or, when that metadata is absent, the same source page, unit and a
+    meaningful title token). This prevents unrelated charts from being packed
+    together merely to fill space.
+    """
+    remaining = list(plans)
+    groups: list[list[ChartPlan]] = []
+    while remaining:
+        anchor = remaining.pop(0)
+        group = [anchor]
+        for candidate in list(remaining):
+            if len(group) >= 3:
+                break
+            if all(_charts_belong_together(member, candidate, index) for member in group):
+                group.append(candidate)
+                remaining.remove(candidate)
+        groups.append(group)
+    return groups
+
+
+def _charts_belong_together(left: ChartPlan, right: ChartPlan, index: DocumentIndex) -> bool:
+    if set(left.observation_ids) == set(right.observation_ids):
+        return False
+    left_values = [index.get(identifier) for identifier in left.observation_ids]
+    right_values = [index.get(identifier) for identifier in right.observation_ids]
+    left_values = [item for item in left_values if item and item.value is not None]
+    right_values = [item for item in right_values if item and item.value is not None]
+    if not left_values or not right_values:
+        return False
+
+    left_contexts = _chart_contexts(left_values)
+    right_contexts = _chart_contexts(right_values)
+    shared_context = bool(left_contexts & right_contexts)
+    left_periods = {item.period for item in left_values if item.period}
+    right_periods = {item.period for item in right_values if item.period}
+    if left_periods and right_periods:
+        overlap = len(left_periods & right_periods) / len(left_periods | right_periods)
+        snapshot_of_trend = (
+            len(left_periods) == 1 and left_periods <= right_periods
+        ) or (
+            len(right_periods) == 1 and right_periods <= left_periods
+        )
+        if overlap < 0.6 and not (shared_context and snapshot_of_trend):
+            return False
+
+    if shared_context:
+        return True
+
+    same_page = bool(_chart_source_pages(left, left_values) & _chart_source_pages(right, right_values))
+    same_unit = _chart_unit_signature(left_values) == _chart_unit_signature(right_values)
+    shared_terms = _chart_title_tokens(left, left_values) & _chart_title_tokens(right, right_values)
+    return same_page and same_unit and bool(shared_terms)
+
+
+def _chart_contexts(values: list[Observation]) -> set[str]:
+    return {
+        " ".join(item.dimensions.get("table_context", "").casefold().split())
+        for item in values
+        if item.dimensions.get("table_context", "").strip()
+    }
+
+
+def _chart_unit_signature(values: list[Observation]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    return (
+        tuple(sorted({item.currency or "" for item in values})),
+        tuple(sorted({item.unit or "" for item in values})),
+    )
+
+
+def _chart_source_pages(plan: ChartPlan, values: list[Observation]) -> set[int]:
+    return {
+        *plan.source_pages,
+        *(source.page for item in values for source in item.evidence),
+    }
+
+
+def _chart_title_tokens(plan: ChartPlan, values: list[Observation]) -> set[str]:
+    labels = " ".join([plan.title, *(display_metric_name(item) for item in values)])
+    ignored = {"and", "the", "reported", "values", "value", "analysis", "chart", "total"}
+    return {
+        token
+        for token in re.findall(r"[^\W_]{2,}", labels.casefold(), flags=re.UNICODE)
+        if token not in ignored
+    }
+
+
+def _chart_group_title(plans: list[ChartPlan], index: DocumentIndex) -> str:
+    value_sets = [
+        [item for identifier in plan.observation_ids if (item := index.get(identifier)) and item.value is not None]
+        for plan in plans
+    ]
+    common_contexts: set[str] | None = None
+    display_contexts: dict[str, str] = {}
+    for values in value_sets:
+        contexts = _chart_contexts(values)
+        for item in values:
+            context = " ".join(item.dimensions.get("table_context", "").split())
+            if context:
+                display_contexts[context.casefold()] = context
+        common_contexts = contexts if common_contexts is None else common_contexts & contexts
+    if common_contexts:
+        context = display_contexts[next(iter(common_contexts))]
+        if 4 <= len(context) <= 72:
+            return context
+
+    titles = [_presentation_chart_title(plan.title, values) for plan, values in zip(plans, value_sets)]
+    if len(titles) == 2:
+        return _summary_text(f"{titles[0]} and {titles[1]}", 72)
+    return _summary_text(f"{titles[0]} and related measures", 72)
 
 
 def _usable_charts(result: PipelineResult) -> list[ChartPlan]:

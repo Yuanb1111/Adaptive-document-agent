@@ -196,3 +196,63 @@ def test_pptx_filters_junk_metrics_and_derives_findings_from_valid_charts() -> N
     assert "No validated analytical findings were produced" not in all_text
     assert "Revenue increased from" in all_text
     assert "\nat\n" not in f"\n{all_text}\n"
+
+
+def test_pptx_groups_related_charts_into_one_story_slide() -> None:
+    result = _result()
+    evidence = result.observations[0].evidence
+    cash = [
+        Observation(
+            id=f"cash-{year}", metric_original="Cash balance", value=value, raw_value=str(value),
+            unit="currency", currency="CNY", period=f"FY{year}",
+            dimensions={"period_basis": "FY", "table_context": "Financial position"},
+            evidence=evidence, confidence=0.9,
+        )
+        for year, value in ((2023, 80.0), (2024, 95.0), (2025, 120.0))
+    ]
+    result.observations.extend(cash)
+    result.charts.append(
+        ChartPlan(
+            id="cash-chart", title="Cash balance", chart_type="bar",
+            question="How did cash change?", observation_ids=[item.id for item in cash], source_pages=[234],
+        )
+    )
+    # Give the original chart the same discovered table context. The grouping
+    # is generic and does not depend on financial metric names.
+    for observation in result.observations[:3]:
+        observation.dimensions["table_context"] = "Financial position"
+
+    deck = Presentation(io.BytesIO(export_pptx(result)))
+    chart_counts = [sum(1 for shape in slide.shapes if shape.has_chart) for slide in deck.slides]
+
+    assert 2 in chart_counts
+    grouped_slide = deck.slides[chart_counts.index(2)]
+    grouped_text = "\n".join(shape.text for shape in grouped_slide.shapes if shape.has_text_frame)
+    assert "Revenue" in grouped_text
+    assert "Cash balance" in grouped_text
+
+
+def test_pptx_keeps_unrelated_charts_on_separate_slides() -> None:
+    result = _result()
+    evidence = result.observations[0].evidence
+    other = [
+        Observation(
+            id=f"other-{year}", metric_original="Distinct measure", value=value, raw_value=str(value),
+            unit="percent", period=f"FY{year}", dimensions={"table_context": "Separate source table"},
+            evidence=evidence, confidence=0.9,
+        )
+        for year, value in ((2023, 10.0), (2024, 20.0), (2025, 30.0))
+    ]
+    result.observations.extend(other)
+    result.charts.append(
+        ChartPlan(
+            id="other-chart", title="Distinct measure", chart_type="line",
+            question="How did the measure change?", observation_ids=[item.id for item in other], source_pages=[250],
+        )
+    )
+
+    deck = Presentation(io.BytesIO(export_pptx(result)))
+    chart_counts = [sum(1 for shape in slide.shapes if shape.has_chart) for slide in deck.slides]
+
+    assert chart_counts.count(1) == 2
+    assert 2 not in chart_counts
