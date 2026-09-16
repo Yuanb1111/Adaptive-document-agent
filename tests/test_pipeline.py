@@ -153,6 +153,7 @@ def test_presentation_plan_failure_does_not_discard_completed_analysis(monkeypat
     monkeypatch.setattr(PresentationPlanner, "plan", fail_plan)
     result = DocumentOrchestrator(gateway).analyse_pdf(pdf)
 
-    assert result.presentation_plan is None
+    assert result.presentation_plan is not None
     assert result.report_markdown
     assert any(issue.code == "presentation_plan_failed" for issue in result.validation_warnings)
+    assert any(issue.code == "presentation_plan_fallback" for issue in result.validation_warnings)

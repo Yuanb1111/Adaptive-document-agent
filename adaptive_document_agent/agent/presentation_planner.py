@@ -7,6 +7,7 @@ from adaptive_document_agent.models import ChartPlan, DocumentProfile, Observati
 from adaptive_document_agent.services.llm import LLMGateway
 from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
 
+from .presentation_plan_repairer import PresentationPlanRepairer
 from .prompting import load_prompt, untrusted_document_message
 
 
@@ -45,26 +46,40 @@ class PresentationPlanner:
         try:
             return validator.validate(proposed, result)
         except ValueError as exc:
-            repaired = self.gateway.generate_structured(
-                [
-                    *messages,
-                    {
-                        "role": "system",
-                        "content": (
-                            "The prior presentation plan failed deterministic validation. "
-                            "Correct only the cited problems and return the complete schema again. "
-                            "Do not add facts, numbers, IDs, or source pages. Validation feedback: "
-                            + str(exc)
+            model_repair_error = ""
+            try:
+                repaired = self.gateway.generate_structured(
+                    [
+                        *messages,
+                        {
+                            "role": "system",
+                            "content": (
+                                "The prior presentation plan failed deterministic validation. "
+                                "Correct only the cited problems and return the complete schema again. "
+                                "Do not add facts, numbers, IDs, or source pages. Validation feedback: "
+                                + str(exc)
+                            ),
+                        },
+                        untrusted_document_message(
+                            json.dumps({"prior_plan": proposed.model_dump(mode="json")}, ensure_ascii=False)
                         ),
-                    },
-                    untrusted_document_message(
-                        json.dumps({"prior_plan": proposed.model_dump(mode="json")}, ensure_ascii=False)
-                    ),
-                ],
-                PresentationPlan,
-                stage="presentation",
-            )
-            return validator.validate(repaired, result)
+                    ],
+                    PresentationPlan,
+                    stage="presentation",
+                )
+                return validator.validate(repaired, result)
+            except Exception as repair_exc:
+                # The deterministic recovery is deliberately narrower than a model repair:
+                # it can only remove unreferenced material and align citations.
+                model_repair_error = str(repair_exc)
+            try:
+                return PresentationPlanRepairer().repair(proposed, result)
+            except ValueError as deterministic_exc:
+                raise ValueError(
+                    "Presentation plan validation failed. Initial reason: "
+                    f"{exc}. AI repair reason: {model_repair_error}. "
+                    f"Deterministic repair reason: {deterministic_exc}"
+                ) from deterministic_exc
 
     @staticmethod
     def _observation_catalog(observations: list[Observation], charts: list[ChartPlan]) -> list[dict[str, object]]:

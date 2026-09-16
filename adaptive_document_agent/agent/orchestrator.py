@@ -26,6 +26,7 @@ from .document_discovery import DocumentDiscovery
 from .executor import AnalysisExecutor
 from .insight_generator import InsightGenerator
 from .presentation_planner import PresentationPlanner
+from .presentation_plan_recovery import PresentationPlanRecovery
 from .report_generator import ReportGenerator
 from .report_planner import DynamicReportPlanner
 from .semantic_resolver import SemanticResolver
@@ -163,7 +164,15 @@ class DocumentOrchestrator:
         with record_timing(timings, "reporting"):
             insights = InsightGenerator(self.gateway).generate(results)
             report_plan = DynamicReportPlanner(self.gateway).plan(profile, insights)
-            charts = ChartPlanner().plan(plan, results, index, preferred_metrics=profile.metrics)
+            charts = ChartPlanner().plan(
+                plan,
+                results,
+                index,
+                preferred_metrics=profile.metrics,
+                insights=insights,
+                report_plan=report_plan,
+                analysis_focus=analysis_focus,
+            )
             markdown = ReportGenerator().generate(
                 profile,
                 report_plan,
@@ -194,15 +203,39 @@ class DocumentOrchestrator:
                 )
                 try:
                     presentation_plan = PresentationPlanner(self.gateway).plan(planning_result)
-                except (LLMResponseError, ValueError):
+                except (LLMResponseError, ValueError) as exc:
+                    detail = " ".join(str(exc).split())[:1_400]
                     issues.append(
                         ValidationIssue(
                             code="presentation_plan_failed",
-                            message="The AI presentation plan could not be validated; the completed analysis remains available.",
+                            message=(
+                                "The AI presentation plan could not be retained. "
+                                f"Reason: {detail or 'No additional validation detail was available.'}"
+                            ),
                             severity="warning",
                             stage="presentation",
                         )
                     )
+                    try:
+                        presentation_plan = PresentationPlanRecovery().fallback(planning_result)
+                        issues.append(
+                            ValidationIssue(
+                                code="presentation_plan_fallback",
+                                message="An evidence-only presentation plan was generated in place of the invalid AI plan.",
+                                severity="info",
+                                stage="presentation",
+                            )
+                        )
+                    except Exception as fallback_exc:
+                        presentation_plan = None
+                        issues.append(
+                            ValidationIssue(
+                                code="presentation_plan_fallback_failed",
+                                message=f"Fallback presentation plan could not be generated: {fallback_exc}",
+                                severity="error",
+                                stage="presentation",
+                            )
+                        )
 
         notify("Complete")
         return PipelineResult(
