@@ -61,7 +61,7 @@ class LLMSettings(BaseModel):
         privacy_raw = "local_only" if os.getenv("LOCAL_ONLY", "false").lower() == "true" else os.getenv("EXECUTION_MODE", "auto").lower()
         stage_models = {
             stage: value
-            for stage in ("discovery", "semantic", "extraction", "planner", "vision", "insight", "report")
+            for stage in ("discovery", "semantic", "extraction", "planner", "vision", "insight", "report", "presentation")
             if (value := os.getenv(f"LLM_{stage.upper()}_MODEL", ""))
         }
         key = os.getenv("LLM_API_KEY") or os.getenv(f"{provider.value.upper()}_API_KEY")

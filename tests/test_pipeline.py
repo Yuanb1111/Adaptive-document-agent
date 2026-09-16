@@ -88,6 +88,24 @@ def test_complete_pipeline_with_mock_llm_controls_semantic_selection() -> None:
         {"scores": [{"candidate_id": identifier, "score": 0.9, "reasons": ["Relevant and complete"], "rejected": False} for identifier in candidate_ids]},
         {"insights": [{"id": "insight_mock", "title": task.title, "narrative": "The validated series changed over the reported period.", "kind": "calculated_result", "confidence": 0.9, "result_ids": [task.id]}]},
         {"title": "Revenue Performance Analysis", "sections": [{"title": "Revenue Performance", "purpose": "Explain the validated change.", "insight_ids": ["insight_mock"]}]},
+        {
+            "title": "Revenue Performance Review",
+            "report_type": "Performance analysis",
+            "company": {
+                "name": "Revenue document",
+                "one_line_description": "A source document reporting a three-year revenue series.",
+                "document_type": "Revenue performance report",
+                "source_pages": [1],
+            },
+            "slides": [
+                {"id": "cover", "slide_type": "cover", "title": "Revenue Performance Review", "message": "Three-year evidence review"},
+                {"id": "overview", "slide_type": "company_overview", "title": "Document at a Glance", "source_pages": [1]},
+                {"id": "summary", "slide_type": "executive_summary", "title": "Revenue changed across the reported period", "insight_ids": ["insight_mock"], "source_pages": [1]},
+                {"id": "analysis", "slide_type": "analysis", "title": "Revenue rose across all reported years", "message": "The retained series shows sustained growth.", "insight_ids": ["insight_mock"], "source_pages": [1]},
+                {"id": "quality", "slide_type": "data_quality", "title": "Data quality and methodology"},
+                {"id": "appendix", "slide_type": "appendix", "title": "Source data"},
+            ],
+        },
     ]
     client = MockLLMClient(responses)
     settings = LLMSettings(provider=ProviderName.MOCK, model="mock")
@@ -96,5 +114,7 @@ def test_complete_pipeline_with_mock_llm_controls_semantic_selection() -> None:
     assert result.analysis_plan
     assert result.insights[0].evidence
     assert result.report_plan.sections[0].title == "Revenue Performance"
+    assert result.presentation_plan is not None
+    assert result.presentation_plan.slides[1].title == "Document at a Glance"
     assert "## Revenue overview" in result.report_markdown
-    assert len(client.calls) == 7
+    assert len(client.calls) == 8

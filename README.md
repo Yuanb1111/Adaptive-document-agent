@@ -71,7 +71,7 @@ LLM_TIMEOUT_SECONDS=120
 LLM_TEMPERATURE=0
 ```
 
-Optional stage-specific model routes are supported with `LLM_DISCOVERY_MODEL`, `LLM_SEMANTIC_MODEL`, `LLM_EXTRACTION_MODEL`, `LLM_PLANNER_MODEL`, `LLM_VISION_MODEL`, `LLM_INSIGHT_MODEL`, and `LLM_REPORT_MODEL`.
+Optional stage-specific model routes are supported with `LLM_DISCOVERY_MODEL`, `LLM_SEMANTIC_MODEL`, `LLM_EXTRACTION_MODEL`, `LLM_PLANNER_MODEL`, `LLM_VISION_MODEL`, `LLM_INSIGHT_MODEL`, `LLM_REPORT_MODEL`, and `LLM_PRESENTATION_MODEL`.
 
 The Streamlit sidebar can also accept a key for the current process. UI-entered keys are masked, not written to disk, and not logged.
 
@@ -169,8 +169,10 @@ Delete `.adaptive_document_cache/` if local extraction caching is not desired be
 10. Validate extraction, semantics, calculations, mathematical consistency, evidence, and report language.
 11. Generate evidence-backed insights and a document-specific report structure.
 12. Plan charts only where they answer a useful analytical question, show direct value labels and provenance, and offer compatible line, bar, area, pie, scatter, horizontal-bar, and data-table views.
-13. Export an editable widescreen PowerPoint with a document or company overview, evidence coverage, native charts, findings, limitations, and paginated chart-data appendices.
-14. Export the generated analysis as a readable PDF while retaining CSV for the complete structured fact base and JSON for internal integrations.
+13. Ask the AI presentation planner to select evidence-backed themes, group related charts, and write one-message slide titles using only retained observation, insight, chart, and page references.
+14. Validate the presentation plan deterministically, rejecting unknown IDs, unsupported numeric claims, missing provenance, invalid page references, and oversized main narratives.
+15. Export an editable widescreen PowerPoint with a mandatory company or document overview, executive summary, planned analysis story, limitations, and paginated source-data appendices.
+16. Export the generated analysis as a readable PDF while retaining CSV for the complete structured fact base and JSON, including the presentation plan, for internal integrations.
 
 ## Data Model
 

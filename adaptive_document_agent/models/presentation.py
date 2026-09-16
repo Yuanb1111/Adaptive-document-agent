@@ -1,0 +1,65 @@
+"""Evidence-bound presentation narrative models."""
+
+from typing import Literal
+
+from pydantic import BaseModel, Field
+
+
+PresentationSlideType = Literal[
+    "cover",
+    "company_overview",
+    "executive_summary",
+    "analysis",
+    "risks",
+    "data_quality",
+    "appendix",
+]
+
+
+class CompanyFact(BaseModel):
+    """One source-supported fact shown on the company overview slide."""
+
+    label: str
+    value: str
+    source_pages: list[int] = Field(default_factory=list)
+
+
+class CompanyProfile(BaseModel):
+    """Source-only company or document identity selected by the planner."""
+
+    name: str = ""
+    one_line_description: str = ""
+    industry: str = ""
+    headquarters: str = ""
+    listing_market: str = ""
+    document_type: str = ""
+    track_record_period: str = ""
+    products: list[str] = Field(default_factory=list, max_length=6)
+    segments: list[str] = Field(default_factory=list, max_length=6)
+    geographies: list[str] = Field(default_factory=list, max_length=6)
+    business_model: str = ""
+    key_facts: list[CompanyFact] = Field(default_factory=list, max_length=8)
+    source_pages: list[int] = Field(default_factory=list)
+
+
+class PresentationSlide(BaseModel):
+    """One narrative instruction whose facts must reference retained IDs."""
+
+    id: str
+    slide_type: PresentationSlideType
+    title: str
+    message: str = ""
+    bullets: list[str] = Field(default_factory=list, max_length=5)
+    chart_ids: list[str] = Field(default_factory=list, max_length=3)
+    observation_ids: list[str] = Field(default_factory=list, max_length=40)
+    insight_ids: list[str] = Field(default_factory=list, max_length=6)
+    source_pages: list[int] = Field(default_factory=list)
+
+
+class PresentationPlan(BaseModel):
+    """AI-selected story plan consumed by the deterministic PPT renderer."""
+
+    title: str
+    report_type: str = "Document analysis"
+    company: CompanyProfile = Field(default_factory=CompanyProfile)
+    slides: list[PresentationSlide] = Field(default_factory=list, max_length=24)

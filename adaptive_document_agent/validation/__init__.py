@@ -5,6 +5,7 @@ from .consistency_checker import ConsistencyChecker
 from .coverage_validator import CoverageValidator, assess_coverage
 from .evidence_validator import EvidenceValidator
 from .extraction_validator import ExtractionValidator
+from .presentation_plan_validator import PresentationPlanValidator
 from .semantic_validator import SemanticValidator
 
-__all__ = ["CalculationValidator", "ConsistencyChecker", "CoverageValidator", "EvidenceValidator", "ExtractionValidator", "SemanticValidator", "assess_coverage"]
+__all__ = ["CalculationValidator", "ConsistencyChecker", "CoverageValidator", "EvidenceValidator", "ExtractionValidator", "PresentationPlanValidator", "SemanticValidator", "assess_coverage"]

@@ -9,6 +9,7 @@ from .chart import ChartPlan
 from .document import DocumentProfile, ParsedDocument
 from .evidence import SourceEvidence
 from .observation import Observation
+from .presentation import PresentationPlan
 from .validation import ValidationIssue
 
 
@@ -44,9 +45,9 @@ class PipelineResult(BaseModel):
     analysis_results: list[AnalysisResult] = Field(default_factory=list)
     insights: list[Insight] = Field(default_factory=list)
     report_plan: ReportPlan = Field(default_factory=ReportPlan)
+    presentation_plan: PresentationPlan | None = None
     report_markdown: str = ""
     charts: list[ChartPlan] = Field(default_factory=list)
     validation_warnings: list[ValidationIssue] = Field(default_factory=list)
     llm_usage: list[dict[str, object]] = Field(default_factory=list)
     timings_ms: dict[str, int] = Field(default_factory=dict)
-

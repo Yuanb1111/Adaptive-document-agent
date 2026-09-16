@@ -8,7 +8,8 @@ import re
 from typing import Any, Iterable
 
 from adaptive_document_agent.document_model import DocumentIndex, display_metric_name, is_meaningful_metric, metric_key, paired_observations, period_sort_key
-from adaptive_document_agent.models import ChartPlan, Observation, PipelineResult
+from adaptive_document_agent.models import ChartPlan, Observation, PipelineResult, PresentationSlide
+from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
 
 
 SLIDE_WIDTH = 13.333
@@ -41,6 +42,20 @@ def build_presentation(result: PipelineResult) -> bytes:
     presentation.slide_width = Inches(SLIDE_WIDTH)
     presentation.slide_height = Inches(SLIDE_HEIGHT)
 
+    if result.presentation_plan:
+        PresentationPlanValidator().validate(result.presentation_plan, result)
+        _build_planned_presentation(presentation, result)
+    else:
+        _build_legacy_presentation(presentation, result)
+    _number_slides(presentation)
+
+    stream = io.BytesIO()
+    presentation.save(stream)
+    return stream.getvalue()
+
+
+def _build_legacy_presentation(presentation: Any, result: PipelineResult) -> None:
+    """Render older cached results that predate the AI presentation plan."""
     index = DocumentIndex(result.observations)
     usable_charts = _usable_charts(result)
     presentation_charts = usable_charts[:10]
@@ -50,6 +65,7 @@ def build_presentation(result: PipelineResult) -> bytes:
         _add_document_overview(presentation, result)
     _add_contents(presentation, result, chart_groups)
     _add_evidence_overview(presentation, result)
+    _add_findings_slide(presentation, result, presentation_charts, index)
     if chart_groups:
         _add_section_divider(presentation, "Thematic analysis", "Connected measures, periods and source evidence")
     for ordinal, group in enumerate(chart_groups):
@@ -59,15 +75,183 @@ def build_presentation(result: PipelineResult) -> bytes:
             _add_chart_cluster_slide(presentation, group, index)
     if not usable_charts:
         _add_no_chart_slide(presentation, result)
-    _add_findings_slide(presentation, result, presentation_charts, index)
     _add_quality_slide(presentation, result)
     _add_section_divider(presentation, "Evidence appendix", "The retained values behind the charts")
     _add_evidence_table_slides(presentation, result, presentation_charts)
-    _number_slides(presentation)
 
-    stream = io.BytesIO()
-    presentation.save(stream)
-    return stream.getvalue()
+
+def _build_planned_presentation(presentation: Any, result: PipelineResult) -> None:
+    """Render the validated AI narrative while keeping all evidence deterministic."""
+    plan = result.presentation_plan
+    if plan is None:  # pragma: no cover - guarded by caller
+        return
+    index = DocumentIndex(result.observations)
+    chart_by_id = {item.id: item for item in _usable_charts(result)}
+    slides_by_type = {slide.slide_type: slide for slide in plan.slides}
+
+    cover = slides_by_type["cover"]
+    _add_cover(presentation, result, title=cover.title, purpose=cover.message)
+    _add_company_at_a_glance(presentation, result, slides_by_type["company_overview"])
+    _add_planned_summary(presentation, result, slides_by_type["executive_summary"], index)
+    _add_planned_contents(presentation, plan.slides)
+
+    rendered_charts: list[ChartPlan] = []
+    ordinal = 0
+    for slide_plan in plan.slides[3:]:
+        if slide_plan.slide_type == "analysis":
+            unavailable_chart_ids = set(slide_plan.chart_ids) - chart_by_id.keys()
+            if unavailable_chart_ids:
+                raise ValueError(
+                    "The presentation plan selected charts that did not pass the evidence checks: "
+                    + ", ".join(sorted(unavailable_chart_ids))
+                )
+            charts = [chart_by_id[identifier] for identifier in slide_plan.chart_ids if identifier in chart_by_id]
+            if charts:
+                charts = [
+                    item.model_copy(
+                        update={
+                            "title": slide_plan.title,
+                            "question": slide_plan.message or item.question,
+                            "source_pages": slide_plan.source_pages or item.source_pages,
+                        }
+                    )
+                    for item in charts
+                ]
+                rendered_charts.extend(charts)
+                if len(charts) == 1:
+                    _add_chart_slide(
+                        presentation,
+                        charts[0],
+                        index,
+                        ordinal=ordinal,
+                        title=slide_plan.title,
+                        subtitle=slide_plan.message,
+                    )
+                else:
+                    _add_chart_cluster_slide(
+                        presentation,
+                        charts,
+                        index,
+                        title=slide_plan.title,
+                        subtitle=slide_plan.message,
+                    )
+                ordinal += 1
+            else:
+                _add_planned_text_slide(presentation, result, slide_plan)
+        elif slide_plan.slide_type == "risks":
+            _add_planned_text_slide(presentation, result, slide_plan)
+        elif slide_plan.slide_type == "data_quality":
+            _add_quality_slide(presentation, result, title=slide_plan.title)
+        elif slide_plan.slide_type == "appendix":
+            appendix_charts = rendered_charts or list(chart_by_id.values())[:10]
+            _add_evidence_table_slides(presentation, result, appendix_charts, title=slide_plan.title)
+
+
+def _add_planned_contents(presentation: Any, planned_slides: list[PresentationSlide]) -> None:
+    slide = _base_slide(presentation, "Contents", "The evidence-led narrative", background=IVORY)
+    entries = [item for item in planned_slides if item.slide_type != "cover"]
+    for index, item in enumerate(entries):
+        column = 0 if index < 5 else 1
+        row = index if column == 0 else index - 5
+        left = 0.82 + column * 6.15
+        top = 1.62 + row * 0.98
+        _text(slide, f"{index + 1:02d}", left, top, 0.58, 0.35, size=14, color=BLUE, bold=True)
+        _text(slide, _summary_text(item.title, 54), left + 0.72, top - 0.02, 5.0, 0.58, size=17, color=INK, bold=True)
+        _rule(slide, left + 0.72, top + 0.68, 5.0, 0.012, STONE)
+
+
+def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_plan: PresentationSlide) -> None:
+    plan = result.presentation_plan
+    if plan is None:  # pragma: no cover - guarded by caller
+        return
+    company = plan.company
+    slide = _base_slide(presentation, slide_plan.title, company.document_type or result.profile.document_type, background=WHITE)
+    name = company.name or result.profile.overview_title or "Document overview"
+    description = company.one_line_description or result.profile.document_summary or result.profile.document_purpose
+    _text(slide, _summary_text(name, 80), 0.78, 1.65, 7.4, 0.68, size=27, color=NAVY, bold=True, font=TITLE_FONT)
+    _text(slide, _summary_text(description, 420), 0.8, 2.48, 7.25, 1.5, size=17, color=INK)
+
+    facts = [
+        ("Industry", company.industry),
+        ("Headquarters", company.headquarters),
+        ("Listing market", company.listing_market),
+        ("Track record", company.track_record_period),
+        *[(item.label, item.value) for item in company.key_facts],
+    ]
+    facts = [(label, value) for label, value in facts if value.strip()][:6]
+    top = 1.68
+    for label, value in facts:
+        _text(slide, label.upper(), 8.65, top, 1.45, 0.28, size=10, color=VIOLET, bold=True)
+        _text(slide, _summary_text(value, 72), 10.05, top - 0.04, 2.45, 0.54, size=14, color=INK, bold=True)
+        top += 0.72
+
+    topics = [*company.products, *company.segments, *company.geographies]
+    if company.business_model:
+        topics.append(company.business_model)
+    if topics:
+        _text(slide, "Business snapshot", 0.8, 4.45, 2.5, 0.3, size=12, color=TEAL, bold=True)
+        _text(slide, ", ".join(_summary_text(item, 48) for item in topics[:7]), 0.8, 4.88, 11.55, 0.92, size=16, color=INK, bold=True)
+    pages = sorted({*company.source_pages, *slide_plan.source_pages, *(page for fact in company.key_facts for page in fact.source_pages)})
+    if pages:
+        _text(slide, f"Source pages  {', '.join(map(str, pages))}", 0.8, 6.48, 11.55, 0.28, size=10, color=MUTED)
+
+
+def _add_planned_summary(
+    presentation: Any,
+    result: PipelineResult,
+    slide_plan: PresentationSlide,
+    index: DocumentIndex,
+) -> None:
+    slide = _base_slide(presentation, slide_plan.title, slide_plan.message, background=IVORY)
+    insight_by_id = {item.id: item for item in result.insights}
+    findings = [
+        (insight_by_id[identifier].title, insight_by_id[identifier].narrative)
+        for identifier in slide_plan.insight_ids
+        if identifier in insight_by_id
+    ]
+    if not findings:
+        findings = [(str(item["title"]), str(item["narrative"])) for item in _chart_findings(_usable_charts(result), index)]
+    if slide_plan.bullets:
+        findings = [("", bullet) for bullet in slide_plan.bullets]
+    _add_numbered_messages(slide, findings[:5], source_pages=slide_plan.source_pages)
+
+
+def _add_planned_text_slide(presentation: Any, result: PipelineResult, slide_plan: PresentationSlide) -> None:
+    slide = _base_slide(presentation, slide_plan.title, slide_plan.message, background=WHITE)
+    insight_by_id = {item.id: item for item in result.insights}
+    messages = [("", item) for item in slide_plan.bullets]
+    if not messages:
+        messages = [
+            (insight_by_id[identifier].title, insight_by_id[identifier].narrative)
+            for identifier in slide_plan.insight_ids
+            if identifier in insight_by_id
+        ]
+    if not messages:
+        messages = [("Evidence note", "The retained evidence supports this topic, but no additional narrative was supplied.")]
+    _add_numbered_messages(slide, messages[:5], source_pages=slide_plan.source_pages)
+
+
+def _add_numbered_messages(
+    slide: Any,
+    messages: list[tuple[str, str]],
+    *,
+    source_pages: list[int],
+) -> None:
+    top = 1.62
+    colors = (BLUE, TEAL, VIOLET, CORAL, AMBER)
+    for number, (label, narrative) in enumerate(messages, start=1):
+        color = colors[(number - 1) % len(colors)]
+        _text(slide, f"{number:02d}", 0.8, top, 0.62, 0.4, size=16, color=color, bold=True)
+        if label:
+            _text(slide, _summary_text(label, 58), 1.55, top - 0.02, 3.55, 0.55, size=16, color=INK, bold=True)
+            narrative_left, narrative_width = 5.35, 6.9
+        else:
+            narrative_left, narrative_width = 1.55, 10.7
+        _text(slide, _summary_text(narrative, 190), narrative_left, top - 0.02, narrative_width, 0.78, size=15, color=INK)
+        _rule(slide, 1.55, top + 0.9, 10.7, 0.012, STONE)
+        top += 1.02
+    if source_pages:
+        _text(slide, f"Source pages  {', '.join(map(str, source_pages))}", 8.25, 6.65, 4.0, 0.25, size=10, color=MUTED, align="right")
 
 
 def _add_contents(presentation: Any, result: PipelineResult, groups: list[list[ChartPlan]]) -> None:
@@ -104,7 +288,13 @@ def _add_section_divider(presentation: Any, title: str, subtitle: str) -> None:
     _text(slide, subtitle, 0.84, 3.48, 8.6, 0.65, size=20, color="BBD0E6")
 
 
-def _add_cover(presentation: Any, result: PipelineResult) -> None:
+def _add_cover(
+    presentation: Any,
+    result: PipelineResult,
+    *,
+    title: str | None = None,
+    purpose: str | None = None,
+) -> None:
     from pptx.enum.shapes import MSO_SHAPE
     from pptx.util import Inches
 
@@ -118,11 +308,11 @@ def _add_cover(presentation: Any, result: PipelineResult) -> None:
     _solid_shape(accent, VIOLET)
     _text(slide, "DOCUMENT INTELLIGENCE", 0.78, 0.62, 4.4, 0.28, size=12, color=TEAL, bold=True)
     _text(slide, f"{result.document.page_count:03d}", 9.25, 0.48, 3.3, 1.25, size=62, color="263958", bold=True, font=TITLE_FONT, align="right")
-    title = result.report_plan.title or "Adaptive Document Analysis"
-    _text(slide, title, 0.78, 1.45, 11.25, 1.55, size=38, color=WHITE, bold=True, font=TITLE_FONT)
+    cover_title = title or result.report_plan.title or "Adaptive Document Analysis"
+    _text(slide, cover_title, 0.78, 1.45, 11.25, 1.55, size=38, color=WHITE, bold=True, font=TITLE_FONT)
     _text(slide, result.profile.document_type, 0.8, 3.2, 8.8, 0.45, size=18, color="A9C7E4", bold=True)
-    purpose = _summary_text(result.profile.document_purpose, 300)
-    _text(slide, purpose, 0.8, 3.78, 10.8, 1.3, size=18, color=WHITE)
+    cover_purpose = _summary_text(purpose or result.profile.document_purpose, 300)
+    _text(slide, cover_purpose, 0.8, 3.78, 10.8, 1.3, size=18, color=WHITE)
     ranges = _page_ranges(result)
     _rule(slide, 0.8, 6.05, 11.75, 0.012, "344B6D")
     _text(slide, f"Analysis scope  {ranges}", 0.8, 6.28, 5.8, 0.35, size=12, color="A9C7E4")
@@ -172,27 +362,36 @@ def _add_document_overview(presentation: Any, result: PipelineResult) -> None:
         _text(slide, f"Overview source pages  {pages}", 0.8, 6.45, 11.5, 0.3, size=10, color=MUTED)
 
 
-def _add_chart_slide(presentation: Any, plan: ChartPlan, index: DocumentIndex, *, ordinal: int) -> None:
+def _add_chart_slide(
+    presentation: Any,
+    plan: ChartPlan,
+    index: DocumentIndex,
+    *,
+    ordinal: int,
+    title: str | None = None,
+    subtitle: str | None = None,
+) -> None:
     observations = [index.get(identifier) for identifier in plan.observation_ids]
     values = [item for item in observations if item and item.value is not None]
-    title = _presentation_chart_title(plan.title, values)
+    display_title = title or _presentation_chart_title(plan.title, values)
+    display_subtitle = subtitle or plan.question
     layout = ordinal % 3
     if layout == 0:
         slide = presentation.slides.add_slide(presentation.slide_layouts[6])
         _background(slide, MIDNIGHT)
         _text(slide, "ANALYSIS", 0.72, 0.48, 2.0, 0.28, size=11, color=TEAL, bold=True)
-        _text(slide, _summary_text(title, 54), 0.72, 1.03, 4.0, 1.42, size=27, color=WHITE, bold=True, font=TITLE_FONT)
-        _text(slide, _summary_text(plan.question, 150), 0.74, 2.68, 3.85, 0.82, size=14, color="BBD0E6")
+        _text(slide, _summary_text(display_title, 72), 0.72, 1.03, 4.0, 1.42, size=25, color=WHITE, bold=True, font=TITLE_FONT)
+        _text(slide, _summary_text(display_subtitle, 150), 0.74, 2.68, 3.85, 0.82, size=14, color="BBD0E6")
         chart_box = (4.72, 0.7, 7.9, 5.92)
         _panel(slide, *chart_box, fill=WHITE)
         chart_bounds = (5.02, 1.05, 7.3, 5.05)
     elif layout == 1:
-        slide = _base_slide(presentation, title, background=IVORY)
+        slide = _base_slide(presentation, display_title, background=IVORY)
         chart_bounds = (0.72, 1.45, 8.35, 5.15)
         _text(slide, "KEY MOVEMENT", 9.45, 1.62, 2.6, 0.28, size=11, color=VIOLET, bold=True)
         _rule(slide, 9.43, 2.02, 2.9, 0.02, STONE)
     else:
-        slide = _base_slide(presentation, title, _summary_text(plan.question, 150), background=WHITE)
+        slide = _base_slide(presentation, display_title, _summary_text(display_subtitle, 150), background=WHITE)
         chart_bounds = (0.72, 1.58, 11.85, 4.82)
     if not values:
         _text(slide, "The chart plan contains no usable values.", 0.85, 2.4, 11.4, 0.8, size=22, color=MUTED, align="center")
@@ -225,12 +424,19 @@ def _add_chart_slide(presentation: Any, plan: ChartPlan, index: DocumentIndex, *
         _text(slide, f"Source pages  {pages}", 9.2, 6.48, 3.35, 0.35, size=11, color=MUTED, align="right")
 
 
-def _add_chart_cluster_slide(presentation: Any, plans: list[ChartPlan], index: DocumentIndex) -> None:
+def _add_chart_cluster_slide(
+    presentation: Any,
+    plans: list[ChartPlan],
+    index: DocumentIndex,
+    *,
+    title: str | None = None,
+    subtitle: str | None = None,
+) -> None:
     """Place related, comparable charts on one analytical story slide."""
     slide = _base_slide(
         presentation,
-        _chart_group_title(plans, index),
-        "A coordinated view across comparable reported periods",
+        title or _chart_group_title(plans, index),
+        subtitle or "A coordinated view across comparable reported periods",
         background=IVORY,
     )
     count = len(plans)
@@ -404,11 +610,11 @@ def _add_findings_slide(presentation: Any, result: PipelineResult, charts: list[
         top += 1.25
 
 
-def _add_quality_slide(presentation: Any, result: PipelineResult) -> None:
+def _add_quality_slide(presentation: Any, result: PipelineResult, *, title: str = "Limits that affect interpretation") -> None:
     slide = presentation.slides.add_slide(presentation.slide_layouts[6])
     _background(slide, NAVY)
     _text(slide, "DATA QUALITY", 0.75, 0.55, 2.8, 0.3, size=11, color=AMBER, bold=True)
-    _text(slide, "Limits that affect interpretation", 0.75, 1.02, 8.9, 0.75, size=31, color=WHITE, bold=True, font=TITLE_FONT)
+    _text(slide, title, 0.75, 1.02, 8.9, 0.75, size=31, color=WHITE, bold=True, font=TITLE_FONT)
     messages = list(dict.fromkeys([
         *result.profile.data_quality_notes,
         *(warning.message for warning in result.validation_warnings if warning.severity in {"error", "warning"}),
@@ -423,7 +629,13 @@ def _add_quality_slide(presentation: Any, result: PipelineResult) -> None:
         top += 0.93
 
 
-def _add_evidence_table_slides(presentation: Any, result: PipelineResult, charts: list[ChartPlan]) -> None:
+def _add_evidence_table_slides(
+    presentation: Any,
+    result: PipelineResult,
+    charts: list[ChartPlan],
+    *,
+    title: str = "Key data appendix",
+) -> None:
     from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
     from pptx.util import Inches, Pt
 
@@ -435,7 +647,7 @@ def _add_evidence_table_slides(presentation: Any, result: PipelineResult, charts
         subtitle = "Validated reported values used by the presentation charts, with page-level provenance"
         if len(pages) > 1:
             subtitle += f" | Appendix {page_number} of {len(pages)}"
-        slide = _base_slide(presentation, "Key data appendix", subtitle, background=IVORY)
+        slide = _base_slide(presentation, title, subtitle, background=IVORY)
         rows = [
             [
                 _summary_text(display_metric_name(item), 58),
@@ -557,20 +769,55 @@ def _normalize_axis_ids(chart: Any) -> None:
             element.set("val", str(abs(int(value))))
 
 
+def _series_name(base: str, dimensions: tuple[tuple[str, str], ...]) -> str:
+    if not dimensions:
+        return base
+    details = ", ".join(
+        f"{name.replace('_', ' ').title()}: {value}" for name, value in dimensions
+    )
+    return f"{base} ({details})"
+
+
 def _series_rows(plan: ChartPlan, observations: list[Observation]) -> list[tuple[str, str, float]]:
-    best: dict[tuple[str, str], Observation] = {}
+    best: dict[tuple[str, str, tuple[tuple[str, str], ...]], Observation] = {}
     for item in sorted(observations, key=lambda value: period_sort_key(value.period)):
-        label = item.dimensions.get(plan.x_dimension) if plan.x_dimension else None
-        label = label or item.period or next(iter(item.dimensions.values()), item.entity or item.metric_original)
-        series = item.entity or display_metric_name(item)
-        key = (str(label), str(series))
+        axis_dimension = plan.x_dimension
+        label = item.dimensions.get(axis_dimension) if axis_dimension else None
+        if not label and item.period:
+            label = item.period
+        if not label and item.dimensions:
+            axis_dimension, label = next(iter(item.dimensions.items()))
+        label = label or item.entity or item.metric_original
+
+        base_series = str(item.entity or display_metric_name(item))
+        ignored_dimensions = {axis_dimension, "table_context", "period_basis"}
+        repeated_values = {
+            str(value).strip().casefold()
+            for value in (label, item.period, item.entity, base_series)
+            if value is not None and str(value).strip()
+        }
+        series_dimensions = tuple(
+            sorted(
+                (str(name), str(value).strip())
+                for name, value in item.dimensions.items()
+                if name not in ignored_dimensions
+                and value is not None
+                and str(value).strip()
+                and str(value).strip().casefold() not in repeated_values
+            )
+        )
+        key = (str(label), base_series, series_dimensions)
         current = best.get(key)
         if current is None or item.confidence > current.confidence:
             best[key] = item
     return [
-        (label, series, float(item.value or 0))
-        for (label, series), item in sorted(
-            best.items(), key=lambda pair: (period_sort_key(pair[0][0]), pair[0][1])
+        (
+            label,
+            _series_name(base_series, dimensions),
+            float(item.value or 0),
+        )
+        for (label, base_series, dimensions), item in sorted(
+            best.items(), key=lambda pair: (period_sort_key(pair[0][0]), pair[0][1], pair[0][2])
         )
     ]
 

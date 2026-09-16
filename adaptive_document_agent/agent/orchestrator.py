@@ -24,6 +24,7 @@ from .chart_planner import ChartPlanner
 from .document_discovery import DocumentDiscovery
 from .executor import AnalysisExecutor
 from .insight_generator import InsightGenerator
+from .presentation_planner import PresentationPlanner
 from .report_generator import ReportGenerator
 from .report_planner import DynamicReportPlanner
 from .semantic_resolver import SemanticResolver
@@ -172,6 +173,26 @@ class DocumentOrchestrator:
             )
             issues.extend(ReportValidator().validate(markdown, results).issues)
 
+        presentation_plan = None
+        if self.gateway:
+            notify("Planning presentation narrative")
+            with record_timing(timings, "presentation_planning"):
+                planning_result = PipelineResult(
+                    document=document,
+                    profile=profile,
+                    observations=index.observations,
+                    candidates=candidates,
+                    candidate_scores=scores,
+                    analysis_plan=plan,
+                    analysis_results=results,
+                    insights=insights,
+                    report_plan=report_plan,
+                    report_markdown=markdown,
+                    charts=charts,
+                    validation_warnings=issues,
+                )
+                presentation_plan = PresentationPlanner(self.gateway).plan(planning_result)
+
         notify("Complete")
         return PipelineResult(
             document=document,
@@ -183,6 +204,7 @@ class DocumentOrchestrator:
             analysis_results=results,
             insights=insights,
             report_plan=report_plan,
+            presentation_plan=presentation_plan,
             report_markdown=markdown,
             charts=charts,
             validation_warnings=issues,

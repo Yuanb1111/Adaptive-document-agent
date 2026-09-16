@@ -13,11 +13,15 @@ from adaptive_document_agent.models import (
     Observation,
     ParsedDocument,
     PipelineResult,
+    PresentationPlan,
+    PresentationSlide,
+    CompanyProfile,
     ReportPlan,
     SourceEvidence,
     ValidationIssue,
 )
 from adaptive_document_agent.services.export import export_pptx
+from adaptive_document_agent.services.pptx_export import _series_rows
 
 
 def _result() -> PipelineResult:
@@ -104,6 +108,125 @@ def test_pptx_export_contains_editable_chart_and_table() -> None:
         chart_xml = b"".join(archive.read(name) for name in names if name.startswith("ppt/charts/chart"))
         assert b'axId val="-' not in chart_xml
         assert b'crossAx val="-' not in chart_xml
+
+
+def test_pptx_export_renders_validated_ai_story_plan() -> None:
+    result = _result()
+    result.presentation_plan = PresentationPlan(
+        title="AI planned review",
+        company=CompanyProfile(
+            name="Example Automation",
+            one_line_description="A source-described automation products company.",
+            document_type="Prospectus",
+            source_pages=[8],
+        ),
+        slides=[
+            PresentationSlide(id="cover", slide_type="cover", title="AI planned review", message="Evidence-led analysis"),
+            PresentationSlide(id="overview", slide_type="company_overview", title="Company at a Glance", source_pages=[8]),
+            PresentationSlide(
+                id="summary",
+                slide_type="executive_summary",
+                title="Executive Summary",
+                bullets=["Revenue increased across the retained periods."],
+                insight_ids=["insight-1"],
+                source_pages=[234],
+            ),
+            PresentationSlide(
+                id="analysis",
+                slide_type="analysis",
+                title="Revenue growth accelerated in the latest period",
+                message="The retained revenue series supports the direction and magnitude shown.",
+                chart_ids=["chart-1"],
+                source_pages=[234],
+            ),
+            PresentationSlide(id="quality", slide_type="data_quality", title="Data quality and methodology"),
+            PresentationSlide(id="appendix", slide_type="appendix", title="Source data"),
+        ],
+    )
+
+    deck = Presentation(io.BytesIO(export_pptx(result)))
+    titles = [
+        next((shape.text.strip() for shape in slide.shapes if shape.has_text_frame and shape.text.strip()), "")
+        for slide in deck.slides
+    ]
+
+    assert titles[:5] == [
+        "DOCUMENT INTELLIGENCE",
+        "Company at a Glance",
+        "Executive Summary",
+        "Contents",
+        "ANALYSIS",
+    ]
+    all_text = "\n".join(shape.text for slide in deck.slides for shape in slide.shapes if shape.has_text_frame)
+    assert "Example Automation" in all_text
+    assert "Revenue growth accelerated in the latest period" in all_text
+    assert any(
+        shape.has_text_frame and shape.text.strip() == "Revenue growth accelerated in the latest period"
+        for shape in deck.slides[4].shapes
+    )
+
+
+def test_pptx_contents_order_matches_generated_sections() -> None:
+    deck = Presentation(io.BytesIO(export_pptx(_result())))
+    contents_index = next(
+        index
+        for index, slide in enumerate(deck.slides)
+        if any(shape.has_text_frame and shape.text.strip() == "Contents" for shape in slide.shapes)
+    )
+    findings_index = next(
+        index
+        for index, slide in enumerate(deck.slides)
+        if index > contents_index
+        and any(shape.has_text_frame and shape.text.strip() == "Key findings" for shape in slide.shapes)
+    )
+    thematic_index = next(
+        index
+        for index, slide in enumerate(deck.slides)
+        if index > contents_index
+        and any(shape.has_text_frame and shape.text.strip() == "Thematic analysis" for shape in slide.shapes)
+    )
+
+    assert findings_index < thematic_index
+
+
+def test_series_rows_preserve_non_axis_business_dimensions() -> None:
+    evidence = SourceEvidence(page=5, text="10", extraction_method="digital_table", confidence=0.9)
+    observations = [
+        Observation(
+            id=f"segment-{segment}-{year}-{ordinal}",
+            metric_original="Revenue",
+            value=value,
+            raw_value=str(value),
+            period=f"FY{year}",
+            dimensions={"segment": segment, "table_context": "Revenue by segment"},
+            evidence=[evidence],
+            confidence=confidence,
+        )
+        for segment, year, ordinal, value, confidence in (
+            ("Automation", 2024, 1, 10.0, 0.9),
+            ("Services", 2024, 1, 20.0, 0.9),
+            ("Automation", 2025, 1, 15.0, 0.9),
+            ("Services", 2025, 1, 25.0, 0.9),
+            ("Automation", 2024, 2, 999.0, 0.2),
+        )
+    ]
+    plan = ChartPlan(
+        id="segment-chart",
+        title="Revenue by segment",
+        chart_type="line",
+        question="How did each segment change?",
+        observation_ids=[item.id for item in observations],
+        source_pages=[5],
+    )
+
+    rows = _series_rows(plan, observations)
+
+    assert len(rows) == 4
+    assert {series for _, series, _ in rows} == {
+        "Revenue (Segment: Automation)",
+        "Revenue (Segment: Services)",
+    }
+    assert ("FY2024", "Revenue (Segment: Automation)", 10.0) in rows
 
 
 def test_pptx_export_skips_constant_period_chart() -> None:
