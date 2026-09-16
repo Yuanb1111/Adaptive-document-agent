@@ -12,6 +12,7 @@ from adaptive_document_agent.extraction.table_reconstructor import TableReconstr
 from adaptive_document_agent.extraction.vision_adapter import VisionAdapter
 from adaptive_document_agent.models import AnalysisScopePreview, Observation, ParsedDocument, PipelineResult, ValidationIssue
 from adaptive_document_agent.services.llm import LLMGateway
+from adaptive_document_agent.services.llm.exceptions import LLMResponseError
 from adaptive_document_agent.utils.caching import DiskCache
 from adaptive_document_agent.utils.hashing import sha256_bytes
 from adaptive_document_agent.utils.timing import record_timing
@@ -191,7 +192,17 @@ class DocumentOrchestrator:
                     charts=charts,
                     validation_warnings=issues,
                 )
-                presentation_plan = PresentationPlanner(self.gateway).plan(planning_result)
+                try:
+                    presentation_plan = PresentationPlanner(self.gateway).plan(planning_result)
+                except (LLMResponseError, ValueError):
+                    issues.append(
+                        ValidationIssue(
+                            code="presentation_plan_failed",
+                            message="The AI presentation plan could not be validated; the completed analysis remains available.",
+                            severity="warning",
+                            stage="presentation",
+                        )
+                    )
 
         notify("Complete")
         return PipelineResult(

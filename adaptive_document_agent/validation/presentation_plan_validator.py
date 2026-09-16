@@ -114,7 +114,11 @@ class PresentationPlanValidator:
                         observation = observation_by_id.get(observation_id)
                         if observation:
                             referenced_pages.update(source.page for source in observation.evidence)
-            if referenced_pages and set(slide.source_pages) - referenced_pages:
+            if (
+                slide.slide_type != "company_overview"
+                and referenced_pages
+                and set(slide.source_pages) - referenced_pages
+            ):
                 errors.append(f"slide {slide.id} cites pages not supported by its retained references")
             if slide.slide_type in {"executive_summary", "analysis", "risks"} and referenced_pages and not slide.source_pages:
                 errors.append(f"slide {slide.id} must cite its retained evidence pages")
@@ -145,7 +149,24 @@ class PresentationPlanValidator:
 
     @staticmethod
     def _numbers(value: str) -> set[str]:
+        grouped_or_decimal = re.compile(
+            r"(?<![A-Za-z0-9_])[+-]?(?:"
+            r"\d{1,3}(?:[, '\u00a0\u202f\u2019]\d{3})+(?:\.\d+)?"
+            r"|\d+(?:[.,]\d+)?"
+            r")%?"
+        )
         return {
-            match.replace(",", "").lstrip("+")
-            for match in re.findall(r"(?<![A-Za-z0-9_])[+-]?\d[\d,]*(?:\.\d+)?%?", value)
+            PresentationPlanValidator._normalize_number(match)
+            for match in grouped_or_decimal.findall(value)
         }
+
+    @staticmethod
+    def _normalize_number(value: str) -> str:
+        clean = value.replace("\u00a0", " ").replace("\u202f", " ").replace("\u2019", "'").lstrip("+")
+        suffix = "%" if clean.endswith("%") else ""
+        clean = clean.removesuffix("%")
+        if re.fullmatch(r"-?\d{1,3}(?:[, ' ]\d{3})+(?:\.\d+)?", clean):
+            clean = re.sub(r"[, ' ]", "", clean)
+        elif clean.count(",") == 1 and "." not in clean:
+            clean = clean.replace(",", ".")
+        return clean + suffix

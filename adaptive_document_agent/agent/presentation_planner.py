@@ -32,15 +32,39 @@ class PresentationPlanner:
             "charts": [item.model_dump(mode="json") for item in result.charts],
             "report_title": result.report_plan.title,
         }
+        messages = [
+            {"role": "system", "content": load_prompt("presentation_planning.txt")},
+            untrusted_document_message(json.dumps(payload, ensure_ascii=False)),
+        ]
         proposed = self.gateway.generate_structured(
-            [
-                {"role": "system", "content": load_prompt("presentation_planning.txt")},
-                untrusted_document_message(json.dumps(payload, ensure_ascii=False)),
-            ],
+            messages,
             PresentationPlan,
             stage="presentation",
         )
-        return PresentationPlanValidator().validate(proposed, result)
+        validator = PresentationPlanValidator()
+        try:
+            return validator.validate(proposed, result)
+        except ValueError as exc:
+            repaired = self.gateway.generate_structured(
+                [
+                    *messages,
+                    {
+                        "role": "system",
+                        "content": (
+                            "The prior presentation plan failed deterministic validation. "
+                            "Correct only the cited problems and return the complete schema again. "
+                            "Do not add facts, numbers, IDs, or source pages. Validation feedback: "
+                            + str(exc)
+                        ),
+                    },
+                    untrusted_document_message(
+                        json.dumps({"prior_plan": proposed.model_dump(mode="json")}, ensure_ascii=False)
+                    ),
+                ],
+                PresentationPlan,
+                stage="presentation",
+            )
+            return validator.validate(repaired, result)
 
     @staticmethod
     def _observation_catalog(observations: list[Observation], charts: list[ChartPlan]) -> list[dict[str, object]]:
