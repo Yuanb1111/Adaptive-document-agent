@@ -41,14 +41,17 @@ def build_presentation(result: PipelineResult) -> bytes:
     presentation.slide_width = Inches(SLIDE_WIDTH)
     presentation.slide_height = Inches(SLIDE_HEIGHT)
 
-    _add_cover(presentation, result)
-    if result.profile.document_summary.strip():
-        _add_document_overview(presentation, result)
-    _add_evidence_overview(presentation, result)
     index = DocumentIndex(result.observations)
     usable_charts = _usable_charts(result)
     presentation_charts = usable_charts[:10]
     chart_groups = _group_chart_plans(presentation_charts, index)
+    _add_cover(presentation, result)
+    if result.profile.document_summary.strip():
+        _add_document_overview(presentation, result)
+    _add_contents(presentation, result, chart_groups)
+    _add_evidence_overview(presentation, result)
+    if chart_groups:
+        _add_section_divider(presentation, "Thematic analysis", "Connected measures, periods and source evidence")
     for ordinal, group in enumerate(chart_groups):
         if len(group) == 1:
             _add_chart_slide(presentation, group[0], index, ordinal=ordinal)
@@ -58,12 +61,47 @@ def build_presentation(result: PipelineResult) -> bytes:
         _add_no_chart_slide(presentation, result)
     _add_findings_slide(presentation, result, presentation_charts, index)
     _add_quality_slide(presentation, result)
+    _add_section_divider(presentation, "Evidence appendix", "The retained values behind the charts")
     _add_evidence_table_slides(presentation, result, presentation_charts)
     _number_slides(presentation)
 
     stream = io.BytesIO()
     presentation.save(stream)
     return stream.getvalue()
+
+
+def _add_contents(presentation: Any, result: PipelineResult, groups: list[list[ChartPlan]]) -> None:
+    """Create a dynamic contents page from the sections actually present."""
+    slide = _base_slide(presentation, "Contents", "A structured path through the evidence", background=IVORY)
+    sections: list[tuple[str, str]] = []
+    if result.profile.document_summary.strip():
+        sections.append(("01", "Document overview"))
+    sections.append((f"{len(sections) + 1:02d}", "Analysis at a glance"))
+    sections.append((f"{len(sections) + 1:02d}", "Key findings"))
+    if groups:
+        sections.append((f"{len(sections) + 1:02d}", "Thematic analysis"))
+    sections.append((f"{len(sections) + 1:02d}", "Data quality and limitations"))
+    sections.append((f"{len(sections) + 1:02d}", "Evidence appendix"))
+    top = 1.75
+    for number, label in sections:
+        _text(slide, number, 0.9, top, 0.62, 0.4, size=16, color=BLUE, bold=True)
+        _text(slide, label, 1.75, top - 0.03, 8.0, 0.48, size=22, color=INK, bold=True)
+        _rule(slide, 1.75, top + 0.62, 10.45, 0.012, STONE)
+        top += 0.82
+
+
+def _add_section_divider(presentation: Any, title: str, subtitle: str) -> None:
+    from pptx.enum.shapes import MSO_SHAPE
+    from pptx.util import Inches
+
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    _background(slide, MIDNIGHT)
+    accent = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0), Inches(0), Inches(13.333), Inches(0.13))
+    _solid_shape(accent, TEAL)
+    _text(slide, "SECTION", 0.82, 1.05, 2.0, 0.3, size=12, color=TEAL, bold=True)
+    _text(slide, title, 0.82, 1.72, 10.9, 1.0, size=42, color=WHITE, bold=True, font=TITLE_FONT)
+    _rule(slide, 0.84, 3.12, 2.3, 0.02, BLUE)
+    _text(slide, subtitle, 0.84, 3.48, 8.6, 0.65, size=20, color="BBD0E6")
 
 
 def _add_cover(presentation: Any, result: PipelineResult) -> None:
@@ -520,13 +558,21 @@ def _normalize_axis_ids(chart: Any) -> None:
 
 
 def _series_rows(plan: ChartPlan, observations: list[Observation]) -> list[tuple[str, str, float]]:
-    rows: list[tuple[str, str, float]] = []
+    best: dict[tuple[str, str], Observation] = {}
     for item in sorted(observations, key=lambda value: period_sort_key(value.period)):
         label = item.dimensions.get(plan.x_dimension) if plan.x_dimension else None
         label = label or item.period or next(iter(item.dimensions.values()), item.entity or item.metric_original)
         series = item.entity or display_metric_name(item)
-        rows.append((str(label), str(series), float(item.value or 0)))
-    return rows
+        key = (str(label), str(series))
+        current = best.get(key)
+        if current is None or item.confidence > current.confidence:
+            best[key] = item
+    return [
+        (label, series, float(item.value or 0))
+        for (label, series), item in sorted(
+            best.items(), key=lambda pair: (period_sort_key(pair[0][0]), pair[0][1])
+        )
+    ]
 
 
 def _display_scale(observations: list[Observation], maximum: float) -> tuple[float, str]:
@@ -790,7 +836,13 @@ def _chart_group_title(plans: list[ChartPlan], index: DocumentIndex) -> str:
         common_contexts = contexts if common_contexts is None else common_contexts & contexts
     if common_contexts:
         context = display_contexts[next(iter(common_contexts))]
-        if 4 <= len(context) <= 72:
+        generic_context = re.sub(r"[^a-z0-9 ]", "", context.casefold()).strip()
+        if 4 <= len(context) <= 72 and generic_context not in {
+            "financial information",
+            "financial information section",
+            "financial results",
+            "analysis",
+        }:
             return context
 
     titles = [_presentation_chart_title(plan.title, values) for plan, values in zip(plans, value_sets)]

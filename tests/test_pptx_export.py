@@ -89,10 +89,13 @@ def test_pptx_export_contains_editable_chart_and_table() -> None:
 
     assert payload.startswith(b"PK")
     deck = Presentation(io.BytesIO(payload))
-    assert len(deck.slides) == 7
+    assert len(deck.slides) >= 9
     assert any(shape.has_chart for slide in deck.slides for shape in slide.shapes)
     assert any(shape.has_table for slide in deck.slides for shape in slide.shapes)
     assert any("Company overview" in shape.text for slide in deck.slides for shape in slide.shapes if shape.has_text_frame)
+    all_text = "\n".join(shape.text for slide in deck.slides for shape in slide.shapes if shape.has_text_frame)
+    assert "Contents" in all_text
+    assert "Thematic analysis" in all_text
 
     with zipfile.ZipFile(io.BytesIO(payload)) as archive:
         names = archive.namelist()
