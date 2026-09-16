@@ -15,6 +15,7 @@ from adaptive_document_agent.models import (
     PipelineResult,
     PresentationPlan,
     PresentationSlide,
+    PresentationVisualBlock,
     CompanyProfile,
     ReportPlan,
     SourceEvidence,
@@ -135,6 +136,7 @@ def test_pptx_export_renders_validated_ai_story_plan() -> None:
                 id="analysis",
                 slide_type="analysis",
                 title="Revenue growth accelerated in the latest period",
+                section_title="Financial Performance",
                 message="The retained revenue series supports the direction and magnitude shown.",
                 chart_ids=["chart-1"],
                 source_pages=[234],
@@ -153,8 +155,8 @@ def test_pptx_export_renders_validated_ai_story_plan() -> None:
     assert titles[:5] == [
         "DOCUMENT INTELLIGENCE",
         "Company at a Glance",
-        "Executive Summary",
         "Contents",
+        "Executive Summary",
         "ANALYSIS",
     ]
     all_text = "\n".join(shape.text for slide in deck.slides for shape in slide.shapes if shape.has_text_frame)
@@ -164,6 +166,54 @@ def test_pptx_export_renders_validated_ai_story_plan() -> None:
         shape.has_text_frame and shape.text.strip() == "Revenue growth accelerated in the latest period"
         for shape in deck.slides[4].shapes
     )
+    contents_text = "\n".join(shape.text for shape in deck.slides[2].shapes if shape.has_text_frame)
+    assert "Financial Performance" in contents_text
+    assert "Revenue growth accelerated" not in contents_text
+
+
+def test_planned_pptx_places_multiple_editable_charts_on_one_message_slide() -> None:
+    result = _result()
+    evidence = result.observations[0].evidence
+    cash = [
+        Observation(
+            id=f"cash-{year}", metric_original="Cash balance", value=value, raw_value=str(value),
+            unit="currency", currency="CNY", period=f"FY{year}", evidence=evidence, confidence=0.9,
+        )
+        for year, value in ((2023, 80_000_000.0), (2024, 95_000_000.0), (2025, 120_000_000.0))
+    ]
+    result.observations.extend(cash)
+    result.charts.append(
+        ChartPlan(
+            id="cash-chart", title="Cash balance", chart_type="bar", available_chart_types=["bar", "line", "table"],
+            question="How did cash change?", observation_ids=[item.id for item in cash], source_pages=[234],
+        )
+    )
+    result.presentation_plan = PresentationPlan(
+        title="AI planned review",
+        company=CompanyProfile(name="Example Automation", one_line_description="Automation company.", source_pages=[8]),
+        slides=[
+            PresentationSlide(id="cover", slide_type="cover", title="AI planned review"),
+            PresentationSlide(id="overview", slide_type="company_overview", title="Company at a Glance", source_pages=[8]),
+            PresentationSlide(id="summary", slide_type="executive_summary", title="Executive Summary", insight_ids=["insight-1"], source_pages=[234]),
+            PresentationSlide(
+                id="analysis", slide_type="analysis", title="Growth and liquidity moved together",
+                section_title="Financial Performance", message="Revenue and cash both increased across the retained periods.",
+                layout="hero_plus_supporting", source_pages=[234],
+                visual_blocks=[
+                    PresentationVisualBlock(role="hero", chart_ids=["chart-1"]),
+                    PresentationVisualBlock(role="supporting", chart_ids=["cash-chart"]),
+                ],
+            ),
+            PresentationSlide(id="quality", slide_type="data_quality", title="Data quality"),
+            PresentationSlide(id="appendix", slide_type="appendix", title="Source data"),
+        ],
+    )
+
+    deck = Presentation(io.BytesIO(export_pptx(result)))
+    chart_counts = [sum(1 for shape in slide.shapes if shape.has_chart) for slide in deck.slides]
+
+    assert chart_counts.count(2) == 1
+    assert sum(chart_counts) == 2
 
 
 def test_pptx_contents_order_matches_generated_sections() -> None:
@@ -271,7 +321,7 @@ def test_pptx_appendix_paginates_all_chart_observations_and_cleans_units() -> No
             evidence=evidence,
             confidence=0.9,
         )
-        for year in range(2010, 2022)
+        for year in range(2003, 2022)
     ]
     result.charts[0] = result.charts[0].model_copy(update={"observation_ids": [item.id for item in result.observations]})
 
@@ -290,7 +340,7 @@ def test_pptx_appendix_paginates_all_chart_observations_and_cleans_units() -> No
         for row in shape.table.rows
         for cell in row.cells
     ]
-    assert all(str(year) in appendix_values for year in range(2010, 2022))
+    assert all(str(year) in appendix_values for year in range(2003, 2022))
     assert "RMB '000" in appendix_values
 
 

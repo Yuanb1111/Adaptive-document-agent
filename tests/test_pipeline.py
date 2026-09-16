@@ -103,7 +103,7 @@ def test_complete_pipeline_with_mock_llm_controls_semantic_selection() -> None:
                 {"id": "cover", "slide_type": "cover", "title": "Revenue Performance Review", "message": "Three-year evidence review"},
                 {"id": "overview", "slide_type": "company_overview", "title": "Document at a Glance", "source_pages": [1]},
                 {"id": "summary", "slide_type": "executive_summary", "title": "Revenue changed across the reported period", "insight_ids": ["insight_mock"], "source_pages": [1]},
-                {"id": "analysis", "slide_type": "analysis", "title": "Revenue rose across all reported years", "message": "The retained series shows sustained growth.", "insight_ids": ["insight_mock"], "source_pages": [1]},
+                {"id": "analysis", "slide_type": "analysis", "title": "Revenue rose across all reported years", "section_title": "Financial Performance", "message": "The retained series shows sustained growth.", "insight_ids": ["insight_mock"], "source_pages": [1]},
                 {"id": "quality", "slide_type": "data_quality", "title": "Data quality and methodology"},
                 {"id": "appendix", "slide_type": "appendix", "title": "Source data"},
             ],

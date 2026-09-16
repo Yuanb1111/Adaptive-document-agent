@@ -10,20 +10,35 @@ When retained references have source pages, copy those page numbers into the sli
 
 The plan must remain document-adaptive. Do not force finance, liquidity, working capital, cash flow, or any other topic unless the supplied evidence supports it.
 
-Required narrative order:
+Required planned-slide order:
 1. exactly one cover slide
 2. exactly one company_overview slide; use "Company at a Glance" when a company is identifiable, otherwise use "Document at a Glance"
-3. exactly one executive_summary slide
+3. exactly one executive_summary slide; the renderer inserts a chapter-level contents page immediately before it
 4. zero or more analysis slides selected from the strongest supported themes
-5. zero or one risks slide when supported; risks must be document-supported watch items, not generic warnings
+5. zero or one risks slide when supported; risks must explain why the document-supported movements matter, not repeat the executive summary
 6. exactly one data_quality slide
 7. exactly one appendix slide
 
-Keep the main report between 7 and 12 planned slides including cover and excluding appendix where the evidence allows. Prefer fewer strong slides over repetitive slides.
+For evidence-dense documents, aim for 13 to 17 planned main slides including cover and excluding appendix because the renderer adds the contents page, producing roughly 14 to 18 main pages. Use fewer slides when the evidence does not support that depth. Never create an empty or weak slide to meet a page target.
+Use section_id and a concise section_title to group slides into chapters. The contents page uses unique section_title values, not full takeaway titles. Examples such as Financial Performance, Profitability, Working Capital, Liquidity and Capital Structure, Cash Flow, and Risks are candidates only when supported by the supplied evidence.
+Use slide_role to distinguish overview, deep_dive, drivers, watch_items, risk, methodology, and source_data pages. A strong topic may receive an overview plus one or more evidence-supported deep dives.
 Each analysis slide must communicate one message. Use a factual takeaway title when the evidence supports one; otherwise use a precise topic title.
-Use at most three related charts on one slide and no more than five bullets.
+Avoid system phrases such as "calculated trend", "supplied observation", "presentation plan", and "source-only" in audience-facing titles or copy.
+
+Prefer multiple related evidence blocks on one slide when they support one message:
+- two_up for two comparable or complementary charts
+- three_up for three compact comparable charts
+- hero_plus_supporting for one primary chart with one or two supporting charts or KPIs
+- chart_with_data for a chart plus a compact KPI or exact-data block
+- data_overview for a flat overview of several reported values when no chart is appropriate
+Use visual_blocks to describe this composition. Keep at most three charts and four total blocks on one slide. Combine related measures such as cash and borrowings, revenue and margin, or working-capital components only when their periods and meanings are compatible. Do not combine unrelated metrics merely to reduce page count.
+When a chart plan offers several available_chart_types, visual_blocks may choose a compatible chart_type. Prefer line or bar for point-in-time balances; use area only when filled magnitude over a continuous series is analytically appropriate. For an exact-data block, use observation_ids with chart_with_data or data_overview; do not request chart_type table.
+Include direct key numbers in the executive summary when the selected observations or insights support them. Use observation_ids so the renderer can display deterministic values.
+Do not repeat executive-summary bullets on the risks slide. A risk statement should connect the supported movement to its potential interpretation, while clearly presenting it as a watch item rather than an invented fact.
+Use no more than five bullets.
 
 Company profile fields are source-only. Leave a field empty when the excerpts do not disclose it. Do not infer headquarters, industry, listing market, founded year, ticker, products, segments, geographies, or business model from general knowledge.
 Company facts must include their source pages.
+Deduplicate products, segments, geographies, and company facts before returning them.
 
 Return only the requested schema.

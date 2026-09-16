@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from .chart import ChartType
+
 
 PresentationSlideType = Literal[
     "cover",
@@ -14,6 +16,20 @@ PresentationSlideType = Literal[
     "data_quality",
     "appendix",
 ]
+
+PresentationLayout = Literal[
+    "auto",
+    "single",
+    "two_up",
+    "three_up",
+    "hero_plus_supporting",
+    "chart_with_data",
+    "data_overview",
+]
+
+PresentationSlideRole = Literal["overview", "deep_dive", "drivers", "watch_items", "risk", "methodology", "source_data"]
+
+PresentationBlockRole = Literal["hero", "supporting", "kpi", "table"]
 
 
 class CompanyFact(BaseModel):
@@ -42,17 +58,33 @@ class CompanyProfile(BaseModel):
     source_pages: list[int] = Field(default_factory=list)
 
 
+class PresentationVisualBlock(BaseModel):
+    """One evidence block placed by the deterministic slide compositor."""
+
+    role: PresentationBlockRole
+    title: str = ""
+    chart_ids: list[str] = Field(default_factory=list, max_length=2)
+    observation_ids: list[str] = Field(default_factory=list, max_length=12)
+    insight_ids: list[str] = Field(default_factory=list, max_length=3)
+    chart_type: ChartType | None = None
+
+
 class PresentationSlide(BaseModel):
     """One narrative instruction whose facts must reference retained IDs."""
 
     id: str
     slide_type: PresentationSlideType
     title: str
+    section_id: str = ""
+    section_title: str = ""
+    slide_role: PresentationSlideRole = "overview"
+    layout: PresentationLayout = "auto"
     message: str = ""
     bullets: list[str] = Field(default_factory=list, max_length=5)
     chart_ids: list[str] = Field(default_factory=list, max_length=3)
     observation_ids: list[str] = Field(default_factory=list, max_length=40)
     insight_ids: list[str] = Field(default_factory=list, max_length=6)
+    visual_blocks: list[PresentationVisualBlock] = Field(default_factory=list, max_length=4)
     source_pages: list[int] = Field(default_factory=list)
 
 

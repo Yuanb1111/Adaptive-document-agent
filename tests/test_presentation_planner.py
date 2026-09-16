@@ -19,6 +19,7 @@ def test_presentation_plan_validator_rejects_unknown_fact_references() -> None:
                 id="analysis",
                 slide_type="analysis",
                 title="Unsupported conclusion",
+                section_title="Financial Performance",
                 message="This message has no retained source.",
                 observation_ids=["missing-observation"],
                 source_pages=[234],

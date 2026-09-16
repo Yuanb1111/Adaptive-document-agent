@@ -6,7 +6,17 @@ from .document import AnalysisPageRange, AnalysisScopePreview, DocumentProfile, 
 from .evidence import SourceEvidence
 from .observation import Observation
 from .page import DocumentPage, PageImage
-from .presentation import CompanyFact, CompanyProfile, PresentationPlan, PresentationSlide, PresentationSlideType
+from .presentation import (
+    CompanyFact,
+    CompanyProfile,
+    PresentationBlockRole,
+    PresentationLayout,
+    PresentationPlan,
+    PresentationSlide,
+    PresentationSlideRole,
+    PresentationSlideType,
+    PresentationVisualBlock,
+)
 from .report import Insight, PipelineResult, ReportPlan, ReportSection
 from .table import ExtractedTable, TableRow
 from .validation import ValidationIssue, ValidationReport
@@ -31,8 +41,12 @@ __all__ = [
     "ParsedDocument",
     "PipelineResult",
     "PresentationPlan",
+    "PresentationBlockRole",
+    "PresentationLayout",
     "PresentationSlide",
+    "PresentationSlideRole",
     "PresentationSlideType",
+    "PresentationVisualBlock",
     "ReportPlan",
     "ReportSection",
     "SourceEvidence",

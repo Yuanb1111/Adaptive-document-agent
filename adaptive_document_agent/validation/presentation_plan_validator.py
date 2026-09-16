@@ -49,8 +49,8 @@ class PresentationPlanValidator:
             errors.append("slide types do not follow the required narrative order")
 
         main_slide_count = sum(slide.slide_type != "appendix" for slide in plan.slides)
-        if main_slide_count > 12:
-            errors.append("the main presentation may contain at most 12 planned slides")
+        if main_slide_count > 18:
+            errors.append("the main presentation may contain at most 18 planned slides")
 
         observation_by_id = {item.id: item for item in result.observations}
         insight_by_id = {item.id: item for item in result.insights}
@@ -75,11 +75,34 @@ class PresentationPlanValidator:
         ) or bool(plan.company.products or plan.company.segments or plan.company.geographies or plan.company.key_facts)
         if company_has_content and not company_pages:
             errors.append("company profile content must cite at least one source page")
+        for label, values in (
+            ("products", plan.company.products),
+            ("segments", plan.company.segments),
+            ("geographies", plan.company.geographies),
+        ):
+            normalized = [self._normalized_text(value) for value in values if value.strip()]
+            if len(normalized) != len(set(normalized)):
+                errors.append(f"company profile contains duplicate {label}")
+        fact_labels = [self._normalized_text(item.label) for item in plan.company.key_facts if item.label.strip()]
+        if len(fact_labels) != len(set(fact_labels)):
+            errors.append("company profile contains duplicate key-fact labels")
 
         for slide in plan.slides:
-            unknown_observations = set(slide.observation_ids) - observation_by_id.keys()
-            unknown_insights = set(slide.insight_ids) - insight_by_id.keys()
-            unknown_charts = set(slide.chart_ids) - chart_by_id.keys()
+            observation_ids = {
+                *slide.observation_ids,
+                *(identifier for block in slide.visual_blocks for identifier in block.observation_ids),
+            }
+            insight_ids = {
+                *slide.insight_ids,
+                *(identifier for block in slide.visual_blocks for identifier in block.insight_ids),
+            }
+            chart_ids = {
+                *slide.chart_ids,
+                *(identifier for block in slide.visual_blocks for identifier in block.chart_ids),
+            }
+            unknown_observations = observation_ids - observation_by_id.keys()
+            unknown_insights = insight_ids - insight_by_id.keys()
+            unknown_charts = chart_ids - chart_by_id.keys()
             if unknown_observations:
                 errors.append(f"slide {slide.id} references unknown observations: {sorted(unknown_observations)}")
             if unknown_insights:
@@ -88,24 +111,38 @@ class PresentationPlanValidator:
                 errors.append(f"slide {slide.id} references unknown charts: {sorted(unknown_charts)}")
             if set(slide.source_pages) - valid_pages:
                 errors.append(f"slide {slide.id} contains source pages outside the document")
-            if slide.slide_type in {"analysis", "risks"} and not (
-                slide.chart_ids or slide.observation_ids or slide.insight_ids
-            ):
+            if slide.slide_type in {"analysis", "risks"} and not (chart_ids or observation_ids or insight_ids):
                 errors.append(f"slide {slide.id} has no retained evidence references")
             if slide.slide_type == "analysis" and not slide.message.strip():
                 errors.append(f"analysis slide {slide.id} must state one message")
+            if slide.slide_type in {"analysis", "risks"} and not slide.section_title.strip():
+                errors.append(f"slide {slide.id} must provide a concise section_title")
+            if len(chart_ids) > 3:
+                errors.append(f"slide {slide.id} may contain at most three charts")
+            for block in slide.visual_blocks:
+                if block.chart_type:
+                    if block.chart_type == "table":
+                        errors.append(
+                            f"slide {slide.id} must use observation_ids for exact-data blocks instead of chart_type table"
+                        )
+                    for identifier in block.chart_ids:
+                        chart = chart_by_id.get(identifier)
+                        if chart and block.chart_type not in {*chart.available_chart_types, chart.chart_type}:
+                            errors.append(
+                                f"slide {slide.id} requests unsupported chart type {block.chart_type} for {identifier}"
+                            )
 
             referenced_pages: set[int] = set()
-            referenced_observation_ids = set(slide.observation_ids)
-            for identifier in slide.observation_ids:
+            referenced_observation_ids = set(observation_ids)
+            for identifier in observation_ids:
                 item = observation_by_id.get(identifier)
                 if item:
                     referenced_pages.update(source.page for source in item.evidence)
-            for identifier in slide.insight_ids:
+            for identifier in insight_ids:
                 item = insight_by_id.get(identifier)
                 if item:
                     referenced_pages.update(source.page for source in item.evidence)
-            for identifier in slide.chart_ids:
+            for identifier in chart_ids:
                 item = chart_by_id.get(identifier)
                 if item:
                     referenced_pages.update(item.source_pages)
@@ -133,7 +170,7 @@ class PresentationPlanValidator:
                             for value in (item.value, item.raw_value, item.period, item.entity, item.dimensions)
                             if value is not None
                         )
-                for identifier in slide.insight_ids:
+                for identifier in insight_ids:
                     item = insight_by_id.get(identifier)
                     if item:
                         allowed_text_parts.extend((item.title, item.narrative))
@@ -142,6 +179,22 @@ class PresentationPlanValidator:
                 unsupported_numbers = claimed_numbers - allowed_numbers
                 if unsupported_numbers:
                     errors.append(f"slide {slide.id} contains unsupported numeric claims: {sorted(unsupported_numbers)}")
+
+        summaries = [slide for slide in plan.slides if slide.slide_type == "executive_summary"]
+        risks = [slide for slide in plan.slides if slide.slide_type == "risks"]
+        if summaries and risks:
+            summary_text = {
+                self._normalized_text(value)
+                for value in (summaries[0].message, *summaries[0].bullets)
+                if value.strip()
+            }
+            risk_text = {
+                self._normalized_text(value)
+                for value in (risks[0].message, *risks[0].bullets)
+                if value.strip()
+            }
+            if summary_text & risk_text:
+                errors.append("the risks slide repeats executive-summary language")
 
         if errors:
             raise ValueError("Invalid presentation plan: " + "; ".join(errors))
@@ -170,3 +223,7 @@ class PresentationPlanValidator:
         elif clean.count(",") == 1 and "." not in clean:
             clean = clean.replace(",", ".")
         return clean + suffix
+
+    @staticmethod
+    def _normalized_text(value: str) -> str:
+        return " ".join(re.sub(r"[^a-z0-9%]+", " ", value.casefold()).split())
