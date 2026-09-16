@@ -7,7 +7,7 @@ import io
 import re
 from typing import Any, Iterable
 
-from adaptive_document_agent.document_model import DocumentIndex, metric_key, metric_label, paired_observations, period_sort_key
+from adaptive_document_agent.document_model import DocumentIndex, display_metric_name, is_meaningful_metric, metric_key, paired_observations, period_sort_key
 from adaptive_document_agent.models import ChartPlan, Observation, PipelineResult
 
 
@@ -52,7 +52,7 @@ def build_presentation(result: PipelineResult) -> bytes:
         _add_chart_slide(presentation, plan, index, ordinal=ordinal)
     if not usable_charts:
         _add_no_chart_slide(presentation, result)
-    _add_findings_slide(presentation, result)
+    _add_findings_slide(presentation, result, presentation_charts, index)
     _add_quality_slide(presentation, result)
     _add_evidence_table_slides(presentation, result, presentation_charts)
     _number_slides(presentation)
@@ -143,8 +143,8 @@ def _add_chart_slide(presentation: Any, plan: ChartPlan, index: DocumentIndex, *
         slide = presentation.slides.add_slide(presentation.slide_layouts[6])
         _background(slide, MIDNIGHT)
         _text(slide, "ANALYSIS", 0.72, 0.48, 2.0, 0.28, size=11, color=TEAL, bold=True)
-        _text(slide, title, 0.72, 1.03, 4.0, 1.18, size=29, color=WHITE, bold=True, font=TITLE_FONT)
-        _text(slide, _summary_text(plan.question, 180), 0.74, 2.36, 3.85, 1.05, size=15, color="BBD0E6")
+        _text(slide, _summary_text(title, 54), 0.72, 1.03, 4.0, 1.42, size=27, color=WHITE, bold=True, font=TITLE_FONT)
+        _text(slide, _summary_text(plan.question, 150), 0.74, 2.68, 3.85, 0.82, size=14, color="BBD0E6")
         chart_box = (4.72, 0.7, 7.9, 5.92)
         _panel(slide, *chart_box, fill=WHITE)
         chart_bounds = (5.02, 1.05, 7.3, 5.05)
@@ -271,9 +271,24 @@ def _add_no_chart_slide(presentation: Any, result: PipelineResult) -> None:
     _text(slide, f"{len(result.observations)} retained observations remain available in the evidence appendix", 3.27, 4.75, 8.6, 0.55, size=16, color=AMBER, bold=True)
 
 
-def _add_findings_slide(presentation: Any, result: PipelineResult) -> None:
+def _add_findings_slide(presentation: Any, result: PipelineResult, charts: list[ChartPlan], index: DocumentIndex) -> None:
     slide = _base_slide(presentation, "Key findings", "Evidence-backed conclusions from the analysis", background=IVORY)
-    findings = sorted(result.insights, key=lambda item: (item.importance, item.confidence), reverse=True)[:4]
+    findings = [
+        {
+            "title": finding.title,
+            "narrative": finding.narrative,
+            "pages": sorted({source.page for source in finding.evidence}),
+        }
+        for finding in sorted(result.insights, key=lambda item: (item.importance, item.confidence), reverse=True)[:4]
+    ]
+    seen_titles = {str(item["title"]).casefold() for item in findings}
+    for derived in _chart_findings(charts, index):
+        if len(findings) >= 4:
+            break
+        if str(derived["title"]).casefold() in seen_titles:
+            continue
+        findings.append(derived)
+        seen_titles.add(str(derived["title"]).casefold())
     if not findings:
         _text(slide, "No validated analytical findings were produced.", 0.9, 2.4, 11.4, 0.8, size=22, color=MUTED, align="center")
         return
@@ -282,10 +297,10 @@ def _add_findings_slide(presentation: Any, result: PipelineResult) -> None:
     for number, finding in enumerate(findings, start=1):
         color = colors[(number - 1) % len(colors)]
         _text(slide, f"{number:02d}", 0.76, top, 0.62, 0.45, size=16, color=color, bold=True)
-        _text(slide, _summary_text(finding.title, 130), 1.48, top - 0.02, 3.95, 0.68, size=18, color=INK, bold=True)
-        pages = sorted({source.page for source in finding.evidence})
+        _text(slide, _summary_text(str(finding["title"]), 130), 1.48, top - 0.02, 3.95, 0.68, size=18, color=INK, bold=True)
+        pages = list(finding["pages"])
         source = f"Pages {', '.join(map(str, pages))}" if pages else "Calculated from retained evidence"
-        _text(slide, _summary_text(finding.narrative, 330), 5.58, top - 0.01, 5.65, 0.92, size=15, color=INK)
+        _text(slide, _summary_text(str(finding["narrative"]), 330), 5.58, top - 0.01, 5.65, 0.92, size=15, color=INK)
         _text(slide, source, 11.25, top + 0.02, 1.2, 0.55, size=9, color=MUTED, align="right")
         _rule(slide, 1.48, top + 1.05, 10.98, 0.012, STONE)
         top += 1.25
@@ -319,13 +334,13 @@ def _add_evidence_table_slides(presentation: Any, result: PipelineResult, charts
     pages = [observations[index:index + page_size] for index in range(0, len(observations), page_size)] or [[]]
     headers = ["Metric", "Period", "Reported value", "Unit", "Page"]
     for page_number, page_observations in enumerate(pages, start=1):
-        subtitle = "Exact reported values used by the presentation charts, with page-level provenance"
+        subtitle = "Validated reported values used by the presentation charts, with page-level provenance"
         if len(pages) > 1:
             subtitle += f" | Appendix {page_number} of {len(pages)}"
         slide = _base_slide(presentation, "Key data appendix", subtitle, background=IVORY)
         rows = [
             [
-                _summary_text(metric_label(item), 58),
+                _summary_text(display_metric_name(item), 58),
                 item.period or item.entity or "-",
                 item.raw_value,
                 _display_source_unit(item),
@@ -357,7 +372,9 @@ def _add_evidence_table_slides(presentation: Any, result: PipelineResult, charts
 def _base_slide(presentation: Any, title: str, subtitle: str = "", *, background: str = WHITE) -> Any:
     slide = presentation.slides.add_slide(presentation.slide_layouts[6])
     _background(slide, background)
-    _text(slide, title, 0.72, 0.34, 11.7, 0.66, size=29, color=NAVY, bold=True, font=TITLE_FONT)
+    clean_title = _summary_text(title, 72)
+    title_size = 27 if len(clean_title) > 52 else 29
+    _text(slide, clean_title, 0.72, 0.31, 11.7, 0.74, size=title_size, color=NAVY, bold=True, font=TITLE_FONT)
     if subtitle:
         _text(slide, subtitle, 0.74, 1.02, 11.4, 0.3, size=12, color=MUTED)
     _rule(slide, 0.72, 1.31, 11.9, 0.025, BLUE)
@@ -447,7 +464,7 @@ def _series_rows(plan: ChartPlan, observations: list[Observation]) -> list[tuple
     for item in sorted(observations, key=lambda value: period_sort_key(value.period)):
         label = item.dimensions.get(plan.x_dimension) if plan.x_dimension else None
         label = label or item.period or next(iter(item.dimensions.values()), item.entity or item.metric_original)
-        series = item.entity or metric_label(item)
+        series = item.entity or display_metric_name(item)
         rows.append((str(label), str(series), float(item.value or 0)))
     return rows
 
@@ -477,7 +494,7 @@ def _unit_label(observations: Iterable[Observation], scale_label: str) -> str:
 def _representative_observations(result: PipelineResult, *, maximum: int) -> list[Observation]:
     groups: dict[str, list[Observation]] = defaultdict(list)
     for item in result.observations:
-        if item.value is not None and item.evidence:
+        if item.value is not None and item.evidence and is_meaningful_metric(item):
             groups[metric_key(item)].append(item)
     preferred = [metric.casefold().strip() for metric in result.profile.metrics if metric.strip()]
     ordered = sorted(
@@ -509,7 +526,7 @@ def _appendix_observations(result: PipelineResult, charts: list[ChartPlan]) -> l
     for chart in charts:
         for identifier in chart.observation_ids:
             item = by_id.get(identifier)
-            if not item or item.value is None or not item.evidence or identifier in seen:
+            if not item or item.value is None or not item.evidence or identifier in seen or not is_meaningful_metric(item):
                 continue
             seen.add(identifier)
             output.append(item)
@@ -562,12 +579,9 @@ def _summary_text(value: str, maximum: int) -> str:
 
 def _presentation_chart_title(value: str, observations: list[Observation]) -> str:
     title = value.replace(" — Reported Values", "").replace(" - Reported Values", "").strip()
-    labels = list(dict.fromkeys(metric_label(item) for item in observations))
+    labels = list(dict.fromkeys(display_metric_name(item) for item in observations if is_meaningful_metric(item)))
     if len(labels) == 1:
-        source_label = labels[0]
-        canonical_names = {(item.metric_canonical or "").casefold() for item in observations}
-        if any(name and name in title.casefold() for name in canonical_names) and source_label.casefold() not in title.casefold():
-            title = source_label
+        title = labels[0]
     if " — " in title and len(title) > 72:
         title = title.split(" — ", 1)[1]
     return _summary_text(title, 78)
@@ -616,6 +630,7 @@ def _usable_charts(result: PipelineResult) -> list[ChartPlan]:
     output: list[ChartPlan] = []
     for plan in result.charts:
         observations = [index.get(identifier) for identifier in plan.observation_ids]
+        observations = [item for item in observations if item and is_meaningful_metric(item)]
         contexts = {
             (item.period, item.entity, tuple(sorted(item.dimensions.items())))
             for item in observations
@@ -630,3 +645,57 @@ def _usable_charts(result: PipelineResult) -> list[ChartPlan]:
         if len(contexts) >= 2 and (not has_periods or has_movement):
             output.append(plan)
     return output
+
+
+def _chart_findings(charts: list[ChartPlan], index: DocumentIndex) -> list[dict[str, object]]:
+    """Create conservative reported-fact findings when analytical insights are absent."""
+    output: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for chart in charts:
+        values = [index.get(identifier) for identifier in chart.observation_ids]
+        values = [item for item in values if item and item.value is not None and is_meaningful_metric(item)]
+        keys = {metric_key(item) for item in values}
+        if len(keys) != 1 or not values:
+            continue
+        key = next(iter(keys))
+        if key in seen:
+            continue
+        by_period: dict[str, Observation] = {}
+        for item in values:
+            if item.period:
+                current = by_period.get(item.period)
+                if current is None or item.confidence > current.confidence:
+                    by_period[item.period] = item
+        ordered = sorted(by_period.values(), key=lambda item: period_sort_key(item.period))
+        if len(ordered) < 2:
+            continue
+        first, last = ordered[0], ordered[-1]
+        scale, scale_label = _display_scale(ordered, max(abs(float(item.value or 0)) for item in ordered))
+        start, end = float(first.value or 0), float(last.value or 0)
+        direction = "increased" if end > start else "decreased"
+        if start < 0 <= end:
+            direction = "moved from negative to positive"
+        elif start > 0 >= end:
+            direction = "moved from positive to negative"
+        label = display_metric_name(first)
+        start_text = _finding_value(first, scale, scale_label)
+        end_text = _finding_value(last, scale, scale_label)
+        movement = _change_summary(ordered, scale)
+        change_text = f" ({movement[0]})" if movement else ""
+        narrative = f"{label} {direction} from {start_text} in {first.period} to {end_text} in {last.period}{change_text}."
+        output.append({
+            "title": label,
+            "narrative": narrative,
+            "pages": sorted({source.page for item in ordered for source in item.evidence}),
+        })
+        seen.add(key)
+    return output
+
+
+def _finding_value(item: Observation, scale: float, scale_label: str) -> str:
+    value = _format_scaled(float(item.value or 0), scale)
+    if item.unit == "percent":
+        return f"{value}%"
+    prefix = f"{item.currency} " if item.currency else ""
+    suffix = f" {scale_label.rstrip('s')}" if scale_label else ""
+    return f"{prefix}{value}{suffix}".strip()

@@ -1,4 +1,4 @@
-from adaptive_document_agent.document_model import DocumentIndex, DocumentModelBuilder, metric_key, metric_label
+from adaptive_document_agent.document_model import DocumentIndex, DocumentModelBuilder, display_metric_name, is_meaningful_metric, metric_key, metric_label
 from adaptive_document_agent.models import Observation, SourceEvidence
 
 
@@ -57,3 +57,20 @@ def test_qualified_source_metric_is_not_collapsed_into_broader_canonical_name() 
     assert metric_key(amount) != metric_key(share)
     assert index.for_metric("revenue") == [amount]
     assert index.for_metric("revenue: % of revenue") == [share]
+
+
+def test_display_metric_filter_rejects_table_grammar_and_cleans_units() -> None:
+    junk = Observation(id="junk", metric_original="As", value=5.8, raw_value="5.8%", confidence=0.8)
+    valid = Observation(id="cash", metric_original="Cash and cash equivalents: RMB", value=100, raw_value="100", confidence=0.8)
+    child = Observation(
+        id="secured",
+        metric_original="- Secured and guaranteed: RMB",
+        value=100,
+        raw_value="100",
+        dimensions={"table_context": "Borrowings"},
+        confidence=0.8,
+    )
+
+    assert not is_meaningful_metric(junk)
+    assert display_metric_name(valid) == "Cash and cash equivalents"
+    assert display_metric_name(child) == "Borrowings: Secured and guaranteed"

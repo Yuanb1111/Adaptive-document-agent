@@ -2,7 +2,7 @@
 
 from collections import defaultdict
 
-from adaptive_document_agent.document_model import metric_key, period_sort_key
+from adaptive_document_agent.document_model import display_metric_name, is_meaningful_metric, metric_key, period_sort_key
 from adaptive_document_agent.models import ChartPlan, DocumentProfile, Insight, Observation, ReportPlan, ValidationIssue
 from adaptive_document_agent.validation.coverage_validator import assess_coverage
 
@@ -52,18 +52,21 @@ class ReportGenerator:
 
     @staticmethod
     def _coverage(profile: DocumentProfile, observations: list[Observation], charts: list[ChartPlan]) -> list[str]:
-        if not observations:
+        displayable = [item for item in observations if is_meaningful_metric(item)]
+        if not displayable:
             return []
-        metrics = {metric_key(item) for item in observations}
-        tables = {source.table_id for item in observations for source in item.evidence if source.table_id}
-        evidence_pages = {source.page for item in observations for source in item.evidence}
+        metrics = {metric_key(item) for item in displayable}
+        tables = {source.table_id for item in displayable for source in item.evidence if source.table_id}
+        evidence_pages = {source.page for item in displayable for source in item.evidence}
+        displayable_ids = {item.id for item in displayable}
+        chart_count = sum(any(identifier in displayable_ids for identifier in chart.observation_ids) for chart in charts)
         ranges = ", ".join(f"{start}-{end}" for start, end in profile.analysis_page_ranges) or "complete document"
         return [
             "## Evidence Coverage",
             "",
             f"- Confirmed analysis scope: pages {ranges}.",
-            f"- Retained fact base: {len(observations)} observations across {len(metrics)} metrics and {len(tables)} source tables.",
-            f"- Page-level evidence is retained from {len(evidence_pages)} pages; {len(charts)} validated visualisations were planned.",
+            f"- Retained fact base: {len(displayable)} observations across {len(metrics)} metrics and {len(tables)} source tables.",
+            f"- Page-level evidence is retained from {len(evidence_pages)} pages; {chart_count} validated visualisations were planned.",
             "- The selected facts below are a readable overview; the complete retained fact base remains available in the CSV export.",
             "",
         ]
@@ -76,7 +79,10 @@ class ReportGenerator:
         maximum_metrics: int = 15,
         maximum_rows_per_metric: int = 6,
     ) -> list[str]:
-        eligible = [item for item in observations if item.value is not None and item.evidence and item.confidence >= 0.5]
+        eligible = [
+            item for item in observations
+            if item.value is not None and item.evidence and item.confidence >= 0.5 and is_meaningful_metric(item)
+        ]
         if not eligible:
             return []
         groups: dict[str, list[Observation]] = defaultdict(list)
@@ -107,7 +113,7 @@ class ReportGenerator:
                 rows.append(
                     "| " + " | ".join(
                         self._escape(value)
-                        for value in (item.metric_original, context, item.raw_value, units, pages, f"{item.confidence:.2f}")
+                        for value in (display_metric_name(item), context, item.raw_value, units, pages, f"{item.confidence:.2f}")
                     ) + " |"
                 )
         if not rows:

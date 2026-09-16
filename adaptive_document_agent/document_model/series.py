@@ -10,6 +10,15 @@ from math import isclose
 from adaptive_document_agent.models import Observation
 
 
+_METRIC_NOISE_WORDS = {
+    "a", "an", "and", "as", "at", "by", "for", "from", "in", "m", "of", "on", "or", "the", "to", "with",
+}
+_TRAILING_UNIT = re.compile(
+    r"\s*:\s*(?:rmb|cny|usd|hkd|eur|gbp)(?:\s*[\u2018\u2019']*\s*0{3}|\s+in\s+(?:thousands|millions|billions))?\s*$",
+    flags=re.IGNORECASE,
+)
+
+
 def metric_label(observation: Observation) -> str:
     """Return the most specific trustworthy display name for a metric.
 
@@ -34,6 +43,42 @@ def metric_label(observation: Observation) -> str:
 
 def metric_key(observation: Observation) -> str:
     return metric_label(observation).casefold()
+
+
+def display_metric_name(observation: Observation) -> str:
+    """Return a clean presentation label without changing the retained source value."""
+    label = metric_label(observation)
+    label = re.sub(r"^[\s\-\u2013\u2014\u2022]+", "", label)
+    label = _TRAILING_UNIT.sub("", label)
+    label = " ".join(label.split()).strip(" :;,-")
+
+    # A leading dash commonly marks a child row.  Restore a short, usable
+    # parent label only when the source explicitly retained one.
+    if observation.metric_original.lstrip().startswith(("-", "\u2013", "\u2014", "\u2022")):
+        context = " ".join(observation.dimensions.get("table_context", "").split()).strip(" :;,-")
+        if context and len(context) <= 48 and is_meaningful_metric_name(context) and context.casefold() not in label.casefold():
+            label = f"{context}: {label}"
+    return label
+
+
+def is_meaningful_metric_name(value: str) -> bool:
+    """Reject fragments and table grammar that cannot identify a metric."""
+    clean = _TRAILING_UNIT.sub("", " ".join(value.split())).strip(" :;,-")
+    if len(clean) < 2 or not re.search(r"[A-Za-z\u00c0-\u024f\u3400-\u9fff]", clean):
+        return False
+    if re.fullmatch(r"(?:19|20)\d{2}(?:[-/.]\d{1,2}){0,2}", clean):
+        return False
+    tokens = re.findall(r"[A-Za-z]+", clean.casefold())
+    if tokens and all(token in _METRIC_NOISE_WORDS for token in tokens):
+        return False
+    if len(tokens) == 1 and len(tokens[0]) == 1:
+        return False
+    return True
+
+
+def is_meaningful_metric(observation: Observation) -> bool:
+    """Return whether an observation has a complete, displayable metric name."""
+    return is_meaningful_metric_name(display_metric_name(observation))
 
 
 def context_key(observation: Observation) -> tuple[object, ...]:

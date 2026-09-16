@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 
 from adaptive_document_agent.models import DocumentProfile, Observation, ValidationIssue, ValidationReport
+from adaptive_document_agent.document_model import display_metric_name, is_meaningful_metric
 
 
 @dataclass(frozen=True)
@@ -23,7 +24,9 @@ def assess_coverage(profile: DocumentProfile, observations: list[Observation]) -
     metric_groups: dict[str, list[Observation]] = {}
     display_names: dict[str, str] = {}
     for item in observations:
-        name = item.metric_canonical or item.metric_original
+        if not is_meaningful_metric(item):
+            continue
+        name = display_metric_name(item)
         key = name.casefold()
         metric_groups.setdefault(key, []).append(item)
         display_names.setdefault(key, name)

@@ -23,7 +23,8 @@ def build_report_pdf(result: PipelineResult) -> bytes:
     except ImportError as exc:  # pragma: no cover - deployment configuration failure
         raise RuntimeError("PDF export requires reportlab.") from exc
 
-    font_name = _register_report_font(result.report_markdown)
+    public_markdown = "\n".join(_public_report_lines(result.report_markdown))
+    font_name = _register_report_font(public_markdown)
 
     stream = io.BytesIO()
     document = SimpleDocTemplate(
@@ -48,7 +49,7 @@ def build_report_pdf(result: PipelineResult) -> bytes:
     }
 
     story: list[Any] = []
-    lines = result.report_markdown.splitlines()
+    lines = public_markdown.splitlines()
     index = 0
     while index < len(lines):
         line = lines[index].strip()
@@ -112,6 +113,25 @@ def _inline(value: str) -> str:
     clean = value.replace("—", "-").replace("–", "-").replace("×", "x")
     escaped = escape(clean)
     return re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", escaped)
+
+
+def _public_report_lines(markdown: str) -> list[str]:
+    """Remove technical diagnostics from the formal PDF while retaining limitations."""
+    output: list[str] = []
+    skipping_validation_section = False
+    for raw_line in markdown.splitlines():
+        line = raw_line.strip()
+        if line.casefold() == "## validation warnings":
+            skipping_validation_section = True
+            continue
+        if skipping_validation_section and line.startswith("## "):
+            skipping_validation_section = False
+        if skipping_validation_section:
+            continue
+        if re.match(r"^-\s*\[(?:error|warning|info)\]\s+", line, flags=re.IGNORECASE):
+            continue
+        output.append(raw_line)
+    return output
 
 
 def _table_cells(value: str) -> list[str]:

@@ -166,3 +166,33 @@ def test_pptx_appendix_paginates_all_chart_observations_and_cleans_units() -> No
     ]
     assert all(str(year) in appendix_values for year in range(2010, 2022))
     assert "RMB '000" in appendix_values
+
+
+def test_pptx_filters_junk_metrics_and_derives_findings_from_valid_charts() -> None:
+    result = _result()
+    result.insights = []
+    evidence = result.observations[0].evidence
+    junk = [
+        Observation(
+            id=f"junk-{year}", metric_original="at", value=value, raw_value=str(value), unit="percent",
+            period=str(year), evidence=evidence, confidence=0.9,
+        )
+        for year, value in ((2023, 31.7), (2024, 36.9))
+    ]
+    result.observations.extend(junk)
+    result.charts.append(
+        ChartPlan(
+            id="junk-chart", title="FINANCIAL INFORMATION - at", chart_type="bar",
+            question="invalid fragment", observation_ids=[item.id for item in junk], source_pages=[234],
+        )
+    )
+
+    deck = Presentation(io.BytesIO(export_pptx(result)))
+    all_text = "\n".join(
+        shape.text for slide in deck.slides for shape in slide.shapes if shape.has_text_frame
+    )
+
+    assert "FINANCIAL INFORMATION - at" not in all_text
+    assert "No validated analytical findings were produced" not in all_text
+    assert "Revenue increased from" in all_text
+    assert "\nat\n" not in f"\n{all_text}\n"

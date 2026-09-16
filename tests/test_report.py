@@ -59,6 +59,15 @@ def test_complete_reported_series_adds_charts_beyond_successful_calculations() -
     assert all(set(chart.available_chart_types) == {"line", "bar", "table"} for chart in charts)
 
 
+def test_reported_series_charts_reject_metric_fragments() -> None:
+    evidence = [SourceEvidence(page=5, text="reported", table_id="table", extraction_method="digital_table", confidence=0.9)]
+    observations = [
+        Observation(id=f"junk-{year}", metric_original="at", value=value, raw_value=str(value), period=str(year), confidence=0.9, evidence=evidence)
+        for year, value in ((2022, 31.7), (2023, 36.9))
+    ]
+    assert ChartPlanner().plan([], [], DocumentIndex(observations)) == []
+
+
 def test_true_cross_source_conflict_blocks_reported_series_chart() -> None:
     observations = [
         Observation(id="a", metric_original="Revenue", value=100, raw_value="100", period="FY2024", confidence=0.9),
@@ -185,6 +194,17 @@ def test_report_displays_source_unit_and_scale_next_to_raw_value() -> None:
     profile = DocumentProfile(metrics=["Revenue"])
     markdown = ReportGenerator().generate(profile, DynamicReportPlanner().plan(profile, []), [], [], observations=[observation])
     assert "RMB in thousands / CNY / currency / source scale ×1,000" in markdown
+
+
+def test_reported_data_overview_excludes_metric_fragments() -> None:
+    evidence = [SourceEvidence(page=8, text="5.8%", table_id="table_8", extraction_method="digital_table", confidence=0.9)]
+    junk = Observation(id="junk", metric_original="As", value=5.8, raw_value="5.8%", period="2023", unit="percent", confidence=0.9, evidence=evidence)
+    profile = DocumentProfile(metrics=["Cost of sales"])
+
+    markdown = ReportGenerator().generate(profile, DynamicReportPlanner().plan(profile, []), [], [], observations=[junk])
+
+    assert "Reported Data Overview" not in markdown
+    assert "| As |" not in markdown
 
 
 def test_scatter_chart_pairs_by_context_and_shows_labels() -> None:

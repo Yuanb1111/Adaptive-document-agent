@@ -3,7 +3,7 @@
 from collections import Counter
 import re
 
-from adaptive_document_agent.document_model import DocumentIndex, best_period_series, conflicting_groups, metric_key, metric_label, paired_observations, period_sort_key
+from adaptive_document_agent.document_model import DocumentIndex, best_period_series, conflicting_groups, display_metric_name, is_meaningful_metric, metric_key, paired_observations, period_sort_key
 from adaptive_document_agent.models import AnalysisResult, AnalysisTask, ChartPlan, ChartType, Observation
 from adaptive_document_agent.utils.ids import stable_id
 
@@ -39,7 +39,7 @@ class ChartPlanner:
             supported_type = self._MAPPING.get(task.analysis_type)
             identifiers = list(task.observation_query.get("observation_ids", []))
             observations = [index.get(identifier) for identifier in identifiers]
-            observations = [item for item in observations if item and item.value is not None]
+            observations = [item for item in observations if item and item.value is not None and is_meaningful_metric(item)]
             if not supported_type or task.id not in valid_tasks or len(observations) < 2:
                 continue
             x_metric = task.required_metrics[0] if task.required_metrics else None
@@ -110,6 +110,8 @@ class ChartPlanner:
             if metric in seen_metrics or metric in {"page", "pages"}:
                 continue
             observations = index.for_metric(metric)
+            if not observations or not is_meaningful_metric(observations[0]):
+                continue
             if conflicting_groups(observations):
                 continue
             series = best_period_series(observations)
@@ -124,9 +126,8 @@ class ChartPlanner:
         for _, metric, series in sorted(candidates, key=lambda item: (item[0], item[1]), reverse=True)[:maximum]:
             identifiers = [item.id for item in series]
             pages = sorted({source.page for item in series for source in item.evidence})
-            label = metric_label(series[0])
-            table_context = series[0].dimensions.get("table_context")
-            title = f"{table_context} — {label}" if self._displayable_context(table_context, label) else label
+            label = display_metric_name(series[0])
+            title = label
             default_type = self._select_period_chart_type(series, chart_type_counts)
             chart_type_counts[default_type] += 1
             available_types: list[ChartType] = ["line", "bar", "table"]
