@@ -14,3 +14,14 @@ Key non-negotiable rules:
 - Never invent missing values, units, periods, categories, currencies, or evidence.
 - Keep modules focused and run tests after each phase.
 
+## GitHub push workflow on the company computer
+
+Direct `git push` from the working repository can fail in the company environment even when local commits succeed. Use the established temporary Git-directory workaround:
+
+1. Make and verify the local commit normally in this working tree.
+2. Copy the repository's `.git` directory to `pushrepo.git` inside the workspace **after** the new commit has been created.
+3. Push with `git --git-dir="D:\adaptive document agent\pushrepo.git" push origin main`.
+4. Verify on GitHub that `main` shows the new commit.
+5. Resolve and confirm the exact temporary path is inside this workspace, then remove only `D:\adaptive document agent\pushrepo.git`.
+
+Always push the current `HEAD`; do not hard-code an older commit hash. Never add `pushrepo.git` to a commit.
