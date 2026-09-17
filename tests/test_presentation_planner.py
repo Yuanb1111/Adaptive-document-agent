@@ -339,3 +339,40 @@ def test_extract_presentation_errors_formats_clean_bullets() -> None:
     assert any("unsupported numeric claim: 1,257,120" in e for e in errors)
     assert any("chart_type area is unavailable" in e for e in errors)
     assert any("section_title is missing" in e for e in errors)
+
+
+def test_presentation_plan_repairer_preserves_usable_charts_when_ai_slides_have_hallucinated_ids() -> None:
+    result = _result()
+    # Simulate an AI plan with invalid / hallucinated chart and observation IDs
+    plan = PresentationPlan(
+        title="AI Plan With Hallucinated IDs",
+        slides=[
+            PresentationSlide(id="cover", slide_type="cover", title="Review"),
+            PresentationSlide(id="overview", slide_type="company_overview", title="Company at a Glance"),
+            PresentationSlide(id="summary", slide_type="executive_summary", title="Executive Summary"),
+            PresentationSlide(
+                id="slide_analysis_bad",
+                slide_type="analysis",
+                title="Revenue Overview",
+                section_title="Financial Performance",
+                message="Revenue analysis statement.",
+                chart_ids=["chart_hallucinated_999"],
+                observation_ids=["obs_hallucinated_888"],
+            ),
+            PresentationSlide(id="quality", slide_type="data_quality", title="Data Quality"),
+            PresentationSlide(id="appendix", slide_type="appendix", title="Appendix"),
+        ],
+    )
+
+    repaired = PresentationPlanRepairer().repair(plan, result)
+    assert PresentationPlanValidator().validate(repaired, result) is repaired
+
+    # Ensure the presentation retains analysis slides and charts
+    analysis_slides = [s for s in repaired.slides if s.slide_type == "analysis"]
+    assert len(analysis_slides) >= 1
+    total_charts = [
+        cid
+        for s in analysis_slides
+        for cid in (*s.chart_ids, *(c for b in s.visual_blocks for c in b.chart_ids))
+    ]
+    assert "chart-1" in total_charts

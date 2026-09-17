@@ -159,6 +159,7 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
             _add_quality_slide(presentation, result, title=slide_plan.title)
         elif slide_plan.slide_type == "appendix":
             appendix_charts = rendered_charts or list(chart_by_id.values())[:10]
+            _add_section_divider(presentation, "Evidence appendix", "The retained values behind the charts")
             _add_evidence_table_slides(presentation, result, appendix_charts, title=slide_plan.title)
 
 
@@ -286,10 +287,14 @@ def _add_planned_summary(
         for identifier in slide_plan.insight_ids
         if identifier in insight_by_id
     ]
+    if slide_plan.bullets:
+        bullet_findings = [("", bullet) for bullet in slide_plan.bullets if bullet.strip()]
+        if len(bullet_findings) >= 3 or not findings:
+            findings = bullet_findings
+        else:
+            findings = [*bullet_findings, *findings[: 5 - len(bullet_findings)]]
     if not findings:
         findings = [(str(item["title"]), str(item["narrative"])) for item in _chart_findings(_usable_charts(result), index)]
-    if slide_plan.bullets:
-        findings = [("", bullet) for bullet in slide_plan.bullets]
     _add_numbered_messages(slide, findings[:5], source_pages=slide_plan.source_pages)
 
 

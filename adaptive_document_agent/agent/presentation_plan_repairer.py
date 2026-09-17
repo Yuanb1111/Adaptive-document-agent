@@ -12,6 +12,7 @@ from collections import defaultdict
 import re
 
 from adaptive_document_agent.models import (
+    ChartPlan,
     CompanyFact,
     CompanyProfile,
     PipelineResult,
@@ -31,9 +32,14 @@ class PresentationPlanRepairer:
 
     def repair(self, plan: PresentationPlan, result: PipelineResult) -> PresentationPlan:
         """Prune unsupported claims, align citations, and validate the resulting plan."""
+        from adaptive_document_agent.document_model import DocumentIndex, display_metric_name
+        from adaptive_document_agent.services.pptx_export import _chart_group_title, _group_chart_plans, _usable_charts
+
         observations = {item.id: item for item in result.observations}
         insights = {item.id: item for item in result.insights}
         charts = {item.id: item for item in result.charts}
+        usable = _usable_charts(result)
+        index = DocumentIndex(result.observations)
         valid_pages = set(range(1, result.document.page_count + 1))
 
         cleaned_company = self._clean_company(plan.company, valid_pages)
@@ -51,13 +57,14 @@ class PresentationPlanRepairer:
             }:
                 continue
 
-            chart_ids = self._unique([item for item in slide.chart_ids if item in charts])[:3]
+            resolved_chart_ids = self._resolve_chart_ids(slide.chart_ids, slide.title, charts, usable)
+            chart_ids = resolved_chart_ids[:3]
             observation_ids = self._unique([item for item in slide.observation_ids if item in observations])
             insight_ids = self._unique([item for item in slide.insight_ids if item in insights])
 
             remaining_chart_capacity = max(0, 3 - len(chart_ids))
             blocks = [
-                self._clean_block(block, observations, insights, charts, max_charts=remaining_chart_capacity)
+                self._clean_block(block, observations, insights, charts, usable, max_charts=remaining_chart_capacity)
                 for block in slide.visual_blocks
             ]
             blocks = [b for b in blocks if b.chart_ids or b.observation_ids or b.insight_ids][:4]
@@ -146,6 +153,91 @@ class PresentationPlanRepairer:
                 )
             )
 
+        # Backfill analysis slides if AI analysis slides were lost or empty despite usable charts
+        repaired_analysis = [s for s in repaired_slides if s.slide_type == "analysis"]
+        referenced_chart_ids = {
+            cid
+            for s in repaired_analysis
+            for cid in (*s.chart_ids, *(c for b in s.visual_blocks for c in b.chart_ids))
+            if cid in charts
+        }
+
+        if usable and (not repaired_analysis or not referenced_chart_ids):
+            chart_groups = _group_chart_plans(usable[:10], index)
+            backfilled_slides: list[PresentationSlide] = []
+            for g_idx, group in enumerate(chart_groups, start=1):
+                g_chart_ids = [c.id for c in group]
+                g_pages = sorted({p for c in group for p in c.source_pages})
+                obs_first = next((index.get(oid) for oid in group[0].observation_ids if index.get(oid)), None)
+                first_label = display_metric_name(obs_first) if obs_first else group[0].title.replace(" — Reported Values", "")
+                group_title = _chart_group_title(group, index)
+                layout = "single" if len(group) == 1 else "two_up" if len(group) == 2 else "three_up"
+                blocks = [
+                    PresentationVisualBlock(
+                        role="hero" if i == 0 else "supporting",
+                        title=(
+                            display_metric_name(next((index.get(oid) for oid in c.observation_ids if index.get(oid)), None))
+                            or c.title.replace(" — Reported Values", "")
+                        ),
+                        chart_ids=[c.id],
+                    )
+                    for i, c in enumerate(group)
+                ]
+                backfilled_slides.append(
+                    PresentationSlide(
+                        id=f"slide_analysis_{g_idx}",
+                        slide_type="analysis",
+                        title=f"{group_title} analysis" if not group_title.casefold().endswith("analysis") else group_title,
+                        section_id=f"analysis_{g_idx}",
+                        section_title=first_label,
+                        slide_role="overview" if g_idx == 1 else "deep_dive",
+                        layout=layout,
+                        message="Evidence-backed comparison of retained reported values.",
+                        chart_ids=g_chart_ids,
+                        visual_blocks=blocks,
+                        source_pages=g_pages,
+                    )
+                )
+            repaired_slides.extend(backfilled_slides)
+        elif usable and len(referenced_chart_ids) < min(len(usable), 4):
+            remaining_charts = [c for c in usable[:10] if c.id not in referenced_chart_ids]
+            if remaining_charts:
+                chart_groups = _group_chart_plans(remaining_charts, index)
+                start_idx = len(repaired_analysis) + 1
+                for g_idx, group in enumerate(chart_groups, start=start_idx):
+                    g_chart_ids = [c.id for c in group]
+                    g_pages = sorted({p for c in group for p in c.source_pages})
+                    obs_first = next((index.get(oid) for oid in group[0].observation_ids if index.get(oid)), None)
+                    first_label = display_metric_name(obs_first) if obs_first else group[0].title.replace(" — Reported Values", "")
+                    group_title = _chart_group_title(group, index)
+                    layout = "single" if len(group) == 1 else "two_up" if len(group) == 2 else "three_up"
+                    blocks = [
+                        PresentationVisualBlock(
+                            role="hero" if i == 0 else "supporting",
+                            title=(
+                                display_metric_name(next((index.get(oid) for oid in c.observation_ids if index.get(oid)), None))
+                                or c.title.replace(" — Reported Values", "")
+                            ),
+                            chart_ids=[c.id],
+                        )
+                        for i, c in enumerate(group)
+                    ]
+                    repaired_slides.append(
+                        PresentationSlide(
+                            id=f"slide_analysis_{g_idx}",
+                            slide_type="analysis",
+                            title=f"{group_title} analysis" if not group_title.casefold().endswith("analysis") else group_title,
+                            section_id=f"analysis_{g_idx}",
+                            section_title=first_label,
+                            slide_role="deep_dive",
+                            layout=layout,
+                            message="Evidence-backed comparison of retained reported values.",
+                            chart_ids=g_chart_ids,
+                            visual_blocks=blocks,
+                            source_pages=g_pages,
+                        )
+                    )
+
         # Merge duplicate risks vs executive summary language
         self._deduplicate_risks_vs_summary(repaired_slides)
 
@@ -162,16 +254,68 @@ class PresentationPlanRepairer:
         return PresentationPlanValidator().validate(ordered_plan, result)
 
     @classmethod
+    def _resolve_chart_ids(
+        cls,
+        raw_ids: list[str],
+        title: str,
+        charts: dict[str, ChartPlan],
+        usable_charts: list[ChartPlan],
+    ) -> list[str]:
+        resolved: list[str] = []
+        chart_by_num: dict[int, str] = {}
+        for idx, chart in enumerate(usable_charts):
+            chart_by_num[idx + 1] = chart.id
+            chart_by_num[idx] = chart.id
+
+        normalized_charts: dict[str, str] = {}
+        for c in usable_charts:
+            normalized_charts[cls._normalized_text(c.title)] = c.id
+            if c.analysis_task_id:
+                normalized_charts[cls._normalized_text(c.analysis_task_id)] = c.id
+            normalized_charts[cls._normalized_text(c.id)] = c.id
+
+        for raw in raw_ids:
+            if raw in charts:
+                resolved.append(raw)
+                continue
+            norm = cls._normalized_text(raw)
+            if norm in normalized_charts:
+                resolved.append(normalized_charts[norm])
+                continue
+            # Match 1-based and 0-based indices like "chart_1", "chart-1", "1"
+            num_match = re.search(r"\b(\d+)\b", raw)
+            if num_match:
+                num = int(num_match.group(1))
+                if num in chart_by_num:
+                    resolved.append(chart_by_num[num])
+                    continue
+            for norm_key, cid in normalized_charts.items():
+                if norm and len(norm) >= 4 and (norm in norm_key or norm_key in norm):
+                    resolved.append(cid)
+                    break
+
+        if not resolved and title.strip():
+            norm_title = cls._normalized_text(title)
+            for norm_key, cid in normalized_charts.items():
+                if norm_key and len(norm_key) >= 4 and (norm_key in norm_title or norm_title in norm_key):
+                    resolved.append(cid)
+                    break
+
+        return cls._unique(resolved)
+
+    @classmethod
     def _clean_block(
         cls,
         block: PresentationVisualBlock,
         observations: dict[str, object],
         insights: dict[str, object],
-        charts: dict[str, object],
+        charts: dict[str, ChartPlan],
+        usable_charts: list[ChartPlan],
         *,
         max_charts: int = 2,
     ) -> PresentationVisualBlock:
-        chart_ids = cls._unique([item for item in block.chart_ids if item in charts])[:max_charts]
+        resolved_chart_ids = cls._resolve_chart_ids(block.chart_ids, block.title, charts, usable_charts)
+        chart_ids = resolved_chart_ids[:max_charts]
         observation_ids = cls._unique([item for item in block.observation_ids if item in observations])[:12]
         insight_ids = cls._unique([item for item in block.insight_ids if item in insights])[:3]
         chart_type = block.chart_type

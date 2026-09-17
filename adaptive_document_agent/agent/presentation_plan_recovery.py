@@ -42,8 +42,16 @@ class PresentationPlanRecovery:
         7. Data Quality
         8+. Appendix
         """
+        from adaptive_document_agent.document_model import DocumentIndex
+        from adaptive_document_agent.services.pptx_export import _chart_group_title, _group_chart_plans, _usable_charts
+
         company_pages = self._profile_pages(result)
-        charts = self._rank_charts(result)
+        usable = _usable_charts(result)
+        index = DocumentIndex(result.observations)
+        ranked = self._rank_charts(result)
+        charts = [c for c in ranked if c.id in {item.id for item in usable}]
+        if not charts:
+            charts = usable[:10]
 
         company_profile = CompanyProfile(
             name=result.profile.overview_title or (result.profile.document_type if result.profile.document_type != "Document" else "Document Overview"),
@@ -68,25 +76,28 @@ class PresentationPlanRecovery:
             self._summary_slide(result),
         ]
 
-        # Thematic analysis slides
-        for group_index, group in enumerate(self._group_charts(charts), start=1):
+        # Thematic analysis slides with context-aware grouping
+        chart_groups = _group_chart_plans(charts[:10], index) if charts else []
+        for group_index, group in enumerate(chart_groups, start=1):
             chart_ids = [item.id for item in group]
             pages = sorted({page for item in group for page in item.source_pages})
-            first_label = self._chart_label(group[0], result)
+            obs_first = next((index.get(oid) for oid in group[0].observation_ids if index.get(oid)), None)
+            first_label = display_metric_name(obs_first) if obs_first else self._chart_label(group[0], result)
+            group_title = _chart_group_title(group, index)
             layout = "single" if len(group) == 1 else "two_up" if len(group) == 2 else "three_up"
             blocks = [
                 PresentationVisualBlock(
-                    role="hero" if index == 0 else "supporting",
-                    title=self._chart_label(chart, result),
+                    role="hero" if idx == 0 else "supporting",
+                    title=display_metric_name(next((index.get(oid) for oid in chart.observation_ids if index.get(oid)), None)) or self._chart_label(chart, result),
                     chart_ids=[chart.id],
                 )
-                for index, chart in enumerate(group)
+                for idx, chart in enumerate(group)
             ]
             slides.append(
                 PresentationSlide(
                     id=f"slide_analysis_{group_index}",
                     slide_type="analysis",
-                    title=f"{first_label} analysis",
+                    title=f"{group_title} analysis" if not group_title.casefold().endswith("analysis") else group_title,
                     section_id=f"analysis_{group_index}",
                     section_title=first_label,
                     slide_role="overview" if group_index == 1 else "deep_dive",
@@ -137,13 +148,28 @@ class PresentationPlanRecovery:
         )
 
     def _summary_slide(self, result: PipelineResult) -> PresentationSlide:
+        from adaptive_document_agent.document_model import DocumentIndex
+        from adaptive_document_agent.services.pptx_export import _chart_findings, _usable_charts
+
+        index = DocumentIndex(result.observations)
+        usable = _usable_charts(result)
+        findings = _chart_findings(usable, index)
+
         insights = sorted(
             (item for item in result.insights if item.evidence),
             key=lambda item: (item.importance, item.confidence),
             reverse=True,
         )[:5]
         pages = sorted({source.page for item in insights for source in item.evidence})
+        if not pages and usable:
+            pages = sorted({p for c in usable[:3] for p in c.source_pages})
+
         bullets = [item.title for item in insights[:4] if not any(char.isdigit() for char in item.title)]
+        if not bullets and findings:
+            bullets = [str(f["title"]) for f in findings[:4] if not any(char.isdigit() for char in str(f["title"]))]
+        if not bullets:
+            bullets = ["Key retained findings selected from the source document."]
+
         return PresentationSlide(
             id="slide_executive_summary",
             slide_type="executive_summary",
