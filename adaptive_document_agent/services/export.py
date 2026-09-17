@@ -3,6 +3,8 @@
 import csv
 import io
 
+from pathlib import Path
+
 from adaptive_document_agent.models import PipelineResult
 
 from .pdf_export import build_report_pdf
@@ -44,8 +46,8 @@ def export_csv(result: PipelineResult) -> bytes:
     return stream.getvalue().encode("utf-8-sig")
 
 
-def export_pptx(result: PipelineResult) -> bytes:
-    return build_presentation(result)
+def export_pptx(result: PipelineResult, template_path: str | Path | None = None) -> bytes:
+    return build_presentation(result, template_path=template_path)
 
 
 def export_pdf(result: PipelineResult) -> bytes:

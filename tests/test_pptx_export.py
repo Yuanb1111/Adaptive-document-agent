@@ -1,8 +1,10 @@
 """PowerPoint export remains editable and presentation-ready."""
 
 import io
+from pathlib import Path
 import zipfile
 
+import pytest
 from pptx import Presentation
 from pptx.enum.chart import XL_CHART_TYPE
 
@@ -153,11 +155,11 @@ def test_pptx_export_renders_validated_ai_story_plan() -> None:
     ]
 
     assert titles[:5] == [
-        "DOCUMENT INTELLIGENCE",
+        "AI planned review",
         "Company at a Glance",
         "Contents",
         "Executive Summary",
-        "ANALYSIS",
+        "Revenue growth accelerated in the latest period",
     ]
     all_text = "\n".join(shape.text for slide in deck.slides for shape in slide.shapes if shape.has_text_frame)
     assert "Example Automation" in all_text
@@ -432,3 +434,37 @@ def test_pptx_keeps_unrelated_charts_on_separate_slides() -> None:
 
     assert chart_counts.count(1) == 2
     assert 2 not in chart_counts
+
+
+def test_fourier_template_dimensions_and_layouts() -> None:
+    payload = export_pptx(_result())
+    deck = Presentation(io.BytesIO(payload))
+
+    # Assert 12.60in x 7.09in dimensions from FOURIER template
+    assert deck.slide_width.inches == pytest.approx(12.60, abs=0.01)
+    assert deck.slide_height.inches == pytest.approx(7.09, abs=0.01)
+
+    # Check that template layout names are used
+    layout_names = [slide.slide_layout.name for slide in deck.slides]
+    assert any("封面" in name for name in layout_names)
+    assert any("Single-line title" in name or "Two-line" in name for name in layout_names)
+    assert any("短文本" in name for name in layout_names)
+
+
+def test_pptx_export_fails_cleanly_when_template_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    non_existent = r"C:\path\to\non_existent_template_file.pptx"
+    with pytest.raises(FileNotFoundError, match="Required PowerPoint template file not found"):
+        export_pptx(_result(), template_path=non_existent)
+
+    monkeypatch.setenv("PPTX_TEMPLATE_PATH", non_existent)
+    with pytest.raises(FileNotFoundError, match="Required PowerPoint template file not found"):
+        export_pptx(_result())
+
+
+def test_pptx_export_fails_cleanly_when_template_corrupted(tmp_path: Path) -> None:
+    corrupted_file = tmp_path / "corrupted_template.pptx"
+    corrupted_file.write_bytes(b"not a valid pptx content")
+
+    with pytest.raises(ValueError, match="Failed to load PowerPoint template"):
+        export_pptx(_result(), template_path=corrupted_file)
+
