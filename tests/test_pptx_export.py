@@ -156,8 +156,8 @@ def test_pptx_export_renders_validated_ai_story_plan() -> None:
 
     assert titles[:5] == [
         "AI planned review",
-        "Company at a Glance",
         "Contents",
+        "Company at a Glance",
         "Executive Summary",
         "Revenue growth accelerated in the latest period",
     ]
@@ -168,7 +168,7 @@ def test_pptx_export_renders_validated_ai_story_plan() -> None:
         shape.has_text_frame and shape.text.strip() == "Revenue growth accelerated in the latest period"
         for shape in deck.slides[4].shapes
     )
-    contents_text = "\n".join(shape.text for shape in deck.slides[2].shapes if shape.has_text_frame)
+    contents_text = "\n".join(shape.text for shape in deck.slides[1].shapes if shape.has_text_frame)
     assert "Financial Performance" in contents_text
     assert "Revenue growth accelerated" not in contents_text
 

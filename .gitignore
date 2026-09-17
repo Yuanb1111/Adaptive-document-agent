@@ -14,3 +14,4 @@ dist/
 build/
 *.egg-info/
 pushrepo.git/
+.tmp_ppt_review/

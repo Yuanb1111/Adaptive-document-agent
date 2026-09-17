@@ -103,10 +103,11 @@ class ObservationExtractor:
                 unit, currency = "currency", "GBP"
             elif "€" in adjacent:
                 unit, currency = "currency", "EUR"
-            elif "%" in adjacent:
+            elif "%" in adjacent and (number.value is not None and abs(number.value) <= 100 and table.default_unit != "currency"):
                 unit = "percent"
         header_lower = (column_label or "").casefold()
-        if "%" in header_lower or "percent" in header_lower:
+        is_nonsensical_pct_header = bool(re.search(r"(?i)%\s*(?:of\s*)?(?:rmb|usd|cny|hkd|eur|\$|£|€)", header_lower))
+        if ("%" in header_lower or "percent" in header_lower) and not is_nonsensical_pct_header:
             unit, currency, scale = "percent", None, 1.0
             value = number.value
         elif any(term in header_lower for term in ("volume", "quantity", "units sold", "count")):
@@ -159,6 +160,8 @@ class ObservationExtractor:
     @staticmethod
     def _meaningful_header(value: str) -> bool:
         clean = value.strip()
+        if re.search(r"(?i)^%\s*(?:of\s*)?(?:rmb|usd|cny|hkd|eur|\$|£|€)\b", clean):
+            return False
         return (
             bool(clean)
             and clean != "label"
