@@ -12,6 +12,7 @@ from adaptive_document_agent.document_model import (
     metric_key,
     paired_observations,
     period_sort_key,
+    score_chartability,
 )
 from adaptive_document_agent.models import (
     AnalysisResult,
@@ -79,6 +80,10 @@ class ChartPlanner:
             observations = [index.get(identifier) for identifier in identifiers]
             observations = [item for item in observations if item and item.value is not None and is_meaningful_metric(item)]
             if len(observations) < 2:
+                continue
+
+            chartability = score_chartability(observations)
+            if not chartability.is_chartable:
                 continue
 
             x_metric = task.required_metrics[0] if task.required_metrics else None
@@ -234,6 +239,10 @@ class ChartPlanner:
                 continue
             series = best_period_series(observations)
             if len(series) < 2 or any(not item.evidence for item in series):
+                continue
+
+            chartability = score_chartability(series)
+            if not chartability.is_chartable:
                 continue
 
             score = self._score_series_candidate(

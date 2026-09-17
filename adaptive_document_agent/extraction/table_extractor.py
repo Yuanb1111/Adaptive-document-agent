@@ -30,20 +30,27 @@ class TableExtractor:
                         if not raw:
                             continue
                         width = max(len(row) for row in raw)
-                        raw = [row + [None] * (width - len(row)) for row in raw]
-                        headers, column_periods, data_rows = self._infer_schema(page, found, raw)
-                        rows = [TableRow(cells=row, page=page_number) for row in data_rows]
-                        non_empty = sum(cell is not None for row in raw for cell in row)
-                        density = non_empty / max(width * len(raw), 1)
                         bbox = tuple(float(value) for value in found.bbox)
                         context = self._context_above(page, found, distance=90)
                         default_unit, default_scale, default_currency, default_raw_unit = self._infer_defaults(raw, context)
+                        table_title, unit_header = self._extract_title_and_unit(context)
+                        headers, column_periods, data_rows, col_types, col_currs, col_scales = self._infer_schema_and_roles(
+                            page, found, raw, default_unit, default_currency, default_scale
+                        )
+                        rows = self._build_table_rows(data_rows, page_number)
+                        non_empty = sum(cell is not None for row in raw for cell in row)
+                        density = non_empty / max(width * len(raw), 1)
                         page_tables.append(
                             ExtractedTable(
                                 table_id=stable_id("table", page_number, index, bbox),
                                 page=page_number,
                                 headers=headers,
                                 column_periods=column_periods,
+                                column_types=col_types,
+                                column_currencies=col_currs,
+                                column_scales=col_scales,
+                                table_title=table_title,
+                                unit_header=unit_header,
                                 rows=rows,
                                 raw_cells=raw,
                                 bbox=bbox,
@@ -52,7 +59,7 @@ class TableExtractor:
                                 default_raw_unit=default_raw_unit,
                                 default_unit_scale=default_scale,
                                 default_currency=default_currency,
-                                context_label=self._context_label(context),
+                                context_label=table_title or self._context_label(context),
                             )
                         )
                     if not page_tables:
@@ -68,6 +75,41 @@ class TableExtractor:
             return None
         cleaned = " ".join(str(value).split())
         return cleaned or None
+
+    def _infer_schema_and_roles(
+        self,
+        page: object,
+        found: object,
+        raw: list[list[str | None]],
+        default_unit: str | None,
+        default_currency: str | None,
+        default_scale: float | None,
+    ) -> tuple[list[str], list[str | None], list[list[str | None]], list[str], list[str | None], list[float | None]]:
+        headers, periods, data_rows = self._infer_schema(page, found, raw)
+
+        # Multi-tier header detection: check if first data row is a sub-header specifying Amount vs %
+        sub_role_keywords = {"amount", "%", "percent", "percentage", "share", "ratio", "multiple", "days", "count", "units", "rmb'000", "rmb", "usd", "cny", "hkd", "千元", "万元", "亿元", "元"}
+        if data_rows and len(data_rows) >= 2:
+            first_row = data_rows[0]
+            matched_roles = [
+                cell for cell in first_row[1:]
+                if cell and any(kw in cell.casefold() for kw in sub_role_keywords) and not self._numeric_like(cell)
+            ]
+            if len(matched_roles) >= 2:
+                # This is a sub-header row specifying column semantics
+                for idx, cell in enumerate(first_row):
+                    if cell and idx < len(headers):
+                        if headers[idx].startswith("column_") or not headers[idx]:
+                            headers[idx] = cell
+                        elif "%" in cell or "amount" in cell.casefold():
+                            headers[idx] = f"{headers[idx]} {cell}".strip()
+                data_rows = data_rows[1:]
+
+        # Classify column roles
+        col_types, col_currs, col_scales = self._classify_column_roles(
+            headers, periods, data_rows, default_unit, default_currency, default_scale
+        )
+        return headers, periods, data_rows, col_types, col_currs, col_scales
 
     def _infer_schema(self, page: object, found: object, raw: list[list[str | None]]) -> tuple[list[str], list[str | None], list[list[str | None]]]:
         width = len(raw[0])
@@ -138,6 +180,107 @@ class TableExtractor:
                 if label and not self._numeric_like(label):
                     headers[index] = label
         return headers, periods, data_rows
+
+    def _classify_column_roles(
+        self,
+        headers: list[str],
+        periods: list[str | None],
+        data_rows: list[list[str | None]],
+        default_unit: str | None,
+        default_currency: str | None,
+        default_scale: float | None,
+    ) -> tuple[list[str], list[str | None], list[float | None]]:
+        width = len(headers)
+        col_types: list[str] = ["label"] + ["unknown"] * (width - 1)
+        col_currs: list[str | None] = [None] * width
+        col_scales: list[float | None] = [None] * width
+
+        for idx in range(1, width):
+            h_clean = headers[idx].casefold()
+            is_nonsensical_pct = bool(re.search(r"(?i)%\s*(?:of\s*)?(?:rmb|usd|cny|hkd|eur|\$|£|€)", h_clean))
+            
+            # Explicit percentage header
+            if ("%" in h_clean or "percent" in h_clean or "share" in h_clean or "margin" in h_clean) and not is_nonsensical_pct:
+                col_types[idx] = "percentage"
+                col_currs[idx] = None
+                col_scales[idx] = 1.0
+            elif any(term in h_clean for term in ("multiple", "times")):
+                col_types[idx] = "ratio"
+                col_currs[idx] = None
+                col_scales[idx] = 1.0
+            elif any(term in h_clean for term in ("days", "dso", "dio", "dpo")):
+                col_types[idx] = "days"
+                col_currs[idx] = None
+                col_scales[idx] = 1.0
+            elif any(term in h_clean for term in ("volume", "quantity", "units sold", "count")):
+                col_types[idx] = "count"
+                col_currs[idx] = None
+                col_scales[idx] = 1.0
+            elif any(term in h_clean for term in ("amount", "rmb", "usd", "cny", "hkd", "eur", "gbp", "'000", "thousand", "million", "金额", "千元")):
+                col_types[idx] = "amount"
+                col_currs[idx] = default_currency
+                col_scales[idx] = default_scale
+            else:
+                # Inspect values across data rows for this column
+                nums = [self._clean(r[idx]) for r in data_rows if idx < len(r) and r[idx]]
+                pct_vals = sum(1 for v in nums if v and ("%" in v or "pct" in v.casefold()))
+                if nums and pct_vals / len(nums) >= 0.5:
+                    col_types[idx] = "percentage"
+                    col_currs[idx] = None
+                    col_scales[idx] = 1.0
+                elif default_unit == "currency" or default_currency:
+                    col_types[idx] = "amount"
+                    col_currs[idx] = default_currency
+                    col_scales[idx] = default_scale
+                else:
+                    col_types[idx] = default_unit or "amount"
+                    col_currs[idx] = default_currency
+                    col_scales[idx] = default_scale
+
+        return col_types, col_currs, col_scales
+
+    def _build_table_rows(self, data_rows: list[list[str | None]], page_number: int) -> list[TableRow]:
+        rows: list[TableRow] = []
+        for row in data_rows:
+            if not row:
+                continue
+            cells = [cell for cell in row]
+            label = cells[0] or ""
+            has_other_content = any(c and c.strip() for c in cells[1:])
+            is_sec = bool(label.strip()) and not has_other_content
+            
+            # Deduction detection ("Less:", "减：", "(Less)")
+            is_ded = bool(re.search(r"(?i)^[:\-\s]*(?:less|减)[:：\s]+", label.strip()))
+            
+            # Subtotal detection
+            is_sub = bool(re.search(r"(?i)\b(?:total|subtotal|合计|总计|小计)\b", label.strip()))
+            
+            # Indentation level
+            leading_spaces = len(label) - len(label.lstrip(" \t\u3000"))
+            indent = leading_spaces // 2 if leading_spaces else (1 if label.strip().startswith(("-", "–", "—", "•")) else 0)
+            
+            rows.append(
+                TableRow(
+                    cells=cells,
+                    page=page_number,
+                    indent_level=indent,
+                    is_section_header=is_sec,
+                    is_subtotal=is_sub,
+                    is_deduction=is_ded,
+                )
+            )
+        return rows
+
+    def _extract_title_and_unit(self, context: str) -> tuple[str | None, str | None]:
+        lines = [line.strip() for line in context.split("\n") if line.strip()]
+        title: str | None = None
+        unit: str | None = None
+        for line in lines:
+            if re.search(r"(?i)\((?:in\s+)?(?:rmb|usd|cny|hkd|eur|gbp|'000|thousands?|millions?|%)\)", line) or re.search(r"（以?人民币(?:千元|万元|亿元)?列示）", line):
+                unit = line
+            elif not title and len(line) >= 4 and not self._numeric_like(line):
+                title = line
+        return title, unit
 
     def _words_above(self, page: object, found: object, *, distance: float) -> list[dict[str, object]]:
         left, top, right, _ = found.bbox

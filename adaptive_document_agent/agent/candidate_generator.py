@@ -102,19 +102,29 @@ class AnalysisCandidateGenerator:
         ]
 
     def _category_candidates(self, metric: str, dimension: str, observations: list[Observation]) -> list[AnalysisCandidate]:
-        ids = [item.id for item in observations if item.dimensions.get(dimension)]
-        return [
-            AnalysisCandidate(
-                id=stable_id("candidate", analysis_type, metric, dimension),
-                title=f"{metric.title()} by {dimension.title()}",
-                analysis_type=analysis_type,
-                metric=metric,
-                dimensions=[dimension],
-                observation_ids=ids,
-                reason=f"{metric} has multiple {dimension} categories.",
-            )
-            for analysis_type in ("rank_values", "contribution_share", "compare_categories")
-        ]
+        candidates: list[AnalysisCandidate] = []
+        # Group by period so category comparisons and rankings are strictly within the same period
+        by_period: dict[str, list[Observation]] = defaultdict(list)
+        for item in observations:
+            if item.dimensions.get(dimension) and item.period:
+                by_period[item.period].append(item)
+
+        for period, p_obs in by_period.items():
+            if len({it.dimensions.get(dimension) for it in p_obs}) >= 2:
+                ids = [it.id for it in p_obs]
+                for analysis_type in ("rank_values", "contribution_share", "compare_categories"):
+                    candidates.append(
+                        AnalysisCandidate(
+                            id=stable_id("candidate", analysis_type, metric, dimension, period),
+                            title=f"{metric.title()} by {dimension.title()} ({period})",
+                            analysis_type=analysis_type,
+                            metric=metric,
+                            dimensions=[dimension],
+                            observation_ids=ids,
+                            reason=f"{metric} has multiple {dimension} categories in {period}.",
+                        )
+                    )
+        return candidates
 
     def _correlation_candidates(self, index: DocumentIndex) -> list[AnalysisCandidate]:
         output: list[AnalysisCandidate] = []

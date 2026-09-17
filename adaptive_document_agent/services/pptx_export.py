@@ -1128,7 +1128,7 @@ def _add_evidence_table_slides(
     pages = [observations[index:index + page_size] for index in range(0, len(observations), page_size)]
     if max_pages is not None:
         pages = pages[:max_pages]
-    headers = ["Metric", "Period", "Reported value", "Unit", "Page"]
+    headers = ["Metric", "Category", "Section", "Period", "Reported value", "Unit", "Page"]
 
     for page_number, page_observations in enumerate(pages, start=1):
         slide_subtitle = subtitle or "Validated reported values used by the presentation charts, with page-level provenance"
@@ -1147,8 +1147,12 @@ def _add_evidence_table_slides(
             )
             is_bs = any(term in semantic.clean_name.casefold() for term in ("liabilit", "cash", "balance", "receiv", "payab", "inventor"))
             period_label = format_period_label(item.period, is_balance_sheet=is_bs)
+            cat_val = ", ".join(v for v in item.category_dimensions.values()) if item.category_dimensions else (item.dimensions.get("category") or "-")
+            sec_val = item.parent_section or item.source_section or item.dimensions.get("section") or "-"
             rows.append([
-                _summary_text(semantic.clean_name, 58),
+                _summary_text(semantic.clean_name, 48),
+                _summary_text(cat_val, 28),
+                _summary_text(sec_val, 28),
                 period_label or item.entity or "-",
                 item.raw_value,
                 _display_source_unit(item),
@@ -1160,23 +1164,23 @@ def _add_evidence_table_slides(
         table_shape = slide.shapes.add_table(len(rows) + 1, len(headers), Inches(0.45), Inches(table_top), Inches(11.70), Inches(table_h))
         table = table_shape.table
 
-        # Client-aligned proportions: Metric 36%, Period 15%, Reported Value 22%, Unit 19%, Page 8%
-        widths = [4.21, 1.76, 2.57, 2.22, 0.94]
+        # Client-aligned proportions for 7 columns: total 11.70 in
+        widths = [2.70, 1.80, 1.80, 1.30, 1.80, 1.50, 0.80]
         for column, width in zip(table.columns, widths):
             column.width = Inches(width)
         for column, header in enumerate(headers):
             cell = table.cell(0, column)
             cell.text = header
-            _cell_style(cell, fill=FOURIER_PURPLE, color=WHITE, bold=True, size=11.5)
-            if column in {2, 4}:
+            _cell_style(cell, fill=FOURIER_PURPLE, color=WHITE, bold=True, size=11.0)
+            if column in {4, 6}:
                 cell.text_frame.paragraphs[0].alignment = PP_ALIGN.RIGHT
         for row_index, values in enumerate(rows, start=1):
             for column, value in enumerate(values):
                 cell = table.cell(row_index, column)
                 cell.text = str(value)
-                _cell_style(cell, fill=WHITE if row_index % 2 else FOURIER_BG_CARD, color=FOURIER_DARK, bold=False, size=10.5)
+                _cell_style(cell, fill=WHITE if row_index % 2 else FOURIER_BG_CARD, color=FOURIER_DARK, bold=False, size=10.0)
                 cell.vertical_anchor = MSO_ANCHOR.MIDDLE
-                cell.text_frame.paragraphs[0].alignment = PP_ALIGN.RIGHT if column in {2, 4} else PP_ALIGN.LEFT
+                cell.text_frame.paragraphs[0].alignment = PP_ALIGN.RIGHT if column in {4, 6} else PP_ALIGN.LEFT
         row_height = min(0.45, 4.60 / max(len(rows) + 1, 1))
         for row in table.rows:
             row.height = Inches(row_height)

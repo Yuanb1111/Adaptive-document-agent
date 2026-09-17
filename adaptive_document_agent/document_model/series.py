@@ -19,6 +19,27 @@ _TRAILING_UNIT = re.compile(
 )
 
 
+_GENERIC_METRIC_PATTERNS = (
+    r"^others?$",
+    r"^other\s+(?:income|expenses?|costs?|revenue|assets?|liabilities|payables?|receivables?|segment|business)$",
+    r"^corporate(?:/unallocated)?$",
+    r"^unallocated$",
+    r"^miscellaneous$",
+    r"^rest\s+of\s+(?:the\s+)?world$",
+    r"^others?\s+segment$",
+    r"^all\s+others?$",
+    r"^其[他它]$",
+    r"^其[他它](?:收入|支出|费用|成本|业务)$",
+    r"^未分配$",
+    r"^未分摊$",
+)
+
+
+def is_generic_metric_label(label: str) -> bool:
+    clean = " ".join(label.strip().split()).casefold()
+    return any(bool(re.search(pat, clean)) for pat in _GENERIC_METRIC_PATTERNS)
+
+
 def metric_label(observation: Observation) -> str:
     """Return the most specific trustworthy display name for a metric.
 
@@ -41,8 +62,33 @@ def metric_label(observation: Observation) -> str:
     return canonical
 
 
+def metric_identity_key(observation: Observation) -> tuple[object, ...]:
+    """Identity used to group observations into a single coherent financial series."""
+    name = metric_label(observation).casefold()
+    u_family = getattr(observation, "unit_family", None) or observation.unit or "generic"
+    core_dims = tuple(sorted(observation.category_dimensions.items())) if observation.category_dimensions else tuple(sorted((k, v) for k, v in observation.dimensions.items() if k not in {"table_context", "section", "period_basis"}))
+    section = (observation.source_section or "").casefold()
+
+    # If the metric label is generic (like "Others", "Corporate", "Miscellaneous"),
+    # it is strictly contextual to its source table and parent section!
+    if is_generic_metric_label(name):
+        tbl = observation.effective_table_id or observation.source_table or ""
+        return (name, section, tbl, core_dims, u_family, observation.entity)
+
+    # Non-generic metrics can merge across multi-page tables IF they share same core dimensions,
+    # section (if present), and unit family.
+    return (name, section, core_dims, u_family, observation.entity)
+
+
 def metric_key(observation: Observation) -> str:
-    return metric_label(observation).casefold()
+    name = metric_label(observation)
+    if is_generic_metric_label(name):
+        sec = observation.source_section
+        tbl = observation.source_table
+        context_part = sec or tbl
+        if context_part:
+            return f"{context_part}: {name}".casefold()
+    return name.casefold()
 
 
 def display_metric_name(observation: Observation) -> str:
@@ -52,7 +98,12 @@ def display_metric_name(observation: Observation) -> str:
     label = _TRAILING_UNIT.sub("", label)
     label = " ".join(label.split()).strip(" :;,-")
 
-    # A leading dash commonly marks a child row.  Restore a short, usable
+    if is_generic_metric_label(label):
+        sec = observation.source_section
+        if sec and sec.casefold() not in label.casefold():
+            label = f"{sec}: {label}"
+
+    # A leading dash commonly marks a child row. Restore a short, usable
     # parent label only when the source explicitly retained one.
     if observation.metric_original.lstrip().startswith(("-", "\u2013", "\u2014", "\u2022")):
         context = " ".join(observation.dimensions.get("table_context", "").split()).strip(" :;,-")
@@ -95,12 +146,7 @@ def conflicting_groups(observations: Iterable[Observation]) -> list[list[Observa
 
 
 def presentation_sign_variant_groups(observations: Iterable[Observation]) -> list[list[Observation]]:
-    """Return groups that differ only by source-table presentation sign.
-
-    These observations remain distinct in the fact base.  The classification
-    merely prevents a common expense/loss display convention from being
-    reported as an unexplained numeric contradiction.
-    """
+    """Return groups that differ only by source-table presentation sign."""
     groups: dict[tuple[object, ...], list[Observation]] = defaultdict(list)
     for item in observations:
         groups[(metric_key(item), context_key(item), item.unit, item.currency)].append(item)
@@ -113,9 +159,9 @@ def best_period_series(observations: Iterable[Observation], *, minimum_periods: 
     for item in observations:
         if item.value is None or not item.period:
             continue
-        core_dims = tuple(sorted((k, v) for k, v in item.dimensions.items() if k not in {"table_context", "section"}))
-        u_family = getattr(item, "unit_family", None) or item.unit
-        groups[(item.entity, core_dims, u_family, item.currency)].append(item)
+        ident = metric_identity_key(item)
+        p_type = getattr(item, "period_type", "fiscal_year")
+        groups[(ident, p_type, item.currency)].append(item)
 
     candidates: list[list[Observation]] = []
     for values in groups.values():
@@ -138,13 +184,6 @@ def best_period_series(observations: Iterable[Observation], *, minimum_periods: 
             candidates.append(sorted(series, key=lambda item: period_sort_key(item.period)))
 
     if not candidates:
-        by_period_fallback: dict[str, list[Observation]] = defaultdict(list)
-        for item in observations:
-            if item.value is not None and item.period:
-                by_period_fallback[item.period].append(item)
-        if len(by_period_fallback) >= minimum_periods:
-            series = [max(items, key=lambda it: it.confidence) for items in by_period_fallback.values()]
-            return sorted(series, key=lambda it: period_sort_key(it.period))
         return []
 
     return max(

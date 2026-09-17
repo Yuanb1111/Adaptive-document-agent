@@ -21,6 +21,18 @@ class Observation(BaseModel):
     evidence: list[SourceEvidence] = Field(default_factory=list)
     confidence: float = Field(ge=0.0, le=1.0)
 
+    # Provenance and structural hierarchy
+    source_table: str | None = None
+    table_id: str | None = None
+    row_id: int | None = None
+    column_id: int | None = None
+    category_dimensions: dict[str, str] = Field(default_factory=dict)
+    parent_section: str | None = None
+    row_operator: str = "additive"  # additive, subtractive (for "Less:" rows)
+    semantic_confidence: float = 1.0
+    chartability_status: str = "unassessed"  # high, medium, low, invalid
+    anomaly_notes: list[str] = Field(default_factory=list)
+
     # Typed financial semantics
     semantic_type: str = "generic"  # monetary_amount, margin, ratio_share, multiple, days, count, growth_rate, generic
     unit_family: str = "generic"    # currency, percentage, multiple, days, count, generic
@@ -30,7 +42,7 @@ class Observation(BaseModel):
     period_end: str | None = None
     as_of_date: str | None = None
     audited_status: str = "unknown"  # audited, unaudited, unknown
-    validation_status: str = "valid"  # valid, partially_valid, ambiguous, invalid
+    validation_status: str = "valid"  # valid, partially_valid, ambiguous, suspicious_alignment, invalid
 
     @property
     def source_label(self) -> str:
@@ -66,11 +78,11 @@ class Observation(BaseModel):
 
     @property
     def source_section(self) -> str | None:
-        return self.dimensions.get("section")
+        return self.parent_section or self.dimensions.get("section")
 
     @property
-    def source_table(self) -> str | None:
-        return self.evidence[0].table_id if self.evidence else None
+    def effective_table_id(self) -> str | None:
+        return self.table_id or (self.evidence[0].table_id if self.evidence else None)
 
     @property
     def source_text(self) -> str | None:
@@ -82,4 +94,5 @@ class Observation(BaseModel):
 
 
 FinancialObservation = Observation
+
 

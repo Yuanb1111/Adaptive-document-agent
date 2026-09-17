@@ -1,17 +1,39 @@
-"""Period semantic classification and interim date formatting."""
+"""Period semantic classification and point-in-time / interim date formatting."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 import re
 
+MONTH_MAP = {
+    "jan": 1, "january": 1, "一月": 1,
+    "feb": 2, "february": 2, "二月": 2,
+    "mar": 3, "march": 3, "三月": 3,
+    "apr": 4, "april": 4, "四月": 4,
+    "may": 5, "五月": 5,
+    "jun": 6, "june": 6, "六月": 6,
+    "jul": 7, "july": 7, "七月": 7,
+    "aug": 8, "august": 8, "八月": 8,
+    "sep": 9, "september": 9, "九月": 9,
+    "oct": 10, "october": 10, "十月": 10,
+    "nov": 11, "november": 11, "十一月": 11,
+    "dec": 12, "december": 12, "十二月": 12,
+}
+MONTH_ABBR = {
+    1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
+    7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec",
+}
+
 
 @dataclass(frozen=True)
 class PeriodSemantic:
-    period_type: str  # 'fiscal_year', 'interim_flow', 'balance_sheet_date', 'generic'
+    period_type: str  # 'fiscal_year', 'interim_flow', 'balance_sheet_date', 'point_in_time', 'generic'
     clean_label: str
     is_unaudited: bool
     is_interim: bool
+    as_of_date: str | None = None
+    period_start: str | None = None
+    period_end: str | None = None
 
 
 def format_period_label(
@@ -24,24 +46,53 @@ def format_period_label(
         return ""
     p = " ".join(str(period).strip().split())
 
-    # April 30, 2025 / 30 Apr 2025 / 2025-04-30
-    if re.search(r"(?i)(?:30\s*apr(?:il)?|april\s*30)[,\s]*(?:20)?(\d{2})", p) or re.search(r"(?i)20(\d{2})-04-30", p):
-        m = re.search(r"(?i)(?:30\s*apr(?:il)?|april\s*30)[,\s]*(?:20)?(\d{2})", p) or re.search(r"(?i)20(\d{2})-04-30", p)
-        year = m.group(1)
-        return f"30 Apr 20{year}*"
+    # 1. ISO Date: YYYY-MM-DD
+    if m := re.search(r"\b(20\d{2})[-/.](0[1-9]|1[0-2])[-/.](0[1-9]|[12]\d|3[01])\b", p):
+        year, month, day = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        mon_str = MONTH_ABBR.get(month, f"{month:02d}")
+        star = "*" if (is_unaudited or (is_balance_sheet and month != 12) or "*" in p) else ""
+        return f"{day} {mon_str} {year}{star}"
 
-    # 4M2024 / 4M2025
-    if m := re.match(r"(?i)^4M\s*(?:20)?(\d{2})\*?$", p):
-        year = m.group(1)
-        if is_balance_sheet:
-            return f"30 Apr 20{year}*"
-        return f"4M20{year}"
+    # 2. Text Date: "30 April 2025" or "April 30, 2025" or "February 28, 2026"
+    if m := re.search(r"(?i)\b([0-3]?\d)\s+([A-Za-z]+)\s+(20\d{2})\b", p):
+        day = int(m.group(1))
+        mon_key = m.group(2).casefold()
+        year = int(m.group(3))
+        if mon_key in MONTH_MAP:
+            month = MONTH_MAP[mon_key]
+            mon_str = MONTH_ABBR[month]
+            star = "*" if (is_unaudited or (is_balance_sheet and month != 12) or "*" in p) else ""
+            return f"{day} {mon_str} {year}{star}"
 
-    # Interim month abbreviations like 4M25, 6M25
+    if m := re.search(r"(?i)\b([A-Za-z]+)\s+([0-3]?\d)[,\s]+(20\d{2})\b", p):
+        mon_key = m.group(1).casefold()
+        day = int(m.group(2))
+        year = int(m.group(3))
+        if mon_key in MONTH_MAP:
+            month = MONTH_MAP[mon_key]
+            mon_str = MONTH_ABBR[month]
+            star = "*" if (is_unaudited or (is_balance_sheet and month != 12) or "*" in p) else ""
+            return f"{day} {mon_str} {year}{star}"
+
+    # 3. CJK Date: "2025年4月30日" or "2026年2月28日"
+    if m := re.search(r"(20\d{2})年([0-1]?\d)月([0-3]?\d)日?", p):
+        year, month, day = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        mon_str = MONTH_ABBR.get(month, f"{month:02d}")
+        star = "*" if (is_unaudited or (is_balance_sheet and month != 12) or "*" in p) else ""
+        return f"{day} {mon_str} {year}{star}"
+
+    # 4. Interim month flow: 4M2024 / 4M2025 / 6M2025 / 9M2025
     if m := re.match(r"(?i)^([0-9]{1,2}M)\s*(?:20)?(\d{2})\*?$", p):
-        return f"{m.group(1).upper()}20{m.group(2)}"
+        prefix = m.group(1).upper()
+        year_suffix = m.group(2)
+        if is_balance_sheet:
+            months = int(prefix[:-1])
+            mon_str = MONTH_ABBR.get(months, "Interim")
+            last_day = 30 if months in (4, 6, 9, 11) else (28 if months == 2 else 31)
+            return f"{last_day} {mon_str} 20{year_suffix}*"
+        return f"{prefix}20{year_suffix}"
 
-    # Explicit FY
+    # 5. Explicit FY
     if m := re.match(r"(?i)^(?:FY\s*)?(20\d{2})$", p):
         year = m.group(1)
         if is_balance_sheet and is_unaudited:
@@ -58,24 +109,52 @@ def is_interim_date(period: str | None) -> bool:
     if not period:
         return False
     p = str(period).casefold()
-    return any(k in p for k in ("-04-30", "-06-30", "-09-30", "apr", "jun", "sep", "4m", "6m", "9m", "interim"))
+    if any(k in p for k in ("interim", "unaudited", "*")):
+        return True
+    if re.search(r"\b[0-9]{1,2}m\b", p):
+        return True
+    # If it is a point-in-time date other than Dec 31
+    if m := re.search(r"\b(20\d{2})[-/.](0[1-9]|1[0-2])[-/.](0[1-9]|[12]\d|3[01])\b", p):
+        month = int(m.group(2))
+        return month != 12
+    for mon_name, month_num in MONTH_MAP.items():
+        if mon_name in p and month_num != 12 and any(char.isdigit() for char in p):
+            return True
+    return False
 
 
-def period_sort_key_extended(period: str | None) -> tuple[int, int, str]:
+def period_sort_key_extended(period: str | None) -> tuple[int, int, int, str]:
     if not period:
-        return (9999, 99, "")
+        return (9999, 99, 99, "")
     p = str(period).strip()
-    year_match = re.search(r"(?:20)?(\d{2})", p)
-    year = int(f"20{year_match.group(1)}") if year_match else 9999
-    # Prioritize FY before interim of same year, or according to month
+    year = 9999
     month = 12
-    if "4m" in p.casefold() or "apr" in p.casefold():
-        month = 4
-    elif "6m" in p.casefold() or "jun" in p.casefold():
-        month = 6
-    elif "9m" in p.casefold() or "sep" in p.casefold():
-        month = 9
-    return (year, month, p)
+    day = 31
+
+    if m := re.search(r"\b(20\d{2})[-/.](0[1-9]|1[0-2])[-/.](0[1-9]|[12]\d|3[01])\b", p):
+        year = int(m.group(1))
+        month = int(m.group(2))
+        day = int(m.group(3))
+        return (year, month, day, p)
+
+    if m := re.search(r"(?:20)?(\d{2})", p):
+        year = int(f"20{m.group(1)}")
+
+    if m := re.search(r"\b([0-9]{1,2})m\b", p.casefold()):
+        month = int(m.group(1))
+        day = 30
+        return (year, month, day, p)
+
+    for mon_name, month_num in MONTH_MAP.items():
+        if mon_name in p.casefold():
+            month = month_num
+            if d_match := re.search(r"\b([0-3]?\d)\b", p):
+                val = int(d_match.group(1))
+                if 1 <= val <= 31:
+                    day = val
+            break
+
+    return (year, month, day, p)
 
 
 def classify_period(period: str | None, *, is_balance_sheet: bool = False) -> PeriodSemantic:
@@ -87,9 +166,18 @@ def classify_period(period: str | None, *, is_balance_sheet: bool = False) -> Pe
     is_unaudited = "*" in formatted or "unaudited" in p.casefold()
     is_interim = is_unaudited or is_interim_date(p)
 
+    # Detect exact point-in-time date
+    as_of: str | None = None
+    if m := re.search(r"\b(20\d{2})[-/.](0[1-9]|1[0-2])[-/.](0[1-9]|[12]\d|3[01])\b", p):
+        as_of = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    elif m := re.search(r"(20\d{2})年([0-1]?\d)月([0-3]?\d)日?", p):
+        as_of = f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+
     ptype = "fiscal_year"
-    if "apr" in formatted.casefold() or (is_balance_sheet and is_interim):
+    if as_of or (is_balance_sheet and (is_interim or any(mon in formatted.casefold() for mon in ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov")))):
         ptype = "balance_sheet_date"
+    elif is_interim and re.match(r"(?i)^[0-9]{1,2}m", p):
+        ptype = "interim_flow"
     elif is_interim:
         ptype = "interim_flow"
 
@@ -98,4 +186,6 @@ def classify_period(period: str | None, *, is_balance_sheet: bool = False) -> Pe
         clean_label=formatted,
         is_unaudited=is_unaudited,
         is_interim=is_interim,
+        as_of_date=as_of or formatted if ptype == "balance_sheet_date" else None,
     )
+

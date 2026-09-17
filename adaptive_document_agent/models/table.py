@@ -8,6 +8,10 @@ class TableRow(BaseModel):
     page: int = Field(ge=1)
     bbox: tuple[float, float, float, float] | None = None
     column_periods: list[str | None] = Field(default_factory=list)
+    indent_level: int = 0
+    is_section_header: bool = False
+    is_subtotal: bool = False
+    is_deduction: bool = False
 
 
 class ExtractedTable(BaseModel):
@@ -15,6 +19,12 @@ class ExtractedTable(BaseModel):
     page: int = Field(ge=1)
     headers: list[str] = Field(default_factory=list)
     column_periods: list[str | None] = Field(default_factory=list)
+    column_types: list[str] = Field(default_factory=list)  # amount, percentage, ratio, days, count, unknown
+    column_currencies: list[str | None] = Field(default_factory=list)
+    column_scales: list[float | None] = Field(default_factory=list)
+    table_title: str | None = None
+    unit_header: str | None = None
+    section_path: list[str] = Field(default_factory=list)
     rows: list[TableRow] = Field(default_factory=list)
     raw_cells: list[list[str | None]] = Field(default_factory=list)
     bbox: tuple[float, float, float, float] | None = None

@@ -160,11 +160,11 @@ def test_pptx_export_structure_ordering_and_gridlines() -> None:
     tables = [s.table for s in appendix_slide.shapes if s.has_table]
     assert len(tables) >= 1
     table = tables[0]
-    assert len(table.columns) == 5
+    assert len(table.columns) == 7
     total_w = sum(col.width.inches for col in table.columns)
     assert abs(total_w - 11.70) < 0.1
-    assert table.columns[4].width.inches < 1.2
-    assert table.columns[0].width.inches > 3.8
+    assert table.columns[6].width.inches < 1.2
+    assert table.columns[0].width.inches >= 2.5
 
 
 def test_multiple_ratio_semantics_and_formatting() -> None:

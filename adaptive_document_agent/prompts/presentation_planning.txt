@@ -34,6 +34,8 @@ Prefer multiple related evidence blocks on one slide when they support one messa
 Use visual_blocks to describe this composition. Keep at most three charts and four total blocks on one slide. Combine related measures such as cash and borrowings, revenue and margin, or working-capital components only when their periods and meanings are compatible. Do not combine unrelated metrics merely to reduce page count.
 When a chart plan offers several available_chart_types, visual_blocks may choose a compatible chart_type. Prefer line or bar for point-in-time balances; use area only when filled magnitude over a continuous series is analytically appropriate. For an exact-data block, use observation_ids with chart_with_data or data_overview; do not request chart_type table.
 Include direct key numbers in the executive summary when the selected observations or insights support them. Use observation_ids so the renderer can display deterministic values.
+Executive Summary bullets must focus on major financial themes (revenue trajectory, margin evolution, loss/profit narrow or expansion, operating cash flow, liquidity and leverage).
+Do NOT mechanically rank numbers across unrelated periods or categories by absolute magnitude. Always compare like with like: track a metric across consistent periods (e.g. FY2023 to FY2025) or compare category shares within the same single period.
 Do not repeat executive-summary bullets on the risks slide. A risk statement should connect the supported movement to its potential interpretation, while clearly presenting it as a watch item rather than an invented fact.
 Use no more than five bullets.
 

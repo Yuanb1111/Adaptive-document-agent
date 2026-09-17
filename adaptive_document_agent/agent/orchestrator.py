@@ -211,10 +211,28 @@ class DocumentOrchestrator:
             )
             if (not charts or len(index.observations) < 4) and quantitative_claim_count >= 3:
                 notify("Evidence unexpectedly sparse; triggering extraction recovery pass")
+                # 1. Ensure tables are extracted across all document pages
+                missing_table_pages = {p.page_number for p in document.pages if not p.tables}
+                if missing_table_pages:
+                    additional_tables = TableExtractor().extract(raw, page_numbers=missing_table_pages)
+                    for p in document.pages:
+                        if p.page_number in additional_tables:
+                            p.tables.extend(additional_tables[p.page_number])
+                    self._reconstruct_tables(document)
+
+                # 2. Re-extract observations across full document
                 recovered = extractor.extract(document, page_ranges=None)
                 if len(recovered) > len(observations):
                     observations = self._merge_observations(observations, recovered)
                     index = DocumentModelBuilder().build(observations)
+                    
+                    # 3. Regenerate candidate analyses and results if plan lacked depth
+                    if len(results) < 2 or not plan:
+                        candidates = AnalysisCandidateGenerator(self.gateway).generate(index, profile)
+                        scores = AnalysisValueScorer(self.gateway).score(candidates, index, profile)
+                        plan = AnalysisPlanner().plan(scores, index)
+                        results = AnalysisExecutor().execute(plan, index)
+
                     charts = ChartPlanner().plan(
                         plan,
                         results,
