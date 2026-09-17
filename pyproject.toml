@@ -14,3 +14,7 @@ addopts = "-q -p no:cacheprovider"
 
 [tool.setuptools.packages.find]
 include = ["adaptive_document_agent*"]
+
+[tool.setuptools.package-data]
+adaptive_document_agent = ["templates/*.pptx", "prompts/*.txt"]
+

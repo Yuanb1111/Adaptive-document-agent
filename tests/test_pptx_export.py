@@ -468,3 +468,13 @@ def test_pptx_export_fails_cleanly_when_template_corrupted(tmp_path: Path) -> No
     with pytest.raises(ValueError, match="Failed to load PowerPoint template"):
         export_pptx(_result(), template_path=corrupted_file)
 
+
+def test_bundled_template_exists_and_loads_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    from adaptive_document_agent.services.pptx_export import BUNDLED_TEMPLATE_PATH
+    assert BUNDLED_TEMPLATE_PATH.exists()
+    assert BUNDLED_TEMPLATE_PATH.is_file()
+    monkeypatch.delenv("PPTX_TEMPLATE_PATH", raising=False)
+    payload = export_pptx(_result())
+    assert payload.startswith(b"PK")
+
+

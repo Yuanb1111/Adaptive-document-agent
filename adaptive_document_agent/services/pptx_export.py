@@ -22,7 +22,10 @@ from adaptive_document_agent.document_model import (
 from adaptive_document_agent.models import ChartPlan, Observation, PipelineResult, PresentationSlide
 from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
 
-DEFAULT_TEMPLATE_PATH = r"C:\Users\yuanb\Desktop\FOURIER Light Version Template EN_251217.pptx"
+PACKAGE_ROOT = Path(__file__).resolve().parent.parent
+BUNDLED_TEMPLATE_PATH = PACKAGE_ROOT / "templates" / "FOURIER Light Version Template EN_251217.pptx"
+LOCAL_DESKTOP_TEMPLATE_PATH = Path(r"C:\Users\yuanb\Desktop\FOURIER Light Version Template EN_251217.pptx")
+DEFAULT_TEMPLATE_PATH = str(BUNDLED_TEMPLATE_PATH if BUNDLED_TEMPLATE_PATH.exists() else LOCAL_DESKTOP_TEMPLATE_PATH)
 
 # Fourier Light Theme Palette (theme1.xml)
 FOURIER_PURPLE = "7A24FD"        # Primary accent 1
@@ -64,16 +67,40 @@ CHART_PALETTE = (
 
 
 def _resolve_template_path(template_path: str | Path | None = None) -> Path:
-    target = template_path or os.environ.get("PPTX_TEMPLATE_PATH") or DEFAULT_TEMPLATE_PATH
-    path = Path(target).resolve()
-    if not path.exists():
-        raise FileNotFoundError(
-            f"Required PowerPoint template file not found at '{path}'. "
-            "Please ensure the FOURIER template exists or set PPTX_TEMPLATE_PATH."
-        )
-    if not path.is_file():
-        raise ValueError(f"Specified PowerPoint template path is not a file: '{path}'")
-    return path
+    if template_path:
+        path = Path(template_path).resolve()
+        if not path.exists():
+            raise FileNotFoundError(
+                f"Required PowerPoint template file not found at '{path}'. "
+                "Please ensure the FOURIER template exists or set PPTX_TEMPLATE_PATH."
+            )
+        if not path.is_file():
+            raise ValueError(f"Specified PowerPoint template path is not a file: '{path}'")
+        return path
+
+    env_target = os.environ.get("PPTX_TEMPLATE_PATH")
+    if env_target:
+        path = Path(env_target).resolve()
+        if not path.exists():
+            raise FileNotFoundError(
+                f"Required PowerPoint template file not found at '{path}'. "
+                "Please ensure the FOURIER template exists or set PPTX_TEMPLATE_PATH."
+            )
+        if not path.is_file():
+            raise ValueError(f"Specified PowerPoint template path is not a file: '{path}'")
+        return path
+
+    if BUNDLED_TEMPLATE_PATH.exists() and BUNDLED_TEMPLATE_PATH.is_file():
+        return BUNDLED_TEMPLATE_PATH
+
+    if LOCAL_DESKTOP_TEMPLATE_PATH.exists() and LOCAL_DESKTOP_TEMPLATE_PATH.is_file():
+        return LOCAL_DESKTOP_TEMPLATE_PATH
+
+    raise FileNotFoundError(
+        f"Required PowerPoint template file not found at bundled path '{BUNDLED_TEMPLATE_PATH}' "
+        f"or desktop path '{LOCAL_DESKTOP_TEMPLATE_PATH}'. "
+        "Please ensure the FOURIER template exists or set PPTX_TEMPLATE_PATH."
+    )
 
 
 def build_presentation(result: PipelineResult, template_path: str | Path | None = None) -> bytes:
