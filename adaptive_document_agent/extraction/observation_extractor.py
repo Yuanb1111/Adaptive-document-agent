@@ -203,8 +203,13 @@ class ObservationExtractor:
                 display_unit = "%"
                 if value is not None and (value > 1000.0 or value < -1000.0):
                     validation_status = "suspicious_alignment"
-                    anomaly_notes.append(f"Implausible percentage value {value}% in column '{column_label}'")
-            elif any(term in header_lower for term in ("volume", "quantity", "units sold", "count")):
+            elif (
+                any(term in header_lower for term in ("volume", "quantity", "units sold", "count", "shipment", "sales volume", "出货量", "销售量", "销量"))
+                or (
+                    any(term in metric.casefold() for term in ("volume", "quantity", "units sold", "shipment", "sales volume", "number of units", "fleet size", "heads", "sets", "pieces", "销量", "销售量", "出货量", "数量", "台", "件", "套"))
+                    and not any(asp in metric.casefold() for asp in ("average selling price", "asp", "unit price", "price per", "单价", "平均售价"))
+                )
+            ):
                 unit, currency, scale = "count", None, 1.0
                 value = number.value
                 semantic_type, unit_family, display_unit = "count", "count", "units"

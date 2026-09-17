@@ -261,9 +261,11 @@ def test_tesla_style_wide_appendix_financial_table() -> None:
     result = _build_test_pipeline_result()
     deck = Presentation(io.BytesIO(export_pptx(result)))
 
-    appendix_slide = deck.slides[-2]
-    tables = [s.table for s in appendix_slide.shapes if s.has_table]
-    assert len(tables) >= 1
+    # Flow and balance-sheet periods are deliberately split into compatible
+    # appendix tables. Inspect every appendix table before the Thank You slide.
+    appendix_slides = list(deck.slides)[:-1]
+    tables = [shape.table for slide in appendix_slides for shape in slide.shapes if shape.has_table]
+    assert tables
     table = tables[0]
 
     headers = [table.cell(0, col).text for col in range(len(table.columns))]
@@ -272,11 +274,20 @@ def test_tesla_style_wide_appendix_financial_table() -> None:
     assert any("2022" in h for h in headers[2:])
     assert any("2023" in h for h in headers[2:])
 
-    row_0_texts = [table.cell(r, 0).text for r in range(len(table.rows))]
+    row_0_texts = [
+        table.cell(r, 0).text
+        for table in tables
+        for r in range(len(table.rows))
+    ]
     assert any("FINANCIAL PERFORMANCE" in t for t in row_0_texts)
     assert any("LIQUIDITY" in t for t in row_0_texts)
 
-    slide_text = " ".join(s.text for s in appendix_slide.shapes if s.has_text_frame)
+    slide_text = " ".join(
+        shape.text
+        for slide in appendix_slides
+        for shape in slide.shapes
+        if shape.has_text_frame
+    )
     assert "Source: pp." in slide_text
     assert "* Unaudited" in slide_text
     assert "Complete reported dataset available in accompanying CSV export." in slide_text

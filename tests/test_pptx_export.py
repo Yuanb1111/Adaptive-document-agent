@@ -342,8 +342,11 @@ def test_pptx_appendix_paginates_all_chart_observations_and_cleans_units() -> No
         for row in shape.table.rows
         for cell in row.cells
     ]
-    assert all(str(year) in appendix_values for year in range(2003, 2022))
-    assert "RMB '000" in appendix_values
+    # Period labels remain complete even though client-facing monetary cells
+    # are rescaled from the raw source unit to the appendix's million basis.
+    assert all(f"FY{year}" in appendix_values for year in range(2003, 2022))
+    assert "RMB million" in appendix_values
+    assert "RMB '000" not in appendix_values
 
 
 def test_pptx_filters_junk_metrics_and_derives_findings_from_valid_charts() -> None:
@@ -476,5 +479,3 @@ def test_bundled_template_exists_and_loads_by_default(monkeypatch: pytest.Monkey
     monkeypatch.delenv("PPTX_TEMPLATE_PATH", raising=False)
     payload = export_pptx(_result())
     assert payload.startswith(b"PK")
-
-

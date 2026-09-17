@@ -60,9 +60,10 @@ def infer_unit_defaults(text: str) -> UnitDefaults:
     if currency and not declaration:
         currency_match = next((re.search(pattern, compact, re.I) for pattern, _ in _CURRENCIES if re.search(pattern, compact, re.I)), None)
         declaration = currency_match.group(0).strip() if currency_match else None
-    if scale and not declaration:
-        scale_match = re.search(r"(?i)(?:in\s+)?(?:thousands?|millions?|billions?|['’`]\s*0{3}|千元|百万|十亿)", compact)
-        declaration = scale_match.group(0).strip() if scale_match else None
+    if declaration:
+        declaration = re.sub(r"(?i)\b(rmb|cny|hkd|hk\s*\$|usd|us\s*\$|eur|gbp)(?:in)?(thousands?|'000)\b", r"\1 in thousands", declaration)
+        declaration = re.sub(r"(?i)\b(rmb|cny|hkd|hk\s*\$|usd|us\s*\$|eur|gbp)(?:in)?(millions?)\b", r"\1 in millions", declaration)
+        declaration = re.sub(r"(?i)\b(rmb|cny|hkd|hk\s*\$|usd|us\s*\$|eur|gbp)(?:in)?(billions?)\b", r"\1 in billions", declaration)
     return UnitDefaults(unit=unit, scale=scale, currency=currency, raw_unit=declaration)
 
 

@@ -30,6 +30,12 @@ from adaptive_document_agent.document_model.period_semantic_validator import (
     format_period_label,
 )
 from adaptive_document_agent.models import ChartPlan, Observation, PipelineResult, PresentationSlide
+from adaptive_document_agent.services.financial_formatter import (
+    format_compact_currency,
+    normalize_currency_symbol,
+    normalize_raw_unit,
+    shorten_metric_title,
+)
 from adaptive_document_agent.services.ppt_preflight import PresentationPreflight
 from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
 
@@ -269,7 +275,16 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
                         for item in charts
                     ]
                 rendered_charts.extend(charts)
-                if len(charts) == 1 and slide_plan.layout != "chart_with_data":
+                if len(charts) == 1 and slide_plan.layout in {"chart_plus_kpis", "chart_with_data", "table_plus_kpis"}:
+                    _add_chart_plus_kpis_slide(
+                        presentation,
+                        charts[0],
+                        index,
+                        title=slide_plan.title,
+                        subtitle=slide_plan.message,
+                        supporting_observations=_planned_observations(slide_plan, index),
+                    )
+                elif len(charts) == 1:
                     _add_chart_slide(
                         presentation,
                         charts[0],
@@ -423,17 +438,25 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
     if not description:
         description = "Document-grounded overview of the reported issuer and business context."
 
+    if has_company_identity or getattr(company, "identity_state", "") == "RESOLVED":
+        description = re.sub(r"(?i)\(?(?:prospectus|document)\s+for\s+an\s+unnamed\s+issuer\)?", "", description)
+        description = re.sub(r"(?i)\bunnamed\s+issuer\b", name, description)
+        description = re.sub(r"(?i)\bcompany\s+not\s+identified\b", name, description)
+        description = re.sub(r"[ \t]{2,}", " ", description).strip()
+
+    products = list(dict.fromkeys(p for p in company.products if p.strip()))[:3]
+    geos = list(dict.fromkeys(g for g in company.geographies if g.strip()))[:3]
+    customer_types = list(dict.fromkeys(item for item in company.customer_types if item.strip()))[:3]
+    b_model = company.business_model.strip() or (company.segments[0] if company.segments else "")
     topics: list[str] = []
-    seen_topics: set[str] = set()
-    for topic in [*company.products, *company.segments, *company.geographies]:
-        key = " ".join(topic.casefold().split())
-        if topic.strip() and key not in seen_topics:
-            seen_topics.add(key)
-            topics.append(topic)
-    if company.business_model:
-        key = " ".join(company.business_model.casefold().split())
-        if key not in seen_topics:
-            topics.append(company.business_model)
+    if products:
+        topics.append(f"Products: {', '.join(products)}")
+    if geos:
+        topics.append(f"Markets: {', '.join(geos)}")
+    if customer_types:
+        topics.append(f"Customers: {', '.join(customer_types)}")
+    if b_model:
+        topics.append(f"Business model: {b_model}")
 
     # Format profile metadata line
     meta_items: list[str] = []
@@ -466,7 +489,7 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
         if topics:
             _text(slide, "BUSINESS FOCUS", 0.70, content_top + 2.55, 4.0, 0.26, size=10.5, color=FOURIER_PURPLE, bold=True)
             _rule(slide, 0.70, content_top + 2.85, 6.70, 0.01, FOURIER_BORDER)
-            topic_text = "\n".join(f"{index:02d}  {_summary_text(item, 72)}" for index, item in enumerate(topics[:4], start=1))
+            topic_text = "\n".join(f"{index:02d}  {_summary_text(item, 72)}" for index, item in enumerate(topics, start=1))
             _text(slide, topic_text, 0.70, content_top + 2.95, 6.70, 1.40, size=12.5, color=FOURIER_DARK, bold=True)
 
         _panel(slide, 7.85, content_top, 4.30, content_h, fill=FOURIER_BG_CARD)
@@ -883,6 +906,57 @@ def _add_chart_slide(
     _add_native_chart(slide, plan, values, chart_bounds)
 
 
+def _add_chart_plus_kpis_slide(
+    presentation: Any,
+    plan: ChartPlan,
+    index: DocumentIndex,
+    *,
+    title: str | None = None,
+    subtitle: str | None = None,
+    supporting_observations: list[Observation] | None = None,
+) -> None:
+    observations = [index.get(identifier) for identifier in plan.observation_ids]
+    values = [item for item in observations if item and item.value is not None]
+    display_title = title or _presentation_chart_title(plan.title, values)
+    display_subtitle = subtitle or plan.question
+    slide = _base_slide(presentation, display_title, display_subtitle)
+    content_top, content_h = _content_zone(slide)
+
+    if not values:
+        _panel(slide, 0.45, content_top, 11.70, content_h, fill=FOURIER_BG_CARD)
+        _text(slide, "The chart plan contains no usable values.", 0.85, 3.2, 10.9, 0.8, size=20, color=FOURIER_MUTED, align="center")
+        return
+
+    # Left: Large clear Chart (65% width = 7.50 in)
+    _panel(slide, 0.45, content_top, 7.50, content_h, fill=WHITE)
+    chart_bounds = (0.65, content_top + 0.20, 7.10, content_h - 0.40)
+    scale, scale_label = _add_native_chart(slide, plan, values, chart_bounds, compact=False)
+
+    # Right: KPI Cards stack (35% width = 3.95 in)
+    right_left = 8.20
+    right_width = 3.95
+    kpi_items = supporting_observations or values[-4:]
+    kpi_count = min(len(kpi_items), 4)
+    card_h = min(1.05, (content_h - (kpi_count - 1) * 0.12) / max(kpi_count, 1))
+
+    for k_idx, item in enumerate(kpi_items[:kpi_count]):
+        card_y = content_top + k_idx * (card_h + 0.12)
+        _panel(slide, right_left, card_y, right_width, card_h, fill=FOURIER_BG_CARD)
+        semantic = classify_metric(display_metric_name(item), value=item.value, raw_unit=item.raw_unit, unit=item.unit)
+        short_title = semantic.short_display_name or semantic.clean_name
+        is_bs = any(term in short_title.casefold() for term in ("liabilit", "cash", "balance", "receiv", "payab", "inventor"))
+        period_str = format_period_label(item.period, is_balance_sheet=is_bs) or item.period or ""
+        val_str = format_metric_display_value(item.raw_value, item.value, semantic, raw_unit=_display_source_unit(item), currency=item.currency, compact=True)
+
+        _text(slide, _summary_text(short_title, 32), right_left + 0.18, card_y + 0.10, right_width - 0.36, 0.24, size=11, color=FOURIER_MUTED, bold=True)
+        _text(slide, val_str, right_left + 0.18, card_y + 0.38, right_width * 0.58, 0.38, size=16, color=FOURIER_DARK, bold=True)
+        if period_str:
+            _text(slide, period_str, right_left + right_width * 0.58, card_y + 0.42, right_width * 0.38, 0.28, size=10.5, color=FOURIER_TECH_BLUE, bold=True, align="right")
+        pages = ", ".join(map(str, sorted({s.page for s in item.evidence})))
+        if pages:
+            _text(slide, f"p. {pages}", right_left + 0.18, card_y + card_h - 0.22, right_width - 0.36, 0.18, size=8.5, color=FOURIER_MUTED, align="right")
+
+
 def _add_chart_cluster_slide(
     presentation: Any,
     plans: list[ChartPlan],
@@ -959,7 +1033,12 @@ def _add_native_chart(
     compact: bool = False,
 ) -> tuple[float, str]:
     from pptx.chart.data import CategoryChartData, XyChartData
-    from pptx.enum.chart import XL_CHART_TYPE, XL_DATA_LABEL_POSITION, XL_LEGEND_POSITION
+    from pptx.enum.chart import (
+        XL_CHART_TYPE,
+        XL_DATA_LABEL_POSITION,
+        XL_LEGEND_POSITION,
+        XL_TICK_LABEL_POSITION,
+    )
     from pptx.util import Inches, Pt
 
     max_abs = max(abs(float(item.value or 0)) for item in values)
@@ -969,15 +1048,18 @@ def _add_native_chart(
     # Detect balance sheet metric for interim date formatting
     metric_name = plan.title or (values[0].metric_original if values else "")
     is_bs = any(term in metric_name.casefold() for term in ("liabilit", "cash", "balance", "receiv", "payab", "inventor"))
+    has_negative = False
 
     if plan.chart_type == "scatter" and plan.x_metric and plan.y_metric:
         data = XyChartData()
-        series = data.add_series("Observed pairs")
+        series_title = f"{shorten_metric_title(plan.y_metric)} vs {shorten_metric_title(plan.x_metric)}"
+        series = data.add_series(series_title)
         for left, right in paired_observations(values, plan.x_metric, plan.y_metric):
             series.add_data_point(float(left.value or 0) / scale, float(right.value or 0) / scale)
         chart = slide.shapes.add_chart(XL_CHART_TYPE.XY_SCATTER, chart_left, chart_top, chart_width, chart_height, data).chart
     else:
         rows = _series_rows(plan, values, is_balance_sheet=is_bs)
+        has_negative = any(row[2] is not None and row[2] < 0 for row in rows)
         categories = list(dict.fromkeys(row[0] for row in rows))
         series_names = list(dict.fromkeys(row[1] for row in rows))
         data = CategoryChartData()
@@ -999,7 +1081,7 @@ def _add_native_chart(
     if chart.has_legend:
         chart.legend.position = XL_LEGEND_POSITION.BOTTOM
         chart.legend.font.name = FONT
-        chart.legend.font.size = Pt(8 if compact else 10)
+        chart.legend.font.size = Pt(9 if compact else 11)
     chart.chart_style = 10
     for series_index, series in enumerate(chart.series):
         color = CHART_PALETTE[series_index % len(CHART_PALETTE)]
@@ -1019,7 +1101,8 @@ def _add_native_chart(
         else:
             labels.position = XL_DATA_LABEL_POSITION.OUTSIDE_END
         labels.font.name = FONT
-        labels.font.size = Pt(8 if compact else 10)
+        labels.font.size = Pt(12 if compact else 14)
+        labels.font.bold = True
         labels.number_format = "0.0"
     except (AttributeError, ValueError):
         pass
@@ -1027,13 +1110,15 @@ def _add_native_chart(
         # Style axis fonts and DISABLE ALL BACKGROUND GRIDLINES
         if hasattr(chart, "category_axis") and chart.category_axis is not None:
             chart.category_axis.tick_labels.font.name = FONT
-            chart.category_axis.tick_labels.font.size = Pt(8 if compact else 10)
+            chart.category_axis.tick_labels.font.size = Pt(10 if compact else 11)
             chart.category_axis.has_major_gridlines = False
             chart.category_axis.has_minor_gridlines = False
+            if has_negative:
+                chart.category_axis.tick_label_position = XL_TICK_LABEL_POSITION.LOW
 
         if hasattr(chart, "value_axis") and chart.value_axis is not None:
             chart.value_axis.tick_labels.font.name = FONT
-            chart.value_axis.tick_labels.font.size = Pt(8 if compact else 10)
+            chart.value_axis.tick_labels.font.size = Pt(10 if compact else 11)
             chart.value_axis.tick_labels.number_format = "0.0"
             chart.value_axis.tick_labels.number_format_is_linked = False
             # Clean institutional styling: NO BACKGROUND HORIZONTAL GRIDLINES
@@ -1224,14 +1309,15 @@ def _add_evidence_table_slides(
             metric_name,
             item.parent_section or item.source_section or item.dimensions.get("section") or "",
         )
-        unit_str = _display_source_unit(item)
+        unit_str = _appendix_display_unit(item, semantic)
+        display_value = _appendix_display_value(item, semantic)
         period_key = item.period or "Reported"
         all_periods_set.add(period_key)
 
         theme_dict = metrics_by_theme.setdefault(theme, {})
         metric_entry = theme_dict.setdefault(metric_name, {"unit": unit_str, "periods": {}, "pages": set()})
 
-        metric_entry["periods"][period_key] = item.raw_value
+        metric_entry["periods"][period_key] = display_value
         for ev in item.evidence:
             if getattr(ev, "page", None):
                 metric_entry["pages"].add(ev.page)
@@ -1240,46 +1326,65 @@ def _add_evidence_table_slides(
     if not sorted_periods:
         sorted_periods = ["Reported"]
 
-    # Partition periods if broad time series (e.g. > 10 periods)
-    if len(sorted_periods) > 10:
-        period_chunks = [sorted_periods[i:i + 10] for i in range(0, len(sorted_periods), 10)]
-    else:
-        period_chunks = [sorted_periods]
+    FLOW_THEMES = [
+        "Financial Performance",
+        "Cash Flow",
+        "Non-IFRS / Adjusted Measures",
+        "Financial Overview",
+    ]
+    BS_THEMES = [
+        "Liquidity",
+        "Working Capital & Operations",
+        "Capital Structure & Indebtedness",
+    ]
 
-    # Build slide bundles
-    slide_specs: list[tuple[list[str], list[tuple[str, dict[str, dict[str, Any]]]]]] = []
-    for p_chunk in period_chunks:
-        current_bundle: list[tuple[str, dict[str, dict[str, Any]]]] = []
-        current_rows = 0
-        for theme in THEME_ORDER:
-            if theme not in metrics_by_theme:
-                continue
-            theme_metrics = metrics_by_theme[theme]
-            needed_rows = 1 + len(theme_metrics)
-            if current_rows > 0 and current_rows + needed_rows > 10:
-                slide_specs.append((p_chunk, current_bundle))
-                current_bundle = [(theme, theme_metrics)]
-                current_rows = needed_rows
-            else:
-                current_bundle.append((theme, theme_metrics))
-                current_rows += needed_rows
-        if current_bundle:
-            slide_specs.append((p_chunk, current_bundle))
+    slide_specs: list[tuple[list[str], list[tuple[str, dict[str, dict[str, Any]]]], bool]] = []
+    for theme_set, is_bs in [(FLOW_THEMES, False), (BS_THEMES, True)]:
+        active_themes = [t for t in theme_set if t in metrics_by_theme]
+        if not active_themes:
+            continue
+        group_periods = sorted(
+            {p for t in active_themes for m in metrics_by_theme[t].values() for p in m["periods"]},
+            key=period_sort_key,
+        )
+        if not group_periods:
+            continue
+        p_chunks = [group_periods[i:i + 10] for i in range(0, len(group_periods), 10)] if len(group_periods) > 10 else [group_periods]
+        for p_chunk in p_chunks:
+            current_bundle: list[tuple[str, dict[str, dict[str, Any]]]] = []
+            current_rows = 0
+            for theme in active_themes:
+                theme_metrics = metrics_by_theme[theme]
+                needed_rows = 1 + len(theme_metrics)
+                if current_rows > 0 and current_rows + needed_rows > 10:
+                    slide_specs.append((p_chunk, current_bundle, is_bs))
+                    current_bundle = [(theme, theme_metrics)]
+                    current_rows = needed_rows
+                else:
+                    current_bundle.append((theme, theme_metrics))
+                    current_rows += needed_rows
+            if current_bundle:
+                slide_specs.append((p_chunk, current_bundle, is_bs))
+
+    if not slide_specs:
+        sorted_periods = sorted(all_periods_set, key=period_sort_key) or ["Reported"]
+        all_entries = [(t, metrics_by_theme[t]) for t in THEME_ORDER if t in metrics_by_theme]
+        slide_specs.append((sorted_periods, all_entries, False))
 
     if max_pages is not None:
         slide_specs = slide_specs[:max_pages]
 
     total_specs = len(slide_specs)
-    for spec_index, (p_chunk, theme_entries) in enumerate(slide_specs, start=1):
-        slide_subtitle = subtitle or "Validated reported values across historical periods, with source provenance"
+    for spec_index, (p_chunk, theme_entries, is_bs) in enumerate(slide_specs, start=1):
+        group_type_str = "Balance Sheet & Position" if is_bs else "Performance & Cash Flows"
+        slide_subtitle = subtitle or f"{group_type_str} across reported periods, with source provenance"
         if total_specs > 1:
             slide_subtitle += f" | Appendix {spec_index} of {total_specs}"
         slide = _base_slide(presentation, title, slide_subtitle)
         content_top, content_h = _content_zone(slide)
 
-        is_any_bs = any(t in ("Liquidity", "Working Capital & Operations", "Capital Structure & Indebtedness") for t, _ in theme_entries)
         formatted_headers = ["Financial Metric", "Unit"] + [
-            format_period_label(p, is_balance_sheet=is_any_bs) or p
+            format_period_label(p, is_balance_sheet=is_bs) or p
             for p in p_chunk
         ]
 
@@ -1709,6 +1814,33 @@ def _charts_belong_together(left: ChartPlan, right: ChartPlan, index: DocumentIn
     if shared_context:
         return True
 
+    left_name = (left.title or (display_metric_name(left_values[0]) if left_values else "")).casefold()
+    right_name = (right.title or (display_metric_name(right_values[0]) if right_values else "")).casefold()
+
+    # Generic Merge 1: Margin & Cost of sales
+    is_margin_cost = (
+        ("margin" in left_name or "gross profit" in left_name) and ("cost of sales" in right_name or "cost of revenue" in right_name)
+    ) or (
+        ("margin" in right_name or "gross profit" in right_name) and ("cost of sales" in left_name or "cost of revenue" in left_name)
+    )
+    if is_margin_cost:
+        return True
+
+    # Generic Merge 2: Operating expense intensities (Selling, Admin, R&D)
+    is_opex_left = any(term in left_name for term in ("selling", "administrative", "admin", "r&d", "research and development")) and any(s in left_name for s in ("revenue", "%", "share", "ratio"))
+    is_opex_right = any(term in right_name for term in ("selling", "administrative", "admin", "r&d", "research and development")) and any(s in right_name for s in ("revenue", "%", "share", "ratio"))
+    if is_opex_left and is_opex_right:
+        return True
+
+    # Generic Merge 3: Volume & ASP
+    is_vol_asp = (
+        any(v in left_name for v in ("volume", "units", "shipment", "sales volume", "销量")) and any(p in right_name for p in ("asp", "price", "单价", "平均售价"))
+    ) or (
+        any(v in right_name for v in ("volume", "units", "shipment", "sales volume", "销量")) and any(p in left_name for p in ("asp", "price", "单价", "平均售价"))
+    )
+    if is_vol_asp:
+        return True
+
     same_page = bool(_chart_source_pages(left, left_values) & _chart_source_pages(right, right_values))
     same_unit = _chart_unit_signature(left_values) == _chart_unit_signature(right_values)
     shared_terms = _chart_title_tokens(left, left_values) & _chart_title_tokens(right, right_values)
@@ -1888,16 +2020,16 @@ def _unit_label(observations: list[Observation], scale_label: str) -> str:
     if "multiple" in units or "multiple" in families:
         return "x"
     if "percent" in units or "percentage" in families:
-        return "percent"
+        return "%"
+    if "count" in units or "count" in families or any(getattr(item, "is_volume", False) for item in observations):
+        return "units"
     currencies = {item.currency for item in observations if item.currency}
     raw_units = {item.raw_unit for item in observations if item.raw_unit}
     if currencies:
-        base = "/".join(sorted(currencies))
-        return f"{base} / {scale_label}" if scale_label else base
+        base = normalize_currency_symbol(next(iter(currencies)))
+        return f"{base} {scale_label}" if scale_label else base
     if raw_units:
-        clean = re.sub(r"\ufffd+", "'", next(iter(raw_units)))
-        clean = re.sub(r"(?i)\bRMB\s*'+\s*000\b", "RMB '000", clean)
-        return clean
+        return normalize_raw_unit(next(iter(raw_units)))
     return scale_label or "units"
 
 
@@ -1907,11 +2039,39 @@ def _display_source_unit(item: Observation) -> str:
         return "x"
     if semantic.is_percentage:
         return "%"
+    if semantic.is_volume or semantic.unit_family == "count":
+        return "units"
     value = item.raw_unit or _unit_label([item], "")
-    clean = re.sub(r"\ufffd+", "'", value)
-    clean = re.sub(r"(?i)\bRMB\s*'+\s*000\b", "RMB '000", clean)
-    clean = re.sub(r"(?i)%\s*of\s*rmb", "RMB '000", clean)
-    return clean
+    return normalize_raw_unit(value, default_currency=item.currency or "RMB")
+
+
+def _appendix_display_unit(item: Observation, semantic: Any) -> str:
+    """Return a client-facing appendix unit without exposing source-scale tokens.
+
+    Exact source units and values remain on ``Observation`` and in the CSV export.
+    The PPT appendix uses one readable monetary scale per row instead.
+    """
+    if semantic.is_currency:
+        return f"{normalize_currency_symbol(item.currency or 'RMB')} million"
+    return _display_source_unit(item)
+
+
+def _appendix_display_value(item: Observation, semantic: Any) -> str:
+    """Format an appendix cell from normalized numeric evidence when available."""
+    if not semantic.is_currency or item.value is None:
+        return str(item.raw_value)
+
+    source_unit = normalize_raw_unit(item.raw_unit, default_currency=item.currency or "RMB").casefold()
+    scale = item.unit_scale or 1.0
+    if scale == 1.0:
+        if "'000" in source_unit or "thousand" in source_unit:
+            scale = 1_000.0
+        elif "billion" in source_unit:
+            scale = 1_000_000_000.0
+        elif "million" in source_unit:
+            scale = 1_000_000.0
+    value_in_millions = float(item.value) * scale / 1_000_000.0
+    return _format_scaled(value_in_millions, 1.0)
 
 
 def _cell_style(cell: Any, *, fill: str, color: str, bold: bool, size: float) -> None:

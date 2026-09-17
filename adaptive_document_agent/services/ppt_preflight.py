@@ -48,7 +48,9 @@ class PresentationPreflight:
         for idx, slide in enumerate(self.presentation.slides):
             self._check_geometry_invariants(idx, slide)
             self._check_chart_gridlines(idx, slide)
+            self._check_chart_quality(idx, slide)
             self._check_banned_phrases(idx, slide)
+            self._check_raw_unit_tokens(idx, slide)
             self._check_collisions(idx, slide)
             self._check_semantic_units(idx, slide)
             self._check_template_completeness(idx, slide)
@@ -97,6 +99,81 @@ class PresentationPreflight:
                             chart.value_axis.has_minor_gridlines = False
                 except Exception:
                     pass
+
+    def _check_chart_quality(self, idx: int, slide: Any) -> None:
+        for shape in slide.shapes:
+            if shape.has_chart:
+                chart = shape.chart
+                # Reject "Observed pairs"
+                try:
+                    for series in getattr(chart, "series", []):
+                        if series.name and "observed pairs" in series.name.casefold():
+                            self.issues.append(
+                                PreflightIssue(
+                                    idx,
+                                    "uninterpretable_chart_series",
+                                    f"Chart contains uninterpretable series name '{series.name}'",
+                                    severity="warning",
+                                )
+                            )
+                            series.name = "Metric Analysis"
+                except Exception:
+                    pass
+
+                # Check category axis position for negative bars
+                try:
+                    if hasattr(chart, "category_axis") and chart.category_axis is not None:
+                        from pptx.enum.chart import XL_TICK_LABEL_POSITION
+                        has_negative = False
+                        for series in getattr(chart, "series", []):
+                            if any(v is not None and v < 0 for v in getattr(series, "values", [])):
+                                has_negative = True
+                                break
+                        if has_negative and chart.category_axis.tick_label_position != XL_TICK_LABEL_POSITION.LOW:
+                            chart.category_axis.tick_label_position = XL_TICK_LABEL_POSITION.LOW
+                            self.issues.append(
+                                PreflightIssue(
+                                    idx,
+                                    "negative_bar_axis_repositioned",
+                                    "Repositioned category axis to LOW for negative vertical bars",
+                                    severity="warning",
+                                )
+                            )
+                except Exception:
+                    pass
+
+    def _check_raw_unit_tokens(self, idx: int, slide: Any) -> None:
+        raw_token_pattern = re.compile(r"(?i)\b(rmb|cny|hkd|usd)(?:in)?(thousands?|millions?|billions?|'000)\b")
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                for p in shape.text_frame.paragraphs:
+                    if raw_token_pattern.search(p.text):
+                        orig = p.text
+                        clean = re.sub(r"(?i)\b(rmb|cny|hkd|usd)(?:in)?(thousands?|'000)\b", r"\1 '000", orig)
+                        clean = re.sub(r"(?i)\b(rmb|cny|hkd|usd)(?:in)?(millions?)\b", r"\1 million", clean)
+                        clean = re.sub(r"(?i)\b(rmb|cny|hkd|usd)(?:in)?(billions?)\b", r"\1 billion", clean)
+                        if clean != orig:
+                            self.issues.append(
+                                PreflightIssue(
+                                    idx,
+                                    "raw_unit_token_sanitized",
+                                    f"Sanitized raw unit token in text: '{orig}' -> '{clean}'",
+                                    severity="warning",
+                                )
+                            )
+                            p.text = clean
+            elif shape.has_table:
+                for row in shape.table.rows:
+                    for cell in row.cells:
+                        for p in cell.text_frame.paragraphs:
+                            if raw_token_pattern.search(p.text):
+                                orig = p.text
+                                clean = re.sub(r"(?i)\b(rmb|cny|hkd|usd)(?:in)?(thousands?|'000)\b", r"\1 '000", orig)
+                                clean = re.sub(r"(?i)\b(rmb|cny|hkd|usd)(?:in)?(millions?)\b", r"\1 million", clean)
+                                clean = re.sub(r"(?i)\b(rmb|cny|hkd|usd)(?:in)?(billions?)\b", r"\1 billion", clean)
+                                if clean != orig:
+                                    p.text = clean
+
 
     def _check_banned_phrases(self, idx: int, slide: Any) -> None:
         for shape in slide.shapes:

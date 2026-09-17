@@ -25,6 +25,11 @@ PresentationLayout = Literal[
     "hero_plus_supporting",
     "chart_with_data",
     "data_overview",
+    "chart_plus_kpis",
+    "chart_plus_commentary",
+    "two_chart_comparison",
+    "combo_chart",
+    "table_plus_kpis",
 ]
 
 PresentationSlideRole = Literal["overview", "deep_dive", "drivers", "watch_items", "risk", "methodology", "source_data"]
@@ -57,6 +62,8 @@ class CompanyProfile(BaseModel):
     segments: list[str] = Field(default_factory=list, max_length=6)
     geographies: list[str] = Field(default_factory=list, max_length=6)
     business_model: str = ""
+    customer_types: list[str] = Field(default_factory=list, max_length=6)
+    identity_state: Literal["UNRESOLVED", "PARTIALLY_RESOLVED", "RESOLVED"] = "UNRESOLVED"
     key_facts: list[CompanyFact] = Field(default_factory=list, max_length=8)
     source_pages: list[int] = Field(default_factory=list)
 

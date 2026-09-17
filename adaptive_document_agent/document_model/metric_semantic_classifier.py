@@ -7,6 +7,14 @@ import re
 from typing import Any
 
 
+from adaptive_document_agent.services.financial_formatter import (
+    format_compact_currency,
+    is_expense_ratio_metric,
+    normalize_raw_unit,
+    shorten_metric_title,
+)
+
+
 @dataclass(frozen=True)
 class MetricSemantic:
     metric_type: str  # 'currency', 'percentage', 'multiple', 'days', 'count', 'generic'
@@ -17,6 +25,9 @@ class MetricSemantic:
     is_currency: bool
     is_percentage: bool
     is_multiple: bool
+    is_expense_ratio: bool = False
+    is_volume: bool = False
+    short_display_name: str = ""
 
 
 # Canonical keywords for metric classification
@@ -177,6 +188,27 @@ _DAYS_KEYWORDS = (
     "days",
 )
 
+_VOLUME_KEYWORDS = (
+    "volume",
+    "sales volume",
+    "shipment",
+    "units sold",
+    "quantity",
+    "number of units",
+    "fleet size",
+    "heads",
+    "sets",
+    "pieces",
+    "pcs",
+    "销量",
+    "销售量",
+    "出货量",
+    "数量",
+    "台",
+    "件",
+    "套",
+)
+
 
 def classify_metric(
     name: str,
@@ -187,6 +219,7 @@ def classify_metric(
 ) -> MetricSemantic:
     clean = sanitize_metric_label(name)
     lower = clean.casefold()
+    short_title = shorten_metric_title(clean)
 
     # 1. Multiples / Ratios (Current ratio, Quick ratio, etc.)
     # Must precede percentage and currency checks to prevent ratios from being misclassified as percent.
@@ -200,6 +233,7 @@ def classify_metric(
             is_currency=False,
             is_percentage=False,
             is_multiple=True,
+            short_display_name=short_title,
         )
 
     # 2. Days metrics (Turnover days, DSO, DIO, DPO)
@@ -213,10 +247,29 @@ def classify_metric(
             is_currency=False,
             is_percentage=False,
             is_multiple=False,
+            short_display_name=short_title,
         )
 
-    # 3. Explicit Share of revenue / expense ratio
-    if any(k in lower for k in _SHARE_KEYWORDS) or lower.endswith("/ revenue"):
+    # 3. Volume / Count metrics (Units sold, Sales volume, Shipment)
+    is_asp = any(asp in lower for asp in ("average selling price", "asp", "unit price", "price per", "单价", "平均售价"))
+    if any(k in lower for k in _VOLUME_KEYWORDS) and not is_asp and not any(k in lower for k in ("share", "%", "margin", "ratio", "revenue", "cost")):
+        return MetricSemantic(
+            metric_type="count",
+            unit_family="count",
+            semantic_type="count",
+            clean_name=clean,
+            display_unit="units",
+            is_currency=False,
+            is_percentage=False,
+            is_multiple=False,
+            is_expense_ratio=False,
+            is_volume=True,
+            short_display_name=short_title,
+        )
+
+    # 4. Explicit Share of revenue / expense ratio
+    is_exp = is_expense_ratio_metric(clean)
+    if any(k in lower for k in _SHARE_KEYWORDS) or lower.endswith("/ revenue") or is_exp:
         return MetricSemantic(
             metric_type="percentage",
             unit_family="percentage",
@@ -226,9 +279,11 @@ def classify_metric(
             is_currency=False,
             is_percentage=True,
             is_multiple=False,
+            is_expense_ratio=is_exp,
+            short_display_name=short_title,
         )
 
-    # 4. Explicit Margin metrics (Gross margin, Operating margin, etc.)
+    # 5. Explicit Margin metrics (Gross margin, Operating margin, etc.)
     if any(k in lower for k in _MARGIN_KEYWORDS):
         return MetricSemantic(
             metric_type="percentage",
@@ -239,6 +294,7 @@ def classify_metric(
             is_currency=False,
             is_percentage=True,
             is_multiple=False,
+            short_display_name=short_title,
         )
 
     # 5. Currency line items (Revenue, Gross profit, Loss from operations, Cash, Liabilities, etc.)
@@ -255,16 +311,19 @@ def classify_metric(
                 is_currency=False,
                 is_percentage=True,
                 is_multiple=False,
+                is_expense_ratio=is_exp,
+                short_display_name=short_title,
             )
         return MetricSemantic(
             metric_type="currency",
             unit_family="currency",
             semantic_type="monetary_amount",
             clean_name=clean,
-            display_unit=raw_unit or "currency",
+            display_unit=normalize_raw_unit(raw_unit) or "currency",
             is_currency=True,
             is_percentage=False,
             is_multiple=False,
+            short_display_name=short_title,
         )
 
     # 6. Other percentage keywords (CAGR, growth rate)
@@ -278,6 +337,7 @@ def classify_metric(
             is_currency=False,
             is_percentage=True,
             is_multiple=False,
+            short_display_name=short_title,
         )
 
     # 7. Fallback based on unit / raw_unit hints
@@ -291,6 +351,7 @@ def classify_metric(
             is_currency=False,
             is_percentage=False,
             is_multiple=True,
+            short_display_name=short_title,
         )
     if unit == "percent" or (raw_unit and "%" in raw_unit):
         return MetricSemantic(
@@ -302,6 +363,8 @@ def classify_metric(
             is_currency=False,
             is_percentage=True,
             is_multiple=False,
+            is_expense_ratio=is_exp,
+            short_display_name=short_title,
         )
     if unit == "currency" or (raw_unit and any(c in raw_unit for c in ("$", "£", "€", "¥", "RMB", "HKD", "USD", "CNY"))):
         return MetricSemantic(
@@ -309,10 +372,11 @@ def classify_metric(
             unit_family="currency",
             semantic_type="monetary_amount",
             clean_name=clean,
-            display_unit=raw_unit or "currency",
+            display_unit=normalize_raw_unit(raw_unit) or "currency",
             is_currency=True,
             is_percentage=False,
             is_multiple=False,
+            short_display_name=short_title,
         )
 
     return MetricSemantic(
@@ -320,10 +384,11 @@ def classify_metric(
         unit_family="generic",
         semantic_type="generic",
         clean_name=clean,
-        display_unit=raw_unit or "",
+        display_unit=normalize_raw_unit(raw_unit) or "",
         is_currency=False,
         is_percentage=False,
         is_multiple=False,
+        short_display_name=short_title,
     )
 
 
@@ -342,6 +407,7 @@ def is_multiple_metric(name: str) -> bool:
 def format_metric_change(start: float, end: float, scale: float, semantic: MetricSemantic) -> str:
     """Format analytical change summary adhering to financial conventions.
 
+    - Expense ratios: 'Cost of sales ratio increased by 6.6 pp' (never 'Loss widened')
     - Multiples change by '+0.20x' (never 'pp')
     - Percentages/margins change by '+2.0 pp'
     - Negative-to-negative currency changes explain 'Loss narrowed by X' or 'Loss widened by X'
@@ -349,6 +415,14 @@ def format_metric_change(start: float, end: float, scale: float, semantic: Metri
     """
     name_lower = semantic.clean_name.casefold()
     is_liability = any(k in name_lower for k in ("liabilit", "borrowing", "debt", "indebtedness", "deficit", "负债", "借款"))
+
+    if semantic.is_expense_ratio:
+        s = abs(start)
+        e = abs(end)
+        diff = e - s
+        direction = "increased" if diff >= 0 else "decreased"
+        title = semantic.short_display_name or semantic.clean_name
+        return f"{title} ratio {direction} by {abs(diff):.1f} pp"
 
     if start < 0 <= end:
         return "Turned positive"
@@ -391,6 +465,7 @@ def format_metric_display_value(
     *,
     raw_unit: str | None = None,
     currency: str | None = None,
+    compact: bool = False,
 ) -> str:
     """Format exact card display value based on typed semantics."""
     if semantic.is_multiple:
@@ -398,16 +473,22 @@ def format_metric_display_value(
         return f"{clean}x"
     if semantic.is_percentage:
         clean = str(raw_val).rstrip("%").strip()
+        if semantic.is_expense_ratio and clean.startswith("-"):
+            clean = clean.lstrip("-").strip()
         return f"{clean}%"
+    if semantic.is_volume or semantic.unit_family == "count":
+        return f"{raw_val}  units".strip()
     if semantic.is_currency:
-        if raw_unit and any(s in raw_unit.lower() for s in ("'000", "000", "thousand", "million", "billion")):
-            unit_label = raw_unit
+        norm_unit = normalize_raw_unit(raw_unit, default_currency=currency or "RMB")
+        if compact and num_val is not None:
+            return format_compact_currency(num_val, raw_unit=raw_unit, currency=currency)
+        if norm_unit and any(s in norm_unit.lower() for s in ("'000", "000", "thousand", "million", "billion")):
+            unit_label = norm_unit
         else:
-            unit_label = raw_unit or currency or "currency"
-        unit_label = re.sub(r"(?i)\bRMB\s*'+\s*000\b", "RMB '000", unit_label)
-        unit_label = re.sub(r"(?i)%\s*of\s*rmb", "RMB '000", unit_label)
+            unit_label = norm_unit or currency or "currency"
         return f"{raw_val}  {unit_label}".strip()
-    return f"{raw_val}  {raw_unit or ''}".strip()
+    norm_unit = normalize_raw_unit(raw_unit)
+    return f"{raw_val}  {norm_unit or ''}".strip()
 
 
 def sanitize_metric_label(name: str) -> str:
