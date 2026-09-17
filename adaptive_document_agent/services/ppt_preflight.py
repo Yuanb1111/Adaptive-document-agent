@@ -48,6 +48,7 @@ class PresentationPreflight:
             self._check_chart_gridlines(idx, slide)
             self._check_banned_phrases(idx, slide)
             self._check_collisions(idx, slide)
+            self._check_semantic_units(idx, slide)
         return self.issues
 
     def _check_chart_gridlines(self, idx: int, slide: Any) -> None:
@@ -91,24 +92,51 @@ class PresentationPreflight:
 
     def _check_collisions(self, idx: int, slide: Any) -> None:
         layout_name = slide.slide_layout.name if hasattr(slide, "slide_layout") else ""
-        is_two_line = "Two-line" in layout_name or "2-line" in layout_name
-        content_min_top = 1.65 if is_two_line else 1.38
-
-        # In non-cover, non-divider slides: content shapes should not encroach above content_min_top
         if "封面" in layout_name or "短文本" in layout_name or idx == 0:
             return
 
+        title_ph = None
+        sub_ph = None
+        for shape in slide.placeholders:
+            try:
+                if shape.placeholder_format.idx in (14, 15):
+                    title_ph = shape
+                elif shape.placeholder_format.idx == 16:
+                    sub_ph = shape
+            except Exception:
+                pass
+
+        # 1. Check and correct title-subtitle overlap
+        if title_ph and sub_ph and sub_ph.has_text_frame and sub_ph.text.strip():
+            title_bottom = title_ph.top.inches + title_ph.height.inches
+            if sub_ph.top.inches < title_bottom - 0.02:
+                self.issues.append(
+                    PreflightIssue(
+                        idx,
+                        "title_subtitle_collision",
+                        f"Subtitle at top={sub_ph.top.inches:.2f}in collides with title ending at {title_bottom:.2f}in",
+                        severity="warning",
+                    )
+                )
+                from pptx.util import Inches
+                sub_ph.top = Inches(title_bottom + 0.08)
+
+        # 2. Compute dynamic content boundary based on subtitle/title bottom
+        content_min_top = 1.38
+        if sub_ph and sub_ph.has_text_frame and sub_ph.text.strip():
+            content_min_top = max(content_min_top, sub_ph.top.inches + sub_ph.height.inches + 0.06)
+        elif title_ph and title_ph.has_text_frame and title_ph.text.strip():
+            content_min_top = max(content_min_top, title_ph.top.inches + title_ph.height.inches + 0.06)
+
         for shape in slide.shapes:
-            # Skip placeholders 14, 15, 16 (titles/subtitles)
             if getattr(shape, "is_placeholder", False):
                 try:
                     if shape.placeholder_format.idx in (14, 15, 16):
                         continue
                 except Exception:
                     pass
-            # Skip shapes that are clearly slide number / watermarks at bottom
             top = shape.top.inches if hasattr(shape, "top") else 0
-            if top < content_min_top and top > 0.1:
+            if 0.2 < top < content_min_top - 0.05:
                 self.issues.append(
                     PreflightIssue(
                         idx,
@@ -117,3 +145,37 @@ class PresentationPreflight:
                         severity="warning",
                     )
                 )
+
+    def _check_semantic_units(self, idx: int, slide: Any) -> None:
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                text = shape.text
+                # Multiple metrics mistakenly formatted with %
+                for match in re.finditer(r"(?i)\b(current ratio|quick ratio)\s*[:=]?\s*([0-9]+(?:\.[0-9]+)?)\s*%", text):
+                    self.issues.append(
+                        PreflightIssue(
+                            idx,
+                            "invalid_ratio_unit",
+                            f"Ratio metric formatted with percentage: '{match.group(0)}'",
+                            severity="warning",
+                        )
+                    )
+                    ratio_val = match.group(2)
+                    new_val = f"{match.group(1)}: {ratio_val}x"
+                    for p in shape.text_frame.paragraphs:
+                        if match.group(0) in p.text:
+                            p.text = p.text.replace(match.group(0), new_val)
+
+                # Multiple metrics with pp change (e.g. +0.2 pp)
+                for match in re.finditer(r"(?i)\b(current ratio|quick ratio)[^0-9\n]*([+\-][0-9]+(?:\.[0-9]+)?)\s*pp\b", text):
+                    self.issues.append(
+                        PreflightIssue(
+                            idx,
+                            "invalid_ratio_change",
+                            f"Ratio change formatted with pp: '{match.group(0)}'",
+                            severity="warning",
+                        )
+                    )
+                    for p in shape.text_frame.paragraphs:
+                        if match.group(0) in p.text:
+                            p.text = p.text.replace(f"{match.group(2)} pp", f"{match.group(2)}x")

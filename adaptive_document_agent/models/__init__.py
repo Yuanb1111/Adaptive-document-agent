@@ -4,7 +4,7 @@ from .analysis import AnalysisCandidate, AnalysisResult, AnalysisTask, Candidate
 from .chart import ChartPlan, ChartType
 from .document import AnalysisPageRange, AnalysisScopePreview, DocumentProfile, ParsedDocument
 from .evidence import SourceEvidence
-from .observation import Observation
+from .observation import FinancialObservation, Observation
 from .page import DocumentPage, PageImage
 from .presentation import (
     CompanyFact,
@@ -35,6 +35,7 @@ __all__ = [
     "DocumentPage",
     "DocumentProfile",
     "ExtractedTable",
+    "FinancialObservation",
     "Insight",
     "Observation",
     "PageImage",

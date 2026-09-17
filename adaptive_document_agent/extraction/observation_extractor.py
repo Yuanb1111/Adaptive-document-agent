@@ -2,6 +2,8 @@
 
 import re
 
+from adaptive_document_agent.document_model.metric_semantic_classifier import classify_metric
+from adaptive_document_agent.document_model.period_semantic_validator import classify_period
 from adaptive_document_agent.models import Observation, ParsedDocument, SourceEvidence
 from adaptive_document_agent.models.table import ExtractedTable
 from adaptive_document_agent.utils.ids import stable_id
@@ -129,6 +131,31 @@ class ObservationExtractor:
             extraction_method="digital_table",
             confidence=confidence,
         )
+        semantic = classify_metric(
+            metric,
+            value=value,
+            raw_unit=number.raw_unit or table.default_raw_unit,
+            unit=unit,
+        )
+        if semantic.is_multiple:
+            unit = "multiple"
+            currency = None
+            scale = 1.0
+            value = number.value
+        elif semantic.is_currency:
+            unit = "currency"
+            currency = currency or table.default_currency
+        elif semantic.is_percentage:
+            unit = "percent"
+            currency = None
+            scale = 1.0
+            value = number.value
+
+        is_bs = semantic.is_currency and any(
+            term in metric.casefold() for term in ("liabilit", "cash", "balance", "receiv", "payab", "inventor", "asset", "equity")
+        )
+        period_sem = classify_period(period, is_balance_sheet=is_bs)
+
         return Observation(
             id=stable_id("observation", table.table_id, row_index, column, column_label, period, raw),
             metric_original=metric,
@@ -142,6 +169,12 @@ class ObservationExtractor:
             dimensions=dimensions or {},
             evidence=[evidence],
             confidence=confidence,
+            semantic_type=semantic.semantic_type,
+            unit_family=semantic.unit_family,
+            display_unit=semantic.display_unit,
+            period_type=period_sem.period_type,
+            as_of_date=period_sem.clean_label if is_bs and period_sem.is_interim else None,
+            audited_status="unaudited" if period_sem.is_unaudited else "audited",
         )
 
     @staticmethod
@@ -178,19 +211,27 @@ class ObservationExtractor:
             metric, period, raw = (part.strip() for part in match.groups())
             if number := parse_number(raw):
                 confidence = min(0.8, number.confidence)
+                semantic = classify_metric(metric, value=number.value, raw_unit=number.raw_unit, unit=number.unit)
+                period_sem = classify_period(period)
+                unit_val = "multiple" if semantic.is_multiple else ("percent" if semantic.is_percentage else (number.unit or semantic.metric_type))
                 output.append(
                     Observation(
                         id=stable_id("observation", page, match.start(), metric, period),
                         metric_original=metric,
                         value=number.value,
                         raw_value=raw,
-                        unit=number.unit,
+                        unit=unit_val,
                         raw_unit=number.raw_unit,
                         unit_scale=number.scale,
                         currency=number.currency,
                         period=period,
                         evidence=[SourceEvidence(page=page, text=match.group(0), extraction_method="digital_text", confidence=confidence)],
                         confidence=confidence,
+                        semantic_type=semantic.semantic_type,
+                        unit_family=semantic.unit_family,
+                        display_unit=semantic.display_unit,
+                        period_type=period_sem.period_type,
+                        audited_status="unaudited" if period_sem.is_unaudited else "audited",
                     )
                 )
         return output

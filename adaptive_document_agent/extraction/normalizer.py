@@ -54,8 +54,8 @@ def infer_unit_defaults(text: str) -> UnitDefaults:
     currency = next((code for pattern, code in _CURRENCIES if re.search(pattern, declaration or lowered, re.I)), None)
     scale_text = declaration_match.group("scale").casefold() if declaration_match else lowered
     scale = next((amount for pattern, amount in _SCALES if re.search(pattern, scale_text, re.I)), None)
-    percent = bool(re.search(r"%|percent(?:age)?s?", lowered))
-    unit = "currency" if currency else "percent" if percent else None
+    percent_declaration = bool(re.search(r"(?i)\b(?:in\s+%)|(?:in\s+percent(?:age)?s?)\b|\((?:%|percent)\)", compact))
+    unit = "currency" if currency else "percent" if percent_declaration else None
 
     if currency and not declaration:
         currency_match = next((re.search(pattern, compact, re.I) for pattern, _ in _CURRENCIES if re.search(pattern, compact, re.I)), None)

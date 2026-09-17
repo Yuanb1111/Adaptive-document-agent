@@ -21,6 +21,8 @@ from adaptive_document_agent.document_model import (
 )
 from adaptive_document_agent.document_model.metric_semantic_classifier import (
     classify_metric,
+    format_metric_change,
+    format_metric_display_value,
     sanitize_metric_label,
 )
 from adaptive_document_agent.document_model.period_semantic_validator import (
@@ -149,14 +151,32 @@ def build_presentation(result: PipelineResult, template_path: str | Path | None 
 
 
 def _content_zone(slide: Any) -> tuple[float, float]:
-    """Return (content_top, content_height) respecting layout title/subtitle vertical boundaries."""
-    layout_name = slide.slide_layout.name if hasattr(slide, "slide_layout") else ""
-    is_two_line = "Two-line" in layout_name or "2-line" in layout_name
-    # Layout 6 subtitle ends at 1.61in; content starts at 1.68in to avoid any collision
-    # Layout 5 subtitle ends at 1.17in; content starts at 1.45in
-    top = 1.68 if is_two_line else 1.45
+    """Return (content_top, content_height) dynamically adapting to actual title/subtitle positions."""
+    sub_bottom = 0.0
+    title_bottom = 0.0
+    for shape in getattr(slide, "placeholders", []):
+        try:
+            idx = shape.placeholder_format.idx
+            if idx == 16:  # subtitle
+                if shape.has_text_frame and shape.text.strip():
+                    sub_bottom = max(sub_bottom, shape.top.inches + shape.height.inches)
+            elif idx in (14, 15):  # title
+                if shape.has_text_frame and shape.text.strip():
+                    title_bottom = max(title_bottom, shape.top.inches + shape.height.inches)
+        except Exception:
+            pass
+
+    if sub_bottom > 0.1:
+        top = max(1.45, sub_bottom + 0.12)
+    elif title_bottom > 0.1:
+        top = max(1.45, title_bottom + 0.15)
+    else:
+        layout_name = slide.slide_layout.name if hasattr(slide, "slide_layout") else ""
+        is_two_line = "Two-line" in layout_name or "2-line" in layout_name
+        top = 1.68 if is_two_line else 1.45
+
     bottom = 6.25  # Leave ample space above footer and watermark at 6.45in
-    return top, bottom - top
+    return top, max(bottom - top, 2.5)
 
 
 def _build_legacy_presentation(presentation: Any, result: PipelineResult) -> None:
@@ -551,15 +571,13 @@ def _add_planned_data_slide(
         )
         metric_title = semantic.clean_name
 
-        if semantic.is_currency:
-            unit_label = item.currency or item.raw_unit or "currency"
-            unit_label = re.sub(r"(?i)RMB\s*'+\s*000", "RMB '000", unit_label)
-            value_str = f"{item.raw_value}  {unit_label}".strip()
-        elif semantic.is_percentage:
-            raw_clean = str(item.raw_value).rstrip("%").strip()
-            value_str = f"{raw_clean}%"
-        else:
-            value_str = f"{item.raw_value}  {_display_source_unit(item)}".strip()
+        value_str = format_metric_display_value(
+            item.raw_value,
+            item.value,
+            semantic,
+            raw_unit=_display_source_unit(item),
+            currency=item.currency,
+        )
 
         # Format period cleanly (e.g. 30 Apr 2025*)
         is_bs = any(term in metric_title.casefold() for term in ("liabilit", "cash", "balance", "receiv", "payab", "inventor"))
@@ -1156,16 +1174,45 @@ def _base_slide(presentation: Any, title: str, subtitle: str = "", *, background
     else:
         slide = presentation.slides.add_slide(presentation.slide_layouts[0])
 
+    title_ph = None
+    sub_ph = None
     for ph in slide.placeholders:
         if ph.placeholder_format.idx in (14, 15):
-            ph.text = clean_title
-            ph.text_frame.word_wrap = True
+            title_ph = ph
         elif ph.placeholder_format.idx == 16:
-            if clean_subtitle:
-                ph.text = clean_subtitle
-                ph.text_frame.word_wrap = True
-            else:
-                ph.text = ""
+            sub_ph = ph
+
+    if title_ph is not None:
+        title_ph.text = clean_title
+        title_ph.text_frame.word_wrap = True
+        title_len = len(clean_title)
+        if title_len <= 45:
+            title_size = 20.0
+            title_h = 0.48
+        elif title_len <= 80:
+            title_size = 17.5
+            title_h = 0.76
+        else:
+            title_size = 15.0
+            title_h = 0.98
+        title_ph.height = Inches(title_h)
+        for p in title_ph.text_frame.paragraphs:
+            p.font.size = Pt(title_size)
+
+    if sub_ph is not None:
+        if clean_subtitle:
+            sub_ph.text = clean_subtitle
+            sub_ph.text_frame.word_wrap = True
+            for p in sub_ph.text_frame.paragraphs:
+                p.font.size = Pt(11.0)
+            if title_ph is not None:
+                title_top = title_ph.top.inches if hasattr(title_ph.top, "inches") else float(title_ph.top) / 914400.0
+                title_h = title_ph.height.inches if hasattr(title_ph.height, "inches") else float(title_ph.height) / 914400.0
+                sub_ph.top = Inches(title_top + title_h + 0.08)
+                if len(clean_subtitle) > 85:
+                    sub_ph.height = Inches(0.50)
+        else:
+            sub_ph.text = ""
     return slide
 
 
@@ -1359,28 +1406,16 @@ def _change_summary(observations: list[Observation], scale: float) -> tuple[str,
 
     # Check metric semantic
     semantic = classify_metric(first.metric_original, value=start, raw_unit=first.raw_unit, unit=first.unit)
-
-    if start < 0 <= end:
-        headline = "Turned positive"
-    elif start > 0 >= end:
-        headline = "Turned negative"
-    elif start < 0 and end < 0:
-        # Negative metrics like Adjusted EBITDA or Net loss: explain loss narrowing
-        diff_scaled = abs(start - end) / scale
-        if end > start:
-            headline = f"Loss narrowed by {diff_scaled:,.1f}" if diff_scaled >= 1 else "Loss narrowed"
-        else:
-            headline = f"Loss widened by {diff_scaled:,.1f}" if diff_scaled >= 1 else "Loss widened"
-    elif first.unit == "percent" or last.unit == "percent" or semantic.is_percentage:
-        headline = f"{end - start:+.1f} pp"
-    elif start:
-        headline = f"{(end / start - 1) * 100:+.1f}%"
-    else:
-        headline = f"{(end - start) / scale:+,.1f}"
+    headline = format_metric_change(start, end, scale, semantic)
 
     p_first = format_period_label(first.period)
     p_last = format_period_label(last.period)
-    detail = f"{_format_scaled(start, scale)} in {p_first} to {_format_scaled(end, scale)} in {p_last}"
+    if semantic.is_multiple:
+        detail = f"{start:.2f}x in {p_first} to {end:.2f}x in {p_last}"
+    elif semantic.is_percentage:
+        detail = f"{start:.1f}% in {p_first} to {end:.1f}% in {p_last}"
+    else:
+        detail = f"{_format_scaled(start, scale)} in {p_first} to {_format_scaled(end, scale)} in {p_last}"
     return headline, detail
 
 
@@ -1594,7 +1629,8 @@ def _appendix_observations(result: PipelineResult, charts: list[ChartPlan]) -> l
 
 def _display_scale(observations: list[Observation], max_value: float) -> tuple[float, str]:
     units = {item.unit for item in observations if item.unit}
-    if "percent" in units:
+    families = {getattr(item, "unit_family", None) for item in observations}
+    if "percent" in units or "percentage" in families or "multiple" in units or "multiple" in families:
         return 1.0, ""
     if max_value >= 1_000_000_000:
         return 1_000_000_000.0, "billions"
@@ -1607,10 +1643,13 @@ def _display_scale(observations: list[Observation], max_value: float) -> tuple[f
 
 def _unit_label(observations: list[Observation], scale_label: str) -> str:
     units = {item.unit for item in observations if item.unit}
+    families = {getattr(item, "unit_family", None) for item in observations}
+    if "multiple" in units or "multiple" in families:
+        return "x"
+    if "percent" in units or "percentage" in families:
+        return "percent"
     currencies = {item.currency for item in observations if item.currency}
     raw_units = {item.raw_unit for item in observations if item.raw_unit}
-    if "percent" in units:
-        return "percent"
     if currencies:
         base = "/".join(sorted(currencies))
         return f"{base} / {scale_label}" if scale_label else base
@@ -1623,6 +1662,8 @@ def _unit_label(observations: list[Observation], scale_label: str) -> str:
 
 def _display_source_unit(item: Observation) -> str:
     semantic = classify_metric(display_metric_name(item), value=item.value, raw_unit=item.raw_unit, unit=item.unit)
+    if semantic.is_multiple:
+        return "x"
     if semantic.is_percentage:
         return "%"
     value = item.raw_unit or _unit_label([item], "")

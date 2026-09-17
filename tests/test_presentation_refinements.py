@@ -165,3 +165,178 @@ def test_pptx_export_structure_ordering_and_gridlines() -> None:
     assert abs(total_w - 11.70) < 0.1
     assert table.columns[4].width.inches < 1.2
     assert table.columns[0].width.inches > 3.8
+
+
+def test_multiple_ratio_semantics_and_formatting() -> None:
+    from adaptive_document_agent.document_model.metric_semantic_classifier import (
+        format_metric_change,
+        format_metric_display_value,
+        is_multiple_metric,
+    )
+    from adaptive_document_agent.models import FinancialObservation
+
+    cr_sem = classify_metric("Current ratio", value=1.45, raw_unit="", unit="multiple")
+    assert cr_sem.is_multiple is True
+    assert cr_sem.is_percentage is False
+    assert cr_sem.is_currency is False
+    assert cr_sem.unit_family == "multiple"
+    assert is_multiple_metric("Current ratio") is True
+
+    # Multiples must format change as '+0.20x', NEVER 'pp' or '%'
+    change_str = format_metric_change(1.10, 1.30, 1.0, cr_sem)
+    assert change_str == "+0.20x"
+    assert "pp" not in change_str
+
+    # Multiples must display as '1.45x', NEVER '1.45%'
+    disp_str = format_metric_display_value("1.45", 1.45, cr_sem)
+    assert disp_str == "1.45x"
+    assert "%" not in disp_str
+
+    qr_sem = classify_metric("Quick ratio", value=0.98)
+    assert qr_sem.is_multiple is True
+    assert is_multiple_metric("Quick ratio") is True
+
+    # FinancialObservation model and typed properties
+    obs = FinancialObservation(
+        id="cr_1",
+        metric_original="Current ratio",
+        value=1.45,
+        raw_value="1.45",
+        unit="multiple",
+        semantic_type="multiple",
+        unit_family="multiple",
+        display_unit="x",
+        period_type="instant",
+        as_of_date="2024-12-31",
+        confidence=0.95,
+    )
+    assert obs.numeric_value == 1.45
+    assert obs.source_label == "Current ratio"
+    assert obs.unit_family == "multiple"
+    assert obs.period_type == "instant"
+
+
+def test_currency_vs_share_of_revenue_semantics() -> None:
+    from adaptive_document_agent.document_model.metric_semantic_classifier import (
+        format_metric_change,
+        format_metric_display_value,
+    )
+
+    # Monetary loss metric
+    sem_loss = classify_metric("Loss from operations", value=-145200.0, raw_unit="RMB '000", unit="currency")
+    assert sem_loss.is_currency is True
+    assert sem_loss.is_percentage is False
+    assert sem_loss.unit_family == "currency"
+
+    loss_disp = format_metric_display_value("-145,200", -145200.0, sem_loss, raw_unit="RMB '000", currency="RMB")
+    assert "RMB '000" in loss_disp
+    assert "%" not in loss_disp
+
+    # Loss narrowing explanation
+    loss_change = format_metric_change(-200.0, -150.0, 1.0, sem_loss)
+    assert "Loss narrowed by 50.0" in loss_change
+
+    # Share of revenue metric
+    sem_share = classify_metric("Loss from operations: share of revenue", value=22.4, raw_unit="%")
+    assert sem_share.is_percentage is True
+    assert sem_share.is_currency is False
+    assert sem_share.unit_family == "percentage"
+
+    share_disp = format_metric_display_value("22.4", 22.4, sem_share)
+    assert share_disp == "22.4%"
+
+
+def test_long_title_dynamic_layout_and_preflight() -> None:
+    long_title = "Rapid expansion across European fulfillment networks accelerated revenue growth while operating leverage supported margin trajectory"
+    assert len(long_title) > 80
+
+    evidence = SourceEvidence(page=50, text="120", extraction_method="digital_table", confidence=0.9)
+    obs = [
+        Observation(
+            id=f"metric_{i}",
+            metric_original="Gross profit",
+            value=float(100 + i * 50),
+            raw_value=str(100 + i * 50),
+            unit="currency",
+            currency="RMB",
+            period=f"FY202{i}",
+            evidence=[evidence],
+            confidence=0.9,
+        )
+        for i in range(1, 4)
+    ]
+    chart = ChartPlan(
+        id="c_long",
+        title="Gross Profit Trajectory",
+        chart_type="bar",
+        question="How did gross profit evolve?",
+        observation_ids=[o.id for o in obs],
+        source_pages=[50],
+    )
+    plan = PresentationPlan(
+        title="Institutional Review",
+        company=CompanyProfile(name="Scale Tech Inc.", one_line_description="Global automation leader", source_pages=[1]),
+        slides=[
+            PresentationSlide(id="cover", slide_type="cover", title="Institutional Review"),
+            PresentationSlide(id="overview", slide_type="company_overview", title="Company at a Glance"),
+            PresentationSlide(id="summary", slide_type="executive_summary", title="Executive Summary", bullets=["Consistent growth across periods"]),
+            PresentationSlide(
+                id="long_analysis",
+                slide_type="analysis",
+                title=long_title,
+                section_title="Financial Performance",
+                message="Substantial improvements observed throughout the track record period.",
+                chart_ids=["c_long"],
+                source_pages=[50],
+            ),
+            PresentationSlide(id="quality", slide_type="data_quality", title="Data Quality"),
+            PresentationSlide(id="appendix", slide_type="appendix", title="Source Data"),
+        ],
+    )
+    result = PipelineResult(
+        document=ParsedDocument(document_id="d_long", sha256="s_long", safe_filename="doc.pdf", page_count=100),
+        profile=DocumentProfile(document_type="Prospectus", document_summary="Automation company"),
+        observations=obs,
+        charts=[chart],
+        presentation_plan=plan,
+    )
+
+    pptx_bytes = export_pptx(result)
+    deck = Presentation(io.BytesIO(pptx_bytes))
+    # In exported deck: 0=Cover, 1=Contents, 2=Overview, 3=Summary, 4=Analysis
+    slide = deck.slides[4]
+
+    # Check title and subtitle placeholder spacing
+    phs = {p.placeholder_format.idx: p for p in slide.placeholders}
+    title_ph = phs.get(14) or phs.get(15)
+    sub_ph = phs.get(16)
+
+    assert title_ph is not None
+    assert sub_ph is not None
+    # Subtitle must start strictly below title bottom
+    assert sub_ph.top.inches >= title_ph.top.inches + title_ph.height.inches - 0.01
+
+    # Check that preflight detects zero fatal collisions
+    preflight = PresentationPreflight(deck)
+    issues = preflight.validate_and_sanitize()
+    severe_collisions = [i for i in issues if i.code in ("title_subtitle_collision", "title_collision")]
+    assert len(severe_collisions) == 0
+
+
+def test_preflight_ratio_sanitization() -> None:
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    tb = slide.shapes.add_textbox(Inches(1), Inches(2), Inches(6), Inches(1))
+    tb.text_frame.text = "Current ratio: 1.45% and Quick ratio increased by +0.20 pp in the period"
+
+    preflight = PresentationPreflight(prs)
+    issues = preflight.validate_and_sanitize()
+
+    # Preflight should detect and fix invalid ratio unit (%) and invalid ratio change (pp)
+    assert any(i.code == "invalid_ratio_unit" for i in issues)
+    assert any(i.code == "invalid_ratio_change" for i in issues)
+    assert "1.45x" in tb.text_frame.text
+    assert "+0.20x" in tb.text_frame.text
+    assert "1.45%" not in tb.text_frame.text
+    assert "pp" not in tb.text_frame.text
+
