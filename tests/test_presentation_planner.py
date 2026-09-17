@@ -1,3 +1,4 @@
+import io
 import pytest
 
 from adaptive_document_agent.agent.presentation_plan_recovery import PresentationPlanRecovery
@@ -7,9 +8,14 @@ from adaptive_document_agent.document_model import DocumentIndex
 from adaptive_document_agent.models import (
     AnalysisResult,
     AnalysisTask,
+    ChartPlan,
     CompanyFact,
     CompanyProfile,
+    DocumentProfile,
+    Insight,
     Observation,
+    ParsedDocument,
+    PipelineResult,
     PresentationPlan,
     PresentationSlide,
     PresentationVisualBlock,
@@ -92,6 +98,15 @@ def test_presentation_plan_validator_accepts_company_excerpt_pages_and_grouped_n
                 slide_type="executive_summary",
                 title="Revenue reached 267 025 in the first retained period",
                 observation_ids=["revenue-2023"],
+                source_pages=[234],
+            ),
+            PresentationSlide(
+                id="analysis",
+                slide_type="analysis",
+                title="Revenue Performance",
+                section_title="Revenue",
+                message="Revenue reached 267 025 in the first retained period.",
+                chart_ids=["chart-1"],
                 source_pages=[234],
             ),
             PresentationSlide(id="quality", slide_type="data_quality", title="Data quality"),
@@ -376,3 +391,180 @@ def test_presentation_plan_repairer_preserves_usable_charts_when_ai_slides_have_
         for cid in (*s.chart_ids, *(c for b in s.visual_blocks for c in b.chart_ids))
     ]
     assert "chart-1" in total_charts
+
+
+def test_validator_rejects_plan_without_analysis_slide_when_charts_exist() -> None:
+    result = _result()
+    plan = PresentationPlan(
+        title="No Analysis Plan",
+        slides=[
+            PresentationSlide(id="cover", slide_type="cover", title="Review"),
+            PresentationSlide(id="overview", slide_type="company_overview", title="Company at a Glance", source_pages=[8]),
+            PresentationSlide(id="summary", slide_type="executive_summary", title="Executive Summary", source_pages=[234]),
+            PresentationSlide(id="quality", slide_type="data_quality", title="Data Quality", source_pages=[8]),
+            PresentationSlide(id="appendix", slide_type="appendix", title="Appendix"),
+        ],
+    )
+    with pytest.raises(ValueError, match="at least one analysis slide"):
+        PresentationPlanValidator().validate(plan, result)
+
+
+def test_validator_rejects_unsupported_company_numbers_and_repairer_prunes_them() -> None:
+    result = _result()
+    bad_plan = PresentationPlan(
+        title="Invalid Company Claim",
+        company=CompanyProfile(
+            name="Example",
+            one_line_description="Revenue was 999 trillion in 2023.",
+            source_pages=[8],
+            key_facts=[
+                CompanyFact(label="Revenue", value="267 025", source_pages=[234]),
+                CompanyFact(label="Invented", value="999 trillion", source_pages=[8]),
+            ],
+        ),
+        slides=[
+            PresentationSlide(id="cover", slide_type="cover", title="Review"),
+            PresentationSlide(id="overview", slide_type="company_overview", title="Company at a Glance", source_pages=[8]),
+            PresentationSlide(id="summary", slide_type="executive_summary", title="Executive Summary", source_pages=[234]),
+            PresentationSlide(
+                id="analysis",
+                slide_type="analysis",
+                title="Revenue Performance",
+                section_title="Revenue",
+                message="Evidence-backed comparison.",
+                chart_ids=["chart-1"],
+                source_pages=[234],
+            ),
+            PresentationSlide(id="quality", slide_type="data_quality", title="Data Quality", source_pages=[8]),
+            PresentationSlide(id="appendix", slide_type="appendix", title="Appendix"),
+        ],
+    )
+
+    with pytest.raises(ValueError, match="unsupported numeric claims"):
+        PresentationPlanValidator().validate(bad_plan, result)
+
+    repaired = PresentationPlanRepairer().repair(bad_plan, result)
+    # The unsupported sentence "Revenue was 999 trillion in 2023." must be pruned
+    assert "999" not in repaired.company.one_line_description
+    # The unsupported fact with 999 trillion must be pruned
+    fact_values = [f.value for f in repaired.company.key_facts]
+    assert not any("999" in v for v in fact_values)
+    # The valid fact with 267 025 must be retained
+    assert any("267 025" in v for v in fact_values)
+    assert PresentationPlanValidator().validate(repaired, result) is repaired
+
+
+def test_chart_ranking_boosts_deposit_when_in_focus() -> None:
+    evidence = SourceEvidence(page=1, text="100", extraction_method="table", confidence=0.9)
+    obs_deposit = [
+        Observation(id=f"dep_{y}", metric_original="Customer deposit", value=100.0 * y, raw_value=str(100 * y), period=f"202{y}", evidence=[evidence], confidence=0.9)
+        for y in (1, 2, 3)
+    ]
+    obs_tax = [
+        Observation(id=f"tax_{y}", metric_original="Prepaid tax", value=50.0 * y, raw_value=str(50 * y), period=f"202{y}", evidence=[evidence], confidence=0.9)
+        for y in (1, 2, 3)
+    ]
+    deposit_chart = ChartPlan(
+        id="chart_deposit",
+        title="Customer deposit trend",
+        question="How did customer deposits change?",
+        chart_type="line",
+        observation_ids=[o.id for o in obs_deposit],
+        source_pages=[1],
+        analysis_task_id="task_deposit",
+    )
+    tax_chart = ChartPlan(
+        id="chart_tax",
+        title="Prepaid tax trend",
+        question="How did prepaid taxes change?",
+        chart_type="line",
+        observation_ids=[o.id for o in obs_tax],
+        source_pages=[1],
+        analysis_task_id="task_tax",
+    )
+    res = PipelineResult(
+        document=ParsedDocument(document_id="doc", sha256="abc", safe_filename="doc.pdf", page_count=10),
+        profile=DocumentProfile(
+            document_type="Banking Report",
+            document_purpose="Evaluate customer deposit growth and liquidity.",
+            analysis_focus="customer deposit trends",
+        ),
+        observations=[*obs_deposit, *obs_tax],
+        analysis_plan=[
+            AnalysisTask(id="task_deposit", title="Deposit analysis", description="Deposit growth", analysis_type="trend", reason="analyze deposit trend", expected_output="growth", priority=1),
+            AnalysisTask(id="task_tax", title="Tax analysis", description="Tax analysis", analysis_type="trend", reason="analyze tax trend", expected_output="growth", priority=1),
+        ],
+        insights=[
+            Insight(id="ins_deposit", title="Customer deposit expansion", narrative="Customer deposit expanded rapidly.", kind="interpretation", importance=0.9, confidence=0.9, evidence=[evidence]),
+        ],
+        charts=[tax_chart, deposit_chart],
+    )
+    ranked = PresentationPlanRecovery()._rank_charts(res)
+    assert ranked[0].id == "chart_deposit"
+
+
+def test_summary_filters_slope_and_intercept_artifacts() -> None:
+    evidence = SourceEvidence(page=1, text="100", extraction_method="table", confidence=0.9)
+    res = PipelineResult(
+        document=ParsedDocument(document_id="doc", sha256="abc", safe_filename="doc.pdf", page_count=5),
+        profile=DocumentProfile(document_type="Report"),
+        observations=[
+            Observation(id="obs_1", metric_original="Revenue", value=100.0, raw_value="100", period="2023", evidence=[evidence], confidence=0.9),
+            Observation(id="obs_2", metric_original="Revenue", value=150.0, raw_value="150", period="2024", evidence=[evidence], confidence=0.9),
+        ],
+        insights=[
+            Insight(id="ins_calc", title="Linear trend slope: 50.0, intercept: 100.0", narrative="slope is 50, turning points: 0", kind="calculated_result", importance=0.99, confidence=0.99, evidence=[evidence]),
+            Insight(id="ins_biz", title="Revenue expanded significantly", narrative="Operational performance was solid.", kind="interpretation", importance=0.8, confidence=0.8, evidence=[evidence]),
+        ],
+    )
+    summary = PresentationPlanRecovery()._summary_slide(res)
+    for bullet in summary.bullets:
+        assert "slope" not in bullet.casefold()
+        assert "intercept" not in bullet.casefold()
+        assert "turning point" not in bullet.casefold()
+    assert any("expanded significantly" in b.casefold() for b in summary.bullets)
+
+
+def test_appendix_limited_to_one_page_when_no_charts_in_body() -> None:
+    from adaptive_document_agent.services.pptx_export import build_presentation
+    from pptx import Presentation
+
+    evidence = SourceEvidence(page=1, text="100", extraction_method="table", confidence=0.9)
+    res = PipelineResult(
+        document=ParsedDocument(document_id="doc", sha256="abc", safe_filename="doc.pdf", page_count=5),
+        profile=DocumentProfile(document_type="Report", document_summary="A short report."),
+        observations=[
+            Observation(id=f"obs_{i}", metric_original=f"Metric {i}", value=10.0 * i, raw_value=str(10 * i), period="2023", evidence=[evidence], confidence=0.9)
+            for i in range(25)
+        ],
+        presentation_plan=PresentationPlan(
+            title="Deck Without Charts",
+            slides=[
+                PresentationSlide(id="cover", slide_type="cover", title="Cover"),
+                PresentationSlide(id="overview", slide_type="company_overview", title="Overview", source_pages=[1]),
+                PresentationSlide(id="summary", slide_type="executive_summary", title="Summary", source_pages=[1]),
+                PresentationSlide(
+                    id="analysis",
+                    slide_type="analysis",
+                    title="Reported Data",
+                    section_title="Data",
+                    message="Evidence overview.",
+                    observation_ids=["obs_1", "obs_2"],
+                    source_pages=[1],
+                ),
+                PresentationSlide(id="quality", slide_type="data_quality", title="Data Quality", source_pages=[1]),
+                PresentationSlide(id="appendix", slide_type="appendix", title="Appendix"),
+            ],
+        ),
+    )
+    data = build_presentation(res)
+    prs = Presentation(io.BytesIO(data))
+    # Count appendix slides
+    appendix_slides = [
+        s for s in prs.slides
+        if any("representative retained evidence" in shape.text.casefold() for shape in s.shapes if shape.has_text_frame)
+    ]
+    # Appendix must be limited to <= 1 page of representative evidence
+    assert len(appendix_slides) <= 1
+    assert any(w.code == "no_body_charts" for w in res.validation_warnings)
+

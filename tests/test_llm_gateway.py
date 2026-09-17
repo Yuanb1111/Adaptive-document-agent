@@ -33,11 +33,12 @@ def test_structured_output_accepts_fenced_json_without_a_repair() -> None:
     assert len(client.calls) == 1
 
 
-def test_malformed_json_fails_after_two_repairs_and_names_the_stage() -> None:
-    client = MockLLMClient(["bad", "still bad", "also bad"])
+def test_malformed_json_fails_after_one_repair_and_names_the_stage() -> None:
+    client = MockLLMClient(["bad", "still bad"])
     gateway = LLMGateway(client, LLMSettings(provider=ProviderName.MOCK, model="mock"))
-    with pytest.raises(LLMResponseError, match="stage 'discovery'.*two repair attempts"):
+    with pytest.raises(LLMResponseError, match="stage 'discovery'.*one repair attempt"):
         gateway.generate_structured([], Answer, stage="discovery")
+    assert len(client.calls) == 2
 
 
 def test_local_only_rejects_cloud_provider() -> None:

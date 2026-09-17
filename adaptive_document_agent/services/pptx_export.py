@@ -158,9 +158,28 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
         elif slide_plan.slide_type == "data_quality":
             _add_quality_slide(presentation, result, title=slide_plan.title)
         elif slide_plan.slide_type == "appendix":
-            appendix_charts = rendered_charts or list(chart_by_id.values())[:10]
-            _add_section_divider(presentation, "Evidence appendix", "The retained values behind the charts")
-            _add_evidence_table_slides(presentation, result, appendix_charts, title=slide_plan.title)
+            if rendered_charts:
+                appendix_charts = rendered_charts
+                _add_section_divider(presentation, "Evidence appendix", "The retained values behind the charts")
+                _add_evidence_table_slides(presentation, result, appendix_charts, title=slide_plan.title)
+            else:
+                from adaptive_document_agent.models.validation import ValidationIssue
+                result.validation_warnings.append(
+                    ValidationIssue(
+                        code="no_body_charts",
+                        message="No charts were rendered in presentation body; appendix limited to representative evidence sample.",
+                        severity="warning",
+                        stage="presentation_export",
+                    )
+                )
+                _add_evidence_table_slides(
+                    presentation,
+                    result,
+                    [],
+                    title="Representative retained evidence",
+                    subtitle="Representative retained evidence (no charts in body)",
+                    max_pages=1,
+                )
 
 
 def _planned_chart_requests(slide_plan: PresentationSlide) -> list[tuple[str, str | None]]:
@@ -274,6 +293,25 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
         _text(slide, f"Source pages  {', '.join(map(str, pages))}", 0.8, 6.48, 11.55, 0.28, size=10, color=MUTED)
 
 
+def _is_calc_artifact(text: str) -> bool:
+    t = text.casefold()
+    return any(
+        term in t
+        for term in (
+            "slope",
+            "intercept",
+            "turning point",
+            "turning_point",
+            "turning points",
+            "turning_points",
+            "r-squared",
+            "r_squared",
+            "p-value",
+            "residuals",
+        )
+    )
+
+
 def _add_planned_summary(
     presentation: Any,
     result: PipelineResult,
@@ -282,19 +320,30 @@ def _add_planned_summary(
 ) -> None:
     slide = _base_slide(presentation, slide_plan.title, slide_plan.message, background=IVORY)
     insight_by_id = {item.id: item for item in result.insights}
-    findings = [
+    raw_findings = [
         (insight_by_id[identifier].title, insight_by_id[identifier].narrative)
         for identifier in slide_plan.insight_ids
         if identifier in insight_by_id
     ]
+    findings = [
+        (t, n) for t, n in raw_findings if not _is_calc_artifact(t) and not _is_calc_artifact(n)
+    ]
     if slide_plan.bullets:
-        bullet_findings = [("", bullet) for bullet in slide_plan.bullets if bullet.strip()]
+        bullet_findings = [
+            ("", bullet)
+            for bullet in slide_plan.bullets
+            if bullet.strip() and not _is_calc_artifact(bullet)
+        ]
         if len(bullet_findings) >= 3 or not findings:
             findings = bullet_findings
         else:
             findings = [*bullet_findings, *findings[: 5 - len(bullet_findings)]]
     if not findings:
-        findings = [(str(item["title"]), str(item["narrative"])) for item in _chart_findings(_usable_charts(result), index)]
+        findings = [
+            (str(item["title"]), str(item["narrative"]))
+            for item in _chart_findings(_usable_charts(result), index)
+            if not _is_calc_artifact(str(item["title"])) and not _is_calc_artifact(str(item["narrative"]))
+        ]
     _add_numbered_messages(slide, findings[:5], source_pages=slide_plan.source_pages)
 
 
@@ -786,6 +835,8 @@ def _add_evidence_table_slides(
     charts: list[ChartPlan],
     *,
     title: str = "Key data appendix",
+    subtitle: str | None = None,
+    max_pages: int | None = None,
 ) -> None:
     from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
     from pptx.util import Inches, Pt
@@ -793,12 +844,14 @@ def _add_evidence_table_slides(
     observations = _appendix_observations(result, charts)
     page_size = 10
     pages = [observations[index:index + page_size] for index in range(0, len(observations), page_size)] or [[]]
+    if max_pages is not None:
+        pages = pages[:max_pages]
     headers = ["Metric", "Period", "Reported value", "Unit", "Page"]
     for page_number, page_observations in enumerate(pages, start=1):
-        subtitle = "Validated reported values used by the presentation charts, with page-level provenance"
-        if len(pages) > 1:
-            subtitle += f" | Appendix {page_number} of {len(pages)}"
-        slide = _base_slide(presentation, title, subtitle, background=IVORY)
+        slide_subtitle = subtitle or "Validated reported values used by the presentation charts, with page-level provenance"
+        if subtitle is None and len(pages) > 1:
+            slide_subtitle += f" | Appendix {page_number} of {len(pages)}"
+        slide = _base_slide(presentation, title, slide_subtitle, background=IVORY)
         rows = [
             [
                 _summary_text(display_metric_name(item), 58),

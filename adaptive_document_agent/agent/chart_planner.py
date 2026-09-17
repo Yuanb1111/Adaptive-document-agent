@@ -38,38 +38,6 @@ class ChartPlanner:
         "spearman_correlation": "scatter",
     }
 
-    _PERIPHERAL_TERMS = (
-        "prepaid",
-        "advance payment",
-        "deposit",
-        "other payable",
-        "other receivable",
-        "miscellaneous",
-        "petty",
-        "stamp duty",
-        "withholding tax",
-        "accrual",
-    )
-
-    _CORE_MEASURE_TERMS = (
-        "revenue",
-        "sales",
-        "turnover",
-        "gross profit",
-        "net profit",
-        "net loss",
-        "loss",
-        "cash flow",
-        "operating",
-        "borrowing",
-        "debt",
-        "satisfaction",
-        "order",
-        "volume",
-        "headcount",
-        "production",
-    )
-
     def plan(
         self,
         tasks: list[AnalysisTask],
@@ -225,17 +193,16 @@ class ChartPlanner:
         distinct_pages = len({source.page for item in observations for source in item.evidence})
         score += min(distinct_pages, 4) * 0.5
 
-        # 5. Clear conclusion support (values vary rather than flatline)
+        # 5. AnalysisResult validity and confidence
+        if task_result.result is not None:
+            score += 1.5 + float(task_result.confidence) * 1.5
+        if task_result.warnings:
+            score -= min(len(task_result.warnings), 3) * 0.5
+
+        # 6. Clear conclusion support (values vary rather than flatline)
         values = [float(item.value) for item in observations if item.value is not None]
         if values and max(values) != min(values):
             score += 1.5
-
-        # 6. Prioritise core measures and downweight peripheral items
-        for term in metric_terms:
-            if any(p in term for p in cls._PERIPHERAL_TERMS):
-                score -= 5.0
-            elif any(c in term for c in cls._CORE_MEASURE_TERMS):
-                score += 3.0
 
         return score
 
@@ -355,12 +322,6 @@ class ChartPlanner:
         values = [float(item.value) for item in series if item.value is not None]
         if values and max(values) != min(values):
             score += 1.0
-
-        # Peripheral penalty vs core boost
-        if any(p in metric_cf for p in cls._PERIPHERAL_TERMS):
-            score -= 5.0
-        elif any(c in metric_cf for c in cls._CORE_MEASURE_TERMS):
-            score += 3.0
 
         return score
 

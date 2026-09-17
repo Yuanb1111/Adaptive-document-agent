@@ -47,8 +47,9 @@ class PresentationPlanner:
             return validator.validate(proposed, result)
         except ValueError as exc:
             model_repair_error = ""
+            candidate = proposed
             try:
-                repaired = self.gateway.generate_structured(
+                candidate = self.gateway.generate_structured(
                     [
                         *messages,
                         {
@@ -66,14 +67,15 @@ class PresentationPlanner:
                     ],
                     PresentationPlan,
                     stage="presentation",
+                    allow_repair=False,
                 )
-                return validator.validate(repaired, result)
+                return validator.validate(candidate, result)
             except Exception as repair_exc:
                 # The deterministic recovery is deliberately narrower than a model repair:
                 # it can only remove unreferenced material and align citations.
                 model_repair_error = str(repair_exc)
             try:
-                return PresentationPlanRepairer().repair(proposed, result)
+                return PresentationPlanRepairer().repair(candidate, result)
             except ValueError as deterministic_exc:
                 raise ValueError(
                     "Presentation plan validation failed. Initial reason: "

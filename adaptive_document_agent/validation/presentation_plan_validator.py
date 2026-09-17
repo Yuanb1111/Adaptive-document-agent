@@ -87,6 +87,68 @@ class PresentationPlanValidator:
         if len(fact_labels) != len(set(fact_labels)):
             errors.append("company profile contains duplicate key-fact labels")
 
+        allowed_company_numbers = self._allowed_company_numbers(set(plan.company.source_pages) & valid_pages, result)
+        company_fields_to_check = [
+            ("one_line_description", plan.company.one_line_description),
+            ("track_record_period", plan.company.track_record_period),
+            ("business_model", plan.company.business_model),
+            ("industry", plan.company.industry),
+            ("headquarters", plan.company.headquarters),
+            ("listing_market", plan.company.listing_market),
+            *[(f"product {i+1}", p) for i, p in enumerate(plan.company.products)],
+            *[(f"segment {i+1}", s) for i, s in enumerate(plan.company.segments)],
+            *[(f"geography {i+1}", g) for i, g in enumerate(plan.company.geographies)],
+        ]
+        for field_label, field_val in company_fields_to_check:
+            if field_val.strip():
+                claimed = self._numbers(field_val)
+                unsupported = claimed - allowed_company_numbers
+                if unsupported:
+                    errors.append(f"company profile field '{field_label}' contains unsupported numeric claims: {sorted(unsupported)}")
+
+        for fact in plan.company.key_facts:
+            fact_pages = set(fact.source_pages) & valid_pages or (set(plan.company.source_pages) & valid_pages)
+            allowed_fact = self._allowed_company_numbers(fact_pages, result)
+            claimed_fact = self._numbers(fact.value)
+            unsupported_fact = claimed_fact - allowed_fact
+            if unsupported_fact:
+                errors.append(f"company fact '{fact.label}' contains unsupported numeric claims: {sorted(unsupported_fact)}")
+
+        has_charts = bool(result.charts)
+        has_analysis_results = any(item.result is not None and item.evidence for item in result.analysis_results)
+        comparable_observations = [item for item in result.observations if item.evidence and item.value is not None]
+        has_comparable_obs = len(comparable_observations) >= 2
+        has_analytical_evidence = has_charts or has_analysis_results or has_comparable_obs
+
+        analysis_slides = [slide for slide in plan.slides if slide.slide_type == "analysis"]
+        if has_analytical_evidence and not analysis_slides:
+            errors.append("the plan must contain at least one analysis slide when analytical evidence is present")
+
+        if has_charts:
+            referenced_charts = {
+                cid
+                for slide in analysis_slides
+                for cid in (*slide.chart_ids, *(c for b in slide.visual_blocks for c in b.chart_ids))
+            }
+            if not any(cid in chart_by_id for cid in referenced_charts):
+                errors.append("the plan must reference at least one available chart in an analysis slide when charts exist")
+        elif has_analytical_evidence:
+            referenced_evidence = {
+                oid
+                for slide in analysis_slides
+                for oid in (
+                    *slide.observation_ids,
+                    *slide.insight_ids,
+                    *(o for b in slide.visual_blocks for o in b.observation_ids),
+                    *(i for b in slide.visual_blocks for i in b.insight_ids),
+                )
+            }
+            valid_evidence_ids = {*observation_by_id.keys(), *insight_by_id.keys()}
+            if not any(eid in valid_evidence_ids for eid in referenced_evidence):
+                errors.append(
+                    "at least one analysis slide must reference an observation or insight when analytical evidence is present"
+                )
+
         for slide in plan.slides:
             observation_ids = {
                 *slide.observation_ids,
@@ -227,3 +289,29 @@ class PresentationPlanValidator:
     @staticmethod
     def _normalized_text(value: str) -> str:
         return " ".join(re.sub(r"[^a-z0-9%]+", " ", value.casefold()).split())
+
+    @classmethod
+    def _allowed_company_numbers(
+        cls,
+        pages: set[int],
+        result: PipelineResult,
+    ) -> set[str]:
+        text_parts: list[str] = []
+        page_by_num = {page.page_number: page.text for page in result.document.pages}
+        for p in pages:
+            if p in page_by_num:
+                text_parts.append(page_by_num[p])
+        for obs in result.observations:
+            obs_pages = {source.page for source in obs.evidence}
+            if not pages or (obs_pages & pages):
+                for val in (obs.value, obs.raw_value, obs.period, obs.entity):
+                    if val is not None:
+                        text_parts.append(str(val))
+                if obs.dimensions:
+                    text_parts.extend(str(v) for v in obs.dimensions.values())
+        for insight in result.insights:
+            insight_pages = {source.page for source in insight.evidence}
+            if not pages or (insight_pages & pages):
+                text_parts.append(insight.title)
+                text_parts.append(insight.narrative)
+        return cls._numbers(" ".join(text_parts))

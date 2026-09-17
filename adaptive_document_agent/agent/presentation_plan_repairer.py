@@ -42,7 +42,7 @@ class PresentationPlanRepairer:
         index = DocumentIndex(result.observations)
         valid_pages = set(range(1, result.document.page_count + 1))
 
-        cleaned_company = self._clean_company(plan.company, valid_pages)
+        cleaned_company = self._clean_company(plan.company, result, valid_pages)
         repaired_slides: list[PresentationSlide] = []
 
         for ordinal, slide in enumerate(plan.slides):
@@ -238,6 +238,36 @@ class PresentationPlanRepairer:
                         )
                     )
 
+        has_analytical_evidence = bool(
+            result.charts
+            or result.analysis_results
+            or len([o for o in result.observations if o.value is not None]) >= 2
+        )
+        if not any(s.slide_type == "analysis" for s in repaired_slides) and has_analytical_evidence:
+            valid_obs = [o for o in result.observations if o.value is not None and o.evidence][:6]
+            obs_pages = sorted({source.page for o in valid_obs for source in o.evidence}) or self._profile_pages(result)
+            repaired_slides.append(
+                PresentationSlide(
+                    id="slide_analysis_1",
+                    slide_type="analysis",
+                    title="Key Reported Evidence",
+                    section_id="analysis_1",
+                    section_title="Evidence",
+                    slide_role="overview",
+                    layout="single",
+                    message="Evidence-backed comparison of retained reported values.",
+                    observation_ids=[o.id for o in valid_obs],
+                    visual_blocks=[
+                        PresentationVisualBlock(
+                            role="hero",
+                            title="Reported Observations",
+                            observation_ids=[o.id for o in valid_obs],
+                        )
+                    ],
+                    source_pages=obs_pages,
+                )
+            )
+
         # Merge duplicate risks vs executive summary language
         self._deduplicate_risks_vs_summary(repaired_slides)
 
@@ -346,43 +376,72 @@ class PresentationPlanRepairer:
         return " ".join(valid_sentences)
 
     @classmethod
-    def _clean_company(cls, company: CompanyProfile, valid_pages: set[int]) -> CompanyProfile:
+    def _clean_company(cls, company: CompanyProfile, result: PipelineResult, valid_pages: set[int]) -> CompanyProfile:
         def dedupe(values: list[str]) -> list[str]:
             seen: set[str] = set()
-            result: list[str] = []
+            out: list[str] = []
             for item in values:
                 norm = cls._normalized_text(item)
                 if norm and norm not in seen:
                     seen.add(norm)
-                    result.append(item.strip())
-            return result[:6]
+                    out.append(item.strip())
+            return out[:6]
+
+        pages = sorted(set(company.source_pages) & valid_pages)
+        company_pages = set(pages) | {p for fact in company.key_facts for p in fact.source_pages if p in valid_pages}
+        allowed_company_numbers = PresentationPlanValidator._allowed_company_numbers(company_pages, result)
 
         facts: list[CompanyFact] = []
         seen: set[str] = set()
         for fact in company.key_facts:
             label = fact.label.strip()
             key = cls._normalized_text(label)
-            if label and key not in seen:
+            fact_pages = sorted(set(fact.source_pages) & valid_pages)
+            fact_allowed = (
+                PresentationPlanValidator._allowed_company_numbers(set(fact_pages), result)
+                if fact_pages
+                else allowed_company_numbers
+            )
+            val = fact.value.strip()
+            if label and key not in seen and cls._numbers_supported(val, fact_allowed):
                 facts.append(
                     fact.model_copy(
                         update={
                             "label": label,
-                            "value": fact.value.strip(),
-                            "source_pages": sorted(set(fact.source_pages) & valid_pages),
+                            "value": val,
+                            "source_pages": fact_pages,
                         }
                     )
                 )
                 seen.add(key)
-        pages = sorted(set(company.source_pages) & valid_pages)
+
+        one_line = company.one_line_description.strip()
+        if not cls._numbers_supported(one_line, allowed_company_numbers):
+            sentences = cls._sentence_split.split(one_line)
+            valid_s = [s.strip() for s in sentences if s.strip() and cls._numbers_supported(s.strip(), allowed_company_numbers)]
+            one_line = " ".join(valid_s)
+
+        business_model = company.business_model.strip()
+        if not cls._numbers_supported(business_model, allowed_company_numbers):
+            sentences = cls._sentence_split.split(business_model)
+            valid_s = [s.strip() for s in sentences if s.strip() and cls._numbers_supported(s.strip(), allowed_company_numbers)]
+            business_model = " ".join(valid_s)
+
+        track_record = (
+            company.track_record_period.strip()
+            if cls._numbers_supported(company.track_record_period.strip(), allowed_company_numbers)
+            else ""
+        )
+
         has_content = any(
             (
                 company.name,
-                company.one_line_description,
+                one_line,
                 company.industry,
                 company.headquarters,
                 company.listing_market,
-                company.track_record_period,
-                company.business_model,
+                track_record,
+                business_model,
                 facts,
                 company.products,
                 company.segments,
@@ -393,6 +452,9 @@ class PresentationPlanRepairer:
             return CompanyProfile()
         return company.model_copy(
             update={
+                "one_line_description": one_line,
+                "business_model": business_model,
+                "track_record_period": track_record,
                 "products": dedupe(company.products),
                 "segments": dedupe(company.segments),
                 "geographies": dedupe(company.geographies),
@@ -441,6 +503,14 @@ class PresentationPlanRepairer:
                 ordered.append(self._fallback_for_type(slide_type, result))
 
         ordered.extend(by_type["analysis"][:14])
+        has_analytical_evidence = bool(
+            result.charts
+            or result.analysis_results
+            or len([o for o in result.observations if o.value is not None]) >= 2
+        )
+        if not by_type["analysis"] and has_analytical_evidence:
+            ordered.append(self._fallback_for_type("analysis", result))
+
         if by_type["risks"]:
             # Ensure risk slide has evidence
             risk_slide = by_type["risks"][0]
@@ -470,6 +540,37 @@ class PresentationPlanRepairer:
         pages = self._profile_pages(result)
         if slide_type == "cover":
             return PresentationSlide(id="slide_cover", slide_type="cover", title=result.report_plan.title)
+        if slide_type == "analysis":
+            from adaptive_document_agent.services.pptx_export import _usable_charts
+            usable = _usable_charts(result)
+            if usable:
+                c = usable[0]
+                title = c.title.replace(" — Reported Values", "").replace(" - Reported Values", "")
+                return PresentationSlide(
+                    id="slide_analysis_1",
+                    slide_type="analysis",
+                    title=f"{title} Analysis",
+                    section_id="analysis_1",
+                    section_title="Analysis",
+                    slide_role="overview",
+                    layout="single",
+                    message="Evidence-backed comparison of retained reported values.",
+                    chart_ids=[c.id],
+                    source_pages=c.source_pages,
+                )
+            valid_obs = [o for o in result.observations if o.value is not None and o.evidence][:6]
+            return PresentationSlide(
+                id="slide_analysis_1",
+                slide_type="analysis",
+                title="Evidence Analysis",
+                section_id="analysis_1",
+                section_title="Analysis",
+                slide_role="overview",
+                layout="single",
+                message="Evidence-backed comparison of retained reported values.",
+                observation_ids=[o.id for o in valid_obs],
+                source_pages=sorted({source.page for o in valid_obs for source in o.evidence}) or pages,
+            )
         if slide_type == "company_overview":
             return PresentationSlide(
                 id="slide_company_overview",

@@ -31,7 +31,14 @@ class LLMGateway:
         self._record(response)
         return response.text
 
-    def generate_structured(self, messages: list[dict[str, Any]], response_model: type[T], *, stage: str) -> T:
+    def generate_structured(
+        self,
+        messages: list[dict[str, Any]],
+        response_model: type[T],
+        *,
+        stage: str,
+        allow_repair: bool = True,
+    ) -> T:
         model_name = self.settings.model_for(stage)
         try:
             value, response = self.client.generate_structured(
@@ -43,6 +50,8 @@ class LLMGateway:
             self._record(response)
             return value  # type: ignore[return-value]
         except LLMResponseError:
+            if not allow_repair:
+                raise
             return self._repair_structured(messages, response_model, stage=stage)
 
     def _repair_structured(self, messages: list[dict[str, Any]], response_model: type[T], *, stage: str) -> T:
@@ -58,39 +67,20 @@ class LLMGateway:
                 ),
             },
         ]
-        last_error: Exception | None = None
-        prior_text = ""
-        for attempt in range(2):
-            attempt_messages = list(repair_messages)
-            if attempt and prior_text:
-                attempt_messages.extend(
-                    [
-                        {"role": "assistant", "content": prior_text[:12_000]},
-                        {
-                            "role": "system",
-                            "content": (
-                                "The previous repair still failed parsing or schema validation. "
-                                "Return a shorter but complete JSON value. Omit optional detail before omitting required fields."
-                            ),
-                        },
-                    ]
-                )
-            try:
-                response = self.client.generate_text(
-                    attempt_messages,
-                    temperature=0,
-                    max_tokens=8_000 if stage == "presentation" else None,
-                    model=self.settings.model_for(stage),
-                )
-                self._record(response)
-                prior_text = response.text
-                return validate_structured_text(response.text, response_model)
-            except (LLMResponseError, ValueError, TypeError) as exc:
-                last_error = exc
-        detail = type(last_error).__name__ if last_error is not None else "unknown validation error"
-        raise LLMResponseError(
-            f"Structured response for stage '{stage}' remained invalid after two repair attempts ({detail})."
-        ) from last_error
+        try:
+            response = self.client.generate_text(
+                repair_messages,
+                temperature=0,
+                max_tokens=8_000 if stage == "presentation" else None,
+                model=self.settings.model_for(stage),
+            )
+            self._record(response)
+            return validate_structured_text(response.text, response_model)
+        except (LLMResponseError, ValueError, TypeError) as exc:
+            detail = type(exc).__name__
+            raise LLMResponseError(
+                f"Structured response for stage '{stage}' remained invalid after one repair attempt ({detail})."
+            ) from exc
 
     def _record(self, response: LLMResponse) -> None:
         if response.usage:

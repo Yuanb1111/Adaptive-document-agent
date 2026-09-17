@@ -109,6 +109,35 @@ class PresentationPlanRecovery:
                 )
             )
 
+        if not chart_groups and (
+            result.charts
+            or result.analysis_results
+            or len([o for o in result.observations if o.value is not None]) >= 2
+        ):
+            valid_obs = [o for o in result.observations if o.value is not None and o.evidence][:6]
+            obs_pages = sorted({source.page for o in valid_obs for source in o.evidence}) or company_pages
+            slides.append(
+                PresentationSlide(
+                    id="slide_analysis_1",
+                    slide_type="analysis",
+                    title="Key Reported Evidence",
+                    section_id="analysis_1",
+                    section_title="Evidence",
+                    slide_role="overview",
+                    layout="single",
+                    message="Evidence-backed comparison of retained reported values.",
+                    observation_ids=[o.id for o in valid_obs],
+                    visual_blocks=[
+                        PresentationVisualBlock(
+                            role="hero",
+                            title="Reported Observations",
+                            observation_ids=[o.id for o in valid_obs],
+                        )
+                    ],
+                    source_pages=obs_pages,
+                )
+            )
+
         # Key Risks: only generated if risk evidence exists
         risk_slide = self._risks_slide(result)
         if risk_slide:
@@ -147,6 +176,25 @@ class PresentationPlanRecovery:
             result,
         )
 
+    @staticmethod
+    def _is_calc_artifact(text: str) -> bool:
+        t = text.casefold()
+        return any(
+            term in t
+            for term in (
+                "slope",
+                "intercept",
+                "turning point",
+                "turning_point",
+                "turning points",
+                "turning_points",
+                "r-squared",
+                "r_squared",
+                "p-value",
+                "residuals",
+            )
+        )
+
     def _summary_slide(self, result: PipelineResult) -> PresentationSlide:
         from adaptive_document_agent.document_model import DocumentIndex
         from adaptive_document_agent.services.pptx_export import _chart_findings, _usable_charts
@@ -156,7 +204,13 @@ class PresentationPlanRecovery:
         findings = _chart_findings(usable, index)
 
         insights = sorted(
-            (item for item in result.insights if item.evidence),
+            (
+                item
+                for item in result.insights
+                if item.evidence
+                and not self._is_calc_artifact(item.title)
+                and not self._is_calc_artifact(item.narrative)
+            ),
             key=lambda item: (item.importance, item.confidence),
             reverse=True,
         )[:5]
@@ -164,9 +218,19 @@ class PresentationPlanRecovery:
         if not pages and usable:
             pages = sorted({p for c in usable[:3] for p in c.source_pages})
 
-        bullets = [item.title for item in insights[:4] if not any(char.isdigit() for char in item.title)]
+        bullets = [
+            item.title
+            for item in insights[:4]
+            if not any(char.isdigit() for char in item.title)
+        ]
         if not bullets and findings:
-            bullets = [str(f["title"]) for f in findings[:4] if not any(char.isdigit() for char in str(f["title"]))]
+            bullets = [
+                str(f["title"])
+                for f in findings[:4]
+                if not self._is_calc_artifact(str(f["title"]))
+                and not self._is_calc_artifact(str(f["narrative"]))
+                and not any(char.isdigit() for char in str(f["title"]))
+            ]
         if not bullets:
             bullets = ["Key retained findings selected from the source document."]
 
@@ -219,35 +283,83 @@ class PresentationPlanRecovery:
 
     def _rank_charts(self, result: PipelineResult) -> list[ChartPlan]:
         task_priority = {item.id: item.priority for item in result.analysis_plan}
-        insight_text = " ".join(f"{item.title} {item.narrative}" for item in result.insights if item.importance >= 0.6).casefold()
-        ranked: list[tuple[tuple[float, ...], ChartPlan]] = []
+        task_results = {item.task_id: item for item in result.analysis_results}
+        insight_text = " ".join(
+            f"{item.title} {item.narrative}"
+            for item in result.insights
+            if item.importance >= 0.5
+        ).casefold()
+
+        focus_terms: set[str] = set()
+        for f in (result.profile.analysis_focus or []):
+            focus_terms.update(f.casefold().split())
+        if result.profile.document_purpose:
+            focus_terms.update(result.profile.document_purpose.casefold().split())
+        for s in (result.report_plan.sections or []):
+            focus_terms.update(s.title.casefold().split())
+        focus_terms = {t for t in focus_terms if len(t) > 3}
+
+        ranked: list[tuple[float, str, ChartPlan]] = []
         for chart in result.charts:
             observations = [item for item in result.observations if item.id in chart.observation_ids]
+            if not observations:
+                continue
+
             metric_terms = {item.metric_canonical.casefold() for item in observations if item.metric_canonical}
             metric_terms.update(item.metric_original.casefold() for item in observations if item.metric_original)
-            semantic_relevance = sum(1 for term in metric_terms if len(term) > 3 and term in insight_text)
+
+            insight_relevance = sum(1.0 for term in metric_terms if len(term) > 3 and term in insight_text)
+            focus_relevance = sum(1.0 for term in metric_terms if any(t in term or term in t for t in focus_terms))
+
             period_count = len({item.period for item in observations if item.period})
-            # Multi-period depth bonus
-            period_depth = 2.0 if period_count >= 3 else 1.0 if period_count == 2 else 0.0
-            # Peripheral penalty for low-explanatory items
-            peripheral_penalty = 0.0
-            for term in metric_terms:
-                if any(p in term for p in ("prepaid", "deposit", "other payable", "miscellaneous", "stamp duty")):
-                    peripheral_penalty -= 2.0
+            period_depth_score = min(period_count / 3.0, 1.5)
+
+            numeric_values = [item.value for item in observations if item.value is not None]
+            variation_score = 0.0
+            if len(numeric_values) >= 2:
+                distinct_vals = len(set(numeric_values))
+                variation_score = 1.0 if distinct_vals > 1 else 0.2
+
+            avg_obs_conf = sum(item.confidence for item in observations) / max(len(observations), 1)
+            priority_val = float(task_priority.get(chart.analysis_task_id or "", 1))
+            res_item = task_results.get(chart.analysis_task_id or "")
+            t_conf = float(res_item.confidence) if res_item else 0.8
+            valid_result_score = 1.0 if (res_item and res_item.result is not None and not res_item.warnings) else 0.5
+
             score = (
-                float(task_priority.get(chart.analysis_task_id or "", 0)),
-                float(semantic_relevance),
-                period_depth,
-                sum(item.confidence for item in observations) / max(len(observations), 1),
-                float(len(chart.source_pages)),
-                peripheral_penalty,
+                (priority_val * 2.0)
+                + (min(insight_relevance, 3.0) * 2.5)
+                + (min(focus_relevance, 3.0) * 2.0)
+                + (period_depth_score * 1.5)
+                + (avg_obs_conf * 1.0)
+                + (t_conf * 1.0)
+                + (valid_result_score * 1.0)
+                + (variation_score * 1.0)
+                + (min(len(chart.source_pages), 5) * 0.2)
             )
-            ranked.append((score, chart))
-        return [chart for _, chart in sorted(ranked, key=lambda item: (item[0], item[1].id), reverse=True)[:12]]
+            ranked.append((score, chart.id, chart))
+
+        ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        return [chart for _, _, chart in ranked[:12]]
 
     @staticmethod
     def _group_charts(charts: list[ChartPlan]) -> list[list[ChartPlan]]:
-        return [charts[index : index + 3] for index in range(0, len(charts), 3)]
+        remaining = list(charts)
+        groups: list[list[ChartPlan]] = []
+        while remaining:
+            anchor = remaining.pop(0)
+            group = [anchor]
+            for candidate in list(remaining):
+                if len(group) >= 3:
+                    break
+                if (
+                    set(anchor.source_pages) & set(candidate.source_pages)
+                    or (anchor.analysis_task_id and anchor.analysis_task_id == candidate.analysis_task_id)
+                ):
+                    group.append(candidate)
+                    remaining.remove(candidate)
+            groups.append(group)
+        return groups
 
     @staticmethod
     def _chart_label(chart: ChartPlan, result: PipelineResult) -> str:
