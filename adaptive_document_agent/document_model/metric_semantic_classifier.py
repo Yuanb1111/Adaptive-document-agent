@@ -347,6 +347,9 @@ def format_metric_change(start: float, end: float, scale: float, semantic: Metri
     - Negative-to-negative currency changes explain 'Loss narrowed by X' or 'Loss widened by X'
     - Standard currency amounts change by '+15.2%'
     """
+    name_lower = semantic.clean_name.casefold()
+    is_liability = any(k in name_lower for k in ("liabilit", "borrowing", "debt", "indebtedness", "deficit", "负债", "借款"))
+
     if start < 0 <= end:
         return "Turned positive"
     if start > 0 >= end:
@@ -354,9 +357,17 @@ def format_metric_change(start: float, end: float, scale: float, semantic: Metri
 
     if start < 0 and end < 0:
         diff_scaled = abs(start - end) / scale
+        if is_liability:
+            return f"Liability narrowed by {diff_scaled:,.1f}" if end > start else f"Liability widened by {diff_scaled:,.1f}"
         if end > start:
             return f"Loss narrowed by {diff_scaled:,.1f}" if diff_scaled >= 1 else "Loss narrowed"
         return f"Loss widened by {diff_scaled:,.1f}" if diff_scaled >= 1 else "Loss widened"
+
+    if is_liability and start > 0 and end > 0:
+        diff_scaled = abs(end - start) / scale
+        if end > start:
+            return f"Widened by {diff_scaled:,.1f}" if diff_scaled >= 1 else "Widened"
+        return f"Narrowed by {diff_scaled:,.1f}" if diff_scaled >= 1 else "Narrowed"
 
     if semantic.is_multiple or semantic.unit_family == "multiple":
         diff = end - start

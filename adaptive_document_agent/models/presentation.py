@@ -48,6 +48,9 @@ class CompanyProfile(BaseModel):
     industry: str = ""
     headquarters: str = ""
     listing_market: str = ""
+    stock_code: str = ""
+    offering_type: str = ""
+    reporting_currency: str = ""
     document_type: str = ""
     track_record_period: str = ""
     products: list[str] = Field(default_factory=list, max_length=6)

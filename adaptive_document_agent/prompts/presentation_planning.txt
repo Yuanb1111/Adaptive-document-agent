@@ -22,25 +22,32 @@ Required planned-slide order:
 For evidence-dense documents, aim for 13 to 17 planned main slides including cover and excluding appendix because the renderer adds the contents page, producing roughly 14 to 18 main pages. Use fewer slides when the evidence does not support that depth. Never create an empty or weak slide to meet a page target.
 Use section_id and a concise section_title to group slides into chapters. The contents page uses unique section_title values, not full takeaway titles. Examples such as Financial Performance, Profitability, Working Capital, Liquidity and Capital Structure, Cash Flow, and Risks are candidates only when supported by the supplied evidence.
 Use slide_role to distinguish overview, deep_dive, drivers, watch_items, risk, methodology, and source_data pages. A strong topic may receive an overview plus one or more evidence-supported deep dives.
-Each analysis slide must communicate one message. Use a factual takeaway title when the evidence supports one; otherwise use a precise topic title.
-Avoid system phrases such as "calculated trend", "supplied observation", "presentation plan", and "source-only" in audience-facing titles or copy.
+Each analysis slide must communicate one message. Every analytical slide title must state the main supported takeaway or movement (e.g. "Current Ratio Declined from 0.4x to 0.2x", "Cash Balances Fell to RMB70m by August 2025", "Inventories Declined Before Partially Rebounding"). Never use generic titles like "Unaudited analysis", "NET CURRENT LIABILITIES analysis", "Trend and related measures analysis", or "[Metric] analysis". The subtitle should explain scope/definition/period, not repeat generic template language.
+Avoid system phrases such as "calculated trend", "supplied observation", "presentation plan", "retained fact", "extracted observation", "parser", "JSON", and "source-only" in audience-facing titles or copy.
+Avoid mathematically confusing negative wording: for liabilities, use "widened" or "narrowed" (e.g. "Net current liabilities widened from RMB1.10bn to RMB1.72bn"); for negative EBITDA/losses, state "loss narrowed" or "loss widened" (e.g. "Adjusted EBITDA loss narrowed from RMB683m to RMB25m").
 
-Prefer multiple related evidence blocks on one slide when they support one message:
+Prefer multiple related evidence blocks on one slide when they support one message (One slide = one message):
+- Group related metrics:
+  * Liquidity: Cash & cash equivalents, Current assets, Current ratio, Net current liabilities
+  * Working Capital: Trade receivables, Inventories, Trade payables, Contract liabilities
+  * Profitability: Revenue, Gross profit, Gross margin, Operating / net loss
+  * Capital Structure: Borrowings, Lease liabilities, Gearing ratio
+  Only give a metric a standalone slide when it is materially important.
 - two_up for two comparable or complementary charts
 - three_up for three compact comparable charts
 - hero_plus_supporting for one primary chart with one or two supporting charts or KPIs
 - chart_with_data for a chart plus a compact KPI or exact-data block
 - data_overview for a flat overview of several reported values when no chart is appropriate
-Use visual_blocks to describe this composition. Keep at most three charts and four total blocks on one slide. Combine related measures such as cash and borrowings, revenue and margin, or working-capital components only when their periods and meanings are compatible. Do not combine unrelated metrics merely to reduce page count.
+Use visual_blocks to describe this composition. Each visual block or chart must have its own distinct title/metric display label. Never give multiple cards or charts on the same slide identical titles. Keep at most three charts and four total blocks on one slide. Combine related measures only when their periods and meanings are compatible. Do not combine unrelated metrics merely to reduce page count.
 When a chart plan offers several available_chart_types, visual_blocks may choose a compatible chart_type. Prefer line or bar for point-in-time balances; use area only when filled magnitude over a continuous series is analytically appropriate. For an exact-data block, use observation_ids with chart_with_data or data_overview; do not request chart_type table.
-Include direct key numbers in the executive summary when the selected observations or insights support them. Use observation_ids so the renderer can display deterministic values.
+Include 4 to 6 direct key numbers in the executive summary when the selected observations or insights support them. Use observation_ids so the renderer can display deterministic values.
 Executive Summary bullets must focus on major financial themes (revenue trajectory, margin evolution, loss/profit narrow or expansion, operating cash flow, liquidity and leverage).
 Do NOT mechanically rank numbers across unrelated periods or categories by absolute magnitude. Always compare like with like: track a metric across consistent periods (e.g. FY2023 to FY2025) or compare category shares within the same single period.
 Do not repeat executive-summary bullets on the risks slide. A risk statement should connect the supported movement to its potential interpretation, while clearly presenting it as a watch item rather than an invented fact.
 Use no more than five bullets.
 
-Company profile fields are source-only. Leave a field empty when the excerpts do not disclose it. Do not infer headquarters, industry, listing market, founded year, ticker, products, segments, geographies, or business model from general knowledge.
-Company facts must include their source pages.
+Company profile fields are source-only. Leave a field empty when the excerpts do not disclose it. Do not infer headquarters, industry, listing market, stock code, offering type, reporting currency, products, segments, geographies, or business model from general knowledge. If company identity is unavailable, use "Document at a Glance" as the slide title.
+Company facts must include their source pages. Supported categories: Industry, Listing market, Stock code, Offering type, Track record period, Headquarters, Main products/services, Main geographic market, Reporting currency. If no key facts are supported by the document, leave key_facts empty.
 Deduplicate products, segments, geographies, and company facts before returning them.
 
 Return only the requested schema.

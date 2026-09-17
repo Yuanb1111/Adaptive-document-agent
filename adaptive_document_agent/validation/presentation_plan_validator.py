@@ -95,6 +95,8 @@ class PresentationPlanValidator:
             ("industry", plan.company.industry),
             ("headquarters", plan.company.headquarters),
             ("listing_market", plan.company.listing_market),
+            ("offering_type", plan.company.offering_type),
+            ("reporting_currency", plan.company.reporting_currency),
             *[(f"product {i+1}", p) for i, p in enumerate(plan.company.products)],
             *[(f"segment {i+1}", s) for i, s in enumerate(plan.company.segments)],
             *[(f"geography {i+1}", g) for i, g in enumerate(plan.company.geographies)],
@@ -177,6 +179,22 @@ class PresentationPlanValidator:
                 errors.append(f"slide {slide.id} has no retained evidence references")
             if slide.slide_type == "analysis" and not slide.message.strip():
                 errors.append(f"analysis slide {slide.id} must state one message")
+            if slide.slide_type == "analysis":
+                for pattern in (
+                    r"(?i)\bunaudited\s+analysis\b",
+                    r"(?i)\btrend\s+and\s+related\s+measures\b",
+                    r"(?i)\bevidence-?backed\s+comparison\b",
+                    r"(?i)\bretained\s+reported\s+values\b",
+                ):
+                    if re.search(pattern, slide.title):
+                        errors.append(
+                            f"analysis slide {slide.id} has a generic blacklisted title: '{slide.title}'. "
+                            "Titles must state the main supported takeaway or direction."
+                        )
+                        break
+                block_titles = [b.title.strip().casefold() for b in slide.visual_blocks if b.title.strip()]
+                if len(block_titles) > 1 and len(block_titles) != len(set(block_titles)):
+                    errors.append(f"analysis slide {slide.id} has duplicate card/block titles: {block_titles}")
             if slide.slide_type in {"analysis", "risks"} and not slide.section_title.strip():
                 errors.append(f"slide {slide.id} must provide a concise section_title")
             if len(chart_ids) > 3:

@@ -127,9 +127,8 @@ def build_presentation(result: PipelineResult, template_path: str | Path | None 
     except Exception as exc:
         raise ValueError(f"Failed to load PowerPoint template at '{resolved_path}': {exc}") from exc
 
-    # Remove template sample slides while retaining master, layouts, and theme
-    slide_ids = list(presentation.slides._sldIdLst)
-    for sld_id in slide_ids:
+    # Remove template sample slides while retaining master and layouts
+    for sld_id in list(presentation.slides._sldIdLst):
         rId = sld_id.rId
         presentation.part.drop_rel(rId)
         del presentation.slides._sldIdLst[presentation.slides._sldIdLst.index(sld_id)]
@@ -139,6 +138,10 @@ def build_presentation(result: PipelineResult, template_path: str | Path | None 
         _build_planned_presentation(presentation, result)
     else:
         _build_legacy_presentation(presentation, result)
+
+    # Append official Thank You slide at the very end after all appendix slides
+    _add_thank_you_slide(presentation)
+
     _number_slides(presentation)
 
     # Pre-export preflight check and sanitization
@@ -244,16 +247,27 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
                     chart = chart.model_copy(update={"chart_type": chart_type})
                 charts.append(chart)
             if charts:
-                charts = [
-                    item.model_copy(
-                        update={
-                            "title": slide_plan.title,
-                            "question": slide_plan.message or item.question,
-                            "source_pages": slide_plan.source_pages or item.source_pages,
-                        }
-                    )
-                    for item in charts
-                ]
+                if len(charts) == 1 and slide_plan.layout != "chart_with_data":
+                    charts = [
+                        charts[0].model_copy(
+                            update={
+                                "title": slide_plan.title,
+                                "question": slide_plan.message or charts[0].question,
+                                "source_pages": slide_plan.source_pages or charts[0].source_pages,
+                            }
+                        )
+                    ]
+                else:
+                    # Multi-chart cluster: preserve each chart's distinct metric title!
+                    charts = [
+                        item.model_copy(
+                            update={
+                                "question": slide_plan.message or item.question,
+                                "source_pages": slide_plan.source_pages or item.source_pages,
+                            }
+                        )
+                        for item in charts
+                    ]
                 rendered_charts.extend(charts)
                 if len(charts) == 1 and slide_plan.layout != "chart_with_data":
                     _add_chart_slide(
@@ -387,11 +401,12 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
     if plan is None:  # pragma: no cover - guarded by caller
         return
     company = plan.company
-    slide = _base_slide(presentation, slide_plan.title, company.document_type or result.profile.document_type)
+    has_company_identity = bool(company.name.strip() and company.name.strip().casefold() != "company overview")
+    slide_title = slide_plan.title if has_company_identity else "Document at a Glance"
+    slide = _base_slide(presentation, slide_title, company.document_type or result.profile.document_type)
     content_top, content_h = _content_zone(slide)
 
-    name = company.name or result.profile.overview_title or "Company Overview"
-    # Build a balanced, source-grounded description (2-4 concise lines)
+    name = company.name.strip() or result.profile.overview_title or "Document Overview"
     desc_candidates = [
         company.one_line_description,
         result.profile.document_summary,
@@ -408,11 +423,6 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
     if not description:
         description = "Document-grounded overview of the reported issuer and business context."
 
-    # Left card: Profile & Business snapshot
-    _panel(slide, 0.45, content_top, 7.20, content_h, fill=FOURIER_BG_CARD)
-    _text(slide, _summary_text(name, 80), 0.70, content_top + 0.20, 6.70, 0.55, size=22, color=FOURIER_DARK, bold=True)
-    _text(slide, _summary_text(description, 360), 0.70, content_top + 0.85, 6.70, 1.40, size=13.5, color=FOURIER_MUTED)
-
     topics: list[str] = []
     seen_topics: set[str] = set()
     for topic in [*company.products, *company.segments, *company.geographies]:
@@ -424,38 +434,69 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
         key = " ".join(company.business_model.casefold().split())
         if key not in seen_topics:
             topics.append(company.business_model)
-    if topics:
-        _text(slide, "BUSINESS FOCUS", 0.70, content_top + 2.45, 4.0, 0.26, size=10.5, color=FOURIER_PURPLE, bold=True)
-        _rule(slide, 0.70, content_top + 2.75, 6.70, 0.01, FOURIER_BORDER)
-        topic_text = "\n".join(f"{index:02d}  {_summary_text(item, 72)}" for index, item in enumerate(topics[:4], start=1))
-        _text(slide, topic_text, 0.70, content_top + 2.85, 6.70, 1.50, size=12.5, color=FOURIER_DARK, bold=True)
 
-    # Right card: Key facts
-    facts = [
-        ("Industry", company.industry),
-        ("Headquarters", company.headquarters),
-        ("Listing market", company.listing_market),
-        ("Track record", company.track_record_period),
-        *[(item.label, item.value) for item in company.key_facts],
-    ]
-    deduplicated_facts: list[tuple[str, str]] = []
-    seen_facts: set[str] = set()
-    for label, value in facts:
-        key = label.casefold().strip()
-        if value.strip() and key not in seen_facts:
-            seen_facts.add(key)
-            deduplicated_facts.append((label, value))
-    facts = deduplicated_facts[:5]
+    # Format profile metadata line
+    meta_items: list[str] = []
+    if getattr(company, "stock_code", ""):
+        meta_items.append(f"Stock Code: {company.stock_code}")
+    if getattr(company, "offering_type", ""):
+        meta_items.append(f"Offering: {company.offering_type}")
+    if getattr(company, "reporting_currency", ""):
+        meta_items.append(f"Currency: {company.reporting_currency}")
+    if company.listing_market:
+        meta_items.append(f"Listing: {company.listing_market}")
+    if company.headquarters:
+        meta_items.append(f"HQ: {company.headquarters}")
+    if company.track_record_period:
+        meta_items.append(f"Track Record: {company.track_record_period}")
+    meta_line = "   |   ".join(meta_items)
 
-    _panel(slide, 7.85, content_top, 4.30, content_h, fill=FOURIER_BG_CARD)
-    _text(slide, "KEY FACTS", 8.10, content_top + 0.20, 3.80, 0.26, size=10.5, color=FOURIER_PURPLE, bold=True)
-    _rule(slide, 8.10, content_top + 0.50, 3.80, 0.01, FOURIER_BORDER)
-    fact_top = content_top + 0.62
-    for label, value in facts:
-        _text(slide, label.upper(), 8.10, fact_top, 3.80, 0.22, size=9, color=FOURIER_MUTED, bold=True)
-        val_h = 0.50 if len(value) > 36 else 0.35
-        _text(slide, _summary_text(value, 86), 8.10, fact_top + 0.20, 3.80, val_h, size=12.5, color=FOURIER_DARK, bold=True)
-        fact_top += val_h + 0.28
+    facts = [(item.label, item.value) for item in company.key_facts if item.label.strip() and item.value.strip()][:6]
+
+    if facts:
+        # Two-panel layout: Left (Profile & Business), Right (Key facts)
+        _panel(slide, 0.45, content_top, 7.20, content_h, fill=FOURIER_BG_CARD)
+        _text(slide, _summary_text(name, 80), 0.70, content_top + 0.20, 6.70, 0.45, size=22, color=FOURIER_DARK, bold=True)
+        top_offset = content_top + 0.70
+        if meta_line:
+            _text(slide, _summary_text(meta_line, 100), 0.70, top_offset, 6.70, 0.25, size=11.0, color=FOURIER_PURPLE, bold=True)
+            top_offset += 0.30
+        _text(slide, _summary_text(description, 360), 0.70, top_offset, 6.70, 1.30, size=13.0, color=FOURIER_MUTED)
+
+        if topics:
+            _text(slide, "BUSINESS FOCUS", 0.70, content_top + 2.55, 4.0, 0.26, size=10.5, color=FOURIER_PURPLE, bold=True)
+            _rule(slide, 0.70, content_top + 2.85, 6.70, 0.01, FOURIER_BORDER)
+            topic_text = "\n".join(f"{index:02d}  {_summary_text(item, 72)}" for index, item in enumerate(topics[:4], start=1))
+            _text(slide, topic_text, 0.70, content_top + 2.95, 6.70, 1.40, size=12.5, color=FOURIER_DARK, bold=True)
+
+        _panel(slide, 7.85, content_top, 4.30, content_h, fill=FOURIER_BG_CARD)
+        _text(slide, "KEY FACTS", 8.10, content_top + 0.20, 3.80, 0.26, size=10.5, color=FOURIER_PURPLE, bold=True)
+        _rule(slide, 8.10, content_top + 0.50, 3.80, 0.01, FOURIER_BORDER)
+        fact_top = content_top + 0.62
+        for label, value in facts:
+            _text(slide, label.upper(), 8.10, fact_top, 3.80, 0.22, size=9, color=FOURIER_MUTED, bold=True)
+            val_h = 0.45 if len(value) > 36 else 0.30
+            _text(slide, _summary_text(value, 86), 8.10, fact_top + 0.20, 3.80, val_h, size=12.0, color=FOURIER_DARK, bold=True)
+            fact_top += val_h + 0.24
+    else:
+        # Full-width card layout when key_facts is empty: do not render empty KEY FACTS block
+        _panel(slide, 0.45, content_top, 11.70, content_h, fill=FOURIER_BG_CARD)
+        _text(slide, _summary_text(name, 100), 0.75, content_top + 0.25, 11.10, 0.50, size=24, color=FOURIER_DARK, bold=True)
+        top_offset = content_top + 0.80
+        if meta_line:
+            _text(slide, _summary_text(meta_line, 140), 0.75, top_offset, 11.10, 0.28, size=11.5, color=FOURIER_PURPLE, bold=True)
+            top_offset += 0.35
+        _text(slide, _summary_text(description, 450), 0.75, top_offset, 11.10, 1.35, size=13.5, color=FOURIER_MUTED)
+        if topics:
+            _text(slide, "BUSINESS FOCUS", 0.75, content_top + 2.65, 6.0, 0.26, size=11.0, color=FOURIER_PURPLE, bold=True)
+            _rule(slide, 0.75, content_top + 2.95, 11.10, 0.01, FOURIER_BORDER)
+            col1 = topics[:3]
+            col2 = topics[3:6]
+            col1_text = "\n".join(f"{index:02d}  {_summary_text(item, 72)}" for index, item in enumerate(col1, start=1))
+            _text(slide, col1_text, 0.75, content_top + 3.05, 5.30, 1.40, size=13.0, color=FOURIER_DARK, bold=True)
+            if col2:
+                col2_text = "\n".join(f"{index:02d}  {_summary_text(item, 72)}" for index, item in enumerate(col2, start=4))
+                _text(slide, col2_text, 6.35, content_top + 3.05, 5.30, 1.40, size=13.0, color=FOURIER_DARK, bold=True)
 
     pages = sorted({*company.source_pages, *slide_plan.source_pages, *(page for fact in company.key_facts for page in fact.source_pages)})
     if pages:
@@ -505,6 +546,11 @@ def _sanitize_investor_narrative(text: str) -> str:
         ("retained evidence", "source disclosures"),
     ):
         clean = re.sub(re.escape(phrase), replacement, clean, flags=re.IGNORECASE)
+    clean = re.sub(r"(?i)\bincreased by -([0-9.]+)", r"decreased by \1", clean)
+    clean = re.sub(r"(?i)\bgrew by -([0-9.]+)", r"contracted by \1", clean)
+    clean = re.sub(r"(?i)\bdeclined by -([0-9.]+)", r"increased by \1", clean)
+    clean = re.sub(r"(?i)\bnet loss widened by -([0-9.]+)", r"net loss narrowed by \1", clean)
+    clean = re.sub(r"(?i)\bnet profit was -([0-9.]+)%?", r"net loss was \1", clean)
     return clean.strip()
 
 
@@ -859,12 +905,21 @@ def _add_chart_cluster_slide(
     panel_w = (total_w - gap * (count - 1)) / count
     panel_bounds = [(0.45 + pos * (panel_w + gap), content_top, panel_w, content_h) for pos in range(count)]
 
+    seen_panel_titles: set[str] = set()
     for position, (plan, bounds) in enumerate(zip(plans[:count], panel_bounds)):
         observations = [index.get(identifier) for identifier in plan.observation_ids]
         values = [item for item in observations if item and item.value is not None]
         left, top, panel_width, panel_height = bounds
         _panel(slide, left, top, panel_width, panel_height, fill=FOURIER_BG_CARD)
+
+        metric_name = display_metric_name(values[0]) if values else ""
         chart_title = _presentation_chart_title(plan.title, values)
+        if title and chart_title.casefold() == title.casefold():
+            chart_title = metric_name or chart_title
+        if chart_title.casefold() in seen_panel_titles:
+            chart_title = metric_name or f"{chart_title} ({position + 1})"
+        seen_panel_titles.add(chart_title.casefold())
+
         compact_panel = panel_width < 4.5
         _text(
             slide,
@@ -1093,6 +1148,34 @@ def _add_quality_slide(presentation: Any, result: PipelineResult, *, title: str 
         _text(slide, _summary_text(message, 360), 1.35, y + 0.14, 10.55, card_h - 0.20, size=14, color=FOURIER_DARK)
 
 
+THEME_ORDER = [
+    "Financial Performance",
+    "Liquidity",
+    "Working Capital & Operations",
+    "Capital Structure & Indebtedness",
+    "Cash Flow",
+    "Non-IFRS / Adjusted Measures",
+    "Financial Overview",
+]
+
+
+def _classify_financial_theme(metric_name: str, parent_section: str = "") -> str:
+    combined = f"{parent_section} {metric_name}".casefold()
+    if any(k in combined for k in ("non-ifrs", "non-gaap", "adjusted net", "adjusted ebitda", "adjusted profit", "adjusted loss", "adjusted operating")):
+        return "Non-IFRS / Adjusted Measures"
+    if any(k in combined for k in ("cash flow", "operating activit", "investing activit", "financing activit", "free cash flow", "cash generated from")):
+        return "Cash Flow"
+    if any(k in combined for k in ("borrowing", "bank loan", "gearing", "leverage", "total debt", "net debt", "share capital", "total equity", "indebtedness")):
+        return "Capital Structure & Indebtedness"
+    if any(k in combined for k in ("inventor", "receiv", "payab", "turnover day", "turnover period", "days sales", "contract asset")):
+        return "Working Capital & Operations"
+    if any(k in combined for k in ("cash and cash", "cash equivalent", "bank balance", "liquid", "current asset", "current liabilit", "quick ratio", "current ratio", "working capital")):
+        return "Liquidity"
+    if any(k in combined for k in ("revenue", "turnover", "gross profit", "operating profit", "operating loss", "profit for the", "loss for the", "net profit", "net loss", "ebit", "margin", "cost of sales", "selling expense", "administrative expense", "r&d", "research and dev")):
+        return "Financial Performance"
+    return "Financial Overview"
+
+
 def _add_evidence_table_slides(
     presentation: Any,
     result: PipelineResult,
@@ -1124,67 +1207,159 @@ def _add_evidence_table_slides(
         _text(slide, "The CSV export contains the complete reported dataset.", 0.45, 6.22, 11.70, 0.25, size=9.5, color=FOURIER_MUTED)
         return
 
-    page_size = 10
-    pages = [observations[index:index + page_size] for index in range(0, len(observations), page_size)]
-    if max_pages is not None:
-        pages = pages[:max_pages]
-    headers = ["Metric", "Category", "Section", "Period", "Reported value", "Unit", "Page"]
+    # Extract clean periods and metrics grouped by theme
+    # theme -> metric_label -> {"periods": {period_str: val_str}, "pages": set()}
+    metrics_by_theme: dict[str, dict[str, dict[str, Any]]] = {}
+    all_periods_set: set[str] = set()
 
-    for page_number, page_observations in enumerate(pages, start=1):
-        slide_subtitle = subtitle or "Validated reported values used by the presentation charts, with page-level provenance"
-        if subtitle is None and len(pages) > 1:
-            slide_subtitle += f" | Appendix {page_number} of {len(pages)}"
+    for item in observations:
+        semantic = classify_metric(
+            display_metric_name(item),
+            value=item.value,
+            raw_unit=item.raw_unit,
+            unit=item.unit,
+        )
+        metric_name = sanitize_metric_label(semantic.clean_name)
+        theme = _classify_financial_theme(
+            metric_name,
+            item.parent_section or item.source_section or item.dimensions.get("section") or "",
+        )
+        unit_str = _display_source_unit(item)
+        period_key = item.period or "Reported"
+        all_periods_set.add(period_key)
+
+        theme_dict = metrics_by_theme.setdefault(theme, {})
+        metric_entry = theme_dict.setdefault(metric_name, {"unit": unit_str, "periods": {}, "pages": set()})
+
+        metric_entry["periods"][period_key] = item.raw_value
+        for ev in item.evidence:
+            if getattr(ev, "page", None):
+                metric_entry["pages"].add(ev.page)
+
+    sorted_periods = sorted(all_periods_set, key=period_sort_key)
+    if not sorted_periods:
+        sorted_periods = ["Reported"]
+
+    # Partition periods if broad time series (e.g. > 10 periods)
+    if len(sorted_periods) > 10:
+        period_chunks = [sorted_periods[i:i + 10] for i in range(0, len(sorted_periods), 10)]
+    else:
+        period_chunks = [sorted_periods]
+
+    # Build slide bundles
+    slide_specs: list[tuple[list[str], list[tuple[str, dict[str, dict[str, Any]]]]]] = []
+    for p_chunk in period_chunks:
+        current_bundle: list[tuple[str, dict[str, dict[str, Any]]]] = []
+        current_rows = 0
+        for theme in THEME_ORDER:
+            if theme not in metrics_by_theme:
+                continue
+            theme_metrics = metrics_by_theme[theme]
+            needed_rows = 1 + len(theme_metrics)
+            if current_rows > 0 and current_rows + needed_rows > 10:
+                slide_specs.append((p_chunk, current_bundle))
+                current_bundle = [(theme, theme_metrics)]
+                current_rows = needed_rows
+            else:
+                current_bundle.append((theme, theme_metrics))
+                current_rows += needed_rows
+        if current_bundle:
+            slide_specs.append((p_chunk, current_bundle))
+
+    if max_pages is not None:
+        slide_specs = slide_specs[:max_pages]
+
+    total_specs = len(slide_specs)
+    for spec_index, (p_chunk, theme_entries) in enumerate(slide_specs, start=1):
+        slide_subtitle = subtitle or "Validated reported values across historical periods, with source provenance"
+        if total_specs > 1:
+            slide_subtitle += f" | Appendix {spec_index} of {total_specs}"
         slide = _base_slide(presentation, title, slide_subtitle)
         content_top, content_h = _content_zone(slide)
 
-        rows = []
-        for item in page_observations:
-            semantic = classify_metric(
-                display_metric_name(item),
-                value=item.value,
-                raw_unit=item.raw_unit,
-                unit=item.unit,
-            )
-            is_bs = any(term in semantic.clean_name.casefold() for term in ("liabilit", "cash", "balance", "receiv", "payab", "inventor"))
-            period_label = format_period_label(item.period, is_balance_sheet=is_bs)
-            cat_val = ", ".join(v for v in item.category_dimensions.values()) if item.category_dimensions else (item.dimensions.get("category") or "-")
-            sec_val = item.parent_section or item.source_section or item.dimensions.get("section") or "-"
-            rows.append([
-                _summary_text(semantic.clean_name, 48),
-                _summary_text(cat_val, 28),
-                _summary_text(sec_val, 28),
-                period_label or item.entity or "-",
-                item.raw_value,
-                _display_source_unit(item),
-                ", ".join(map(str, sorted({source.page for source in item.evidence}))),
-            ])
+        is_any_bs = any(t in ("Liquidity", "Working Capital & Operations", "Capital Structure & Indebtedness") for t, _ in theme_entries)
+        formatted_headers = ["Financial Metric", "Unit"] + [
+            format_period_label(p, is_balance_sheet=is_any_bs) or p
+            for p in p_chunk
+        ]
+
+        table_rows: list[tuple[str, str, list[str], bool]] = []
+        slide_pages: set[int] = set()
+
+        for theme, metrics_dict in theme_entries:
+            table_rows.append((theme, "", ["" for _ in p_chunk], True))
+            for m_name, m_data in metrics_dict.items():
+                row_vals = [m_data["periods"].get(p, "—") for p in p_chunk]
+                table_rows.append((m_name, m_data.get("unit", ""), row_vals, False))
+                slide_pages.update(m_data["pages"])
 
         table_top = content_top
         table_h = min(4.50, content_h - 0.35)
-        table_shape = slide.shapes.add_table(len(rows) + 1, len(headers), Inches(0.45), Inches(table_top), Inches(11.70), Inches(table_h))
+        num_rows = len(table_rows) + 1
+        num_cols = len(formatted_headers)
+        table_shape = slide.shapes.add_table(num_rows, num_cols, Inches(0.45), Inches(table_top), Inches(11.70), Inches(table_h))
         table = table_shape.table
 
-        # Client-aligned proportions for 7 columns: total 11.70 in
-        widths = [2.70, 1.80, 1.80, 1.30, 1.80, 1.50, 0.80]
-        for column, width in zip(table.columns, widths):
-            column.width = Inches(width)
-        for column, header in enumerate(headers):
-            cell = table.cell(0, column)
-            cell.text = header
-            _cell_style(cell, fill=FOURIER_PURPLE, color=WHITE, bold=True, size=11.0)
-            if column in {4, 6}:
+        num_p = len(p_chunk)
+        metric_w = max(2.80, min(3.80, 11.70 - 1.10 - num_p * 1.15))
+        unit_w = 1.10
+        period_w = (11.70 - metric_w - unit_w) / max(num_p, 1)
+        table.columns[0].width = Inches(metric_w)
+        table.columns[1].width = Inches(unit_w)
+        for col_idx in range(2, num_cols):
+            table.columns[col_idx].width = Inches(period_w)
+
+        for col_idx, h_text in enumerate(formatted_headers):
+            cell = table.cell(0, col_idx)
+            cell.text = h_text
+            _cell_style(cell, fill=FOURIER_PURPLE, color=WHITE, bold=True, size=10.5)
+            cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+            if col_idx >= 2:
                 cell.text_frame.paragraphs[0].alignment = PP_ALIGN.RIGHT
-        for row_index, values in enumerate(rows, start=1):
-            for column, value in enumerate(values):
-                cell = table.cell(row_index, column)
-                cell.text = str(value)
-                _cell_style(cell, fill=WHITE if row_index % 2 else FOURIER_BG_CARD, color=FOURIER_DARK, bold=False, size=10.0)
-                cell.vertical_anchor = MSO_ANCHOR.MIDDLE
-                cell.text_frame.paragraphs[0].alignment = PP_ALIGN.RIGHT if column in {4, 6} else PP_ALIGN.LEFT
-        row_height = min(0.45, 4.60 / max(len(rows) + 1, 1))
+            else:
+                cell.text_frame.paragraphs[0].alignment = PP_ALIGN.LEFT
+
+        for row_idx, (row_label, row_unit, row_vals, is_header) in enumerate(table_rows, start=1):
+            if is_header:
+                cell0 = table.cell(row_idx, 0)
+                cell0.text = f"■ {row_label.upper()}"
+                _cell_style(cell0, fill=FOURIER_BG_CARD, color=FOURIER_PURPLE, bold=True, size=10.0)
+                cell0.vertical_anchor = MSO_ANCHOR.MIDDLE
+                cell0.text_frame.paragraphs[0].alignment = PP_ALIGN.LEFT
+                for col_idx in range(1, num_cols):
+                    cell = table.cell(row_idx, col_idx)
+                    cell.text = ""
+                    _cell_style(cell, fill=FOURIER_BG_CARD, color=FOURIER_PURPLE, bold=True, size=10.0)
+            else:
+                row_fill = WHITE if row_idx % 2 == 0 else FOURIER_BG_CARD
+                cell0 = table.cell(row_idx, 0)
+                cell0.text = _summary_text(row_label, 50)
+                _cell_style(cell0, fill=row_fill, color=FOURIER_DARK, bold=False, size=9.5)
+                cell0.vertical_anchor = MSO_ANCHOR.MIDDLE
+                cell0.text_frame.paragraphs[0].alignment = PP_ALIGN.LEFT
+
+                cell1 = table.cell(row_idx, 1)
+                cell1.text = str(row_unit)
+                _cell_style(cell1, fill=row_fill, color=FOURIER_DARK, bold=False, size=9.5)
+                cell1.vertical_anchor = MSO_ANCHOR.MIDDLE
+                cell1.text_frame.paragraphs[0].alignment = PP_ALIGN.LEFT
+
+                for col_idx, val in enumerate(row_vals, start=2):
+                    cell = table.cell(row_idx, col_idx)
+                    cell.text = str(val)
+                    _cell_style(cell, fill=row_fill, color=FOURIER_DARK, bold=False, size=9.5)
+                    cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+                    cell.text_frame.paragraphs[0].alignment = PP_ALIGN.RIGHT
+
+        row_height = min(0.38, 4.40 / max(num_rows, 1))
         for row in table.rows:
             row.height = Inches(row_height)
-        _text(slide, "The CSV export contains the complete reported dataset.", 0.45, 6.22, 11.70, 0.25, size=9.5, color=FOURIER_MUTED)
+
+        has_unaudited = any("*" in h for h in formatted_headers[1:])
+        star_note = " | * Unaudited" if has_unaudited else ""
+        pages_str = f"Source: pp. {', '.join(map(str, sorted(slide_pages)))}" if slide_pages else "Source: Prospectus disclosures"
+        footnote = f"{pages_str}{star_note} | Complete reported dataset available in accompanying CSV export."
+        _text(slide, footnote, 0.45, 6.22, 11.70, 0.25, size=9.0, color=FOURIER_MUTED)
 
 
 def update_geometry(
@@ -1600,7 +1775,9 @@ def _chart_group_title(plans: list[ChartPlan], index: DocumentIndex) -> str:
     titles = [_presentation_chart_title(plan.title, values) for plan, values in zip(plans, value_sets)]
     if len(titles) == 2:
         return _summary_text(f"{titles[0]} and {titles[1]}", 72)
-    return _summary_text(f"{titles[0]} and related measures", 72)
+    if len(titles) >= 3:
+        return _summary_text(f"{titles[0]}, {titles[1]} and {titles[2]}", 72)
+    return _summary_text(titles[0] if titles else "Financial Overview", 72)
 
 
 def _usable_charts(result: PipelineResult) -> list[ChartPlan]:
@@ -1751,10 +1928,35 @@ def _cell_style(cell: Any, *, fill: str, color: str, bold: bool, size: float) ->
         paragraph.font.color.rgb = _rgb(color)
 
 
+def _add_thank_you_slide(presentation: Any) -> None:
+    """Append the official FOURIER Thank You slide cloned from template layout."""
+    from pptx.util import Inches, Pt
+
+    if len(presentation.slide_layouts) > 14:
+        thank_you_layout = presentation.slide_layouts[14]
+    else:
+        thank_you_layout = presentation.slide_layouts[-1]
+
+    slide = presentation.slides.add_slide(thank_you_layout)
+    tb = slide.shapes.add_textbox(Inches(0.87), Inches(2.70), Inches(6.0), Inches(1.0))
+    p = tb.text_frame.paragraphs[0]
+    p.text = "THANK YOU"
+    p.font.name = "Arial"
+    p.font.size = Pt(44)
+    p.font.bold = True
+    p.font.color.rgb = _rgb(FOURIER_DARK)
+
+
 def _number_slides(presentation: Any) -> None:
+    total_count = len(presentation.slides)
     for index, slide in enumerate(presentation.slides, start=1):
         if index == 1:
             continue
+        if index == total_count:
+            last_text = " ".join(s.text for s in slide.shapes if s.has_text_frame).casefold()
+            last_layout = slide.slide_layout.name if hasattr(slide, "slide_layout") else ""
+            if "thank you" in last_text or "thank" in last_layout.casefold():
+                continue
         _text(slide, str(index), 11.60, 6.53, 0.60, 0.23, size=9, color=FOURIER_MUTED, align="right")
 
 

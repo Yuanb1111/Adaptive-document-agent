@@ -156,15 +156,22 @@ def test_pptx_export_structure_ordering_and_gridlines() -> None:
         assert ch.category_axis.has_major_gridlines is False
         assert ch.category_axis.has_minor_gridlines is False
 
-    appendix_slide = deck.slides[-1]
+    # Appendix slide is before the final official Thank You slide
+    appendix_slide = deck.slides[-2]
     tables = [s.table for s in appendix_slide.shapes if s.has_table]
     assert len(tables) >= 1
     table = tables[0]
-    assert len(table.columns) == 7
     total_w = sum(col.width.inches for col in table.columns)
     assert abs(total_w - 11.70) < 0.1
-    assert table.columns[6].width.inches < 1.2
     assert table.columns[0].width.inches >= 2.5
+    # Tesla-style wide table has Metric + Unit + Periods columns
+    assert len(table.columns) == 5
+    assert table.cell(0, 0).text == "Financial Metric"
+    assert table.cell(0, 1).text == "Unit"
+
+    # Final slide is the official FOURIER Thank You slide
+    thank_you_slide = deck.slides[-1]
+    assert any("thank you" in s.text.casefold() for s in thank_you_slide.shapes if s.has_text_frame)
 
 
 def test_multiple_ratio_semantics_and_formatting() -> None:

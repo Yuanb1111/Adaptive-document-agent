@@ -183,11 +183,14 @@ class PresentationPlanRepairer:
                     )
                     for i, c in enumerate(group)
                 ]
+                clean_title = re.sub(r"(?i)\s+and\s+related\s+measures\b", "", group_title).strip()
+                clean_title = re.sub(r"(?i)\s+analysis\b", "", clean_title).strip()
+                slide_title = f"{clean_title} Trajectory" if not any(w in clean_title.casefold() for w in ("trajectory", "trend", "movement", "growth", "performance")) else clean_title
                 backfilled_slides.append(
                     PresentationSlide(
                         id=f"slide_analysis_{g_idx}",
                         slide_type="analysis",
-                        title=f"{group_title} analysis" if not group_title.casefold().endswith("analysis") else group_title,
+                        title=slide_title,
                         section_id=f"analysis_{g_idx}",
                         section_title=first_label,
                         slide_role="overview" if g_idx == 1 else "deep_dive",
@@ -222,11 +225,14 @@ class PresentationPlanRepairer:
                         )
                         for i, c in enumerate(group)
                     ]
+                    clean_title2 = re.sub(r"(?i)\s+and\s+related\s+measures\b", "", group_title).strip()
+                    clean_title2 = re.sub(r"(?i)\s+analysis\b", "", clean_title2).strip()
+                    slide_title2 = f"{clean_title2} Trajectory" if not any(w in clean_title2.casefold() for w in ("trajectory", "trend", "movement", "growth", "performance")) else clean_title2
                     repaired_slides.append(
                         PresentationSlide(
                             id=f"slide_analysis_{g_idx}",
                             slide_type="analysis",
-                            title=f"{group_title} analysis" if not group_title.casefold().endswith("analysis") else group_title,
+                            title=slide_title2,
                             section_id=f"analysis_{g_idx}",
                             section_title=first_label,
                             slide_role="deep_dive",
@@ -617,6 +623,8 @@ class PresentationPlanRepairer:
     @staticmethod
     def _profile_pages(result: PipelineResult) -> list[int]:
         pages = [p for p in result.profile.document_summary_pages if 1 <= p <= result.document.page_count]
+        if not pages and result.document.page_count >= 1:
+            pages = [1]
         return pages[:6]
 
     @classmethod

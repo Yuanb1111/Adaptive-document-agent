@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 import re
 from typing import Any
 
@@ -51,6 +52,9 @@ class PresentationPreflight:
             self._check_collisions(idx, slide)
             self._check_semantic_units(idx, slide)
             self._check_template_completeness(idx, slide)
+            self._check_duplicate_card_titles(idx, slide)
+            self._check_slide_title_quality(idx, slide)
+        self._check_thank_you_slide()
         return self.issues
 
     def _check_geometry_invariants(self, idx: int, slide: Any) -> None:
@@ -237,3 +241,73 @@ class PresentationPreflight:
                     clean = clean.strip()
                     if clean != orig_text:
                         p.text = clean
+
+    def _check_duplicate_card_titles(self, idx: int, slide: Any) -> None:
+        titles: list[str] = []
+        for shape in slide.shapes:
+            if shape.has_text_frame and shape.text.strip():
+                top = getattr(shape, "top", None)
+                if top and top.inches > 1.3:
+                    paras = [p for p in shape.text_frame.paragraphs if p.text.strip()]
+                    if paras and paras[0].font.bold and len(paras[0].text) < 50:
+                        t = paras[0].text.strip().casefold()
+                        titles.append(t)
+        counts = Counter(titles)
+        for t, count in counts.items():
+            if count > 1 and t not in ("key facts", "business focus", "source data", "notes", "financial metric"):
+                self.issues.append(
+                    PreflightIssue(
+                        idx,
+                        "duplicate_card_title",
+                        f"Duplicate card title '{t}' detected across {count} elements on slide {idx + 1}",
+                        severity="warning",
+                    )
+                )
+
+    def _check_slide_title_quality(self, idx: int, slide: Any) -> None:
+        title = ""
+        for shape in slide.placeholders:
+            try:
+                if shape.placeholder_format.idx in (14, 15) and shape.has_text_frame:
+                    title = shape.text.strip()
+                    break
+            except Exception:
+                pass
+        if not title and hasattr(slide, "shapes"):
+            first = next((s for s in slide.shapes if getattr(s, "has_text_frame", False) and s.text.strip()), None)
+            if first:
+                title = first.text.strip()
+
+        for pattern in (
+            r"(?i)\bunaudited\s+analysis\b",
+            r"(?i)\btrend\s+and\s+related\s+measures\b",
+            r"(?i)\bevidence-?backed\s+comparison\b",
+            r"(?i)\bretained\s+reported\s+values\b",
+        ):
+            if re.search(pattern, title):
+                self.issues.append(
+                    PreflightIssue(
+                        idx,
+                        "generic_slide_title",
+                        f"Slide {idx + 1} has generic uninformative title: '{title}'",
+                        severity="warning",
+                    )
+                )
+                break
+
+    def _check_thank_you_slide(self) -> None:
+        if not self.presentation.slides:
+            return
+        last_slide = self.presentation.slides[-1]
+        text = " ".join(s.text for s in last_slide.shapes if s.has_text_frame).casefold()
+        layout_name = last_slide.slide_layout.name if hasattr(last_slide, "slide_layout") else ""
+        if not ("thank you" in text or "thank" in layout_name.casefold()):
+            self.issues.append(
+                PreflightIssue(
+                    len(self.presentation.slides) - 1,
+                    "missing_thank_you_slide",
+                    "The final slide is not the official FOURIER Thank You slide",
+                    severity="warning",
+                )
+            )
+

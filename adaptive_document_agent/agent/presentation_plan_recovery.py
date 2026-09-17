@@ -6,6 +6,7 @@ PresentationPlanRepairer, and provides an evidence-only modern fallback deck
 when no proposed plan can be retained.
 """
 
+import re
 from collections import defaultdict
 
 from adaptive_document_agent.document_model import display_metric_name
@@ -93,11 +94,14 @@ class PresentationPlanRecovery:
                 )
                 for idx, chart in enumerate(group)
             ]
+            clean_title = re.sub(r"(?i)\s+and\s+related\s+measures\b", "", group_title).strip()
+            clean_title = re.sub(r"(?i)\s+analysis\b", "", clean_title).strip()
+            slide_title = f"{clean_title} Trajectory" if not any(w in clean_title.casefold() for w in ("trajectory", "trend", "movement", "growth", "performance")) else clean_title
             slides.append(
                 PresentationSlide(
                     id=f"slide_analysis_{group_index}",
                     slide_type="analysis",
-                    title=f"{group_title} analysis" if not group_title.casefold().endswith("analysis") else group_title,
+                    title=slide_title,
                     section_id=f"analysis_{group_index}",
                     section_title=first_label,
                     slide_role="overview" if group_index == 1 else "deep_dive",
@@ -279,6 +283,8 @@ class PresentationPlanRecovery:
     @staticmethod
     def _profile_pages(result: PipelineResult) -> list[int]:
         pages = [page for page in result.profile.document_summary_pages if 1 <= page <= result.document.page_count]
+        if not pages and result.document.page_count >= 1:
+            pages = [1]
         return pages[:6]
 
     def _rank_charts(self, result: PipelineResult) -> list[ChartPlan]:
