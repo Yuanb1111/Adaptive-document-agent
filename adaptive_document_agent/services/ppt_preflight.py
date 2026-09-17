@@ -45,11 +45,39 @@ class PresentationPreflight:
     def validate_and_sanitize(self) -> list[PreflightIssue]:
         self.issues.clear()
         for idx, slide in enumerate(self.presentation.slides):
+            self._check_geometry_invariants(idx, slide)
             self._check_chart_gridlines(idx, slide)
             self._check_banned_phrases(idx, slide)
             self._check_collisions(idx, slide)
             self._check_semantic_units(idx, slide)
+            self._check_template_completeness(idx, slide)
         return self.issues
+
+    def _check_geometry_invariants(self, idx: int, slide: Any) -> None:
+        from pptx.util import Inches
+        for shape in slide.shapes:
+            try:
+                # Title placeholders must have generous horizontal width
+                if getattr(shape, "is_placeholder", False) and shape.placeholder_format.idx in (14, 15):
+                    if shape.width.inches < 6.0:
+                        self.issues.append(
+                            PreflightIssue(
+                                idx,
+                                "title_geometry_collapsed",
+                                f"Title placeholder width collapsed to {shape.width.inches:.2f}in; restoring to 9.06in",
+                                severity="warning",
+                            )
+                        )
+                        shape.width = Inches(9.06)
+                if shape.has_text_frame and shape.text.strip():
+                    if shape.width.inches <= 0.05:
+                        shape.width = Inches(4.0)
+                        self.issues.append(PreflightIssue(idx, "shape_zero_width", f"Shape '{shape.name}' had zero width; restored", severity="warning"))
+                    if shape.height.inches <= 0.05:
+                        shape.height = Inches(0.4)
+                        self.issues.append(PreflightIssue(idx, "shape_zero_height", f"Shape '{shape.name}' had zero height; restored", severity="warning"))
+            except Exception:
+                pass
 
     def _check_chart_gridlines(self, idx: int, slide: Any) -> None:
         for shape in slide.shapes:
@@ -87,8 +115,11 @@ class PresentationPreflight:
                     p.text = pattern.sub("Analysis indicates", p.text)
                 elif phrase in ("based on extracted observations", "extracted observations"):
                     p.text = pattern.sub("based on reported disclosures", p.text)
+                elif phrase in ("retained fact", "retained facts"):
+                    p.text = pattern.sub("reported data", p.text)
                 else:
                     p.text = pattern.sub("", p.text)
+                p.text = re.sub(r"[ \t]{2,}", " ", p.text).strip()
 
     def _check_collisions(self, idx: int, slide: Any) -> None:
         layout_name = slide.slide_layout.name if hasattr(slide, "slide_layout") else ""
@@ -179,3 +210,30 @@ class PresentationPreflight:
                     for p in shape.text_frame.paragraphs:
                         if match.group(0) in p.text:
                             p.text = p.text.replace(f"{match.group(2)} pp", f"{match.group(2)}x")
+
+    def _check_template_completeness(self, idx: int, slide: Any) -> None:
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                for p in shape.text_frame.paragraphs:
+                    orig_text = p.text
+                    clean = orig_text
+                    # Check and clean unresolved variables like {variable_name}
+                    unresolved = re.findall(r"\{[a-zA-Z0-9_]+\}", clean)
+                    if unresolved:
+                        self.issues.append(
+                            PreflightIssue(idx, "unresolved_template_variable", f"Unresolved template variables {unresolved} in text", severity="warning")
+                        )
+                        for var in unresolved:
+                            clean = clean.replace(var, "")
+                    # Check and clean literal "None" or "null" appearing as words
+                    if re.search(r"\b(?:None|null)\b", clean):
+                        self.issues.append(
+                            PreflightIssue(idx, "literal_none_null", "Literal 'None' or 'null' detected in text", severity="warning")
+                        )
+                        clean = re.sub(r"\b(?:None|null)\b", "", clean)
+                    # Check and clean double spaces
+                    if "  " in clean:
+                        clean = re.sub(r"[ \t]{2,}", " ", clean)
+                    clean = clean.strip()
+                    if clean != orig_text:
+                        p.text = clean

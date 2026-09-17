@@ -183,6 +183,48 @@ class DocumentOrchestrator:
             )
             issues.extend(ReportValidator().validate(markdown, results).issues)
 
+            # Structured diagnostic metadata logging
+            import logging
+            import re
+            logger = logging.getLogger("adaptive_document_agent.pipeline")
+            raw_obs_count = len(observations)
+            valid_obs_count = sum(1 for o in observations if getattr(o, "validation_status", "valid") == "valid")
+            partial_obs_count = sum(1 for o in observations if getattr(o, "validation_status", "") == "partially_valid")
+            retained_count = len(index.observations)
+            metric_series_count = len(index.metrics())
+            chartable_series_count = len(charts)
+            selected_insight_count = len(insights)
+            
+            logger.info(
+                "Extraction & Analysis Pipeline Diagnostics: "
+                "raw_observation_count=%d, valid_count=%d, partial_count=%d, "
+                "retained_count=%d, metric_series_count=%d, chartable_series_count=%d, selected_insight_count=%d",
+                raw_obs_count, valid_obs_count, partial_obs_count,
+                retained_count, metric_series_count, chartable_series_count, selected_insight_count,
+            )
+
+            # Minimum evidence sanity check & recovery pass:
+            # If narrative layer identifies quantitative trends but structured evidence is sparse
+            quantitative_claim_count = sum(
+                len(re.findall(r"\b\d+(?:\.\d+)?%?\b", f"{ins.title} {ins.narrative}"))
+                for ins in insights
+            )
+            if (not charts or len(index.observations) < 4) and quantitative_claim_count >= 3:
+                notify("Evidence unexpectedly sparse; triggering extraction recovery pass")
+                recovered = extractor.extract(document, page_ranges=None)
+                if len(recovered) > len(observations):
+                    observations = self._merge_observations(observations, recovered)
+                    index = DocumentModelBuilder().build(observations)
+                    charts = ChartPlanner().plan(
+                        plan,
+                        results,
+                        index,
+                        preferred_metrics=profile.metrics,
+                        insights=insights,
+                        report_plan=report_plan,
+                        analysis_focus=analysis_focus,
+                    )
+
         presentation_plan = None
         if self.gateway:
             notify("Planning presentation narrative")

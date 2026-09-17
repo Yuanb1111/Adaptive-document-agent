@@ -75,19 +75,26 @@ class TableExtractor:
         periods: list[str | None] = [None] * width
         data_rows = raw
 
-        # A conventional header row contains several labels but no numeric values.
+        # A conventional header row contains several labels, or labels plus period/year columns
         first = raw[0]
         text_cells = [cell for cell in first if cell and not self._numeric_like(cell) and cell not in {"$", "£", "€", "%"}]
         numeric_cells = [cell for cell in first if self._numeric_like(cell)]
+        is_year_cell = lambda c: bool(re.search(r"(?:19|20)\d{2}", c or ""))
+        is_period_header = bool(numeric_cells) and all(is_year_cell(c) for c in numeric_cells)
         later_has_numbers = any(any(self._numeric_like(cell) for cell in row[1:]) for row in raw[1:])
-        if len(text_cells) >= 2 and not numeric_cells and later_has_numbers:
+        if ((len(text_cells) >= 2 and not numeric_cells) or (text_cells and is_period_header)) and later_has_numbers:
             headers = [cell or f"column_{index + 1}" for index, cell in enumerate(first)]
+            for index, cell in enumerate(first):
+                if cell and is_year_cell(cell):
+                    match = re.search(r"(?:19|20)\d{2}", cell)
+                    if match:
+                        periods[index] = match.group(0)
             data_rows = raw[1:]
 
         words = self._words_above(page, found, distance=65)
         year_lines: dict[float, list[dict[str, object]]] = {}
         for word in words:
-            if re.fullmatch(r"(?:19|20)\d{2}", str(word["text"])):
+            if re.search(r"(?:19|20)\d{2}", str(word["text"])):
                 year_lines.setdefault(round(float(word["top"]), 1), []).append(word)
         year_words: list[dict[str, object]] = []
         if year_lines:
@@ -95,9 +102,13 @@ class TableExtractor:
             year_words = year_lines[max(year_lines)]
 
         cells = next((row.cells for row in found.rows if any(cell is not None for cell in row.cells)), [])
-        anchors = [(float(word["x0"] + word["x1"]) / 2, str(word["text"])) for word in year_words]
+        anchors = []
+        for word in year_words:
+            m = re.search(r"(?:19|20)\d{2}", str(word["text"]))
+            if m:
+                anchors.append((float(word["x0"] + word["x1"]) / 2, m.group(0)))
         for index, cell in enumerate(cells[:width]):
-            if index == 0 or cell is None or not anchors:
+            if index == 0 or cell is None or not anchors or periods[index] is not None:
                 continue
             center = (float(cell[0]) + float(cell[2])) / 2
             periods[index] = min(anchors, key=lambda item: abs(item[0] - center))[1]
@@ -163,6 +174,6 @@ class TableExtractor:
     def _context_label(context: str) -> str | None:
         candidates = [part.strip(" .:;()") for part in re.split(r"[\n.!?]", context) if part.strip(" .:;()")]
         for candidate in reversed(candidates):
-            if 2 <= len(candidate) <= 100 and len(re.findall(r"[A-Za-z]", candidate)) >= 2:
+            if 2 <= len(candidate) <= 100 and len(re.findall(r"[A-Za-z\u3400-\u9fff\u00c0-\u024f]", candidate)) >= 2:
                 return candidate
         return None

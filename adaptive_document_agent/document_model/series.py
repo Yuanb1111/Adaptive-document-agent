@@ -108,39 +108,51 @@ def presentation_sign_variant_groups(observations: Iterable[Observation]) -> lis
 
 
 def best_period_series(observations: Iterable[Observation], *, minimum_periods: int = 2) -> list[Observation]:
-    """Select one coherent, comparable source series without mixing tables."""
+    """Select one coherent, comparable source series across compatible periods."""
     groups: dict[tuple[object, ...], list[Observation]] = defaultdict(list)
     for item in observations:
         if item.value is None or not item.period:
             continue
-        groups[
-            (
-                item.entity,
-                tuple(sorted(item.dimensions.items())),
-                item.unit,
-                item.currency,
-                _primary_table_id(item),
-            )
-        ].append(item)
+        core_dims = tuple(sorted((k, v) for k, v in item.dimensions.items() if k not in {"table_context", "section"}))
+        u_family = getattr(item, "unit_family", None) or item.unit
+        groups[(item.entity, core_dims, u_family, item.currency)].append(item)
 
     candidates: list[list[Observation]] = []
     for values in groups.values():
         by_period: dict[str, list[Observation]] = defaultdict(list)
         for item in values:
             by_period[item.period or ""].append(item)
-        if len(by_period) < minimum_periods or any(_has_conflict(items) for items in by_period.values()):
+        if len(by_period) < minimum_periods:
             continue
-        series = [max(items, key=lambda item: item.confidence) for items in by_period.values()]
-        candidates.append(sorted(series, key=lambda item: period_sort_key(item.period)))
+        series: list[Observation] = []
+        has_fatal_conflict = False
+        for period_key, items in by_period.items():
+            if _has_conflict(items):
+                reconciled, _ = reconcile_observations(items)
+                if _has_conflict(reconciled):
+                    has_fatal_conflict = True
+                    break
+                items = reconciled
+            series.append(max(items, key=lambda it: (it.confidence, len(it.evidence))))
+        if not has_fatal_conflict and len(series) >= minimum_periods:
+            candidates.append(sorted(series, key=lambda item: period_sort_key(item.period)))
+
     if not candidates:
+        by_period_fallback: dict[str, list[Observation]] = defaultdict(list)
+        for item in observations:
+            if item.value is not None and item.period:
+                by_period_fallback[item.period].append(item)
+        if len(by_period_fallback) >= minimum_periods:
+            series = [max(items, key=lambda it: it.confidence) for items in by_period_fallback.values()]
+            return sorted(series, key=lambda it: period_sort_key(it.period))
         return []
+
     return max(
         candidates,
         key=lambda series: (
             len(series),
             sum(item.confidence for item in series) / len(series),
             len({source.page for item in series for source in item.evidence}),
-            str((series[0].entity, sorted(series[0].dimensions.items()), _primary_table_id(series[0]))),
         ),
     )
 

@@ -30,6 +30,7 @@ class Observation(BaseModel):
     period_end: str | None = None
     as_of_date: str | None = None
     audited_status: str = "unknown"  # audited, unaudited, unknown
+    validation_status: str = "valid"  # valid, partially_valid, ambiguous, invalid
 
     @property
     def source_label(self) -> str:

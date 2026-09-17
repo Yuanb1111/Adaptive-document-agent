@@ -184,7 +184,9 @@ class ObservationExtractor:
         label = " ".join(value.split()).strip()
         if parse_number(label) or label in {"$", "£", "€", "%", "—", "–", "-"}:
             return None
-        if len(re.findall(r"[A-Za-z]", label)) < 2:
+        # Support Unicode letters including Latin and CJK characters
+        letters = re.findall(r"[A-Za-z\u3400-\u9fff\u00c0-\u024f]", label)
+        if len(letters) < 2:
             return None
         if label.casefold().rstrip(":") in _GENERIC_LABELS:
             return None
@@ -205,7 +207,7 @@ class ObservationExtractor:
         )
 
     def _text_observations(self, page: int, text: str) -> list[Observation]:
-        pattern = re.compile(r"(?im)^\s*([A-Za-z][A-Za-z /&-]{1,80}?)\s+(?:FY\s*)?((?:19|20)\d{2})\s*(?:=|:|was)\s*([^\n;]+)")
+        pattern = re.compile(r"(?im)^\s*([A-Za-z\u3400-\u9fff][A-Za-z\u3400-\u9fff /&-]{1,80}?)\s+(?:FY\s*)?((?:19|20)\d{2})\s*(?:=|:|was|为|是|：)\s*([^\n;]+)")
         output: list[Observation] = []
         for match in pattern.finditer(text):
             metric, period, raw = (part.strip() for part in match.groups())

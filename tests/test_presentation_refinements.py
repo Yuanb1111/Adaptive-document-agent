@@ -340,3 +340,185 @@ def test_preflight_ratio_sanitization() -> None:
     assert "1.45%" not in tb.text_frame.text
     assert "pp" not in tb.text_frame.text
 
+
+def test_update_geometry_preserves_unspecified_dimensions() -> None:
+    from adaptive_document_agent.services.pptx_export import update_geometry
+    prs = Presentation(r"adaptive_document_agent/templates/FOURIER Light Version Template EN_251217.pptx")
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    phs = {p.placeholder_format.idx: p for p in slide.placeholders}
+    t = phs[14]
+    s = phs[16]
+
+    orig_t_w = t.width.inches
+    orig_t_l = t.left.inches
+    orig_s_w = s.width.inches
+    orig_s_l = s.left.inches
+
+    # Test 1: Update only height, verify width and left remain completely intact
+    update_geometry(t, height=1.15)
+    assert abs(t.width.inches - orig_t_w) < 0.05
+    assert abs(t.left.inches - orig_t_l) < 0.05
+    assert abs(t.height.inches - 1.15) < 0.05
+
+    # Test 2: Update only top position, verify width, height, and left remain intact
+    update_geometry(s, top=2.10)
+    assert abs(s.width.inches - orig_s_w) < 0.05
+    assert abs(s.left.inches - orig_s_l) < 0.05
+    assert abs(s.top.inches - 2.10) < 0.05
+
+    # Test 3: Title width cannot collapse to zero
+    update_geometry(t, width=0.0)
+    assert t.width.inches >= 8.0
+
+
+def test_preflight_restores_collapsed_title_width() -> None:
+    prs = Presentation(r"adaptive_document_agent/templates/FOURIER Light Version Template EN_251217.pptx")
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    phs = {p.placeholder_format.idx: p for p in slide.placeholders}
+    t = phs[14]
+    # Simulate a bug where width was set to near zero
+    t.width = Inches(0.01)
+
+    preflight = PresentationPreflight(prs)
+    issues = preflight.validate_and_sanitize()
+
+    assert any(i.code == "title_geometry_collapsed" for i in issues)
+    assert t.width.inches >= 8.5
+
+
+def test_cjk_multilingual_table_row_and_header_extraction() -> None:
+    from adaptive_document_agent.extraction.observation_extractor import ObservationExtractor
+    from adaptive_document_agent.models.table import ExtractedTable, TableRow
+
+    # Table with Chinese financial labels (e.g. LDROBOT prospectus)
+    headers = ["项目", "2021", "2022", "2023"]
+    rows = [
+        TableRow(cells=["营业收入", "100,000", "150,000", "220,000"], page=10),
+        TableRow(cells=["毛利", "30,000", "48,000", "75,000"], page=10),
+        TableRow(cells=["流动比率", "1.25", "1.45", "1.80"], page=10),
+    ]
+    table = ExtractedTable(
+        table_id="tbl_cjk",
+        page=10,
+        headers=headers,
+        column_periods=[None, "2021", "2022", "2023"],
+        rows=rows,
+        raw_cells=[[c for c in r.cells] for r in rows],
+        bbox=(50.0, 100.0, 500.0, 300.0),
+        confidence=0.9,
+        default_unit="currency",
+        default_currency="RMB",
+        default_raw_unit="RMB '000",
+        default_unit_scale=1000.0,
+    )
+    extractor = ObservationExtractor()
+    obs = extractor._table_observations(table)
+
+    # All Chinese rows must be successfully extracted
+    assert len(obs) == 9
+    metrics = {o.metric_original for o in obs}
+    assert "营业收入" in metrics
+    assert "毛利" in metrics
+    assert "流动比率" in metrics
+
+    # Multiples should be correctly identified
+    cr_obs = [o for o in obs if o.metric_original == "流动比率"]
+    assert len(cr_obs) == 3
+    assert all(o.unit_family == "multiple" or o.unit == "multiple" for o in cr_obs)
+
+
+def test_cross_table_metric_series_construction() -> None:
+    from adaptive_document_agent.document_model.series import best_period_series
+    # Multi-page table where 2021-2022 are in table_1 and 2023-2024 are in table_2
+    obs = [
+        Observation(
+            id="rev_21",
+            metric_original="Revenue",
+            value=100.0,
+            raw_value="100",
+            period="FY2021",
+            unit="currency",
+            currency="RMB",
+            unit_family="currency",
+            evidence=[SourceEvidence(page=45, text="100", extraction_method="digital_table", table_id="tbl_45", confidence=0.9)],
+            confidence=0.9,
+        ),
+        Observation(
+            id="rev_22",
+            metric_original="Revenue",
+            value=150.0,
+            raw_value="150",
+            period="FY2022",
+            unit="currency",
+            currency="RMB",
+            unit_family="currency",
+            evidence=[SourceEvidence(page=45, text="150", extraction_method="digital_table", table_id="tbl_45", confidence=0.9)],
+            confidence=0.9,
+        ),
+        Observation(
+            id="rev_23",
+            metric_original="Revenue",
+            value=220.0,
+            raw_value="220",
+            period="FY2023",
+            unit="currency",
+            currency="RMB",
+            unit_family="currency",
+            evidence=[SourceEvidence(page=46, text="220", extraction_method="digital_table", table_id="tbl_46", confidence=0.9)],
+            confidence=0.9,
+        ),
+        Observation(
+            id="rev_24",
+            metric_original="Revenue",
+            value=310.0,
+            raw_value="310",
+            period="FY2024",
+            unit="currency",
+            currency="RMB",
+            unit_family="currency",
+            evidence=[SourceEvidence(page=46, text="310", extraction_method="digital_table", table_id="tbl_46", confidence=0.9)],
+            confidence=0.9,
+        ),
+    ]
+    # Cross-table series should successfully unify into all 4 periods
+    series = best_period_series(obs)
+    assert len(series) == 4
+    assert [o.period for o in series] == ["FY2021", "FY2022", "FY2023", "FY2024"]
+
+
+def test_template_text_completeness_and_sanitization() -> None:
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    tb = slide.shapes.add_textbox(Inches(1), Inches(2), Inches(6), Inches(1))
+    tb.text_frame.text = "The CSV export contains the complete retained fact base with {dataset_name} and None values."
+
+    preflight = PresentationPreflight(prs)
+    issues = preflight.validate_and_sanitize()
+
+    # Preflight should detect and clean banned phrase 'retained fact', unresolved variable, and 'None'
+    clean_text = tb.text_frame.text
+    assert "retained fact" not in clean_text
+    assert "{dataset_name}" not in clean_text
+    assert "None" not in clean_text
+    assert "  " not in clean_text  # No double spaces
+    assert "The CSV export contains the complete  base." not in clean_text
+
+
+def test_empty_appendix_explicit_fallback_card() -> None:
+    from adaptive_document_agent.services.pptx_export import _add_evidence_table_slides
+    prs = Presentation(r"adaptive_document_agent/templates/FOURIER Light Version Template EN_251217.pptx")
+    empty_result = PipelineResult(
+        document=ParsedDocument(document_id="d0", sha256="s0", safe_filename="doc.pdf", page_count=10),
+        profile=DocumentProfile(document_type="Prospectus", document_summary="Test"),
+        observations=[],
+        charts=[],
+    )
+    _add_evidence_table_slides(prs, empty_result, [])
+    appendix_slide = prs.slides[-1]
+
+    # Must contain explicit fallback text rather than an empty 1-row table
+    slide_text = " ".join(s.text for s in appendix_slide.shapes if s.has_text_frame)
+    assert "No chart-grade structured observations were retained" in slide_text
+    assert "The CSV export contains the complete reported dataset." in slide_text
+
+

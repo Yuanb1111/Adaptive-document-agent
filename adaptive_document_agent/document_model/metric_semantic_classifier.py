@@ -32,6 +32,9 @@ _MULTIPLE_KEYWORDS = (
     "receivables turnover ratio",
     "multiple",
     "times",
+    "流动比率",
+    "速动比率",
+    "现金比率",
 )
 
 _MARGIN_KEYWORDS = (
@@ -45,6 +48,13 @@ _MARGIN_KEYWORDS = (
     "adjusted ebitda margin",
     "effective tax rate",
     "gearing ratio",
+    "毛利率",
+    "净利率",
+    "净利润率",
+    "营业利润率",
+    "经营利润率",
+    "ebitda利润率",
+    "资产负债率",
 )
 
 _SHARE_KEYWORDS = (
@@ -58,6 +68,10 @@ _SHARE_KEYWORDS = (
     "share of total",
     "market share",
     "/ revenue",
+    "占收入比例",
+    "占营业收入比例",
+    "占总额比例",
+    "占比",
 )
 
 _PERCENTAGE_OTHER_KEYWORDS = (
@@ -66,6 +80,10 @@ _PERCENTAGE_OTHER_KEYWORDS = (
     "percentage",
     "pct",
     "proportion",
+    "增长率",
+    "同比",
+    "复合年增长率",
+    "百分比",
 )
 
 _CURRENCY_KEYWORDS = (
@@ -105,6 +123,47 @@ _CURRENCY_KEYWORDS = (
     "total equity",
     "capital expenditure",
     "capex",
+    "营业收入",
+    "主营业务收入",
+    "毛利",
+    "毛利润",
+    "营业利润",
+    "经营利润",
+    "营业亏损",
+    "经营亏损",
+    "净利润",
+    "净亏损",
+    "年内亏损",
+    "年内利润",
+    "期内亏损",
+    "期内利润",
+    "销售成本",
+    "营业成本",
+    "研发开支",
+    "研发费用",
+    "行政开支",
+    "管理费用",
+    "销售及分销开支",
+    "销售费用",
+    "财务成本",
+    "所得税开支",
+    "所得税费用",
+    "现金及现金等价物",
+    "银行结余及现金",
+    "借贷",
+    "银行借款",
+    "贸易应收款项",
+    "应收账款",
+    "贸易应付款项",
+    "应付账款",
+    "存货",
+    "流动资产",
+    "流动负债",
+    "资产总值",
+    "总资产",
+    "负债总额",
+    "总负债",
+    "权益总额",
 )
 
 _DAYS_KEYWORDS = (

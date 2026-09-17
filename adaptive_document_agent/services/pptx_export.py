@@ -1106,8 +1106,26 @@ def _add_evidence_table_slides(
     from pptx.util import Inches
 
     observations = _appendix_observations(result, charts)
+    if not observations:
+        slide = _base_slide(presentation, title, subtitle or "Source-grounded evidence base")
+        content_top, content_h = _content_zone(slide)
+        _panel(slide, 0.45, content_top, 11.70, min(2.5, content_h), fill=FOURIER_BG_CARD)
+        _text(
+            slide,
+            "No chart-grade structured observations were retained. See Data Quality for extraction limitations.",
+            0.85,
+            content_top + 0.80,
+            10.9,
+            0.8,
+            size=15,
+            color=FOURIER_MUTED,
+            align="center",
+        )
+        _text(slide, "The CSV export contains the complete reported dataset.", 0.45, 6.22, 11.70, 0.25, size=9.5, color=FOURIER_MUTED)
+        return
+
     page_size = 10
-    pages = [observations[index:index + page_size] for index in range(0, len(observations), page_size)] or [[]]
+    pages = [observations[index:index + page_size] for index in range(0, len(observations), page_size)]
     if max_pages is not None:
         pages = pages[:max_pages]
     headers = ["Metric", "Period", "Reported value", "Unit", "Page"]
@@ -1162,7 +1180,45 @@ def _add_evidence_table_slides(
         row_height = min(0.45, 4.60 / max(len(rows) + 1, 1))
         for row in table.rows:
             row.height = Inches(row_height)
-        _text(slide, "The CSV export contains the complete retained fact base.", 0.45, 6.22, 11.70, 0.25, size=9.5, color=FOURIER_MUTED)
+        _text(slide, "The CSV export contains the complete reported dataset.", 0.45, 6.22, 11.70, 0.25, size=9.5, color=FOURIER_MUTED)
+
+
+def update_geometry(
+    shape: Any,
+    *,
+    left: float | Any | None = None,
+    top: float | Any | None = None,
+    width: float | Any | None = None,
+    height: float | Any | None = None,
+) -> None:
+    """Safely update shape geometry preserving unspecified dimensions.
+
+    For python-pptx placeholder shapes inheriting transforms from slide layout,
+    modifying any single dimension creates a new <a:xfrm> element with all other
+    dimensions 0. Capturing all four dimensions BEFORE modifying ensures inherited
+    geometry is preserved, preventing width or height from collapsing to zero.
+    """
+    cur_left = shape.left
+    cur_top = shape.top
+    cur_width = shape.width
+    cur_height = shape.height
+
+    from pptx.util import Inches
+    new_left = Inches(left) if isinstance(left, (int, float)) else (left if left is not None else cur_left)
+    new_top = Inches(top) if isinstance(top, (int, float)) else (top if top is not None else cur_top)
+    new_width = Inches(width) if isinstance(width, (int, float)) else (width if width is not None else cur_width)
+    new_height = Inches(height) if isinstance(height, (int, float)) else (height if height is not None else cur_height)
+
+    # Invariants: ensure width and height never collapse to 0
+    if hasattr(new_width, "inches") and new_width.inches <= 0.05:
+        new_width = Inches(8.5)
+    if hasattr(new_height, "inches") and new_height.inches <= 0.05:
+        new_height = Inches(0.40)
+
+    shape.left = new_left
+    shape.top = new_top
+    shape.width = new_width
+    shape.height = new_height
 
 
 def _base_slide(presentation: Any, title: str, subtitle: str = "", *, background: str | None = None) -> Any:
@@ -1195,7 +1251,7 @@ def _base_slide(presentation: Any, title: str, subtitle: str = "", *, background
         else:
             title_size = 15.0
             title_h = 0.98
-        title_ph.height = Inches(title_h)
+        update_geometry(title_ph, height=title_h)
         for p in title_ph.text_frame.paragraphs:
             p.font.size = Pt(title_size)
 
@@ -1205,12 +1261,14 @@ def _base_slide(presentation: Any, title: str, subtitle: str = "", *, background
             sub_ph.text_frame.word_wrap = True
             for p in sub_ph.text_frame.paragraphs:
                 p.font.size = Pt(11.0)
+            sub_h = 0.50 if len(clean_subtitle) > 85 else None
             if title_ph is not None:
                 title_top = title_ph.top.inches if hasattr(title_ph.top, "inches") else float(title_ph.top) / 914400.0
-                title_h = title_ph.height.inches if hasattr(title_ph.height, "inches") else float(title_ph.height) / 914400.0
-                sub_ph.top = Inches(title_top + title_h + 0.08)
-                if len(clean_subtitle) > 85:
-                    sub_ph.height = Inches(0.50)
+                title_h_in = title_ph.height.inches if hasattr(title_ph.height, "inches") else float(title_ph.height) / 914400.0
+                sub_top = title_top + title_h_in + 0.08
+                update_geometry(sub_ph, top=sub_top, height=sub_h)
+            elif sub_h is not None:
+                update_geometry(sub_ph, height=sub_h)
         else:
             sub_ph.text = ""
     return slide
@@ -1618,8 +1676,10 @@ def _appendix_observations(result: PipelineResult, charts: list[ChartPlan]) -> l
     used_ids = [identifier for plan in charts for identifier in plan.observation_ids]
     selected = [index.get(identifier) for identifier in used_ids]
     pool = [item for item in selected if item is not None and item.value is not None]
-    if not pool:
-        pool = [item for item in result.observations if item.value is not None]
+    if not pool or len(pool) < 8:
+        all_obs = [item for item in result.observations if item is not None and item.value is not None]
+        seen_ids = {p.id for p in pool}
+        pool = pool + [item for item in all_obs if item.id not in seen_ids]
     unique: dict[str, Observation] = {}
     for item in pool:
         if item.id not in unique:
