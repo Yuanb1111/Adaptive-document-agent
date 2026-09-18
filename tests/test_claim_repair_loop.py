@@ -1031,3 +1031,181 @@ def test_regression_standard_balance_sheet_metric_not_affected_by_deficit_rule()
     assert determine_trend_state("Total assets", 100.0, 150.0) == TrendState.INCREASED
     assert determine_trend_state("Total assets", 150.0, 100.0) == TrendState.DECREASED
 
+
+def test_regression_case_a_revenue_and_net_loss_clause_matching() -> None:
+    """Case A: 'Revenue increased while net loss narrowed.'
+    - Must NOT flag 'Revenue narrowed'
+    - Must NOT flag 'Net loss increased'
+    """
+    validator = ClaimValidator()
+    ev = SourceEvidence(page=1, text="ev", extraction_method="digital_table", confidence=0.9)
+    obs = [
+        Observation(id="r1", metric_original="Revenue", metric_canonical="revenue", value=100.0, raw_value="100", period="FY2022", unit="currency", currency="RMB", period_type="fiscal_year", evidence=[ev], confidence=0.9),
+        Observation(id="r2", metric_original="Revenue", metric_canonical="revenue", value=150.0, raw_value="150", period="FY2023", unit="currency", currency="RMB", period_type="fiscal_year", evidence=[ev], confidence=0.9),
+        Observation(id="l1", metric_original="Net loss", metric_canonical="net_loss", value=-500.0, raw_value="-500", period="FY2022", unit="currency", currency="RMB", period_type="fiscal_year", evidence=[ev], confidence=0.9),
+        Observation(id="l2", metric_original="Net loss", metric_canonical="net_loss", value=-200.0, raw_value="-200", period="FY2023", unit="currency", currency="RMB", period_type="fiscal_year", evidence=[ev], confidence=0.9),
+    ]
+
+    slide = PresentationSlide(
+        id="slide_a",
+        slide_type="executive_summary",
+        title="Executive Summary: Revenue and Net Loss Performance",
+        message="Revenue increased by 50% while net loss narrowed significantly.",
+        bullets=["Revenue increased while net loss narrowed."],
+        observation_ids=["r1", "r2", "l1", "l2"],
+    )
+
+    issues = validator.validate_slide(slide, obs)
+    assert len(issues) == 0, f"Expected 0 issues, got: {issues}"
+
+
+def test_regression_case_b_cash_and_redemption_liabilities() -> None:
+    """Case B: 'Cash declined while redemption liabilities rose.'
+    - Cash: 1121 -> 520 (DECREASED)
+    - Redemption liabilities: 5715 -> 7058 (INCREASED)
+    - Must NOT flag 'Cash rising'
+    - Must NOT flag 'Redemption liabilities decreasing'
+    """
+    validator = ClaimValidator()
+    ev = SourceEvidence(page=2, text="ev", extraction_method="digital_table", confidence=0.9)
+    obs = [
+        Observation(id="c1", metric_original="Cash and cash equivalents", metric_canonical="cash_and_cash_equivalents", value=1121.0, raw_value="1121", period="31 Dec 2022", unit="currency", currency="RMB", period_type="balance_sheet_date", evidence=[ev], confidence=0.9),
+        Observation(id="c2", metric_original="Cash and cash equivalents", metric_canonical="cash_and_cash_equivalents", value=520.0, raw_value="520", period="31 Dec 2023", unit="currency", currency="RMB", period_type="balance_sheet_date", evidence=[ev], confidence=0.9),
+        Observation(id="rl1", metric_original="Redemption liabilities", metric_canonical="redemption_liabilities", value=5715.0, raw_value="5715", period="31 Dec 2022", unit="currency", currency="RMB", period_type="balance_sheet_date", evidence=[ev], confidence=0.9),
+        Observation(id="rl2", metric_original="Redemption liabilities", metric_canonical="redemption_liabilities", value=7058.0, raw_value="7058", period="31 Dec 2023", unit="currency", currency="RMB", period_type="balance_sheet_date", evidence=[ev], confidence=0.9),
+    ]
+
+    slide = PresentationSlide(
+        id="slide_b",
+        slide_type="risks",
+        title="Liquidity and Financial Obligations",
+        message="Cash declined from 1,121m to 520m, while redemption liabilities rose from 5,715m to 7,058m.",
+        bullets=["Cash declined while redemption liabilities rose."],
+        observation_ids=["c1", "c2", "rl1", "rl2"],
+    )
+
+    issues = validator.validate_slide(slide, obs)
+    assert len(issues) == 0, f"Expected 0 issues, got: {issues}"
+
+
+def test_regression_case_c_gross_margin_and_adjusted_net_loss() -> None:
+    """Case C: 'Gross margin expanded while adjusted net loss narrowed.'
+    - Gross margin: 17.7 -> 34.8 (INCREASED)
+    - Adjusted net loss: -820 -> -92 (LOSS_NARROWED)
+    - Must NOT confuse margin and net loss
+    """
+    validator = ClaimValidator()
+    ev = SourceEvidence(page=3, text="ev", extraction_method="digital_table", confidence=0.9)
+    obs = [
+        Observation(id="gm1", metric_original="Gross profit as % of revenue", metric_canonical="gross_profit_margin", value=17.7, raw_value="17.7%", unit="percentage", unit_family="percentage", period="FY2022", period_type="fiscal_year", evidence=[ev], confidence=0.9),
+        Observation(id="gm2", metric_original="Gross profit as % of revenue", metric_canonical="gross_profit_margin", value=34.8, raw_value="34.8%", unit="percentage", unit_family="percentage", period="FY2023", period_type="fiscal_year", evidence=[ev], confidence=0.9),
+        Observation(id="anl1", metric_original="Adjusted net loss", metric_canonical="net_loss", value=-820.0, raw_value="-820", period="FY2022", unit="currency", currency="RMB", period_type="fiscal_year", evidence=[ev], confidence=0.9),
+        Observation(id="anl2", metric_original="Adjusted net loss", metric_canonical="net_loss", value=-92.0, raw_value="-92", period="FY2023", unit="currency", currency="RMB", period_type="fiscal_year", evidence=[ev], confidence=0.9),
+    ]
+
+    slide = PresentationSlide(
+        id="slide_c",
+        slide_type="analysis",
+        title="Profitability Progress",
+        message="Gross margin expanded to 34.8% while adjusted net loss narrowed significantly.",
+        bullets=["Gross margin expanded while adjusted net loss narrowed."],
+        observation_ids=["gm1", "gm2", "anl1", "anl2"],
+    )
+
+    issues = validator.validate_slide(slide, obs)
+    assert len(issues) == 0, f"Expected 0 issues, got: {issues}"
+
+
+def test_regression_case_d_fx_gain_loss_transition() -> None:
+    """Case D: Net foreign exchange gain/(loss):
+    +55.83m -> -28.004m
+    Must classify as GAIN_TO_LOSS, NOT AMBIGUOUS.
+    """
+    from adaptive_document_agent.validation.claim_validator import (
+        TrendState,
+        determine_trend_state,
+        is_signed_gain_loss_metric,
+    )
+
+    assert is_signed_gain_loss_metric("Net foreign exchange gain/(loss)")
+    assert is_signed_gain_loss_metric("FX gain/(loss)")
+
+    trend = determine_trend_state("Net foreign exchange gain/(loss)", 55.83, -28.004)
+    assert trend == TrendState.GAIN_TO_LOSS
+    assert trend != TrendState.AMBIGUOUS
+
+    # Reverse: -28.004 -> +55.83
+    trend_rev = determine_trend_state("Net foreign exchange gain/(loss)", -28.004, 55.83)
+    assert trend_rev == TrendState.LOSS_TO_GAIN
+    assert trend_rev != TrendState.AMBIGUOUS
+
+    # Slide narrative test
+    ev = SourceEvidence(page=4, text="fx", extraction_method="digital_table", confidence=0.9)
+    obs = [
+        Observation(id="fx1", metric_original="Net foreign exchange gain/(loss)", metric_canonical="foreign_exchange_gain_loss", value=55.83, raw_value="55.83", period="FY2022", unit="currency", currency="RMB", period_type="fiscal_year", evidence=[ev], confidence=0.9),
+        Observation(id="fx2", metric_original="Net foreign exchange gain/(loss)", metric_canonical="foreign_exchange_gain_loss", value=-28.004, raw_value="-28.004", period="FY2023", unit="currency", currency="RMB", period_type="fiscal_year", evidence=[ev], confidence=0.9),
+    ]
+
+    slide = PresentationSlide(
+        id="slide_fx",
+        slide_type="analysis",
+        title="Foreign Exchange Movements",
+        message="Net foreign exchange swung from gain to loss from RMB 55.83m to RMB -28.004m.",
+        bullets=["FX swung from gain to loss."],
+        observation_ids=["fx1", "fx2"],
+    )
+
+    validator = ClaimValidator()
+    issues = validator.validate_slide(slide, obs)
+    assert len(issues) == 0, f"Expected 0 issues, got: {issues}"
+
+
+def test_regression_case_e_data_quality_slide_no_obs_ids() -> None:
+    """Case E: Data Quality slide with no observation_ids:
+    Must NOT run directional QA against unrelated financial observations in document.
+    """
+    ev = SourceEvidence(page=4, text="fx", extraction_method="digital_table", confidence=0.9)
+    obs = [
+        Observation(id="fx1", metric_original="Net foreign exchange gain/(loss)", value=55.83, raw_value="55.83", period="FY2022", unit="currency", currency="RMB", period_type="fiscal_year", evidence=[ev], confidence=0.9),
+        Observation(id="fx2", metric_original="Net foreign exchange gain/(loss)", value=-28.004, raw_value="-28.004", period="FY2023", unit="currency", currency="RMB", period_type="fiscal_year", evidence=[ev], confidence=0.9),
+    ]
+
+    dq_slide = PresentationSlide(
+        id="slide_dq",
+        slide_type="data_quality",
+        title="Data Quality & Extraction Audit",
+        message="All tabular extractions meet confidence thresholds.",
+        bullets=["Confidence score average is 98.5%.", "No ambiguous columns detected."],
+        observation_ids=[],
+    )
+
+    plan = PresentationPlan(title="Deck", slides=[dq_slide])
+    validator = ClaimValidator()
+    issues = validator.validate_plan(plan, obs)
+    assert len(issues) == 0, f"Expected 0 issues on data quality slide, got: {issues}"
+
+
+def test_regression_case_f_appendix_slide_no_narrative_claims() -> None:
+    """Case F: Appendix slide with no narrative trend claim:
+    Must NOT trigger QA directional contradiction.
+    """
+    ev = SourceEvidence(page=10, text="table", extraction_method="digital_table", confidence=0.9)
+    obs = [
+        Observation(id="rev1", metric_original="Revenue", value=100.0, raw_value="100", period="FY2022", unit="currency", period_type="fiscal_year", evidence=[ev], confidence=0.9),
+        Observation(id="rev2", metric_original="Revenue", value=150.0, raw_value="150", period="FY2023", unit="currency", period_type="fiscal_year", evidence=[ev], confidence=0.9),
+    ]
+
+    appendix_slide = PresentationSlide(
+        id="slide_app",
+        slide_type="appendix",
+        title="Appendix: Detailed Financial Statement Line Items",
+        message="Reference table of all reported figures.",
+        bullets=["See Note 12 for reconciliation details.", "Audited financials available on request."],
+        observation_ids=[],
+    )
+
+    plan = PresentationPlan(title="Deck", slides=[appendix_slide])
+    validator = ClaimValidator()
+    issues = validator.validate_plan(plan, obs)
+    assert len(issues) == 0, f"Expected 0 issues on appendix slide, got: {issues}"
+

@@ -58,6 +58,8 @@ class TrendState(str, Enum):
     LOSS_WIDENED = "LOSS_WIDENED"
     LOSS_TO_PROFIT = "LOSS_TO_PROFIT"
     PROFIT_TO_LOSS = "PROFIT_TO_LOSS"
+    GAIN_TO_LOSS = "GAIN_TO_LOSS"
+    LOSS_TO_GAIN = "LOSS_TO_GAIN"
     TURNED_POSITIVE = "TURNED_POSITIVE"
     TURNED_NEGATIVE = "TURNED_NEGATIVE"
     DEFICIT_WIDENED = "DEFICIT_WIDENED"
@@ -314,6 +316,41 @@ def classify_balance_sheet_subtype(
     return BalanceSheetSubtype.STANDARD
 
 
+def is_signed_gain_loss_metric(
+    metric_name: str,
+    canonical_name: str | None = None,
+) -> bool:
+    """Determine if a metric represents a signed gain/(loss) accounting line item.
+
+    Examples:
+    - Net foreign exchange gain/(loss)
+    - fair-value gain/(loss)
+    - FX gain/(loss)
+    """
+    cn = canonical_name or ""
+    name_str = f"{cn} {metric_name}".strip().casefold()
+    name_norm = re.sub(r"[_\-]+", " ", name_str)
+    if re.search(r"gain\s*[\(\/\\]\s*loss", name_norm) or re.search(r"loss\s*[\(\/\\]\s*gain", name_norm):
+        return True
+    if any(
+        p in name_norm
+        for p in (
+            "gain or loss",
+            "loss or gain",
+            "fx gain",
+            "fx loss",
+            "foreign exchange gain",
+            "foreign exchange loss",
+            "fair value gain",
+            "fair value loss",
+            "exchange gain",
+            "exchange loss",
+        )
+    ):
+        return True
+    return False
+
+
 def determine_trend_state(
     metric_name: str,
     val_start: float,
@@ -326,6 +363,30 @@ def determine_trend_state(
 
     if val_start == val_end:
         return TrendState.FLAT
+
+    # 0. Signed gain/(loss) accounting line items (never ambiguous on zero-crossing)
+    if is_signed_gain_loss_metric(metric_name, canonical_name):
+        if val_start > 0 and val_end < 0:
+            return TrendState.GAIN_TO_LOSS
+        if val_start < 0 and val_end > 0:
+            return TrendState.LOSS_TO_GAIN
+        if val_start < 0 and val_end < 0:
+            abs_start = abs(val_start)
+            abs_end = abs(val_end)
+            if abs_end < abs_start:
+                return TrendState.LOSS_NARROWED
+            elif abs_end > abs_start:
+                return TrendState.LOSS_WIDENED
+            else:
+                return TrendState.FLAT
+        if val_start >= 0 and val_end >= 0:
+            diff = val_end - val_start
+            if diff > 0:
+                return TrendState.INCREASED
+            elif diff < 0:
+                return TrendState.DECREASED
+            else:
+                return TrendState.FLAT
 
     # 1. EXPENSE Family
     if family == MetricSemanticFamily.EXPENSE:
@@ -710,6 +771,45 @@ _DEFICIT_NARROWED_REPLACEMENTS: dict[str, str] = {
     "deterioration": "improvement",
 }
 
+_GAIN_TO_LOSS_REPLACEMENTS: dict[str, str] = {
+    "improved": "swung from gain to loss",
+    "improving": "swinging from gain to loss",
+    "increased": "swung from gain to loss",
+    "increasing": "swinging from gain to loss",
+    "increases": "swings from gain to loss",
+    "increase": "swing from gain to loss",
+    "grew": "swung from gain to loss",
+    "growing": "swinging from gain to loss",
+    "growth": "reversal to loss",
+    "rose": "swung from gain to loss",
+    "rising": "swinging from gain to loss",
+    "turned profitable": "swung from gain to loss",
+    "turned positive": "swung from gain to loss",
+    "narrowed": "swung from gain to loss",
+    "expanded": "swung from gain to loss",
+}
+
+_LOSS_TO_GAIN_REPLACEMENTS: dict[str, str] = {
+    "deteriorated": "swung from loss to gain",
+    "deteriorating": "swinging from loss to gain",
+    "decreased": "swung from loss to gain",
+    "decreasing": "swinging from loss to gain",
+    "decreases": "swings from loss to gain",
+    "decrease": "swing from loss to gain",
+    "declined": "swung from loss to gain",
+    "declining": "swinging from loss to gain",
+    "declines": "swings from loss to gain",
+    "decline": "swing from loss to gain",
+    "fell": "swung from loss to gain",
+    "falling": "swinging from loss to gain",
+    "dropped": "swung from loss to gain",
+    "dropping": "swinging from loss to gain",
+    "swung into loss": "swung from loss to gain",
+    "turned negative": "swung from loss to gain",
+    "widened": "swung from loss to gain",
+    "widening": "swinging from loss to gain",
+}
+
 
 def _detect_offending_in_text(
     text: str,
@@ -741,6 +841,14 @@ def _detect_offending_in_text(
         for bad_phrase in _PROFIT_TO_LOSS_REPLACEMENTS:
             if re.search(r"\b" + re.escape(bad_phrase) + r"\b", text_lower):
                 return bad_phrase
+    elif trend_state == TrendState.GAIN_TO_LOSS:
+        for bad_word in _GAIN_TO_LOSS_REPLACEMENTS:
+            if re.search(r"\b" + re.escape(bad_word) + r"\b", text_lower):
+                return bad_word
+    elif trend_state == TrendState.LOSS_TO_GAIN:
+        for bad_word in _LOSS_TO_GAIN_REPLACEMENTS:
+            if re.search(r"\b" + re.escape(bad_word) + r"\b", text_lower):
+                return bad_word
     elif trend_state == TrendState.DEFICIT_WIDENED:
         for bad_word in _DEFICIT_WIDENED_REPLACEMENTS:
             if re.search(r"\b" + re.escape(bad_word) + r"\b", text_lower):
@@ -783,6 +891,234 @@ def _detect_offending_in_text(
     return None
 
 
+def split_into_clauses(text: str) -> list[str]:
+    r"""Split slide text into local clauses / claim spans.
+
+    Splits on:
+    - Newlines, semicolons, em/en dashes
+    - Periods not within numbers ((?<!\d)\.(?!\d)\s+)
+    - Contrastive / coordinating conjunctions (while, whilst, whereas, although, though, but, however, yet)
+    - Comma followed by conjunction or word boundary (not within numbers like '1,121')
+    """
+    delims = [
+        r"\r?\n+",
+        r";\s*",
+        r"\s+[—–]\s+",
+        r"(?<!\d)\.(?!\d)\s+",
+        r",\s+(?:while|whilst|whereas|although|though|but|however|yet|and)\b",
+        r"\b(?:while|whilst|whereas|although|though|but|however|yet)\b",
+        r"(?<!\d),(?!\d)\s+(?=[a-zA-Z])",
+    ]
+    pattern = "|".join(delims)
+    raw_clauses = re.split(pattern, text, flags=re.IGNORECASE)
+    return [c.strip() for c in raw_clauses if c and c.strip()]
+
+
+def extract_metric_aliases(
+    metric_name: str,
+    canonical_name: str | None = None,
+    pres_label: str | None = None,
+) -> list[str]:
+    """Extract canonical and presentation aliases for a metric, rejecting single generic tokens."""
+    aliases: set[str] = set()
+
+    clean_metric = metric_name.strip()
+    if clean_metric:
+        aliases.add(clean_metric)
+        no_punct = re.sub(r"[_\-]+", " ", clean_metric).strip()
+        if no_punct:
+            aliases.add(no_punct)
+        no_parens = re.sub(r"\s*\(.*?\)", "", no_punct).strip()
+        if no_parens:
+            aliases.add(no_parens)
+
+    if canonical_name:
+        clean_can = canonical_name.strip()
+        aliases.add(clean_can)
+        can_words = clean_can.replace("_", " ").strip()
+        if can_words:
+            aliases.add(can_words)
+
+    if pres_label:
+        clean_pres = pres_label.strip()
+        if clean_pres:
+            aliases.add(clean_pres)
+            aliases.add(re.sub(r"[_\-]+", " ", clean_pres).strip())
+
+    combined = f"{canonical_name or ''} {metric_name} {pres_label or ''}".casefold()
+
+    if any(k in combined for k in ("gross profit margin", "gross margin", "gross profit as % of revenue", "gp margin", "gross_margin", "gross_profit_margin")):
+        aliases.update(["gross profit margin", "gross margin", "gp margin", "gross margins", "毛利率"])
+    elif any(k in combined for k in ("revenue", "turnover", "top line", "topline")) and not any(k in combined for k in ("gross profit as %", "margin", "/ revenue", "% of revenue", "share of revenue")):
+        aliases.update(["revenue", "total revenue", "turnover", "top line", "topline", "营业收入", "收入"])
+
+    if "redemption" in combined and "liabilit" in combined:
+        aliases.update(["redemption liabilities", "redemption liability", "liabilities for redemption"])
+
+    if "operating cash" in combined or "cash from operations" in combined or "cash flow from operating" in combined:
+        aliases.update(["operating cash flow", "cash from operations", "operating cash flows", "operating cash", "经营活动现金流", "经营现金流"])
+    elif "cash" in combined and not any(k in combined for k in ("cash flow", "operating cash", "investing cash", "financing cash")):
+        aliases.update(["cash and cash equivalents", "cash balance", "cash reserves", "cash", "现金及现金等价物", "现金余额", "现金"])
+
+    if "net loss" in combined or "net_loss" in combined or "adjusted net loss" in combined:
+        aliases.update(["net loss", "net losses", "adjusted net loss", "adjusted net losses", "loss for the year", "loss for the period", "净亏损"])
+    elif "operating loss" in combined or "operating_loss" in combined:
+        aliases.update(["operating loss", "operating losses", "营业亏损"])
+
+    if is_signed_gain_loss_metric(metric_name, canonical_name):
+        aliases.update([
+            "net foreign exchange gain/(loss)",
+            "net foreign exchange gain/loss",
+            "foreign exchange gain/(loss)",
+            "foreign exchange gain/loss",
+            "fx gain/(loss)",
+            "fx gain/loss",
+            "foreign exchange gain",
+            "foreign exchange loss",
+            "fx gain",
+            "fx loss",
+            "fair value gain/(loss)",
+            "fair value gain/loss",
+        ])
+
+    if any(k in combined for k in ("net current liabilities", "net current liability")):
+        aliases.update(["net current liabilities", "net current liability", "流动负债净额"])
+
+    if any(k in combined for k in ("depreciation", "amortization")):
+        aliases.update(["depreciation and amortization", "depreciation & amortization", "d&a", "depreciation", "amortization"])
+
+    if any(k in combined for k in ("employee benefit", "staff cost")):
+        aliases.update(["employee benefit expenses", "employee benefits", "employee benefit expense", "staff costs", "staff cost"])
+
+    filtered: set[str] = set()
+    is_multi_word = len(clean_metric.split()) > 1 or (canonical_name and "_" in canonical_name)
+    generic_isolated_tokens = {"revenue", "profit", "loss", "cash", "expense", "expenses", "cost", "costs", "margin", "ratio"}
+
+    for a in aliases:
+        a_clean = a.strip()
+        if not a_clean or len(a_clean) < 2:
+            continue
+        if is_multi_word and a_clean.casefold() in generic_isolated_tokens:
+            if a_clean.casefold() == "cash" and "cash and cash equivalents" in combined:
+                filtered.add(a_clean)
+            elif a_clean.casefold() == "revenue" and "total revenue" in combined:
+                filtered.add(a_clean)
+            else:
+                continue
+        else:
+            filtered.add(a_clean)
+
+    return sorted(filtered, key=lambda s: -len(s))
+
+
+_ALL_DIRECTIONAL_WORDS: list[str] = [
+    "turned profitable", "reversed from loss to profit",
+    "swung into loss", "reversed from profit to loss", "reversal to loss",
+    "turned positive", "turned negative",
+    "swung from gain to loss", "swung from loss to gain",
+    "cash outflow narrowed", "cash outflow widened",
+    "loss narrowed", "loss widening", "loss widened", "loss narrowing",
+    "increased", "increasing", "increases", "increase",
+    "declined", "declining", "declines", "decline",
+    "decreased", "decreasing", "decreases", "decrease",
+    "fell", "falling", "falls", "fall",
+    "dropped", "dropping", "drops", "drop",
+    "contracted", "contracting", "contraction",
+    "expanded", "expanding", "expansion",
+    "narrowed", "narrowing", "narrows", "narrow",
+    "widened", "widening", "widens", "widen",
+    "grew", "growing", "grow", "growth",
+    "rose", "rising", "rises", "rise",
+    "surged", "surging",
+    "improved", "improving", "improvement",
+    "deteriorated", "deteriorating", "deterioration",
+    "slumped",
+]
+_ALL_DIRECTIONAL_WORDS.sort(key=lambda w: -len(w))
+
+
+def associate_clause_directions(
+    clause: str,
+    metric_aliases_map: dict[str, list[str]],
+    metric_values_map: dict[str, list[str]] | None = None,
+    is_only_metric: bool = False,
+    only_metric_name: str | None = None,
+) -> list[tuple[str, str]]:
+    """Find directional claims in a local clause and associate each only with its specific metric."""
+    all_alias_pairs: list[tuple[int, str, str]] = []
+    for m_name, aliases in metric_aliases_map.items():
+        for alias in aliases:
+            all_alias_pairs.append((len(alias), alias, m_name))
+    all_alias_pairs.sort(key=lambda x: -x[0])
+
+    clause_lower = clause.casefold()
+    occupied = [False] * len(clause)
+    metric_spans: list[tuple[int, int, str]] = []
+    for _, alias, m_name in all_alias_pairs:
+        pattern = r"\b" + re.escape(alias.casefold()) + r"\b"
+        for m in re.finditer(pattern, clause_lower):
+            s, e = m.start(), m.end()
+            if not any(occupied[s:e]):
+                metric_spans.append((s, e, m_name))
+                for i in range(s, e):
+                    occupied[i] = True
+
+    metric_spans.sort(key=lambda x: x[0])
+
+    # Find directional words/phrases
+    dir_spans: list[tuple[int, int, str]] = []
+    occupied_dir = [False] * len(clause)
+    for dw in _ALL_DIRECTIONAL_WORDS:
+        pattern = r"\b" + re.escape(dw.casefold()) + r"\b"
+        for m in re.finditer(pattern, clause_lower):
+            s, e = m.start(), m.end()
+            if not any(occupied_dir[s:e]):
+                dir_spans.append((s, e, dw))
+                for i in range(s, e):
+                    occupied_dir[i] = True
+
+    dir_spans.sort(key=lambda x: x[0])
+
+    if not dir_spans:
+        return []
+
+    # If no metric name matched in clause, check if specific values match
+    if not metric_spans and metric_values_map:
+        for m_name, vals in metric_values_map.items():
+            for v_str in vals:
+                if v_str and len(v_str) >= 2 and re.search(r"\b" + re.escape(v_str) + r"\b", clause_lower):
+                    metric_spans.append((0, len(clause), m_name))
+                    break
+
+    if not metric_spans:
+        if is_only_metric and only_metric_name:
+            return [(only_metric_name, dw) for _, _, dw in dir_spans]
+        return []
+
+    if len(metric_spans) == 1:
+        m_name = metric_spans[0][2]
+        return [(m_name, dw) for _, _, dw in dir_spans]
+
+    # Multiple metrics in clause: associate each directional word with closest metric span
+    assocs: list[tuple[str, str]] = []
+    for ds, de, dw in dir_spans:
+        closest_m = None
+        min_dist = 999999
+        for ms, me, m_name in metric_spans:
+            if de <= ms:
+                dist = ms - de
+            elif me <= ds:
+                dist = ds - me
+            else:
+                dist = 0
+            if dist < min_dist:
+                min_dist = dist
+                closest_m = m_name
+        if closest_m:
+            assocs.append((closest_m, dw))
+    return assocs
+
+
 def is_text_relevant_to_metric(
     text: str,
     metric_name: str,
@@ -790,12 +1126,12 @@ def is_text_relevant_to_metric(
     val_end: float,
     is_only_metric: bool,
 ) -> bool:
-    """Check whether a specific slide component (title, message, bullet) relates to a metric."""
+    """Check whether a specific slide component relates to a metric."""
     if is_only_metric:
         return True
+    aliases = extract_metric_aliases(metric_name)
     text_lower = text.casefold()
-    tokens = [t for t in re.findall(r"[a-z0-9]+", metric_name) if len(t) > 2 and t not in ("and", "the", "for", "with", "expense", "expenses")]
-    if any(t in text_lower for t in tokens):
+    if any(re.search(r"\b" + re.escape(a.casefold()) + r"\b", text_lower) for a in aliases):
         return True
     s_start = str(round(val_start, 2)).rstrip("0").rstrip(".")
     s_end = str(round(val_end, 2)).rstrip("0").rstrip(".")
@@ -820,14 +1156,39 @@ class ClaimValidator:
         obs_by_id = {obs.id: obs for obs in observations}
 
         for slide in plan.slides:
+            # 1. Slide-type scoping: skip non-analytical slide types
+            if slide.slide_type in (
+                "cover",
+                "contents",
+                "data_quality",
+                "appendix",
+                "section_divider",
+                "divider",
+            ):
+                continue
+
             slide_obs = [obs_by_id[oid] for oid in slide.observation_ids if oid in obs_by_id]
             for block in getattr(slide, "visual_blocks", []):
                 for oid in getattr(block, "observation_ids", []):
                     if oid in obs_by_id and obs_by_id[oid] not in slide_obs:
                         slide_obs.append(obs_by_id[oid])
 
-            effective_obs = slide_obs if slide_obs else observations
-            slide_issues = self.validate_slide(slide, effective_obs)
+            # 2. Remove global observation fallback:
+            # If a slide has no linked observations, skip numeric directional validation
+            if not slide_obs:
+                continue
+
+            # 3. For company_overview, validate only if linked observations exist AND narrative claims are present
+            if slide.slide_type == "company_overview":
+                full_text = " ".join([slide.title, slide.message, *slide.bullets])
+                has_claim = any(
+                    re.search(r"\b" + re.escape(w) + r"\b", full_text, flags=re.IGNORECASE)
+                    for w in _ALL_DIRECTIONAL_WORDS
+                )
+                if not has_claim:
+                    continue
+
+            slide_issues = self.validate_slide(slide, slide_obs)
             issues.extend(slide_issues)
 
         return issues
@@ -847,7 +1208,12 @@ class ClaimValidator:
             key = (obs.metric_canonical or obs.metric_original).strip().casefold()
             by_metric.setdefault(key, []).append(obs)
 
-        is_only_metric = len(by_metric) == 1
+        if not by_metric:
+            return issues
+
+        metric_info: dict[str, dict[str, Any]] = {}
+        metric_aliases_map: dict[str, list[str]] = {}
+        metric_values_map: dict[str, list[str]] = {}
 
         for metric_name, obs_list in by_metric.items():
             if len(obs_list) < 2:
@@ -859,10 +1225,7 @@ class ClaimValidator:
             val_start = float(first.value)
             val_end = float(last.value)
 
-            # Check compatibility
             is_comp, comp_reason = are_observations_compatible(first, last)
-
-            # Classify semantic family first
             family = classify_metric_semantic_family(metric_name, canonical_name=first.metric_canonical)
             bs_subtype = (
                 classify_balance_sheet_subtype(metric_name, canonical_name=first.metric_canonical)
@@ -870,7 +1233,6 @@ class ClaimValidator:
                 else BalanceSheetSubtype.STANDARD
             )
 
-            # Determine trend state
             if is_comp:
                 trend_state = determine_trend_state(
                     metric_name,
@@ -879,118 +1241,205 @@ class ClaimValidator:
                     canonical_name=first.metric_canonical,
                 )
             else:
-                trend_state = TrendState.AMBIGUOUS
+                trend_state = None
 
-            # Check each text component on the slide
-            components = [
-                ("title", slide.title, None),
-                ("message", slide.message, None),
-                *[(f"bullet", bullet, idx) for idx, bullet in enumerate(slide.bullets)],
-            ]
+            aliases = extract_metric_aliases(
+                metric_name,
+                canonical_name=first.metric_canonical,
+                pres_label=getattr(first, "presentation_label", None),
+            )
+            metric_aliases_map[metric_name] = aliases
 
-            for comp_type, comp_text, bullet_idx in components:
-                if not comp_text.strip():
-                    continue
-                if not is_text_relevant_to_metric(comp_text, metric_name, val_start, val_end, is_only_metric):
-                    continue
+            vals = []
+            s_s = str(round(val_start, 2)).rstrip("0").rstrip(".")
+            s_e = str(round(val_end, 2)).rstrip("0").rstrip(".")
+            if s_s and s_s != "0":
+                vals.append(s_s)
+            if s_e and s_e != "0":
+                vals.append(s_e)
+            metric_values_map[metric_name] = vals
 
-                if not is_comp:
-                    # Slide asserts directional claims on incompatible observations
-                    offending = any(
-                        w in comp_text.casefold()
-                        for w in (
-                            "increased", "decreased", "declined", "narrowed", "widened",
-                            "improved", "deteriorated", "grew", "rose", "fell", "contracted"
-                        )
-                    )
-                    if offending:
+            metric_info[metric_name] = {
+                "first": first,
+                "last": last,
+                "val_start": val_start,
+                "val_end": val_end,
+                "is_comp": is_comp,
+                "comp_reason": comp_reason,
+                "family": family,
+                "bs_subtype": bs_subtype,
+                "trend_state": trend_state,
+            }
+
+        if not metric_info:
+            return issues
+
+        is_only_metric = len(metric_info) == 1
+        only_metric_name = next(iter(metric_info)) if is_only_metric else None
+
+        components = [
+            ("title", slide.title, None),
+            ("message", slide.message, None),
+            *[(f"bullet", bullet, idx) for idx, bullet in enumerate(slide.bullets)],
+        ]
+
+        seen_issues: set[tuple[str, str, int | None, str]] = set()
+
+        for comp_type, comp_text, bullet_idx in components:
+            if not comp_text.strip():
+                continue
+
+            # Check if component mentions an ambiguous-sign metric
+            for m_name, info in metric_info.items():
+                if info["trend_state"] == TrendState.AMBIGUOUS:
+                    aliases = metric_aliases_map.get(m_name, [])
+                    mentioned = any(re.search(r"\b" + re.escape(a.casefold()) + r"\b", comp_text.casefold()) for a in aliases) or is_only_metric
+                    if mentioned:
+                        issue_key = (m_name, comp_type, bullet_idx, "ambiguous_semantics")
+                        if issue_key not in seen_issues:
+                            seen_issues.add(issue_key)
+                            issues.append(
+                                DirectionalClaimIssue(
+                                    code="directional_contradiction",
+                                    message=(
+                                        f"Slide {slide.id} has ambiguous sign semantics for metric '{m_name}' "
+                                        f"transitioning from {info['val_start']} to {info['val_end']}. Export blocked."
+                                    ),
+                                    severity="error",
+                                    stage="presentation",
+                                    slide_id=slide.id,
+                                    metric_name=m_name,
+                                    semantic_family=info["family"].value,
+                                    balance_sheet_subtype=info["bs_subtype"].value,
+                                    related_ids=[info["first"].id, info["last"].id],
+                                    start_value=info["val_start"],
+                                    end_value=info["val_end"],
+                                    expected_direction=TrendState.AMBIGUOUS.value,
+                                    offending_direction="ambiguous_semantics",
+                                    target_component=comp_type,
+                                    bullet_index=bullet_idx,
+                                )
+                            )
+
+            clauses = split_into_clauses(comp_text)
+            for clause in clauses:
+                assocs = associate_clause_directions(
+                    clause,
+                    metric_aliases_map,
+                    metric_values_map,
+                    is_only_metric=is_only_metric,
+                    only_metric_name=only_metric_name,
+                )
+
+                for m_name, dir_word in assocs:
+                    if m_name not in metric_info:
+                        continue
+                    info = metric_info[m_name]
+                    first = info["first"]
+                    last = info["last"]
+                    val_start = info["val_start"]
+                    val_end = info["val_end"]
+                    is_comp = info["is_comp"]
+                    comp_reason = info["comp_reason"]
+                    family = info["family"]
+                    bs_subtype = info["bs_subtype"]
+                    trend_state = info["trend_state"]
+
+                    issue_key = (m_name, comp_type, bullet_idx, dir_word.casefold())
+                    if issue_key in seen_issues:
+                        continue
+
+                    if not is_comp:
+                        seen_issues.add(issue_key)
                         issues.append(
                             DirectionalClaimIssue(
                                 code="directional_contradiction",
                                 message=(
-                                    f"Slide {slide.id} asserts directional movement for '{metric_name}', "
+                                    f"Slide {slide.id} asserts directional movement '{dir_word}' for '{m_name}', "
                                     f"but observations are incompatible: {comp_reason}. Export blocked."
                                 ),
                                 severity="error",
                                 stage="presentation",
                                 slide_id=slide.id,
-                                metric_name=metric_name,
+                                metric_name=m_name,
                                 semantic_family=family.value,
                                 balance_sheet_subtype=bs_subtype.value,
                                 related_ids=[first.id, last.id],
                                 start_value=val_start,
                                 end_value=val_end,
                                 expected_direction="INCOMPATIBLE",
-                                offending_direction=comp_text[:30],
+                                offending_direction=dir_word,
                                 target_component=comp_type,
                                 bullet_index=bullet_idx,
                             )
                         )
-                    continue
+                        continue
 
-                if trend_state == TrendState.AMBIGUOUS:
-                    # Ambiguous sign semantics: block export instead of guessing
-                    issues.append(
-                        DirectionalClaimIssue(
-                            code="directional_contradiction",
-                            message=(
-                                f"Slide {slide.id} has ambiguous sign semantics for metric '{metric_name}' "
-                                f"transitioning from {val_start} to {val_end}. Export blocked."
-                            ),
-                            severity="error",
-                            stage="presentation",
-                            slide_id=slide.id,
-                            metric_name=metric_name,
-                            semantic_family=family.value,
-                            balance_sheet_subtype=bs_subtype.value,
-                            related_ids=[first.id, last.id],
-                            start_value=val_start,
-                            end_value=val_end,
-                            expected_direction=TrendState.AMBIGUOUS.value,
-                            offending_direction="ambiguous_semantics",
-                            target_component=comp_type,
-                            bullet_index=bullet_idx,
+                    if trend_state == TrendState.AMBIGUOUS:
+                        seen_issues.add(issue_key)
+                        issues.append(
+                            DirectionalClaimIssue(
+                                code="directional_contradiction",
+                                message=(
+                                    f"Slide {slide.id} has ambiguous sign semantics for metric '{m_name}' "
+                                    f"transitioning from {val_start} to {val_end}. Export blocked."
+                                ),
+                                severity="error",
+                                stage="presentation",
+                                slide_id=slide.id,
+                                metric_name=m_name,
+                                semantic_family=family.value,
+                                balance_sheet_subtype=bs_subtype.value,
+                                related_ids=[first.id, last.id],
+                                start_value=val_start,
+                                end_value=val_end,
+                                expected_direction=TrendState.AMBIGUOUS.value,
+                                offending_direction=dir_word,
+                                target_component=comp_type,
+                                bullet_index=bullet_idx,
+                            )
                         )
-                    )
-                    continue
+                        continue
 
-                # Check for offending direction
-                offending_word = _detect_offending_in_text(comp_text, trend_state, family)
-                if offending_word:
-                    verb = (
-                        "narrowed" if trend_state in (TrendState.LOSS_NARROWED, TrendState.DEFICIT_NARROWED)
-                        else "widened" if trend_state in (TrendState.LOSS_WIDENED, TrendState.DEFICIT_WIDENED)
-                        else "turned profitable" if trend_state == TrendState.LOSS_TO_PROFIT
-                        else "swung into loss" if trend_state == TrendState.PROFIT_TO_LOSS
-                        else "turned positive" if trend_state == TrendState.TURNED_POSITIVE
-                        else "turned negative" if trend_state == TrendState.TURNED_NEGATIVE
-                        else "cash outflow narrowed / increased" if (trend_state == TrendState.INCREASED and family == MetricSemanticFamily.CASH_FLOW)
-                        else "increased" if trend_state == TrendState.INCREASED
-                        else "decreased" if trend_state == TrendState.DECREASED
-                        else "held flat"
-                    )
-                    issues.append(
-                        DirectionalClaimIssue(
-                            code="directional_contradiction",
-                            message=(
-                                f"Slide {slide.id} {comp_type} asserts '{offending_word}' for '{metric_name}', "
-                                f"but underlying values {verb} from {val_start} to {val_end} ({trend_state.value})."
-                            ),
-                            severity="error",
-                            stage="presentation",
-                            slide_id=slide.id,
-                            metric_name=metric_name,
-                            semantic_family=family.value,
-                            balance_sheet_subtype=bs_subtype.value,
-                            related_ids=[first.id, last.id],
-                            start_value=val_start,
-                            end_value=val_end,
-                            expected_direction=trend_state.value,
-                            offending_direction=offending_word,
-                            target_component=comp_type,
-                            bullet_index=bullet_idx,
+                    offending = _detect_offending_in_text(dir_word, trend_state, family)
+                    if offending:
+                        seen_issues.add(issue_key)
+                        verb = (
+                            "narrowed" if trend_state in (TrendState.LOSS_NARROWED, TrendState.DEFICIT_NARROWED)
+                            else "widened" if trend_state in (TrendState.LOSS_WIDENED, TrendState.DEFICIT_WIDENED)
+                            else "turned profitable" if trend_state == TrendState.LOSS_TO_PROFIT
+                            else "swung into loss" if trend_state == TrendState.PROFIT_TO_LOSS
+                            else "swung from gain to loss" if trend_state == TrendState.GAIN_TO_LOSS
+                            else "swung from loss to gain" if trend_state == TrendState.LOSS_TO_GAIN
+                            else "turned positive" if trend_state == TrendState.TURNED_POSITIVE
+                            else "turned negative" if trend_state == TrendState.TURNED_NEGATIVE
+                            else "cash outflow narrowed / increased" if (trend_state == TrendState.INCREASED and family == MetricSemanticFamily.CASH_FLOW)
+                            else "increased" if trend_state == TrendState.INCREASED
+                            else "decreased" if trend_state == TrendState.DECREASED
+                            else "held flat"
                         )
-                    )
+                        issues.append(
+                            DirectionalClaimIssue(
+                                code="directional_contradiction",
+                                message=(
+                                    f"Slide {slide.id} {comp_type} asserts '{offending}' for '{m_name}', "
+                                    f"but underlying values {verb} from {val_start} to {val_end} ({trend_state.value})."
+                                ),
+                                severity="error",
+                                stage="presentation",
+                                slide_id=slide.id,
+                                metric_name=m_name,
+                                semantic_family=family.value,
+                                balance_sheet_subtype=bs_subtype.value,
+                                related_ids=[first.id, last.id],
+                                start_value=val_start,
+                                end_value=val_end,
+                                expected_direction=trend_state.value,
+                                offending_direction=offending,
+                                target_component=comp_type,
+                                bullet_index=bullet_idx,
+                            )
+                        )
 
         return issues
 
@@ -1017,7 +1466,11 @@ def apply_structured_issue_replacement(text: str, issue: DirectionalClaimIssue) 
 
     replacement = None
 
-    if state == TrendState.TURNED_POSITIVE.value:
+    if state == TrendState.GAIN_TO_LOSS.value:
+        replacement = _GAIN_TO_LOSS_REPLACEMENTS.get(offending.casefold(), "swung from gain to loss")
+    elif state == TrendState.LOSS_TO_GAIN.value:
+        replacement = _LOSS_TO_GAIN_REPLACEMENTS.get(offending.casefold(), "swung from loss to gain")
+    elif state == TrendState.TURNED_POSITIVE.value:
         replacement = _TURNED_POSITIVE_REPLACEMENTS.get(offending.casefold(), "turned positive")
     elif state == TrendState.TURNED_NEGATIVE.value:
         replacement = _TURNED_NEGATIVE_REPLACEMENTS.get(offending.casefold(), "turned negative")
@@ -1057,6 +1510,25 @@ def apply_structured_issue_replacement(text: str, issue: DirectionalClaimIssue) 
             if bad_p in replacement.casefold():
                 replacement = "increased" if state == TrendState.INCREASED.value else "decreased"
 
+    # Clause-aware replacement: find the specific clause mentioning issue.metric_name
+    delims = r"(\r?\n+|;\s*|\s+[—–]\s+|(?<!\d)\.(?!\d)\s+|,\s*(?:while|whilst|whereas|although|though|but|however|yet)\b|\b(?:while|whilst|whereas|although|though|but|however|yet)\b|(?<!\d),(?!\d)\s+(?=[a-zA-Z]))"
+    parts = re.split(delims, text, flags=re.IGNORECASE)
+    metric_aliases = extract_metric_aliases(issue.metric_name)
+
+    replaced = False
+    new_parts = []
+    alias_patterns = [r"\b" + re.escape(a.casefold()) + r"\b" for a in metric_aliases]
+    for p in parts:
+        if not replaced and any(re.search(pat, p.casefold()) for pat in alias_patterns):
+            pat_off = r"\b" + re.escape(offending) + r"\b"
+            if re.search(pat_off, p, flags=re.IGNORECASE):
+                p, replaced = replace_word_preserving_case(p, offending, replacement)
+        new_parts.append(p)
+
+    if replaced:
+        return "".join(new_parts), True
+
+    # Fallback to general replace if metric was not isolated in a single clause
     return replace_word_preserving_case(text, offending, replacement)
 
 

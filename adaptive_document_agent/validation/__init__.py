@@ -11,6 +11,8 @@ from .claim_validator import (
     classify_metric_semantic_family,
     determine_trend_state,
     is_deficit_or_net_liability_metric,
+    is_signed_gain_loss_metric,
+    split_into_clauses,
 )
 from .consistency_checker import ConsistencyChecker
 from .coverage_validator import CoverageValidator, assess_coverage
@@ -37,4 +39,6 @@ __all__ = [
     "classify_metric_semantic_family",
     "determine_trend_state",
     "is_deficit_or_net_liability_metric",
+    "is_signed_gain_loss_metric",
+    "split_into_clauses",
 ]
