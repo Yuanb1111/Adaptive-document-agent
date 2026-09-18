@@ -87,7 +87,8 @@ def test_loss_narrowed_auto_repair() -> None:
     issues = validator.validate_slide_claims("slide_exec", " ".join([slide.title, slide.message, *slide.bullets]), obs)
     assert len(issues) >= 1
     assert issues[0].code == "directional_contradiction"
-    assert "narrowed from -562.82 to -243.648" in issues[0].message
+    assert "LOSS_NARROWED" in issues[0].message
+    assert "-562.82 to -243.648" in issues[0].message
 
     # 2. Repair rewrites title, message, and bullets with casing preserved
     repaired_slide, repairs = repair_slide_claims(slide, obs)
@@ -389,3 +390,247 @@ def test_generate_artifacts_reflects_repaired_claims(tmp_path: Path) -> None:
         qa_data = json.load(f)
         assert qa_data["is_export_blocked"] is False
         assert any(item["code"] == "claim_contradiction_repaired" for item in qa_data["info"])
+
+
+def test_regression_loss_to_profit_transition() -> None:
+    """Regression test for -39.295m -> +12.752m:
+
+    - Transition from negative to positive must be classified as LOSS_TO_PROFIT.
+    - Not classified simply as 'loss narrowed'.
+    - Rewritten as 'turned profitable' or 'reversed from loss to profit'.
+    - Export only if revalidation passes.
+    """
+    from adaptive_document_agent.validation.claim_validator import (
+        DirectionalClaimIssue,
+        TrendState,
+        determine_trend_state,
+    )
+
+    # 1. Verify trend state classification
+    trend = determine_trend_state(
+        metric_name="Net profit",
+        val_start=-39.295,
+        val_end=12.752,
+        canonical_name="net_income",
+    )
+    assert trend == TrendState.LOSS_TO_PROFIT
+
+    ev = SourceEvidence(page=4, text="table", extraction_method="digital_table", confidence=0.95)
+    obs = [
+        Observation(
+            id="p_22",
+            metric_original="Net profit",
+            metric_canonical="net_income",
+            value=-39.295,
+            raw_value="-39.295",
+            period="FY2022",
+            currency="CNY",
+            unit="currency",
+            period_type="fiscal_year",
+            evidence=[ev],
+            confidence=0.95,
+        ),
+        Observation(
+            id="p_23",
+            metric_original="Net profit",
+            metric_canonical="net_income",
+            value=12.752,
+            raw_value="12.752",
+            period="FY2023",
+            currency="CNY",
+            unit="currency",
+            period_type="fiscal_year",
+            evidence=[ev],
+            confidence=0.95,
+        ),
+    ]
+
+    slide = PresentationSlide(
+        id="slide_perf",
+        slide_type="analysis",
+        title="Profitability Performance: Loss Widened",
+        section_title="Profitability",
+        message="Net profit loss widened from RMB -39.295m to RMB 12.752m.",
+        bullets=["Loss widened during the fiscal year."],
+        observation_ids=["p_22", "p_23"],
+        source_pages=[4],
+    )
+
+    validator = ClaimValidator()
+    issues = validator.validate_slide(slide, obs)
+    assert len(issues) >= 1
+    dir_issue = next(i for i in issues if isinstance(i, DirectionalClaimIssue))
+    assert dir_issue.expected_direction == TrendState.LOSS_TO_PROFIT.value
+    assert dir_issue.start_value == -39.295
+    assert dir_issue.end_value == 12.752
+
+    # Repair slide
+    plan = PresentationPlan(
+        title="Profitability Deck",
+        slides=[
+            PresentationSlide(id="cov", slide_type="cover", title="Cover"),
+            PresentationSlide(id="ovw", slide_type="company_overview", title="Overview", source_pages=[4]),
+            PresentationSlide(id="exec", slide_type="executive_summary", title="Exec Summary", message="Summary.", source_pages=[4]),
+            slide,
+            PresentationSlide(id="dq", slide_type="data_quality", title="Quality", source_pages=[4]),
+            PresentationSlide(id="appx", slide_type="appendix", title="Appendix"),
+        ],
+    )
+    result = PipelineResult(
+        document=_sample_doc(),
+        profile=DocumentProfile(overview_title="Profit Corp"),
+        observations=obs,
+        presentation_plan=plan,
+    )
+
+    qa = run_comprehensive_qa(result, auto_repair=True)
+    assert not qa.has_critical_errors
+    repaired_slide = result.presentation_plan.slides[3]
+    assert "turned profitable" in repaired_slide.title.casefold() or "reversed from loss to profit" in repaired_slide.title.casefold()
+    assert "turned profitable" in repaired_slide.message.casefold() or "reversed from loss to profit" in repaired_slide.message.casefold()
+
+
+def test_regression_loss_widened() -> None:
+    """Regression test for -95.561m -> -569.617m:
+
+    - Negative value moving further from zero must be classified as LOSS_WIDENED.
+    - Contradictory wording 'narrowed' rewritten as 'widened'.
+    """
+    from adaptive_document_agent.validation.claim_validator import (
+        DirectionalClaimIssue,
+        TrendState,
+        determine_trend_state,
+    )
+
+    trend = determine_trend_state(
+        metric_name="Operating loss",
+        val_start=-95.561,
+        val_end=-569.617,
+        canonical_name="operating_loss",
+    )
+    assert trend == TrendState.LOSS_WIDENED
+
+    ev = SourceEvidence(page=6, text="loss", extraction_method="digital_table", confidence=0.95)
+    obs = [
+        Observation(
+            id="l_22",
+            metric_original="Operating loss",
+            metric_canonical="operating_loss",
+            value=-95.561,
+            raw_value="-95.561",
+            period="FY2022",
+            currency="RMB",
+            unit="currency",
+            period_type="fiscal_year",
+            evidence=[ev],
+            confidence=0.95,
+        ),
+        Observation(
+            id="l_23",
+            metric_original="Operating loss",
+            metric_canonical="operating_loss",
+            value=-569.617,
+            raw_value="-569.617",
+            period="FY2023",
+            currency="RMB",
+            unit="currency",
+            period_type="fiscal_year",
+            evidence=[ev],
+            confidence=0.95,
+        ),
+    ]
+
+    slide = PresentationSlide(
+        id="slide_op_loss",
+        slide_type="analysis",
+        title="Operating Loss Narrowed",
+        section_title="Operating Loss",
+        message="Operating loss narrowed significantly from RMB -95.561m to RMB -569.617m.",
+        bullets=["Operating loss narrowed."],
+        observation_ids=["l_22", "l_23"],
+        source_pages=[6],
+    )
+
+    validator = ClaimValidator()
+    issues = validator.validate_slide(slide, obs)
+    assert len(issues) >= 1
+    dir_issue = next(i for i in issues if isinstance(i, DirectionalClaimIssue))
+    assert dir_issue.expected_direction == TrendState.LOSS_WIDENED.value
+    assert dir_issue.start_value == -95.561
+    assert dir_issue.end_value == -569.617
+
+    plan = PresentationPlan(
+        title="Loss Deck",
+        slides=[
+            PresentationSlide(id="cov", slide_type="cover", title="Cover"),
+            PresentationSlide(id="ovw", slide_type="company_overview", title="Overview", source_pages=[6]),
+            PresentationSlide(id="exec", slide_type="executive_summary", title="Exec Summary", message="Summary.", source_pages=[6]),
+            slide,
+            PresentationSlide(id="dq", slide_type="data_quality", title="Quality", source_pages=[6]),
+            PresentationSlide(id="appx", slide_type="appendix", title="Appendix"),
+        ],
+    )
+    result = PipelineResult(
+        document=_sample_doc(),
+        profile=DocumentProfile(overview_title="Loss Corp"),
+        observations=obs,
+        presentation_plan=plan,
+    )
+
+    qa = run_comprehensive_qa(result, auto_repair=True)
+    assert not qa.has_critical_errors
+    repaired_slide = result.presentation_plan.slides[3]
+    assert "Operating Loss Widened" in repaired_slide.title
+    assert "Operating loss widened" in repaired_slide.message
+
+
+def test_ambiguous_sign_semantics_blocks_export() -> None:
+    """If metric itself is 'loss' and transition across zero is ambiguous, export must stay blocked."""
+    from adaptive_document_agent.validation.claim_validator import (
+        TrendState,
+        determine_trend_state,
+    )
+
+    # Metric name is strictly "Loss" with no profit/income semantics
+    trend = determine_trend_state(
+        metric_name="Loss",
+        val_start=-39.295,
+        val_end=12.752,
+        canonical_name=None,
+    )
+    assert trend == TrendState.AMBIGUOUS
+
+    ev = SourceEvidence(page=1, text="ambig", extraction_method="digital_table", confidence=0.9)
+    obs = [
+        Observation(id="a1", metric_original="Loss", value=-39.295, raw_value="-39.295", period="FY2022", unit="currency", period_type="fiscal_year", evidence=[ev], confidence=0.9),
+        Observation(id="a2", metric_original="Loss", value=12.752, raw_value="12.752", period="FY2023", unit="currency", period_type="fiscal_year", evidence=[ev], confidence=0.9),
+    ]
+    slide = PresentationSlide(
+        id="slide_ambig",
+        slide_type="analysis",
+        title="Loss Analysis",
+        section_title="Loss",
+        message="Loss changed over the period.",
+        observation_ids=["a1", "a2"],
+        source_pages=[1],
+    )
+    plan = PresentationPlan(
+        title="Ambiguous Deck",
+        slides=[
+            PresentationSlide(id="cov", slide_type="cover", title="Cover"),
+            slide,
+        ],
+    )
+    result = PipelineResult(
+        document=_sample_doc(),
+        profile=DocumentProfile(overview_title="Ambig Corp"),
+        observations=obs,
+        presentation_plan=plan,
+    )
+
+    qa = run_comprehensive_qa(result, auto_repair=True)
+    assert qa.has_critical_errors
+    assert any("ambiguous sign semantics" in err.message for err in qa.critical_errors)
+    with pytest.raises(CriticalQAError):
+        export_pptx(result, force=False)
+

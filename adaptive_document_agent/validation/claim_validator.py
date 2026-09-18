@@ -5,18 +5,30 @@ and quantitative assertions in presentation slides match underlying facts.
 
 Rules:
 1. Direction is determined by deterministic numeric logic, never LLM judgment.
-2. For losses:
-   - negative value moving closer to zero = loss narrowed / improved
-   - negative value moving further from zero = loss widened / deteriorated
-3. Before comparing two observations: verify same canonical metric, compatible units,
-   same currency, compatible period types, and compatible reporting basis.
-4. If contradictory wording can be safely repaired from validated numbers, automatically
-   rewrite the slide title/message/bullets and rerun QA.
-5. If observations are incompatible or ambiguous, do not auto-repair; keep export blocked.
+2. Explicit trend states:
+   - INCREASED, DECREASED, FLAT
+   - LOSS_NARROWED (e.g. -562m -> -243m)
+   - LOSS_WIDENED (e.g. -95m -> -569m)
+   - LOSS_TO_PROFIT (e.g. -39m -> +12m)
+   - PROFIT_TO_LOSS (e.g. +12m -> -39m)
+   - AMBIGUOUS
+3. For LOSS_TO_PROFIT:
+   - Use wording: "turned profitable", "reversed from loss to profit"
+   - Only if metric semantics confirm positive means profit.
+   - If metric itself is "loss" and sign semantics are ambiguous, block export instead of guessing.
+4. Structured repair:
+   - ClaimValidator returns structured DirectionalClaimIssue objects with exact slide_id,
+     metric_name, start_value, end_value, expected_direction, offending_direction,
+     and target_component.
+   - Repairs are performed directly on structured issues rather than re-inferring text relevance.
+5. Verification loop:
+   Presentation Plan -> Claim Validator -> Structured Repair -> Claim Validator (Revalidate)
+   Export only if the second validation passes cleanly.
 """
 
 from __future__ import annotations
 
+from enum import Enum
 import re
 from typing import Any
 
@@ -24,17 +36,32 @@ from adaptive_document_agent.document_model import period_sort_key
 from adaptive_document_agent.models import Observation, PresentationPlan, PresentationSlide, ValidationIssue
 
 
-def are_observations_compatible(obs1: Observation, obs2: Observation) -> tuple[bool, str]:
-    """Verify that two observations can be safely compared for directional changes.
+class TrendState(str, Enum):
+    INCREASED = "INCREASED"
+    DECREASED = "DECREASED"
+    FLAT = "FLAT"
+    LOSS_NARROWED = "LOSS_NARROWED"
+    LOSS_WIDENED = "LOSS_WIDENED"
+    LOSS_TO_PROFIT = "LOSS_TO_PROFIT"
+    PROFIT_TO_LOSS = "PROFIT_TO_LOSS"
+    AMBIGUOUS = "AMBIGUOUS"
 
-    Checks:
-    1. Same canonical metric (or normalized original metric).
-    2. Compatible units (same unit family, compatible unit scale).
-    3. Same currency.
-    4. Compatible period types (cannot compare balance sheet date with flow period,
-       or full year flow with interim flow).
-    5. Compatible reporting basis (reporting_basis dimension and audited_status).
-    """
+
+class DirectionalClaimIssue(ValidationIssue):
+    """Structured validation issue capturing exact directional contradiction details."""
+
+    slide_id: str = ""
+    metric_name: str = ""
+    start_value: float = 0.0
+    end_value: float = 0.0
+    expected_direction: str = ""  # TrendState string
+    offending_direction: str = ""  # Contradictory word/phrase in text
+    target_component: str = ""  # "title", "message", "bullet"
+    bullet_index: int | None = None
+
+
+def are_observations_compatible(obs1: Observation, obs2: Observation) -> tuple[bool, str]:
+    """Verify that two observations can be safely compared for directional changes."""
     # 1. Canonical metric
     m1 = (obs1.metric_canonical or obs1.metric_original).strip().casefold()
     m2 = (obs2.metric_canonical or obs2.metric_original).strip().casefold()
@@ -69,12 +96,10 @@ def are_observations_compatible(obs1: Observation, obs2: Observation) -> tuple[b
     p1 = (obs1.period_type or "generic").strip().casefold()
     p2 = (obs2.period_type or "generic").strip().casefold()
     if p1 != "generic" and p2 != "generic":
-        # Cannot compare point-in-time balance sheet date with flow period
         if (p1 == "balance_sheet_date" and p2 in ("fiscal_year", "interim_flow")) or (
             p2 == "balance_sheet_date" and p1 in ("fiscal_year", "interim_flow")
         ):
             return False, f"Incompatible period types: balance sheet point-in-time '{p1}' vs flow period '{p2}'"
-        # Cannot compare full fiscal year flow directly with interim flow
         if (p1 == "fiscal_year" and p2 == "interim_flow") or (p2 == "fiscal_year" and p1 == "interim_flow"):
             return False, f"Incompatible period types: full fiscal year '{p1}' vs interim flow '{p2}'"
 
@@ -92,8 +117,79 @@ def are_observations_compatible(obs1: Observation, obs2: Observation) -> tuple[b
     return True, ""
 
 
+def determine_trend_state(
+    metric_name: str,
+    val_start: float,
+    val_end: float,
+    canonical_name: str | None = None,
+) -> TrendState:
+    """Deterministically determine the trend state from numeric movement and metric semantics."""
+    metric_lower = (canonical_name or metric_name).strip().casefold()
+
+    is_profit_confirmed = (
+        canonical_name in (
+            "net_income", "operating_profit", "gross_profit", "profit_for_the_year",
+            "profit_before_tax", "ebitda", "operating_income", "net_profit"
+        )
+        or any(p in metric_lower for p in ("profit", "income", "earnings", "ebit", "result"))
+    )
+
+    is_named_loss_only = (
+        "loss" in metric_lower
+        and not any(p in metric_lower for p in ("profit", "income", "earnings", "ebit", "result"))
+    )
+
+    # Transition from negative to positive
+    if val_start < 0 and val_end > 0:
+        if is_profit_confirmed:
+            return TrendState.LOSS_TO_PROFIT
+        elif is_named_loss_only:
+            # Metric itself is "loss" and sign semantics are ambiguous: block export instead of guessing
+            return TrendState.AMBIGUOUS
+        else:
+            return TrendState.LOSS_TO_PROFIT
+
+    # Transition from positive to negative
+    if val_start > 0 and val_end < 0:
+        if is_profit_confirmed:
+            return TrendState.PROFIT_TO_LOSS
+        elif is_named_loss_only:
+            return TrendState.AMBIGUOUS
+        else:
+            return TrendState.PROFIT_TO_LOSS
+
+    # Both values negative
+    if val_start < 0 and val_end < 0:
+        abs_start = abs(val_start)
+        abs_end = abs(val_end)
+        if abs_end < abs_start:
+            return TrendState.LOSS_NARROWED
+        elif abs_end > abs_start:
+            return TrendState.LOSS_WIDENED
+        else:
+            return TrendState.FLAT
+
+    # Both values positive under a metric explicitly named "loss"
+    if is_named_loss_only and val_start > 0 and val_end > 0:
+        if val_end < val_start:
+            return TrendState.LOSS_NARROWED
+        elif val_end > val_start:
+            return TrendState.LOSS_WIDENED
+        else:
+            return TrendState.FLAT
+
+    # Standard metrics
+    diff = val_end - val_start
+    if diff > 0:
+        return TrendState.INCREASED
+    elif diff < 0:
+        return TrendState.DECREASED
+    else:
+        return TrendState.FLAT
+
+
 def replace_word_preserving_case(text: str, target: str, replacement: str) -> tuple[str, bool]:
-    """Replace a standalone word preserving uppercase or capitalized casing."""
+    """Replace a word or phrase preserving uppercase or capitalized casing."""
     pattern = re.compile(r"\b" + re.escape(target) + r"\b", re.IGNORECASE)
     replaced = False
 
@@ -189,217 +285,60 @@ _LOSS_WIDENED_REPLACEMENTS: dict[str, str] = {
     "declining": "widening",
     "declines": "widens",
     "contracted": "widened",
+    "fell": "widened",
+    "dropped": "widened",
+}
+
+# Mappings for loss to profit
+_LOSS_TO_PROFIT_REPLACEMENTS: dict[str, str] = {
+    "loss widened": "turned profitable",
+    "loss narrowed": "turned profitable",
+    "widened": "turned profitable",
+    "narrowed": "turned profitable",
+    "deteriorated": "turned profitable",
+    "declined": "turned profitable",
+    "decreased": "reversed from loss to profit",
+}
+
+# Mappings for profit to loss
+_PROFIT_TO_LOSS_REPLACEMENTS: dict[str, str] = {
+    "improved": "swung into loss",
+    "increased": "reversed from profit to loss",
+    "grew": "swung into loss",
+    "growth": "reversal to loss",
 }
 
 
-class ClaimValidator:
-    """Validates directional and numeric claims across presentation slides."""
+def _detect_offending_in_text(text: str, trend_state: TrendState) -> str | None:
+    """Find any contradictory directional words or phrases in text based on trend state."""
+    text_lower = text.casefold()
 
-    def __init__(self, relative_tolerance: float = 0.10) -> None:
-        self.relative_tolerance = relative_tolerance
+    if trend_state == TrendState.LOSS_NARROWED:
+        for bad_word in _LOSS_NARROWED_REPLACEMENTS:
+            if re.search(r"\b" + re.escape(bad_word) + r"\b", text_lower):
+                return bad_word
+    elif trend_state == TrendState.LOSS_WIDENED:
+        for bad_word in _LOSS_WIDENED_REPLACEMENTS:
+            if re.search(r"\b" + re.escape(bad_word) + r"\b", text_lower):
+                return bad_word
+    elif trend_state == TrendState.LOSS_TO_PROFIT:
+        for bad_phrase in _LOSS_TO_PROFIT_REPLACEMENTS:
+            if re.search(r"\b" + re.escape(bad_phrase) + r"\b", text_lower):
+                return bad_phrase
+    elif trend_state == TrendState.PROFIT_TO_LOSS:
+        for bad_phrase in _PROFIT_TO_LOSS_REPLACEMENTS:
+            if re.search(r"\b" + re.escape(bad_phrase) + r"\b", text_lower):
+                return bad_phrase
+    elif trend_state == TrendState.INCREASED:
+        for bad_word in _STANDARD_INCREASE_REPLACEMENTS:
+            if re.search(r"\b" + re.escape(bad_word) + r"\b", text_lower):
+                return bad_word
+    elif trend_state == TrendState.DECREASED:
+        for bad_word in _STANDARD_DECREASE_REPLACEMENTS:
+            if re.search(r"\b" + re.escape(bad_word) + r"\b", text_lower):
+                return bad_word
 
-    def validate_plan(
-        self,
-        plan: PresentationPlan,
-        observations: list[Observation],
-    ) -> list[ValidationIssue]:
-        issues: list[ValidationIssue] = []
-        obs_by_id = {obs.id: obs for obs in observations}
-
-        for slide in plan.slides:
-            slide_obs = [obs_by_id[oid] for oid in slide.observation_ids if oid in obs_by_id]
-            for block in getattr(slide, "visual_blocks", []):
-                for oid in getattr(block, "observation_ids", []):
-                    if oid in obs_by_id and obs_by_id[oid] not in slide_obs:
-                        slide_obs.append(obs_by_id[oid])
-
-            # Fall back to all observations if slide has no linked observations
-            effective_obs = slide_obs if slide_obs else observations
-
-            slide_text = " ".join([slide.title, slide.message, *slide.bullets])
-            slide_issues = self.validate_slide_claims(slide.id, slide_text, effective_obs)
-            issues.extend(slide_issues)
-
-        return issues
-
-    def validate_slide_claims(
-        self,
-        slide_id: str,
-        claim_text: str,
-        observations: list[Observation],
-    ) -> list[ValidationIssue]:
-        issues: list[ValidationIssue] = []
-        text_lower = claim_text.casefold()
-
-        # Group observations by metric
-        by_metric: dict[str, list[Observation]] = {}
-        for obs in observations:
-            if obs.value is None or not obs.period:
-                continue
-            key = (obs.metric_canonical or obs.metric_original).strip().casefold()
-            by_metric.setdefault(key, []).append(obs)
-
-        for metric_name, obs_list in by_metric.items():
-            if len(obs_list) < 2:
-                continue
-            sorted_obs = sorted(obs_list, key=lambda o: period_sort_key(o.period))
-            first = sorted_obs[0]
-            last = sorted_obs[-1]
-
-            # Check if this metric is mentioned or relevant to the slide
-            metric_tokens = [t for t in re.findall(r"[a-z0-9]+", metric_name) if len(t) > 2 and t not in ("and", "the", "for", "with")]
-            is_relevant = (
-                any(t in text_lower for t in metric_tokens)
-                or (len(by_metric) == 1)
-                or any(str(first.value) in text_lower or str(last.value) in text_lower for _ in [0])
-            )
-
-            if not is_relevant:
-                continue
-
-            # Verify compatibility before comparing
-            is_comp, comp_reason = are_observations_compatible(first, last)
-            if not is_comp:
-                # If slide explicitly asserts direction on incompatible observations, block
-                has_directional_word = any(
-                    w in text_lower
-                    for w in (
-                        "increased", "decreased", "declined", "narrowed", "widened",
-                        "improved", "deteriorated", "grew", "rose", "fell", "contracted"
-                    )
-                )
-                if has_directional_word:
-                    issues.append(
-                        ValidationIssue(
-                            code="directional_contradiction",
-                            message=(
-                                f"Slide {slide_id} asserts directional movement for '{metric_name}', "
-                                f"but observations are incompatible: {comp_reason}. Cannot verify or auto-repair."
-                            ),
-                            stage="presentation",
-                            related_ids=[first.id, last.id],
-                        )
-                    )
-                continue
-
-            val_start = float(first.value)
-            val_end = float(last.value)
-            diff = val_end - val_start
-
-            is_loss_metric = "loss" in metric_name or (val_start < 0 and val_end < 0)
-
-            # Check for directional contradictions
-            if is_loss_metric:
-                # Loss closer to zero -> narrowed / improved
-                # Loss further from zero -> widened / deteriorated
-                is_narrowed = (
-                    (val_start < 0 and val_end < 0 and abs(val_end) < abs(val_start))
-                    or (val_start < 0 and val_end >= 0)
-                    or ("loss" in metric_name and val_start > 0 and val_end > 0 and val_end < val_start)
-                )
-                is_widened = (
-                    (val_start < 0 and val_end < 0 and abs(val_end) > abs(val_start))
-                    or (val_start >= 0 and val_end < 0)
-                    or ("loss" in metric_name and val_start > 0 and val_end > 0 and val_end > val_start)
-                )
-
-                claims_widened = any(w in text_lower for w in ("widened", "widening", "widens", "deteriorated", "deteriorating"))
-                claims_narrowed = any(w in text_lower for w in ("narrowed", "narrowing", "narrows", "improved", "improving"))
-
-                if is_narrowed and claims_widened:
-                    issues.append(
-                        ValidationIssue(
-                            code="directional_contradiction",
-                            message=f"Slide {slide_id} claims loss 'widened' but underlying values narrowed from {val_start} to {val_end}.",
-                            stage="presentation",
-                            related_ids=[first.id, last.id],
-                        )
-                    )
-                elif is_widened and claims_narrowed:
-                    issues.append(
-                        ValidationIssue(
-                            code="directional_contradiction",
-                            message=f"Slide {slide_id} claims loss 'narrowed' but underlying values widened from {val_start} to {val_end}.",
-                            stage="presentation",
-                            related_ids=[first.id, last.id],
-                        )
-                    )
-            else:
-                claims_increase = any(w in text_lower for w in ("increased", "grew", "expanded", "rose", "growth", "widened"))
-                claims_decrease = any(w in text_lower for w in ("decreased", "declined", "contracted", "fell", "dropped", "narrowed"))
-
-                if diff > 0 and claims_decrease and not claims_increase:
-                    issues.append(
-                        ValidationIssue(
-                            code="directional_contradiction",
-                            message=f"Slide {slide_id} asserts metric '{metric_name}' decreased/declined, but underlying value increased from {val_start} to {val_end}.",
-                            stage="presentation",
-                            related_ids=[first.id, last.id],
-                        )
-                    )
-                elif diff < 0 and claims_increase and not claims_decrease:
-                    issues.append(
-                        ValidationIssue(
-                            code="directional_contradiction",
-                            message=f"Slide {slide_id} asserts metric '{metric_name}' increased/grew, but underlying value decreased from {val_start} to {val_end}.",
-                            stage="presentation",
-                            related_ids=[first.id, last.id],
-                        )
-                    )
-
-        return issues
-
-
-def repair_slide_text(
-    text: str,
-    metric_name: str,
-    val_start: float,
-    val_end: float,
-    is_loss_metric: bool,
-) -> tuple[str, list[str]]:
-    """Safely rewrite contradictory directional wording in a text fragment."""
-    repairs: list[str] = []
-
-    # Determine numeric direction
-    if is_loss_metric:
-        is_narrowed = (
-            (val_start < 0 and val_end < 0 and abs(val_end) < abs(val_start))
-            or (val_start < 0 and val_end >= 0)
-            or ("loss" in metric_name and val_start > 0 and val_end > 0 and val_end < val_start)
-        )
-        is_widened = (
-            (val_start < 0 and val_end < 0 and abs(val_end) > abs(val_start))
-            or (val_start >= 0 and val_end < 0)
-            or ("loss" in metric_name and val_start > 0 and val_end > 0 and val_end > val_start)
-        )
-        if is_narrowed:
-            mapping = _LOSS_NARROWED_REPLACEMENTS
-            direction_name = "narrowed"
-        elif is_widened:
-            mapping = _LOSS_WIDENED_REPLACEMENTS
-            direction_name = "widened"
-        else:
-            return text, repairs
-    else:
-        diff = val_end - val_start
-        if diff > 0:
-            mapping = _STANDARD_INCREASE_REPLACEMENTS
-            direction_name = "increased"
-        elif diff < 0:
-            mapping = _STANDARD_DECREASE_REPLACEMENTS
-            direction_name = "decreased"
-        else:
-            return text, repairs
-
-    # Check for any contradictory words present
-    current_text = text
-    for bad_word, good_word in mapping.items():
-        if re.search(r"\b" + re.escape(bad_word) + r"\b", current_text, re.IGNORECASE):
-            current_text, replaced = replace_word_preserving_case(current_text, bad_word, good_word)
-            if replaced:
-                repairs.append(f"Replaced '{bad_word}' with '{good_word}' ({direction_name})")
-
-    return current_text, repairs
+    return None
 
 
 def is_text_relevant_to_metric(
@@ -416,7 +355,6 @@ def is_text_relevant_to_metric(
     tokens = [t for t in re.findall(r"[a-z0-9]+", metric_name) if len(t) > 2 and t not in ("and", "the", "for", "with", "expense", "expenses")]
     if any(t in text_lower for t in tokens):
         return True
-    # Check if numbers match
     s_start = str(round(val_start, 2)).rstrip("0").rstrip(".")
     s_end = str(round(val_end, 2)).rstrip("0").rstrip(".")
     if (s_start in text_lower and s_start not in ("", "0")) or (s_end in text_lower and s_end not in ("", "0")):
@@ -424,94 +362,281 @@ def is_text_relevant_to_metric(
     return False
 
 
+class ClaimValidator:
+    """Validates directional and numeric claims across presentation slides."""
+
+    def __init__(self, relative_tolerance: float = 0.10) -> None:
+        self.relative_tolerance = relative_tolerance
+
+    def validate_plan(
+        self,
+        plan: PresentationPlan,
+        observations: list[Observation],
+    ) -> list[ValidationIssue]:
+        """Validate entire presentation plan and return structured ValidationIssues."""
+        issues: list[ValidationIssue] = []
+        obs_by_id = {obs.id: obs for obs in observations}
+
+        for slide in plan.slides:
+            slide_obs = [obs_by_id[oid] for oid in slide.observation_ids if oid in obs_by_id]
+            for block in getattr(slide, "visual_blocks", []):
+                for oid in getattr(block, "observation_ids", []):
+                    if oid in obs_by_id and obs_by_id[oid] not in slide_obs:
+                        slide_obs.append(obs_by_id[oid])
+
+            effective_obs = slide_obs if slide_obs else observations
+            slide_issues = self.validate_slide(slide, effective_obs)
+            issues.extend(slide_issues)
+
+        return issues
+
+    def validate_slide(
+        self,
+        slide: PresentationSlide,
+        observations: list[Observation],
+    ) -> list[ValidationIssue]:
+        """Validate a single slide against observations, returning structured DirectionalClaimIssue objects."""
+        issues: list[ValidationIssue] = []
+
+        by_metric: dict[str, list[Observation]] = {}
+        for obs in observations:
+            if obs.value is None or not obs.period:
+                continue
+            key = (obs.metric_canonical or obs.metric_original).strip().casefold()
+            by_metric.setdefault(key, []).append(obs)
+
+        is_only_metric = len(by_metric) == 1
+
+        for metric_name, obs_list in by_metric.items():
+            if len(obs_list) < 2:
+                continue
+            sorted_obs = sorted(obs_list, key=lambda o: period_sort_key(o.period))
+            first = sorted_obs[0]
+            last = sorted_obs[-1]
+
+            val_start = float(first.value)
+            val_end = float(last.value)
+
+            # Check compatibility
+            is_comp, comp_reason = are_observations_compatible(first, last)
+
+            # Determine trend state
+            if is_comp:
+                trend_state = determine_trend_state(
+                    metric_name,
+                    val_start,
+                    val_end,
+                    canonical_name=first.metric_canonical,
+                )
+            else:
+                trend_state = TrendState.AMBIGUOUS
+
+            # Check each text component on the slide
+            components = [
+                ("title", slide.title, None),
+                ("message", slide.message, None),
+                *[(f"bullet", bullet, idx) for idx, bullet in enumerate(slide.bullets)],
+            ]
+
+            for comp_type, comp_text, bullet_idx in components:
+                if not comp_text.strip():
+                    continue
+                if not is_text_relevant_to_metric(comp_text, metric_name, val_start, val_end, is_only_metric):
+                    continue
+
+                if not is_comp:
+                    # Slide asserts directional claims on incompatible observations
+                    offending = any(
+                        w in comp_text.casefold()
+                        for w in (
+                            "increased", "decreased", "declined", "narrowed", "widened",
+                            "improved", "deteriorated", "grew", "rose", "fell", "contracted"
+                        )
+                    )
+                    if offending:
+                        issues.append(
+                            DirectionalClaimIssue(
+                                code="directional_contradiction",
+                                message=(
+                                    f"Slide {slide.id} asserts directional movement for '{metric_name}', "
+                                    f"but observations are incompatible: {comp_reason}. Export blocked."
+                                ),
+                                severity="error",
+                                stage="presentation",
+                                slide_id=slide.id,
+                                metric_name=metric_name,
+                                related_ids=[first.id, last.id],
+                                start_value=val_start,
+                                end_value=val_end,
+                                expected_direction="INCOMPATIBLE",
+                                offending_direction=comp_text[:30],
+                                target_component=comp_type,
+                                bullet_index=bullet_idx,
+                            )
+                        )
+                    continue
+
+                if trend_state == TrendState.AMBIGUOUS:
+                    # Ambiguous sign semantics: block export instead of guessing
+                    issues.append(
+                        DirectionalClaimIssue(
+                            code="directional_contradiction",
+                            message=(
+                                f"Slide {slide.id} has ambiguous sign semantics for metric '{metric_name}' "
+                                f"transitioning from {val_start} to {val_end}. Export blocked."
+                            ),
+                            severity="error",
+                            stage="presentation",
+                            slide_id=slide.id,
+                            metric_name=metric_name,
+                            related_ids=[first.id, last.id],
+                            start_value=val_start,
+                            end_value=val_end,
+                            expected_direction=TrendState.AMBIGUOUS.value,
+                            offending_direction="ambiguous_semantics",
+                            target_component=comp_type,
+                            bullet_index=bullet_idx,
+                        )
+                    )
+                    continue
+
+                # Check for offending direction
+                offending_word = _detect_offending_in_text(comp_text, trend_state)
+                if offending_word:
+                    verb = (
+                        "narrowed" if trend_state == TrendState.LOSS_NARROWED
+                        else "widened" if trend_state == TrendState.LOSS_WIDENED
+                        else "turned profitable" if trend_state == TrendState.LOSS_TO_PROFIT
+                        else "swung into loss" if trend_state == TrendState.PROFIT_TO_LOSS
+                        else "increased" if trend_state == TrendState.INCREASED
+                        else "decreased" if trend_state == TrendState.DECREASED
+                        else "held flat"
+                    )
+                    issues.append(
+                        DirectionalClaimIssue(
+                            code="directional_contradiction",
+                            message=(
+                                f"Slide {slide.id} {comp_type} asserts '{offending_word}' for '{metric_name}', "
+                                f"but underlying values {verb} from {val_start} to {val_end} ({trend_state.value})."
+                            ),
+                            severity="error",
+                            stage="presentation",
+                            slide_id=slide.id,
+                            metric_name=metric_name,
+                            related_ids=[first.id, last.id],
+                            start_value=val_start,
+                            end_value=val_end,
+                            expected_direction=trend_state.value,
+                            offending_direction=offending_word,
+                            target_component=comp_type,
+                            bullet_index=bullet_idx,
+                        )
+                    )
+
+        return issues
+
+    def validate_slide_claims(
+        self,
+        slide_id: str,
+        claim_text: str,
+        observations: list[Observation],
+    ) -> list[ValidationIssue]:
+        """Backward-compatible validation helper for plain text."""
+        slide = PresentationSlide(
+            id=slide_id,
+            slide_type="analysis",
+            title=claim_text,
+        )
+        return self.validate_slide(slide, observations)
+
+
+def apply_structured_issue_replacement(text: str, issue: DirectionalClaimIssue) -> tuple[str, bool]:
+    """Replace the offending direction in text using the expected trend state."""
+    state = issue.expected_direction
+    offending = issue.offending_direction
+
+    if state == TrendState.LOSS_TO_PROFIT.value:
+        replacement = _LOSS_TO_PROFIT_REPLACEMENTS.get(offending.casefold(), "turned profitable")
+    elif state == TrendState.PROFIT_TO_LOSS.value:
+        replacement = _PROFIT_TO_LOSS_REPLACEMENTS.get(offending.casefold(), "swung into loss")
+    elif state == TrendState.LOSS_NARROWED.value:
+        replacement = _LOSS_NARROWED_REPLACEMENTS.get(offending.casefold(), "narrowed")
+    elif state == TrendState.LOSS_WIDENED.value:
+        replacement = _LOSS_WIDENED_REPLACEMENTS.get(offending.casefold(), "widened")
+    elif state == TrendState.INCREASED.value:
+        replacement = _STANDARD_INCREASE_REPLACEMENTS.get(offending.casefold(), "increased")
+    elif state == TrendState.DECREASED.value:
+        replacement = _STANDARD_DECREASE_REPLACEMENTS.get(offending.casefold(), "decreased")
+    else:
+        return text, False
+
+    return replace_word_preserving_case(text, offending, replacement)
+
+
+def repair_presentation_plan_from_issues(
+    plan: PresentationPlan,
+    issues: list[ValidationIssue],
+) -> tuple[PresentationPlan, list[str]]:
+    """Directly repair presentation plan using structured DirectionalClaimIssue records."""
+    repairs: list[str] = []
+    slide_by_id = {s.id: s for s in plan.slides}
+
+    for issue in issues:
+        if not isinstance(issue, DirectionalClaimIssue):
+            continue
+        if issue.expected_direction in (TrendState.AMBIGUOUS.value, "INCOMPATIBLE", TrendState.FLAT.value):
+            # Unsafe or ambiguous: do not repair, keep blocked
+            continue
+
+        slide = slide_by_id.get(issue.slide_id)
+        if not slide:
+            continue
+
+        if issue.target_component == "title":
+            repaired, changed = apply_structured_issue_replacement(slide.title, issue)
+            if changed:
+                slide.title = repaired
+                repairs.append(
+                    f"Slide {slide.id} title: replaced '{issue.offending_direction}' for '{issue.metric_name}' ({issue.expected_direction})"
+                )
+        elif issue.target_component == "message":
+            repaired, changed = apply_structured_issue_replacement(slide.message, issue)
+            if changed:
+                slide.message = repaired
+                repairs.append(
+                    f"Slide {slide.id} message: replaced '{issue.offending_direction}' for '{issue.metric_name}' ({issue.expected_direction})"
+                )
+        elif issue.target_component == "bullet" and issue.bullet_index is not None:
+            if 0 <= issue.bullet_index < len(slide.bullets):
+                repaired, changed = apply_structured_issue_replacement(slide.bullets[issue.bullet_index], issue)
+                if changed:
+                    slide.bullets[issue.bullet_index] = repaired
+                    repairs.append(
+                        f"Slide {slide.id} bullet #{issue.bullet_index+1}: replaced '{issue.offending_direction}' for '{issue.metric_name}' ({issue.expected_direction})"
+                    )
+
+    return plan, repairs
+
+
 def repair_slide_claims(
     slide: PresentationSlide,
     observations: list[Observation],
 ) -> tuple[PresentationSlide, list[str]]:
-    """Deterministically rewrite contradictory wording on a slide using validated facts."""
-    repairs: list[str] = []
-
-    # Map observations for this slide
-    obs_by_id = {obs.id: obs for obs in observations}
-    slide_obs = [obs_by_id[oid] for oid in slide.observation_ids if oid in obs_by_id]
-    for block in getattr(slide, "visual_blocks", []):
-        for oid in getattr(block, "observation_ids", []):
-            if oid in obs_by_id and obs_by_id[oid] not in slide_obs:
-                slide_obs.append(obs_by_id[oid])
-
-    effective_obs = slide_obs if slide_obs else observations
-
-    by_metric: dict[str, list[Observation]] = {}
-    for obs in effective_obs:
-        if obs.value is None or not obs.period:
-            continue
-        key = (obs.metric_canonical or obs.metric_original).strip().casefold()
-        by_metric.setdefault(key, []).append(obs)
-
-    is_only_metric = len(by_metric) == 1
-
-    new_title = slide.title
-    new_message = slide.message
-    new_bullets = list(slide.bullets)
-
-    for metric_name, obs_list in by_metric.items():
-        if len(obs_list) < 2:
-            continue
-        sorted_obs = sorted(obs_list, key=lambda o: period_sort_key(o.period))
-        first = sorted_obs[0]
-        last = sorted_obs[-1]
-
-        # Compatibility check
-        is_comp, _ = are_observations_compatible(first, last)
-        if not is_comp:
-            # Cannot safely auto-repair incompatible observations
-            continue
-
-        val_start = float(first.value)
-        val_end = float(last.value)
-        is_loss_metric = "loss" in metric_name or (val_start < 0 and val_end < 0)
-
-        # Title repair
-        if is_text_relevant_to_metric(new_title, metric_name, val_start, val_end, is_only_metric):
-            repaired_title, title_repairs = repair_slide_text(new_title, metric_name, val_start, val_end, is_loss_metric)
-            if title_repairs:
-                new_title = repaired_title
-                for r in title_repairs:
-                    repairs.append(f"Slide {slide.id} title: {r} for '{metric_name}'")
-
-        # Message repair
-        if is_text_relevant_to_metric(new_message, metric_name, val_start, val_end, is_only_metric):
-            repaired_msg, msg_repairs = repair_slide_text(new_message, metric_name, val_start, val_end, is_loss_metric)
-            if msg_repairs:
-                new_message = repaired_msg
-                for r in msg_repairs:
-                    repairs.append(f"Slide {slide.id} message: {r} for '{metric_name}'")
-
-        # Bullets repair
-        for idx, bullet in enumerate(new_bullets):
-            if is_text_relevant_to_metric(bullet, metric_name, val_start, val_end, is_only_metric):
-                repaired_bullet, bullet_repairs = repair_slide_text(bullet, metric_name, val_start, val_end, is_loss_metric)
-                if bullet_repairs:
-                    new_bullets[idx] = repaired_bullet
-                    for r in bullet_repairs:
-                        repairs.append(f"Slide {slide.id} bullet #{idx+1}: {r} for '{metric_name}'")
-
-    if repairs:
-        slide.title = new_title
-        slide.message = new_message
-        slide.bullets = new_bullets
-
-    return slide, repairs
+    """Backward-compatible slide repair using ClaimValidator structured issues."""
+    validator = ClaimValidator()
+    issues = validator.validate_slide(slide, observations)
+    plan = PresentationPlan(title="Temp", slides=[slide])
+    repaired_plan, repairs = repair_presentation_plan_from_issues(plan, issues)
+    return repaired_plan.slides[0], repairs
 
 
 def repair_presentation_plan(
     plan: PresentationPlan,
     observations: list[Observation],
 ) -> tuple[PresentationPlan, list[str]]:
-    """Execute claim repairs across all slides in a presentation plan."""
-    all_repairs: list[str] = []
-    for slide in plan.slides:
-        _, slide_repairs = repair_slide_claims(slide, observations)
-        all_repairs.extend(slide_repairs)
-    return plan, all_repairs
+    """Execute claim repairs across all slides using structured validation issues."""
+    validator = ClaimValidator()
+    issues = validator.validate_plan(plan, observations)
+    return repair_presentation_plan_from_issues(plan, issues)
+
 
