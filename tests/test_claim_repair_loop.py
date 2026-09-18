@@ -634,3 +634,265 @@ def test_ambiguous_sign_semantics_blocks_export() -> None:
     with pytest.raises(CriticalQAError):
         export_pptx(result, force=False)
 
+
+def test_regression_operating_cash_flow_outflow_narrowed() -> None:
+    """Regression 1: Operating cash flow -100 -> -50:
+    - Family: CASH_FLOW
+    - Trend: INCREASED (cash outflow narrowed / value increased)
+    - NEVER generate 'loss narrowed'
+    """
+    from adaptive_document_agent.validation.claim_validator import (
+        ClaimValidator,
+        MetricSemanticFamily,
+        TrendState,
+        classify_metric_semantic_family,
+        determine_trend_state,
+    )
+
+    family = classify_metric_semantic_family("Operating cash flow")
+    assert family == MetricSemanticFamily.CASH_FLOW
+
+    trend = determine_trend_state("Operating cash flow", -100.0, -50.0)
+    assert trend == TrendState.INCREASED
+    assert trend != TrendState.LOSS_NARROWED
+
+    ev = SourceEvidence(page=3, text="-100", extraction_method="digital_table", confidence=0.95)
+    obs = [
+        Observation(id="cf1", metric_original="Operating cash flow", value=-100.0, raw_value="-100", period="FY2022", unit="currency", currency="RMB", period_type="fiscal_year", evidence=[ev], confidence=0.95),
+        Observation(id="cf2", metric_original="Operating cash flow", value=-50.0, raw_value="-50", period="FY2023", unit="currency", currency="RMB", period_type="fiscal_year", evidence=[ev], confidence=0.95),
+    ]
+
+    # Slide incorrectly uses 'loss narrowed'
+    slide = PresentationSlide(
+        id="slide_cf",
+        slide_type="analysis",
+        title="Operating Cash Flow: Loss Narrowed",
+        message="Operating cash flow loss narrowed from RMB -100m to RMB -50m.",
+        bullets=["Cash flow loss narrowed."],
+        observation_ids=["cf1", "cf2"],
+        source_pages=[3],
+    )
+
+    validator = ClaimValidator()
+    issues = validator.validate_slide(slide, obs)
+    assert len(issues) >= 1
+    assert issues[0].semantic_family == MetricSemanticFamily.CASH_FLOW.value
+
+    repaired_slide, repairs = repair_slide_claims(slide, obs)
+    assert len(repairs) >= 1
+    # Check that 'loss narrowed' is completely eliminated
+    full_text = f"{repaired_slide.title} {repaired_slide.message} {' '.join(repaired_slide.bullets)}".casefold()
+    assert "loss narrowed" not in full_text
+    assert "cash outflow narrowed" in full_text or "increased" in full_text
+
+    # Revalidation passes cleanly
+    revalidated = validator.validate_slide(repaired_slide, obs)
+    assert len(revalidated) == 0
+
+
+def test_regression_operating_cash_flow_turned_positive() -> None:
+    """Regression 2: Operating cash flow -39 -> +12:
+    - Family: CASH_FLOW
+    - Trend: TURNED_POSITIVE
+    - NEVER generate 'turned profitable' or 'reversed from loss to profit'
+    """
+    from adaptive_document_agent.validation.claim_validator import (
+        ClaimValidator,
+        MetricSemanticFamily,
+        TrendState,
+        classify_metric_semantic_family,
+        determine_trend_state,
+    )
+
+    family = classify_metric_semantic_family("Operating cash flow")
+    assert family == MetricSemanticFamily.CASH_FLOW
+
+    trend = determine_trend_state("Operating cash flow", -39.0, 12.0)
+    assert trend == TrendState.TURNED_POSITIVE
+    assert trend != TrendState.LOSS_TO_PROFIT
+
+    ev = SourceEvidence(page=3, text="-39", extraction_method="digital_table", confidence=0.95)
+    obs = [
+        Observation(id="cf_neg", metric_original="Operating cash flow", value=-39.0, raw_value="-39", period="FY2022", unit="currency", currency="RMB", period_type="fiscal_year", evidence=[ev], confidence=0.95),
+        Observation(id="cf_pos", metric_original="Operating cash flow", value=12.0, raw_value="12", period="FY2023", unit="currency", currency="RMB", period_type="fiscal_year", evidence=[ev], confidence=0.95),
+    ]
+
+    # Slide incorrectly claims 'turned profitable'
+    slide = PresentationSlide(
+        id="slide_cf_turn",
+        slide_type="analysis",
+        title="Operating Cash Flow Turned Profitable",
+        message="Operating cash flow turned profitable from RMB -39m to RMB 12m.",
+        bullets=["Cash generation reversed from loss to profit."],
+        observation_ids=["cf_neg", "cf_pos"],
+        source_pages=[3],
+    )
+
+    validator = ClaimValidator()
+    issues = validator.validate_slide(slide, obs)
+    assert len(issues) >= 1
+    assert issues[0].expected_direction == TrendState.TURNED_POSITIVE.value
+
+    repaired_slide, repairs = repair_slide_claims(slide, obs)
+    assert len(repairs) >= 1
+    full_text = f"{repaired_slide.title} {repaired_slide.message} {' '.join(repaired_slide.bullets)}".casefold()
+    assert "turned profitable" not in full_text
+    assert "turned positive" in full_text
+
+    # Revalidation passes cleanly
+    revalidated = validator.validate_slide(repaired_slide, obs)
+    assert len(revalidated) == 0
+
+
+def test_regression_rd_expense_negative_convention_increased() -> None:
+    """Regression 3: R&D expense -100 -> -150:
+    - Family: EXPENSE
+    - Trend: INCREASED (expense increased, not loss widened)
+    - NEVER generate 'loss widened'
+    """
+    from adaptive_document_agent.validation.claim_validator import (
+        ClaimValidator,
+        MetricSemanticFamily,
+        TrendState,
+        classify_metric_semantic_family,
+        determine_trend_state,
+    )
+
+    family = classify_metric_semantic_family("R&D expense", canonical_name="research_and_development_expenses")
+    assert family == MetricSemanticFamily.EXPENSE
+
+    trend = determine_trend_state("R&D expense", -100.0, -150.0, canonical_name="research_and_development_expenses")
+    assert trend == TrendState.INCREASED
+    assert trend != TrendState.LOSS_WIDENED
+
+    ev = SourceEvidence(page=4, text="-100", extraction_method="digital_table", confidence=0.95)
+    obs = [
+        Observation(id="rd1", metric_original="R&D expense", metric_canonical="research_and_development_expenses", value=-100.0, raw_value="-100", period="FY2022", unit="currency", currency="RMB", period_type="fiscal_year", evidence=[ev], confidence=0.95),
+        Observation(id="rd2", metric_original="R&D expense", metric_canonical="research_and_development_expenses", value=-150.0, raw_value="-150", period="FY2023", unit="currency", currency="RMB", period_type="fiscal_year", evidence=[ev], confidence=0.95),
+    ]
+
+    # Slide incorrectly says 'loss widened'
+    slide = PresentationSlide(
+        id="slide_rd",
+        slide_type="analysis",
+        title="R&D Investment: Loss Widened",
+        message="R&D expense loss widened from RMB -100m to RMB -150m.",
+        bullets=["R&D expense loss widened as investment expanded."],
+        observation_ids=["rd1", "rd2"],
+        source_pages=[4],
+    )
+
+    validator = ClaimValidator()
+    issues = validator.validate_slide(slide, obs)
+    assert len(issues) >= 1
+    assert issues[0].semantic_family == MetricSemanticFamily.EXPENSE.value
+    assert issues[0].expected_direction == TrendState.INCREASED.value
+
+    repaired_slide, repairs = repair_slide_claims(slide, obs)
+    assert len(repairs) >= 1
+    full_text = f"{repaired_slide.title} {repaired_slide.message} {' '.join(repaired_slide.bullets)}".casefold()
+    assert "loss widened" not in full_text
+    assert "increased" in full_text
+
+    revalidated = validator.validate_slide(repaired_slide, obs)
+    assert len(revalidated) == 0
+
+
+def test_regression_operating_loss_widened_explicit() -> None:
+    """Regression 4: Operating loss -95 -> -569:
+    - Family: PROFIT_LOSS
+    - Trend: LOSS_WIDENED
+    """
+    from adaptive_document_agent.validation.claim_validator import (
+        ClaimValidator,
+        MetricSemanticFamily,
+        TrendState,
+        classify_metric_semantic_family,
+        determine_trend_state,
+    )
+
+    family = classify_metric_semantic_family("Operating loss", canonical_name="operating_loss")
+    assert family == MetricSemanticFamily.PROFIT_LOSS
+
+    trend = determine_trend_state("Operating loss", -95.0, -569.0, canonical_name="operating_loss")
+    assert trend == TrendState.LOSS_WIDENED
+
+    ev = SourceEvidence(page=5, text="-95", extraction_method="digital_table", confidence=0.95)
+    obs = [
+        Observation(id="ol1", metric_original="Operating loss", metric_canonical="operating_loss", value=-95.0, raw_value="-95", period="FY2022", unit="currency", currency="RMB", period_type="fiscal_year", evidence=[ev], confidence=0.95),
+        Observation(id="ol2", metric_original="Operating loss", metric_canonical="operating_loss", value=-569.0, raw_value="-569", period="FY2023", unit="currency", currency="RMB", period_type="fiscal_year", evidence=[ev], confidence=0.95),
+    ]
+
+    slide = PresentationSlide(
+        id="slide_ol",
+        slide_type="analysis",
+        title="Operating Loss Narrowed",
+        message="Operating loss narrowed from RMB -95m to RMB -569m.",
+        bullets=["Loss narrowed unexpectedly."],
+        observation_ids=["ol1", "ol2"],
+        source_pages=[5],
+    )
+
+    validator = ClaimValidator()
+    issues = validator.validate_slide(slide, obs)
+    assert len(issues) >= 1
+    assert issues[0].expected_direction == TrendState.LOSS_WIDENED.value
+
+    repaired_slide, repairs = repair_slide_claims(slide, obs)
+    assert len(repairs) >= 1
+    assert "Operating Loss Widened" in repaired_slide.title
+    assert "Operating loss widened" in repaired_slide.message
+
+    revalidated = validator.validate_slide(repaired_slide, obs)
+    assert len(revalidated) == 0
+
+
+def test_regression_net_profit_loss_to_profit_explicit() -> None:
+    """Regression 5: Net profit -39 -> +12:
+    - Family: PROFIT_LOSS
+    - Trend: LOSS_TO_PROFIT
+    - Wording: turned profitable / reversed from loss to profit
+    """
+    from adaptive_document_agent.validation.claim_validator import (
+        ClaimValidator,
+        MetricSemanticFamily,
+        TrendState,
+        classify_metric_semantic_family,
+        determine_trend_state,
+    )
+
+    family = classify_metric_semantic_family("Net profit", canonical_name="net_income")
+    assert family == MetricSemanticFamily.PROFIT_LOSS
+
+    trend = determine_trend_state("Net profit", -39.0, 12.0, canonical_name="net_income")
+    assert trend == TrendState.LOSS_TO_PROFIT
+
+    ev = SourceEvidence(page=6, text="-39", extraction_method="digital_table", confidence=0.95)
+    obs = [
+        Observation(id="np1", metric_original="Net profit", metric_canonical="net_income", value=-39.0, raw_value="-39", period="FY2022", unit="currency", currency="RMB", period_type="fiscal_year", evidence=[ev], confidence=0.95),
+        Observation(id="np2", metric_original="Net profit", metric_canonical="net_income", value=12.0, raw_value="12", period="FY2023", unit="currency", currency="RMB", period_type="fiscal_year", evidence=[ev], confidence=0.95),
+    ]
+
+    slide = PresentationSlide(
+        id="slide_np",
+        slide_type="analysis",
+        title="Net Profit Loss Widened",
+        message="Net profit loss widened from RMB -39m to RMB 12m.",
+        bullets=["Loss widened during the year."],
+        observation_ids=["np1", "np2"],
+        source_pages=[6],
+    )
+
+    validator = ClaimValidator()
+    issues = validator.validate_slide(slide, obs)
+    assert len(issues) >= 1
+    assert issues[0].expected_direction == TrendState.LOSS_TO_PROFIT.value
+
+    repaired_slide, repairs = repair_slide_claims(slide, obs)
+    assert len(repairs) >= 1
+    full_text = f"{repaired_slide.title} {repaired_slide.message}".casefold()
+    assert "turned profitable" in full_text or "reversed from loss to profit" in full_text
+
+    revalidated = validator.validate_slide(repaired_slide, obs)
+    assert len(revalidated) == 0
+

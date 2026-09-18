@@ -1,7 +1,14 @@
 """Layered extraction, semantic, calculation, consistency, and evidence validation."""
 
 from .calculation_validator import CalculationValidator
-from .claim_validator import ClaimValidator
+from .claim_validator import (
+    ClaimValidator,
+    DirectionalClaimIssue,
+    MetricSemanticFamily,
+    TrendState,
+    classify_metric_semantic_family,
+    determine_trend_state,
+)
 from .consistency_checker import ConsistencyChecker
 from .coverage_validator import CoverageValidator, assess_coverage
 from .evidence_validator import EvidenceValidator
@@ -14,9 +21,14 @@ __all__ = [
     "ClaimValidator",
     "ConsistencyChecker",
     "CoverageValidator",
+    "DirectionalClaimIssue",
     "EvidenceValidator",
     "ExtractionValidator",
+    "MetricSemanticFamily",
     "PresentationPlanValidator",
     "SemanticValidator",
+    "TrendState",
     "assess_coverage",
+    "classify_metric_semantic_family",
+    "determine_trend_state",
 ]

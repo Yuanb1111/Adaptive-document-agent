@@ -36,6 +36,15 @@ from adaptive_document_agent.document_model import period_sort_key
 from adaptive_document_agent.models import Observation, PresentationPlan, PresentationSlide, ValidationIssue
 
 
+class MetricSemanticFamily(str, Enum):
+    PROFIT_LOSS = "PROFIT_LOSS"
+    CASH_FLOW = "CASH_FLOW"
+    EXPENSE = "EXPENSE"
+    BALANCE_SHEET = "BALANCE_SHEET"
+    RATIO = "RATIO"
+    GENERIC = "GENERIC"
+
+
 class TrendState(str, Enum):
     INCREASED = "INCREASED"
     DECREASED = "DECREASED"
@@ -44,6 +53,8 @@ class TrendState(str, Enum):
     LOSS_WIDENED = "LOSS_WIDENED"
     LOSS_TO_PROFIT = "LOSS_TO_PROFIT"
     PROFIT_TO_LOSS = "PROFIT_TO_LOSS"
+    TURNED_POSITIVE = "TURNED_POSITIVE"
+    TURNED_NEGATIVE = "TURNED_NEGATIVE"
     AMBIGUOUS = "AMBIGUOUS"
 
 
@@ -52,6 +63,7 @@ class DirectionalClaimIssue(ValidationIssue):
 
     slide_id: str = ""
     metric_name: str = ""
+    semantic_family: str = ""  # MetricSemanticFamily string
     start_value: float = 0.0
     end_value: float = 0.0
     expected_direction: str = ""  # TrendState string
@@ -117,68 +129,262 @@ def are_observations_compatible(obs1: Observation, obs2: Observation) -> tuple[b
     return True, ""
 
 
+def classify_metric_semantic_family(
+    metric_name: str,
+    canonical_name: str | None = None,
+) -> MetricSemanticFamily:
+    """Classify the semantic family of a financial metric.
+
+    Families:
+    - CASH_FLOW: cash flows, operating/investing/financing cash, cash generated
+    - EXPENSE: costs, expenses, R&D, SG&A, depreciation, employee benefits
+    - RATIO: margins, ratios, percentages, growth rates
+    - PROFIT_LOSS: net profit, operating profit, net income, ebit, losses
+    - BALANCE_SHEET: assets, liabilities, equity, receivables, payables, borrowings
+    - GENERIC: revenue, volume, headcount, etc.
+    """
+    name_str = f"{canonical_name or ''} {metric_name}".strip().casefold()
+    name_normalized = re.sub(r"[_\-]+", " ", name_str)
+
+    # 1. CASH_FLOW (must precede PROFIT_LOSS so 'operating cash flow' != 'operating profit')
+    cash_flow_indicators = (
+        "cash flow",
+        "operating cash",
+        "investing cash",
+        "financing cash",
+        "free cash flow",
+        "cash generated",
+        "cash from operations",
+        "cash used",
+        "cash outflow",
+        "cash inflow",
+        "现金流",
+        "经营活动现金",
+        "经营现金",
+        "投资活动现金",
+        "筹资活动现金",
+    )
+    if any(p in name_normalized for p in cash_flow_indicators):
+        return MetricSemanticFamily.CASH_FLOW
+
+    # 2. RATIO (margins, percentages, multipliers)
+    ratio_indicators = (
+        "margin",
+        "ratio",
+        "% of",
+        "percentage",
+        "multiple",
+        "turnover days",
+        "cagr",
+        "bps",
+        "毛利率",
+        "净利率",
+        "营业利润率",
+        "负债率",
+    )
+    if any(p in name_normalized for p in ratio_indicators):
+        return MetricSemanticFamily.RATIO
+
+    # 3. EXPENSE (costs, expenses, R&D, D&A, finance costs)
+    expense_indicators = (
+        "expense",
+        "cost of",
+        "operating cost",
+        "r&d",
+        "research and development",
+        "selling",
+        "administrative",
+        "depreciation",
+        "amortization",
+        "impairment",
+        "credit loss",
+        "staff cost",
+        "employee benefit",
+        "finance cost",
+        "tax expense",
+        "taxation",
+        "费用",
+        "营业成本",
+        "研发费用",
+        "管理费用",
+        "销售费用",
+        "财务费用",
+    )
+    if any(p in name_normalized for p in expense_indicators) or re.search(r"\bcosts?\b", name_normalized) or re.search(r"\bexpenses?\b", name_normalized):
+        return MetricSemanticFamily.EXPENSE
+
+    # 4. PROFIT_LOSS (net profit, loss, ebit, ebitda, net income)
+    pl_indicators = (
+        "profit",
+        "net income",
+        "operating income",
+        "ebit",
+        "ebitda",
+        "net result",
+        "净利润",
+        "净亏损",
+        "营业利润",
+        "营业亏损",
+        "利润总额",
+        "亏损",
+    )
+    if any(p in name_normalized for p in pl_indicators) or re.search(r"\bloss(?:es)?\b", name_normalized):
+        if "impairment" in name_normalized or "credit loss" in name_normalized:
+            return MetricSemanticFamily.EXPENSE
+        return MetricSemanticFamily.PROFIT_LOSS
+
+    # 5. BALANCE_SHEET (assets, liabilities, equity, cash balance)
+    bs_indicators = (
+        "assets",
+        "asset",
+        "liabilities",
+        "liability",
+        "equity",
+        "receivable",
+        "receivables",
+        "payable",
+        "payables",
+        "inventory",
+        "inventories",
+        "borrowing",
+        "borrowings",
+        "debt",
+        "cash and cash equivalents",
+        "资产",
+        "负债",
+        "所有者权益",
+        "股东权益",
+        "应收",
+        "应付",
+        "存货",
+        "借款",
+    )
+    if any(p in name_normalized for p in bs_indicators):
+        return MetricSemanticFamily.BALANCE_SHEET
+
+    return MetricSemanticFamily.GENERIC
+
+
 def determine_trend_state(
     metric_name: str,
     val_start: float,
     val_end: float,
     canonical_name: str | None = None,
 ) -> TrendState:
-    """Deterministically determine the trend state from numeric movement and metric semantics."""
-    metric_lower = (canonical_name or metric_name).strip().casefold()
+    """Deterministically determine the trend state by classifying semantic family first."""
+    family = classify_metric_semantic_family(metric_name, canonical_name)
+    metric_normalized = re.sub(r"[_\-]+", " ", f"{canonical_name or ''} {metric_name}".strip().casefold())
 
-    is_profit_confirmed = (
-        canonical_name in (
-            "net_income", "operating_profit", "gross_profit", "profit_for_the_year",
-            "profit_before_tax", "ebitda", "operating_income", "net_profit"
+    if val_start == val_end:
+        return TrendState.FLAT
+
+    # 1. EXPENSE Family
+    if family == MetricSemanticFamily.EXPENSE:
+        # Expenses: increased expense means magnitude grew; decreased means magnitude shrank
+        if val_start <= 0 and val_end <= 0:
+            abs_start = abs(val_start)
+            abs_end = abs(val_end)
+            if abs_end > abs_start:
+                return TrendState.INCREASED
+            elif abs_end < abs_start:
+                return TrendState.DECREASED
+            else:
+                return TrendState.FLAT
+        elif val_start >= 0 and val_end >= 0:
+            if val_end > val_start:
+                return TrendState.INCREASED
+            elif val_end < val_start:
+                return TrendState.DECREASED
+            else:
+                return TrendState.FLAT
+        else:
+            return TrendState.TURNED_POSITIVE if val_end > 0 else TrendState.TURNED_NEGATIVE
+
+    # 2. CASH_FLOW Family
+    if family == MetricSemanticFamily.CASH_FLOW:
+        # Transition across zero
+        if val_start < 0 and val_end > 0:
+            return TrendState.TURNED_POSITIVE
+        if val_start > 0 and val_end < 0:
+            return TrendState.TURNED_NEGATIVE
+        # Numeric difference: -100 -> -50 is diff = +50 (value increased / cash outflow narrowed)
+        diff = val_end - val_start
+        if diff > 0:
+            return TrendState.INCREASED
+        elif diff < 0:
+            return TrendState.DECREASED
+        else:
+            return TrendState.FLAT
+
+    # 3. PROFIT_LOSS Family
+    if family == MetricSemanticFamily.PROFIT_LOSS:
+        is_profit_confirmed = (
+            canonical_name in (
+                "net_income", "operating_profit", "gross_profit", "profit_for_the_year",
+                "profit_before_tax", "ebitda", "operating_income", "net_profit"
+            )
+            or any(p in metric_normalized for p in ("profit", "income", "earnings", "ebit", "result"))
         )
-        or any(p in metric_lower for p in ("profit", "income", "earnings", "ebit", "result"))
-    )
 
-    is_named_loss_only = (
-        "loss" in metric_lower
-        and not any(p in metric_lower for p in ("profit", "income", "earnings", "ebit", "result"))
-    )
+        is_named_loss_only = (
+            "loss" in metric_normalized
+            and not any(p in metric_normalized for p in ("profit", "income", "earnings", "ebit", "result"))
+        )
 
-    # Transition from negative to positive
+        # Transition from negative to positive
+        if val_start < 0 and val_end > 0:
+            if is_profit_confirmed:
+                return TrendState.LOSS_TO_PROFIT
+            elif is_named_loss_only:
+                # Metric itself is "loss" and sign semantics are ambiguous: block export instead of guessing
+                return TrendState.AMBIGUOUS
+            else:
+                return TrendState.LOSS_TO_PROFIT
+
+        # Transition from positive to negative
+        if val_start > 0 and val_end < 0:
+            if is_profit_confirmed:
+                return TrendState.PROFIT_TO_LOSS
+            elif is_named_loss_only:
+                return TrendState.AMBIGUOUS
+            else:
+                return TrendState.PROFIT_TO_LOSS
+
+        # Both values negative
+        if val_start < 0 and val_end < 0:
+            abs_start = abs(val_start)
+            abs_end = abs(val_end)
+            if abs_end < abs_start:
+                return TrendState.LOSS_NARROWED
+            elif abs_end > abs_start:
+                return TrendState.LOSS_WIDENED
+            else:
+                return TrendState.FLAT
+
+        # Both values positive under a metric explicitly named "loss"
+        if is_named_loss_only and val_start > 0 and val_end > 0:
+            if val_end < val_start:
+                return TrendState.LOSS_NARROWED
+            elif val_end > val_start:
+                return TrendState.LOSS_WIDENED
+            else:
+                return TrendState.FLAT
+
+        # Standard profit metrics (e.g. 100 -> 150)
+        diff = val_end - val_start
+        if diff > 0:
+            return TrendState.INCREASED
+        elif diff < 0:
+            return TrendState.DECREASED
+        else:
+            return TrendState.FLAT
+
+    # 4. BALANCE_SHEET, RATIO, GENERIC Families
     if val_start < 0 and val_end > 0:
-        if is_profit_confirmed:
-            return TrendState.LOSS_TO_PROFIT
-        elif is_named_loss_only:
-            # Metric itself is "loss" and sign semantics are ambiguous: block export instead of guessing
-            return TrendState.AMBIGUOUS
-        else:
-            return TrendState.LOSS_TO_PROFIT
-
-    # Transition from positive to negative
+        return TrendState.TURNED_POSITIVE
     if val_start > 0 and val_end < 0:
-        if is_profit_confirmed:
-            return TrendState.PROFIT_TO_LOSS
-        elif is_named_loss_only:
-            return TrendState.AMBIGUOUS
-        else:
-            return TrendState.PROFIT_TO_LOSS
+        return TrendState.TURNED_NEGATIVE
 
-    # Both values negative
-    if val_start < 0 and val_end < 0:
-        abs_start = abs(val_start)
-        abs_end = abs(val_end)
-        if abs_end < abs_start:
-            return TrendState.LOSS_NARROWED
-        elif abs_end > abs_start:
-            return TrendState.LOSS_WIDENED
-        else:
-            return TrendState.FLAT
-
-    # Both values positive under a metric explicitly named "loss"
-    if is_named_loss_only and val_start > 0 and val_end > 0:
-        if val_end < val_start:
-            return TrendState.LOSS_NARROWED
-        elif val_end > val_start:
-            return TrendState.LOSS_WIDENED
-        else:
-            return TrendState.FLAT
-
-    # Standard metrics
     diff = val_end - val_start
     if diff > 0:
         return TrendState.INCREASED
@@ -206,6 +412,20 @@ def replace_word_preserving_case(text: str, target: str, replacement: str) -> tu
     new_text = pattern.sub(_repl, text)
     return new_text, replaced
 
+
+# Mappings for standard metrics (non-loss)
+# Forbidden loss words/phrases for non-profit/loss metrics
+_FORBIDDEN_NON_PROFIT_LOSS_PHRASES: list[str] = [
+    "turned profitable",
+    "reversed from loss to profit",
+    "swung into loss",
+    "reversed from profit to loss",
+    "reversal to loss",
+    "loss narrowed",
+    "loss narrowing",
+    "loss widened",
+    "loss widening",
+]
 
 # Mappings for standard metrics (non-loss)
 _STANDARD_INCREASE_REPLACEMENTS: dict[str, str] = {
@@ -250,6 +470,60 @@ _STANDARD_DECREASE_REPLACEMENTS: dict[str, str] = {
     "expansion": "contraction",
     "surged": "slumped",
     "widened": "contracted",
+}
+
+_CASH_FLOW_INCREASE_REPLACEMENTS: dict[str, str] = {
+    k: v for k, v in _STANDARD_INCREASE_REPLACEMENTS.items() if k != "narrowed"
+}
+_CASH_FLOW_INCREASE_REPLACEMENTS.update({
+    "cash outflow widened": "cash outflow narrowed",
+    "outflow widened": "cash outflow narrowed",
+    "loss narrowed": "cash outflow narrowed",
+    "loss widened": "cash outflow narrowed",
+    "widened": "cash outflow narrowed",
+})
+
+_EXPENSE_INCREASE_REPLACEMENTS: dict[str, str] = {
+    **_STANDARD_INCREASE_REPLACEMENTS,
+    "loss widened": "increased",
+    "loss narrowed": "increased",
+    "widened": "increased",
+    "narrowed": "increased",
+}
+
+_EXPENSE_DECREASE_REPLACEMENTS: dict[str, str] = {
+    **_STANDARD_DECREASE_REPLACEMENTS,
+    "loss narrowed": "decreased",
+    "loss widened": "decreased",
+    "widened": "decreased",
+    "narrowed": "decreased",
+}
+
+_TURNED_POSITIVE_REPLACEMENTS: dict[str, str] = {
+    "turned profitable": "turned positive",
+    "reversed from loss to profit": "turned positive",
+    "swung into loss": "turned positive",
+    "loss narrowed": "turned positive",
+    "loss widened": "turned positive",
+    "declined": "turned positive",
+    "decreased": "turned positive",
+    "fell": "turned positive",
+    "dropped": "turned positive",
+    "deteriorated": "turned positive",
+    "widened": "turned positive",
+    "narrowed": "turned positive",
+}
+
+_TURNED_NEGATIVE_REPLACEMENTS: dict[str, str] = {
+    "swung into loss": "turned negative",
+    "reversed from profit to loss": "turned negative",
+    "reversal to loss": "turned negative",
+    "turned profitable": "turned negative",
+    "improved": "turned negative",
+    "increased": "turned negative",
+    "grew": "turned negative",
+    "rose": "turned negative",
+    "expanded": "turned negative",
 }
 
 # Mappings for loss metrics
@@ -309,9 +583,19 @@ _PROFIT_TO_LOSS_REPLACEMENTS: dict[str, str] = {
 }
 
 
-def _detect_offending_in_text(text: str, trend_state: TrendState) -> str | None:
-    """Find any contradictory directional words or phrases in text based on trend state."""
+def _detect_offending_in_text(
+    text: str,
+    trend_state: TrendState,
+    family: MetricSemanticFamily = MetricSemanticFamily.GENERIC,
+) -> str | None:
+    """Find any contradictory directional words or phrases in text based on trend state and family."""
     text_lower = text.casefold()
+
+    # Rule: For non-profit/loss metrics, never generate or allow loss terminology
+    if family != MetricSemanticFamily.PROFIT_LOSS:
+        for bad_phrase in _FORBIDDEN_NON_PROFIT_LOSS_PHRASES:
+            if re.search(r"\b" + re.escape(bad_phrase) + r"\b", text_lower):
+                return bad_phrase
 
     if trend_state == TrendState.LOSS_NARROWED:
         for bad_word in _LOSS_NARROWED_REPLACEMENTS:
@@ -329,14 +613,36 @@ def _detect_offending_in_text(text: str, trend_state: TrendState) -> str | None:
         for bad_phrase in _PROFIT_TO_LOSS_REPLACEMENTS:
             if re.search(r"\b" + re.escape(bad_phrase) + r"\b", text_lower):
                 return bad_phrase
+    elif trend_state == TrendState.TURNED_POSITIVE:
+        for bad_word in _TURNED_POSITIVE_REPLACEMENTS:
+            if re.search(r"\b" + re.escape(bad_word) + r"\b", text_lower):
+                return bad_word
+    elif trend_state == TrendState.TURNED_NEGATIVE:
+        for bad_word in _TURNED_NEGATIVE_REPLACEMENTS:
+            if re.search(r"\b" + re.escape(bad_word) + r"\b", text_lower):
+                return bad_word
     elif trend_state == TrendState.INCREASED:
-        for bad_word in _STANDARD_INCREASE_REPLACEMENTS:
-            if re.search(r"\b" + re.escape(bad_word) + r"\b", text_lower):
-                return bad_word
+        if family == MetricSemanticFamily.CASH_FLOW:
+            for bad_word in _CASH_FLOW_INCREASE_REPLACEMENTS:
+                if re.search(r"\b" + re.escape(bad_word) + r"\b", text_lower):
+                    return bad_word
+        elif family == MetricSemanticFamily.EXPENSE:
+            for bad_word in _EXPENSE_INCREASE_REPLACEMENTS:
+                if re.search(r"\b" + re.escape(bad_word) + r"\b", text_lower):
+                    return bad_word
+        else:
+            for bad_word in _STANDARD_INCREASE_REPLACEMENTS:
+                if re.search(r"\b" + re.escape(bad_word) + r"\b", text_lower):
+                    return bad_word
     elif trend_state == TrendState.DECREASED:
-        for bad_word in _STANDARD_DECREASE_REPLACEMENTS:
-            if re.search(r"\b" + re.escape(bad_word) + r"\b", text_lower):
-                return bad_word
+        if family == MetricSemanticFamily.EXPENSE:
+            for bad_word in _EXPENSE_DECREASE_REPLACEMENTS:
+                if re.search(r"\b" + re.escape(bad_word) + r"\b", text_lower):
+                    return bad_word
+        else:
+            for bad_word in _STANDARD_DECREASE_REPLACEMENTS:
+                if re.search(r"\b" + re.escape(bad_word) + r"\b", text_lower):
+                    return bad_word
 
     return None
 
@@ -420,6 +726,9 @@ class ClaimValidator:
             # Check compatibility
             is_comp, comp_reason = are_observations_compatible(first, last)
 
+            # Classify semantic family first
+            family = classify_metric_semantic_family(metric_name, canonical_name=first.metric_canonical)
+
             # Determine trend state
             if is_comp:
                 trend_state = determine_trend_state(
@@ -465,6 +774,7 @@ class ClaimValidator:
                                 stage="presentation",
                                 slide_id=slide.id,
                                 metric_name=metric_name,
+                                semantic_family=family.value,
                                 related_ids=[first.id, last.id],
                                 start_value=val_start,
                                 end_value=val_end,
@@ -489,6 +799,7 @@ class ClaimValidator:
                             stage="presentation",
                             slide_id=slide.id,
                             metric_name=metric_name,
+                            semantic_family=family.value,
                             related_ids=[first.id, last.id],
                             start_value=val_start,
                             end_value=val_end,
@@ -501,13 +812,16 @@ class ClaimValidator:
                     continue
 
                 # Check for offending direction
-                offending_word = _detect_offending_in_text(comp_text, trend_state)
+                offending_word = _detect_offending_in_text(comp_text, trend_state, family)
                 if offending_word:
                     verb = (
                         "narrowed" if trend_state == TrendState.LOSS_NARROWED
                         else "widened" if trend_state == TrendState.LOSS_WIDENED
                         else "turned profitable" if trend_state == TrendState.LOSS_TO_PROFIT
                         else "swung into loss" if trend_state == TrendState.PROFIT_TO_LOSS
+                        else "turned positive" if trend_state == TrendState.TURNED_POSITIVE
+                        else "turned negative" if trend_state == TrendState.TURNED_NEGATIVE
+                        else "cash outflow narrowed / increased" if (trend_state == TrendState.INCREASED and family == MetricSemanticFamily.CASH_FLOW)
                         else "increased" if trend_state == TrendState.INCREASED
                         else "decreased" if trend_state == TrendState.DECREASED
                         else "held flat"
@@ -523,6 +837,7 @@ class ClaimValidator:
                             stage="presentation",
                             slide_id=slide.id,
                             metric_name=metric_name,
+                            semantic_family=family.value,
                             related_ids=[first.id, last.id],
                             start_value=val_start,
                             end_value=val_end,
@@ -551,11 +866,18 @@ class ClaimValidator:
 
 
 def apply_structured_issue_replacement(text: str, issue: DirectionalClaimIssue) -> tuple[str, bool]:
-    """Replace the offending direction in text using the expected trend state."""
+    """Replace the offending direction in text using the expected trend state and semantic family."""
     state = issue.expected_direction
     offending = issue.offending_direction
+    family = issue.semantic_family
 
-    if state == TrendState.LOSS_TO_PROFIT.value:
+    replacement = None
+
+    if state == TrendState.TURNED_POSITIVE.value:
+        replacement = _TURNED_POSITIVE_REPLACEMENTS.get(offending.casefold(), "turned positive")
+    elif state == TrendState.TURNED_NEGATIVE.value:
+        replacement = _TURNED_NEGATIVE_REPLACEMENTS.get(offending.casefold(), "turned negative")
+    elif state == TrendState.LOSS_TO_PROFIT.value:
         replacement = _LOSS_TO_PROFIT_REPLACEMENTS.get(offending.casefold(), "turned profitable")
     elif state == TrendState.PROFIT_TO_LOSS.value:
         replacement = _PROFIT_TO_LOSS_REPLACEMENTS.get(offending.casefold(), "swung into loss")
@@ -564,11 +886,28 @@ def apply_structured_issue_replacement(text: str, issue: DirectionalClaimIssue) 
     elif state == TrendState.LOSS_WIDENED.value:
         replacement = _LOSS_WIDENED_REPLACEMENTS.get(offending.casefold(), "widened")
     elif state == TrendState.INCREASED.value:
-        replacement = _STANDARD_INCREASE_REPLACEMENTS.get(offending.casefold(), "increased")
+        if family == MetricSemanticFamily.CASH_FLOW.value:
+            replacement = _CASH_FLOW_INCREASE_REPLACEMENTS.get(offending.casefold(), "increased")
+        elif family == MetricSemanticFamily.EXPENSE.value:
+            replacement = _EXPENSE_INCREASE_REPLACEMENTS.get(offending.casefold(), "increased")
+        else:
+            replacement = _STANDARD_INCREASE_REPLACEMENTS.get(offending.casefold(), "increased")
     elif state == TrendState.DECREASED.value:
-        replacement = _STANDARD_DECREASE_REPLACEMENTS.get(offending.casefold(), "decreased")
+        if family == MetricSemanticFamily.EXPENSE.value:
+            replacement = _EXPENSE_DECREASE_REPLACEMENTS.get(offending.casefold(), "decreased")
+        else:
+            replacement = _STANDARD_DECREASE_REPLACEMENTS.get(offending.casefold(), "decreased")
     else:
         return text, False
+
+    if not replacement:
+        return text, False
+
+    # Safety guard: for non-profit/loss metrics, NEVER generate loss words
+    if family != MetricSemanticFamily.PROFIT_LOSS.value:
+        for bad_p in _FORBIDDEN_NON_PROFIT_LOSS_PHRASES:
+            if bad_p in replacement.casefold():
+                replacement = "increased" if state == TrendState.INCREASED.value else "decreased"
 
     return replace_word_preserving_case(text, offending, replacement)
 
