@@ -896,3 +896,138 @@ def test_regression_net_profit_loss_to_profit_explicit() -> None:
     revalidated = validator.validate_slide(repaired_slide, obs)
     assert len(revalidated) == 0
 
+
+def test_regression_balance_sheet_net_current_liabilities_widened() -> None:
+    """Regression: Net current liabilities -4.47 -> -6.62:
+    - Magnitude semantics: more negative = widened / deteriorated
+    - Text claiming 'decreased' or 'contracted' must be repaired to 'widened'
+    """
+    from adaptive_document_agent.validation.claim_validator import (
+        BalanceSheetSubtype,
+        ClaimValidator,
+        MetricSemanticFamily,
+        TrendState,
+        classify_balance_sheet_subtype,
+        classify_metric_semantic_family,
+        determine_trend_state,
+    )
+
+    family = classify_metric_semantic_family("Net current liabilities")
+    assert family == MetricSemanticFamily.BALANCE_SHEET
+
+    subtype = classify_balance_sheet_subtype("Net current liabilities")
+    assert subtype == BalanceSheetSubtype.DEFICIT_OR_NET_LIABILITY
+
+    trend = determine_trend_state("Net current liabilities", -4.47, -6.62)
+    assert trend == TrendState.DEFICIT_WIDENED
+
+    ev = SourceEvidence(page=7, text="-4.47", extraction_method="digital_table", confidence=0.95)
+    obs = [
+        Observation(id="ncl1", metric_original="Net current liabilities", value=-4.47, raw_value="-4.47", period="31 Dec 2022", unit="currency", currency="RMB", period_type="balance_sheet_date", evidence=[ev], confidence=0.95),
+        Observation(id="ncl2", metric_original="Net current liabilities", value=-6.62, raw_value="-6.62", period="31 Dec 2023", unit="currency", currency="RMB", period_type="balance_sheet_date", evidence=[ev], confidence=0.95),
+    ]
+
+    # Slide incorrectly claims 'decreased' and 'contracted'
+    slide = PresentationSlide(
+        id="slide_ncl",
+        slide_type="analysis",
+        title="Liquidity Analysis: Liabilities Decreased",
+        message="Net current liabilities decreased from RMB -4.47bn to RMB -6.62bn.",
+        bullets=["Net current liabilities contracted over the fiscal period."],
+        observation_ids=["ncl1", "ncl2"],
+        source_pages=[7],
+    )
+
+    validator = ClaimValidator()
+    issues = validator.validate_slide(slide, obs)
+    assert len(issues) >= 1
+    assert issues[0].expected_direction == TrendState.DEFICIT_WIDENED.value
+    assert issues[0].balance_sheet_subtype == BalanceSheetSubtype.DEFICIT_OR_NET_LIABILITY.value
+
+    repaired_slide, repairs = repair_slide_claims(slide, obs)
+    assert len(repairs) >= 1
+    full_text = f"{repaired_slide.title} {repaired_slide.message} {' '.join(repaired_slide.bullets)}".casefold()
+    assert "decreased" not in full_text
+    assert "contracted" not in full_text
+    assert "widened" in full_text
+
+    revalidated = validator.validate_slide(repaired_slide, obs)
+    assert len(revalidated) == 0
+
+
+def test_regression_balance_sheet_net_current_liabilities_narrowed() -> None:
+    """Regression: Net current liabilities -6.62 -> -4.47:
+    - Magnitude semantics: closer to zero = narrowed / improved
+    - Text claiming 'increased' or 'expanded' must be repaired to 'narrowed'
+    """
+    from adaptive_document_agent.validation.claim_validator import (
+        BalanceSheetSubtype,
+        ClaimValidator,
+        MetricSemanticFamily,
+        TrendState,
+        classify_balance_sheet_subtype,
+        classify_metric_semantic_family,
+        determine_trend_state,
+    )
+
+    family = classify_metric_semantic_family("Net current liabilities")
+    assert family == MetricSemanticFamily.BALANCE_SHEET
+
+    subtype = classify_balance_sheet_subtype("Net current liabilities")
+    assert subtype == BalanceSheetSubtype.DEFICIT_OR_NET_LIABILITY
+
+    trend = determine_trend_state("Net current liabilities", -6.62, -4.47)
+    assert trend == TrendState.DEFICIT_NARROWED
+
+    ev = SourceEvidence(page=7, text="-6.62", extraction_method="digital_table", confidence=0.95)
+    obs = [
+        Observation(id="ncl_start", metric_original="Net current liabilities", value=-6.62, raw_value="-6.62", period="31 Dec 2022", unit="currency", currency="RMB", period_type="balance_sheet_date", evidence=[ev], confidence=0.95),
+        Observation(id="ncl_end", metric_original="Net current liabilities", value=-4.47, raw_value="-4.47", period="31 Dec 2023", unit="currency", currency="RMB", period_type="balance_sheet_date", evidence=[ev], confidence=0.95),
+    ]
+
+    # Slide incorrectly claims 'increased' and 'widened'
+    slide = PresentationSlide(
+        id="slide_ncl_narrow",
+        slide_type="analysis",
+        title="Liquidity Position: Liabilities Increased",
+        message="Net current liabilities increased from RMB -6.62bn to RMB -4.47bn.",
+        bullets=["Net current liabilities widened during the recovery."],
+        observation_ids=["ncl_start", "ncl_end"],
+        source_pages=[7],
+    )
+
+    validator = ClaimValidator()
+    issues = validator.validate_slide(slide, obs)
+    assert len(issues) >= 1
+    assert issues[0].expected_direction == TrendState.DEFICIT_NARROWED.value
+
+    repaired_slide, repairs = repair_slide_claims(slide, obs)
+    assert len(repairs) >= 1
+    full_text = f"{repaired_slide.title} {repaired_slide.message} {' '.join(repaired_slide.bullets)}".casefold()
+    assert "increased" not in full_text
+    assert "widened" not in full_text
+    assert "narrowed" in full_text
+
+    revalidated = validator.validate_slide(repaired_slide, obs)
+    assert len(revalidated) == 0
+
+
+def test_regression_standard_balance_sheet_metric_not_affected_by_deficit_rule() -> None:
+    """Only metrics representing a deficit or net liability position use magnitude semantics.
+    Standard balance sheet metrics (Total assets, Cash, etc.) use simple arithmetic direction.
+    """
+    from adaptive_document_agent.validation.claim_validator import (
+        BalanceSheetSubtype,
+        TrendState,
+        classify_balance_sheet_subtype,
+        determine_trend_state,
+    )
+
+    assert classify_balance_sheet_subtype("Total assets") == BalanceSheetSubtype.STANDARD
+    assert classify_balance_sheet_subtype("Cash and cash equivalents") == BalanceSheetSubtype.STANDARD
+    assert classify_balance_sheet_subtype("Trade receivables") == BalanceSheetSubtype.STANDARD
+
+    # Standard metrics use simple arithmetic direction
+    assert determine_trend_state("Total assets", 100.0, 150.0) == TrendState.INCREASED
+    assert determine_trend_state("Total assets", 150.0, 100.0) == TrendState.DECREASED
+

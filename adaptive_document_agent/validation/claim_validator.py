@@ -45,6 +45,11 @@ class MetricSemanticFamily(str, Enum):
     GENERIC = "GENERIC"
 
 
+class BalanceSheetSubtype(str, Enum):
+    STANDARD = "STANDARD"
+    DEFICIT_OR_NET_LIABILITY = "DEFICIT_OR_NET_LIABILITY"
+
+
 class TrendState(str, Enum):
     INCREASED = "INCREASED"
     DECREASED = "DECREASED"
@@ -55,6 +60,8 @@ class TrendState(str, Enum):
     PROFIT_TO_LOSS = "PROFIT_TO_LOSS"
     TURNED_POSITIVE = "TURNED_POSITIVE"
     TURNED_NEGATIVE = "TURNED_NEGATIVE"
+    DEFICIT_WIDENED = "DEFICIT_WIDENED"
+    DEFICIT_NARROWED = "DEFICIT_NARROWED"
     AMBIGUOUS = "AMBIGUOUS"
 
 
@@ -64,6 +71,7 @@ class DirectionalClaimIssue(ValidationIssue):
     slide_id: str = ""
     metric_name: str = ""
     semantic_family: str = ""  # MetricSemanticFamily string
+    balance_sheet_subtype: str = ""  # BalanceSheetSubtype string
     start_value: float = 0.0
     end_value: float = 0.0
     expected_direction: str = ""  # TrendState string
@@ -250,6 +258,8 @@ def classify_metric_semantic_family(
         "borrowings",
         "debt",
         "cash and cash equivalents",
+        "deficit",
+        "working capital",
         "资产",
         "负债",
         "所有者权益",
@@ -263,6 +273,45 @@ def classify_metric_semantic_family(
         return MetricSemanticFamily.BALANCE_SHEET
 
     return MetricSemanticFamily.GENERIC
+
+
+def is_deficit_or_net_liability_metric(
+    metric_name: str,
+    canonical_name: str | None = None,
+) -> bool:
+    """Determine if a balance sheet metric represents a deficit or net liability position."""
+    name_str = f"{canonical_name or ''} {metric_name}".strip().casefold()
+    name_norm = re.sub(r"[_\-]+", " ", name_str)
+
+    deficit_indicators = (
+        "net current liabilities",
+        "net current liability",
+        "net liabilities",
+        "net liability",
+        "shareholders deficit",
+        "shareholder deficit",
+        "shareholders' deficit",
+        "total deficit",
+        "negative working capital",
+        "working capital deficit",
+        "net asset deficit",
+        "net assets deficit",
+    )
+    if any(p in name_norm for p in deficit_indicators):
+        return True
+    if re.search(r"\bdeficits?\b", name_norm):
+        return True
+    return False
+
+
+def classify_balance_sheet_subtype(
+    metric_name: str,
+    canonical_name: str | None = None,
+) -> BalanceSheetSubtype:
+    """Classify the balance-sheet sign semantic subtype."""
+    if is_deficit_or_net_liability_metric(metric_name, canonical_name):
+        return BalanceSheetSubtype.DEFICIT_OR_NET_LIABILITY
+    return BalanceSheetSubtype.STANDARD
 
 
 def determine_trend_state(
@@ -379,7 +428,45 @@ def determine_trend_state(
         else:
             return TrendState.FLAT
 
-    # 4. BALANCE_SHEET, RATIO, GENERIC Families
+    # 4. BALANCE_SHEET Family
+    if family == MetricSemanticFamily.BALANCE_SHEET:
+        if is_deficit_or_net_liability_metric(metric_name, canonical_name):
+            # Magnitude semantics for deficit / net liability position metrics:
+            # - more negative = widened / deteriorated (e.g. -4.47bn -> -6.62bn)
+            # - closer to zero = narrowed / improved (e.g. -6.62bn -> -4.47bn)
+            if val_start <= 0 and val_end <= 0:
+                abs_start = abs(val_start)
+                abs_end = abs(val_end)
+                if abs_end > abs_start:
+                    return TrendState.DEFICIT_WIDENED
+                elif abs_end < abs_start:
+                    return TrendState.DEFICIT_NARROWED
+                else:
+                    return TrendState.FLAT
+            elif val_start >= 0 and val_end >= 0:
+                if val_end > val_start:
+                    return TrendState.DEFICIT_WIDENED
+                elif val_end < val_start:
+                    return TrendState.DEFICIT_NARROWED
+                else:
+                    return TrendState.FLAT
+            else:
+                return TrendState.TURNED_POSITIVE if val_end > 0 else TrendState.TURNED_NEGATIVE
+        else:
+            # Standard balance sheet metrics (assets, cash, normal liabilities, equity)
+            if val_start < 0 and val_end > 0:
+                return TrendState.TURNED_POSITIVE
+            if val_start > 0 and val_end < 0:
+                return TrendState.TURNED_NEGATIVE
+            diff = val_end - val_start
+            if diff > 0:
+                return TrendState.INCREASED
+            elif diff < 0:
+                return TrendState.DECREASED
+            else:
+                return TrendState.FLAT
+
+    # 5. RATIO, GENERIC Families
     if val_start < 0 and val_end > 0:
         return TrendState.TURNED_POSITIVE
     if val_start > 0 and val_end < 0:
@@ -582,6 +669,47 @@ _PROFIT_TO_LOSS_REPLACEMENTS: dict[str, str] = {
     "growth": "reversal to loss",
 }
 
+# Mappings for balance sheet deficit / net liability position metrics
+_DEFICIT_WIDENED_REPLACEMENTS: dict[str, str] = {
+    "decreased": "widened",
+    "decreasing": "widening",
+    "decreases": "widens",
+    "decrease": "widen",
+    "contracted": "widened",
+    "contracting": "widening",
+    "contraction": "widening",
+    "narrowed": "widened",
+    "narrowing": "widening",
+    "narrows": "widens",
+    "narrow": "widen",
+    "fell": "widened",
+    "dropped": "widened",
+    "improved": "deteriorated",
+    "improving": "deteriorating",
+    "improves": "deteriorates",
+    "improvement": "deterioration",
+}
+
+_DEFICIT_NARROWED_REPLACEMENTS: dict[str, str] = {
+    "increased": "narrowed",
+    "increasing": "narrowing",
+    "increases": "narrows",
+    "increase": "narrow",
+    "expanded": "narrowed",
+    "expanding": "narrowing",
+    "expansion": "narrowing",
+    "widened": "narrowed",
+    "widening": "narrowing",
+    "widens": "narrows",
+    "widen": "narrow",
+    "rose": "narrowed",
+    "grew": "narrowed",
+    "deteriorated": "improved",
+    "deteriorating": "improving",
+    "deteriorates": "improves",
+    "deterioration": "improvement",
+}
+
 
 def _detect_offending_in_text(
     text: str,
@@ -613,6 +741,14 @@ def _detect_offending_in_text(
         for bad_phrase in _PROFIT_TO_LOSS_REPLACEMENTS:
             if re.search(r"\b" + re.escape(bad_phrase) + r"\b", text_lower):
                 return bad_phrase
+    elif trend_state == TrendState.DEFICIT_WIDENED:
+        for bad_word in _DEFICIT_WIDENED_REPLACEMENTS:
+            if re.search(r"\b" + re.escape(bad_word) + r"\b", text_lower):
+                return bad_word
+    elif trend_state == TrendState.DEFICIT_NARROWED:
+        for bad_word in _DEFICIT_NARROWED_REPLACEMENTS:
+            if re.search(r"\b" + re.escape(bad_word) + r"\b", text_lower):
+                return bad_word
     elif trend_state == TrendState.TURNED_POSITIVE:
         for bad_word in _TURNED_POSITIVE_REPLACEMENTS:
             if re.search(r"\b" + re.escape(bad_word) + r"\b", text_lower):
@@ -728,6 +864,11 @@ class ClaimValidator:
 
             # Classify semantic family first
             family = classify_metric_semantic_family(metric_name, canonical_name=first.metric_canonical)
+            bs_subtype = (
+                classify_balance_sheet_subtype(metric_name, canonical_name=first.metric_canonical)
+                if family == MetricSemanticFamily.BALANCE_SHEET
+                else BalanceSheetSubtype.STANDARD
+            )
 
             # Determine trend state
             if is_comp:
@@ -775,6 +916,7 @@ class ClaimValidator:
                                 slide_id=slide.id,
                                 metric_name=metric_name,
                                 semantic_family=family.value,
+                                balance_sheet_subtype=bs_subtype.value,
                                 related_ids=[first.id, last.id],
                                 start_value=val_start,
                                 end_value=val_end,
@@ -800,6 +942,7 @@ class ClaimValidator:
                             slide_id=slide.id,
                             metric_name=metric_name,
                             semantic_family=family.value,
+                            balance_sheet_subtype=bs_subtype.value,
                             related_ids=[first.id, last.id],
                             start_value=val_start,
                             end_value=val_end,
@@ -815,8 +958,8 @@ class ClaimValidator:
                 offending_word = _detect_offending_in_text(comp_text, trend_state, family)
                 if offending_word:
                     verb = (
-                        "narrowed" if trend_state == TrendState.LOSS_NARROWED
-                        else "widened" if trend_state == TrendState.LOSS_WIDENED
+                        "narrowed" if trend_state in (TrendState.LOSS_NARROWED, TrendState.DEFICIT_NARROWED)
+                        else "widened" if trend_state in (TrendState.LOSS_WIDENED, TrendState.DEFICIT_WIDENED)
                         else "turned profitable" if trend_state == TrendState.LOSS_TO_PROFIT
                         else "swung into loss" if trend_state == TrendState.PROFIT_TO_LOSS
                         else "turned positive" if trend_state == TrendState.TURNED_POSITIVE
@@ -838,6 +981,7 @@ class ClaimValidator:
                             slide_id=slide.id,
                             metric_name=metric_name,
                             semantic_family=family.value,
+                            balance_sheet_subtype=bs_subtype.value,
                             related_ids=[first.id, last.id],
                             start_value=val_start,
                             end_value=val_end,
@@ -885,6 +1029,10 @@ def apply_structured_issue_replacement(text: str, issue: DirectionalClaimIssue) 
         replacement = _LOSS_NARROWED_REPLACEMENTS.get(offending.casefold(), "narrowed")
     elif state == TrendState.LOSS_WIDENED.value:
         replacement = _LOSS_WIDENED_REPLACEMENTS.get(offending.casefold(), "widened")
+    elif state == TrendState.DEFICIT_WIDENED.value:
+        replacement = _DEFICIT_WIDENED_REPLACEMENTS.get(offending.casefold(), "widened")
+    elif state == TrendState.DEFICIT_NARROWED.value:
+        replacement = _DEFICIT_NARROWED_REPLACEMENTS.get(offending.casefold(), "narrowed")
     elif state == TrendState.INCREASED.value:
         if family == MetricSemanticFamily.CASH_FLOW.value:
             replacement = _CASH_FLOW_INCREASE_REPLACEMENTS.get(offending.casefold(), "increased")
