@@ -46,7 +46,19 @@ def export_csv(result: PipelineResult) -> bytes:
     return stream.getvalue().encode("utf-8-sig")
 
 
-def export_pptx(result: PipelineResult, template_path: str | Path | None = None) -> bytes:
+def export_pptx(
+    result: PipelineResult,
+    template_path: str | Path | None = None,
+    *,
+    force: bool = False,
+) -> bytes:
+    from .qa_reporter import CriticalQAError, run_comprehensive_qa
+
+    qa = run_comprehensive_qa(result)
+    if not force and qa.has_critical_errors:
+        reasons = "\n - ".join(e.message for e in qa.critical_errors)
+        raise CriticalQAError(f"PowerPoint export blocked due to critical QA errors:\n - {reasons}")
+
     return build_presentation(result, template_path=template_path)
 
 

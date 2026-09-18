@@ -481,7 +481,7 @@ def format_metric_display_value(
     if semantic.is_currency:
         norm_unit = normalize_raw_unit(raw_unit, default_currency=currency or "RMB")
         if compact and num_val is not None:
-            return format_compact_currency(num_val, raw_unit=raw_unit, currency=currency)
+            return format_compact_currency(num_val, raw_unit=raw_unit, currency=currency, is_base_value=True)
         if norm_unit and any(s in norm_unit.lower() for s in ("'000", "000", "thousand", "million", "billion")):
             unit_label = norm_unit
         else:
@@ -496,21 +496,37 @@ def sanitize_metric_label(name: str) -> str:
     # Remove nonsensical '% of RMB' or similar
     clean = re.sub(r"(?i)\s*%\s*of\s*rmb\b", "", clean).strip()
     clean = re.sub(r"(?i)\s*%\s*of\s*(?:usd|cny|hkd|eur)\b", "", clean).strip()
+    clean = re.sub(r"(?:\.{2,}|\u2026)+$", "", clean).strip()
     clean = re.sub(r"^[:\-\s]+|[:\-\s]+$", "", clean).strip()
     if not clean:
-        clean = "Reported metric"
+        return "Reported metric"
 
-    # Normalize expense ratio titles before segment shares
-    if re.search(r"(?i)research(?:\s+and\s+|\s*&\s*)development(?:\s+expenses?)?\s+(?:as\s+)?(?:%|ratio)\s+(?:of\s+)?revenue", clean):
-        clean = "R&D / revenue"
-    elif re.search(r"(?i)research(?:\s+and\s+|\s*&\s*)development(?:\s+expense)?$", clean) and "ratio" in clean.casefold():
-        clean = "R&D / revenue"
+    # Specific standard expense ratio mappings for presentation consistency
+    if re.search(
+        r"(?i)research(?:\s+and\s+|\s*&\s*)development(?:\s+expenses?)?\s*(?::\s*(?:share|as\s*%?|ratio)\s+(?:of\s+)?(?:total\s+)?revenue|\s*as\s*%\s*of\s*revenue|\s*/\s*revenue|\s*ratio|\s*\(.*?(?:share|%|ratio).*?revenue.*?\))",
+        clean,
+    ) or (
+        re.search(r"(?i)research(?:\s+and\s+|\s*&\s*)development", clean)
+        and any(k in clean.casefold() for k in ("share of revenue", "% of revenue", "/ revenue", "ratio"))
+    ):
+        return "R&D / revenue"
+    if re.search(r"(?i)(?:selling\s+(?:and|&)\s+(?:distribution|marketing)|sales\s+(?:and|&)\s+marketing)(?:\s+expenses?)?\s*(?::\s*share\s+of\s+revenue|\s*as\s*%\s*of\s*revenue|\s*/\s*revenue|\s*ratio)", clean):
+        return "Selling & Marketing / Revenue" if "marketing" in clean.casefold() else "Selling & Distribution / Revenue"
+    if re.search(r"(?i)(?:sg&a|selling,?\s+(?:general\s+)?(?:and|&)\s+administrative)(?:\s+expenses?)?\s*(?::\s*share\s+of\s+revenue|\s*as\s*%\s*of\s*revenue|\s*/\s*revenue|\s*ratio)", clean):
+        return "SG&A / Revenue"
+    if re.search(r"(?i)administrative\s+expenses?\s*(?::\s*share\s+of\s+revenue|\s*as\s*%\s*of\s*revenue|\s*/\s*revenue|\s*ratio)", clean):
+        return "Admin / Revenue"
+    if re.search(r"(?i)cost\s+of\s+(?:sales|revenue)\s*(?::\s*share\s+of\s+revenue|\s*as\s*%\s*of\s*revenue|\s*/\s*revenue|\s*ratio)", clean):
+        return "Cost of Sales / Revenue"
+
 
     # Normalize segment shares
     clean = re.sub(r"(?i)\s*%\s*of\s*total\s*revenue$", " share of revenue", clean)
     clean = re.sub(r"(?i)\s*%\s*of\s*revenue$", " share of revenue", clean)
 
-    # If it says 'Warehouse fulfillment revenue' but context is share of revenue, format clearly
+    if re.search(r"(?i)warehouse\s+fulfillment(?:\s+solutions)?(?:\s+expenses?)?\s*(?::\s*share\s+of\s+revenue|/ revenue)", clean):
+        return "Warehouse Fulfillment / Revenue"
+
     if re.search(r"(?i)warehouse fulfillment(?:\s+solutions)?\s+revenue$", clean):
         clean = "Warehouse fulfillment share of revenue"
 

@@ -4,6 +4,7 @@ from .analysis import AnalysisCandidate, AnalysisResult, AnalysisTask, Candidate
 from .chart import ChartPlan, ChartType
 from .document import AnalysisPageRange, AnalysisScopePreview, DocumentProfile, ParsedDocument
 from .evidence import SourceEvidence
+from .fact import CanonicalFact
 from .observation import FinancialObservation, Observation
 from .page import DocumentPage, PageImage
 from .presentation import (
@@ -28,6 +29,7 @@ __all__ = [
     "AnalysisScopePreview",
     "AnalysisTask",
     "CandidateScore",
+    "CanonicalFact",
     "ChartPlan",
     "ChartType",
     "CompanyFact",

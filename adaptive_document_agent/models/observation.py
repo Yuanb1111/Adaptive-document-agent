@@ -1,5 +1,6 @@
 """Generic observation representation."""
 
+from typing import Any
 from pydantic import BaseModel, Field
 
 from .evidence import SourceEvidence
@@ -37,6 +38,10 @@ class Observation(BaseModel):
     semantic_type: str = "generic"  # monetary_amount, margin, ratio_share, multiple, days, count, growth_rate, generic
     unit_family: str = "generic"    # currency, percentage, multiple, days, count, generic
     display_unit: str = ""
+    display_value: str = ""
+    presentation_label: str = ""
+    normalized_value: float | None = None
+    normalized_unit: str | None = None
     period_type: str = "generic"    # fiscal_year, interim_flow, balance_sheet_date, multi_year, generic
     period_start: str | None = None
     period_end: str | None = None
@@ -65,10 +70,6 @@ class Observation(BaseModel):
         return self.unit_scale
 
     @property
-    def normalized_unit(self) -> str | None:
-        return self.unit
-
-    @property
     def period_label(self) -> str | None:
         return self.period
 
@@ -91,6 +92,10 @@ class Observation(BaseModel):
     @property
     def extraction_confidence(self) -> float:
         return self.confidence
+
+    def to_canonical_fact(self) -> Any:
+        from .fact import CanonicalFact
+        return CanonicalFact.from_observation(self)
 
 
 FinancialObservation = Observation

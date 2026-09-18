@@ -44,11 +44,15 @@ def infer_unit_defaults(text: str) -> UnitDefaults:
     """
     compact = " ".join(text.split())
     lowered = compact.casefold()
-    declaration_pattern = re.compile(
+    curr_first_pattern = re.compile(
         r"(?i)(?P<currency>rmb|cny|hk\s*\$|hkd|us\s*\$|usd|sgd|s\s*\$|eur|gbp|人民币|港元)"
         r"\s*(?:in\s*)?(?P<scale>['’`]\s*0{3}|thousands?|millions?|billions?|千元|百万|十亿)"
     )
-    declarations = list(declaration_pattern.finditer(compact))
+    scale_first_pattern = re.compile(
+        r"(?i)(?:in\s+)?(?P<scale>['’`]\s*0{3}|thousands?|millions?|billions?|千元|百万|十亿)"
+        r"\s*(?:of\s+)?(?P<currency>rmb|cny|hk\s*\$|hkd|us\s*\$|usd|sgd|s\s*\$|eur|gbp|人民币|港元)"
+    )
+    declarations = list(curr_first_pattern.finditer(compact)) or list(scale_first_pattern.finditer(compact))
     declaration_match = declarations[-1] if declarations else None
     declaration = declaration_match.group(0).strip() if declaration_match else None
     currency = next((code for pattern, code in _CURRENCIES if re.search(pattern, declaration or lowered, re.I)), None)
@@ -65,6 +69,83 @@ def infer_unit_defaults(text: str) -> UnitDefaults:
         declaration = re.sub(r"(?i)\b(rmb|cny|hkd|hk\s*\$|usd|us\s*\$|eur|gbp)(?:in)?(millions?)\b", r"\1 in millions", declaration)
         declaration = re.sub(r"(?i)\b(rmb|cny|hkd|hk\s*\$|usd|us\s*\$|eur|gbp)(?:in)?(billions?)\b", r"\1 in billions", declaration)
     return UnitDefaults(unit=unit, scale=scale, currency=currency, raw_unit=declaration)
+
+
+def normalize_financial_fact(
+    raw_value: str | int | float,
+    raw_unit: str | None = None,
+    *,
+    default_currency: str | None = None,
+    default_scale: float = 1.0,
+) -> tuple[float | None, str | None, str, str, str | None]:
+    """Deterministically convert raw numeric string and unit declarations into:
+    (normalized_value, normalized_unit, display_value, display_unit, currency).
+
+    Never guesses or uses LLM reasoning for numerical conversions.
+    """
+    from .numeric_parser import parse_number
+    from adaptive_document_agent.services.financial_formatter import (
+        format_compact_currency,
+        normalize_currency_symbol,
+    )
+
+    parsed = parse_number(raw_value)
+    if not parsed:
+        return None, None, str(raw_value), "", default_currency
+
+    scale = parsed.scale
+    currency = parsed.currency or default_currency
+    unit = parsed.unit
+
+    if raw_unit:
+        inferred = infer_unit_defaults(raw_unit)
+        if inferred.scale and scale == 1.0:
+            scale = inferred.scale
+        if inferred.currency and not currency:
+            currency = inferred.currency
+        if inferred.unit and not unit:
+            unit = inferred.unit
+
+    if not scale or scale <= 0:
+        scale = default_scale
+
+    normalized_value = parsed.value * scale if scale != 1.0 and parsed.scale == 1.0 else parsed.value
+    curr_sym = normalize_currency_symbol(currency)
+
+    if unit == "percent" or (parsed.raw_unit and "%" in parsed.raw_unit):
+        normalized_unit = "percent"
+        display_unit = "%"
+        display_value = f"{parsed.value:g}%"
+    elif unit == "percentage_points" or (parsed.raw_unit and "pp" in parsed.raw_unit.lower()):
+        normalized_unit = "percentage_points"
+        display_unit = "pp"
+        display_value = f"{parsed.value:g} pp"
+    elif unit == "basis_points" or (parsed.raw_unit and "bps" in parsed.raw_unit.lower()):
+        normalized_unit = "basis_points"
+        display_unit = "bps"
+        display_value = f"{parsed.value:g} bps"
+    elif unit == "multiple" or (parsed.raw_unit and "x" in parsed.raw_unit.lower()):
+        normalized_unit = "multiple"
+        display_unit = "x"
+        display_value = f"{parsed.value:g}x"
+    elif currency or unit == "currency":
+        normalized_unit = "currency"
+        display_value = format_compact_currency(normalized_value, currency=currency, is_base_value=True)
+        abs_norm = abs(normalized_value)
+        if abs_norm >= 1_000_000_000:
+            display_unit = f"{curr_sym} billion"
+        elif abs_norm >= 1_000_000:
+            display_unit = f"{curr_sym} million"
+        elif abs_norm >= 1_000:
+            display_unit = f"{curr_sym} '000"
+        else:
+            display_unit = curr_sym
+    else:
+        normalized_unit = unit or "generic"
+        display_unit = parsed.raw_unit or raw_unit or ""
+        display_value = str(raw_value)
+
+    return normalized_value, normalized_unit, display_value, display_unit, currency
 
 
 def compatible_units(left: UnitSignature, right: UnitSignature) -> bool:

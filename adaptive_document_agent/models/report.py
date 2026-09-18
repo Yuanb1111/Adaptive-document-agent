@@ -22,6 +22,11 @@ class Insight(BaseModel):
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     evidence: list[SourceEvidence] = Field(default_factory=list)
     result_ids: list[str] = Field(default_factory=list)
+    metric: str | None = None
+    movement: str | None = None
+    driver: str | None = None
+    implication: str | None = None
+    watch_item: str | None = None
 
 
 class ReportSection(BaseModel):

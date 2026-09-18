@@ -20,6 +20,8 @@ _CURRENCIES = {
     "$": "USD",
     "US$": "USD",
     "USD": "USD",
+    "HK$": "HKD",
+    "HKD": "HKD",
     "£": "GBP",
     "GBP": "GBP",
     "€": "EUR",
@@ -28,6 +30,7 @@ _CURRENCIES = {
     "CNY": "CNY",
     "RMB": "CNY",
     "SGD": "SGD",
+    "S$": "SGD",
 }
 _SCALES = {
     "k": 1_000.0,
@@ -54,9 +57,10 @@ def parse_number(raw: str | int | float) -> ParsedNumber | None:
     if negative:
         text = text[1:-1] if text.startswith("(") else text[:-1]
     currency = None
-    currency_match = re.search(r"(?i)(US\$|USD|SGD|GBP|EUR|CNY|RMB|[$£€¥])", text)
+    currency_match = re.search(r"(?i)(US\$|USD|SGD|S\$|GBP|EUR|CNY|RMB|HK\$|HKD|[$£€¥])", text)
     if currency_match:
-        currency = _CURRENCIES[currency_match.group(1).upper() if currency_match.group(1).isalpha() or currency_match.group(1).upper() == "US$" else currency_match.group(1)]
+        curr_key = currency_match.group(1).upper()
+        currency = _CURRENCIES.get(curr_key, _CURRENCIES.get(currency_match.group(1)))
         text = text[: currency_match.start()] + text[currency_match.end() :]
 
     unit = None
@@ -65,9 +69,15 @@ def parse_number(raw: str | int | float) -> ParsedNumber | None:
     if re.search(r"(?i)\bbps?\b|basis\s+points?", text):
         unit, raw_unit = "basis_points", "bps"
         text = re.sub(r"(?i)\bbps?\b|basis\s+points?", "", text)
+    elif re.search(r"(?i)\bpp\b|percentage\s+points?", text):
+        unit, raw_unit = "percentage_points", "pp"
+        text = re.sub(r"(?i)\bpp\b|percentage\s+points?", "", text)
     elif "%" in text or re.search(r"(?i)\bpercent(?:age)?\b", text):
         unit, raw_unit = "percent", "%"
         text = re.sub(r"(?i)%|\bpercent(?:age)?\b", "", text)
+    elif re.search(r"(?i)(?<=\d)\s*(?:x|times|倍)\b", text):
+        unit, raw_unit = "multiple", "x"
+        text = re.sub(r"(?i)\s*(?:x|times|倍)\b", "", text)
 
     scale_match = re.search(r"(?i)(?:\s|(?<=\d))(thousand|million|billion|bn|mn|[kmb])\b", text)
     if scale_match:

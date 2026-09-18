@@ -2,7 +2,12 @@
 
 import re
 
-from adaptive_document_agent.document_model.metric_semantic_classifier import classify_metric, is_multiple_metric
+from adaptive_document_agent.document_model.metric_semantic_classifier import (
+    classify_metric,
+    format_metric_display_value,
+    is_multiple_metric,
+    sanitize_metric_label,
+)
 from adaptive_document_agent.document_model.period_semantic_validator import classify_period
 from adaptive_document_agent.models import Observation, ParsedDocument, SourceEvidence
 from adaptive_document_agent.models.table import ExtractedTable
@@ -247,6 +252,19 @@ class ObservationExtractor:
             term in metric.casefold() for term in ("liabilit", "cash", "balance", "receiv", "payab", "inventor", "asset", "equity", "资产", "负债", "结余", "现金")
         )
         period_sem = classify_period(period, is_balance_sheet=is_bs)
+        pres_label = sanitize_metric_label(metric)
+        disp_val = ""
+        effective_raw_unit = number.raw_unit or table.default_raw_unit
+        if value is not None:
+            semantic_obj = classify_metric(metric, value=value, raw_unit=effective_raw_unit, unit=unit)
+            disp_val = format_metric_display_value(
+                raw,
+                value,
+                semantic_obj,
+                raw_unit=effective_raw_unit,
+                currency=currency,
+                compact=False,
+            )
 
         return Observation(
             id=stable_id("observation", table.table_id, row_index, column, column_label, period, raw),
@@ -254,7 +272,7 @@ class ObservationExtractor:
             value=value,
             raw_value=raw,
             unit=unit,
-            raw_unit=number.raw_unit or table.default_raw_unit,
+            raw_unit=effective_raw_unit,
             unit_scale=scale,
             currency=currency,
             period=period,
@@ -274,6 +292,10 @@ class ObservationExtractor:
             semantic_type=semantic_type,
             unit_family=unit_family,
             display_unit=display_unit,
+            display_value=disp_val,
+            presentation_label=pres_label,
+            normalized_value=value,
+            normalized_unit=unit,
             period_type=period_sem.period_type,
             as_of_date=period_sem.as_of_date or (period_sem.clean_label if (is_bs or period_sem.period_type == "balance_sheet_date") else None),
             audited_status="unaudited" if period_sem.is_unaudited else "audited",
@@ -322,6 +344,15 @@ class ObservationExtractor:
                 semantic = classify_metric(metric, value=number.value, raw_unit=number.raw_unit, unit=number.unit)
                 period_sem = classify_period(period)
                 unit_val = "multiple" if semantic.is_multiple else ("percent" if semantic.is_percentage else (number.unit or semantic.metric_type))
+                pres_label = sanitize_metric_label(metric)
+                disp_val = format_metric_display_value(
+                    raw,
+                    number.value,
+                    semantic,
+                    raw_unit=number.raw_unit,
+                    currency=number.currency,
+                    compact=False,
+                )
                 output.append(
                     Observation(
                         id=stable_id("observation", page, match.start(), metric, period),
@@ -338,6 +369,10 @@ class ObservationExtractor:
                         semantic_type=semantic.semantic_type,
                         unit_family=semantic.unit_family,
                         display_unit=semantic.display_unit,
+                        display_value=disp_val,
+                        presentation_label=pres_label,
+                        normalized_value=number.value,
+                        normalized_unit=unit_val,
                         period_type=period_sem.period_type,
                         audited_status="unaudited" if period_sem.is_unaudited else "audited",
                     )

@@ -128,9 +128,7 @@ class TableExtractor:
             headers = [cell or f"column_{index + 1}" for index, cell in enumerate(first)]
             for index, cell in enumerate(first):
                 if cell and is_year_cell(cell):
-                    match = re.search(r"(?:19|20)\d{2}", cell)
-                    if match:
-                        periods[index] = match.group(0)
+                    periods[index] = " ".join(cell.split())
             data_rows = raw[1:]
 
         words = self._words_above(page, found, distance=65)

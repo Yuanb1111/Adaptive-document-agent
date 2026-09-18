@@ -370,9 +370,11 @@ def _planned_observations(slide_plan: PresentationSlide, index: DocumentIndex) -
 
 def _add_planned_contents(presentation: Any, planned_slides: list[PresentationSlide]) -> None:
     slide = _base_slide(presentation, "Contents", "Presentation structure")
-    entries: list[str] = ["Company Overview"]
-    seen = {"company overview"}
+    entries: list[str] = []
+    seen: set[str] = set()
     defaults = {
+        "company_overview": "Company Overview",
+        "executive_summary": "Executive Summary",
         "analysis": "Analysis",
         "risks": "Key Risks and Watch Items",
         "data_quality": "Data Quality",
@@ -389,10 +391,6 @@ def _add_planned_contents(presentation: Any, planned_slides: list[PresentationSl
         if key not in seen:
             seen.add(key)
             entries.append(label)
-
-    # Ensure Appendix is represented
-    if "appendix" not in seen:
-        entries.append("Appendix")
 
     # Balanced 2-column grid layout preventing overflow
     total_count = len(entries)
@@ -555,26 +553,8 @@ def _is_calc_artifact(text: str) -> bool:
 
 
 def _sanitize_investor_narrative(text: str) -> str:
-    clean = text
-    for phrase, replacement in (
-        ("Calculated change result: ", "Analysis indicates "),
-        ("calculated change result: ", "analysis indicates "),
-        ("Calculated change result", "Analysis indicates"),
-        ("calculated result", "analysis indicates"),
-        ("Based on extracted observations", "Based on reported disclosures"),
-        ("based on extracted observations", "based on reported disclosures"),
-        ("extracted observations", "reported disclosures"),
-        ("retained facts", "reported data"),
-        ("retained fact", "reported figure"),
-        ("retained evidence", "source disclosures"),
-    ):
-        clean = re.sub(re.escape(phrase), replacement, clean, flags=re.IGNORECASE)
-    clean = re.sub(r"(?i)\bincreased by -([0-9.]+)", r"decreased by \1", clean)
-    clean = re.sub(r"(?i)\bgrew by -([0-9.]+)", r"contracted by \1", clean)
-    clean = re.sub(r"(?i)\bdeclined by -([0-9.]+)", r"increased by \1", clean)
-    clean = re.sub(r"(?i)\bnet loss widened by -([0-9.]+)", r"net loss narrowed by \1", clean)
-    clean = re.sub(r"(?i)\bnet profit was -([0-9.]+)%?", r"net loss was \1", clean)
-    return clean.strip()
+    from adaptive_document_agent.services.language_qa import clean_presentation_text
+    return clean_presentation_text(text)
 
 
 def _add_planned_summary(
@@ -621,24 +601,44 @@ def _add_planned_data_slide(
 ) -> None:
     slide = _base_slide(presentation, slide_plan.title, slide_plan.message)
     content_top, content_h = _content_zone(slide)
-    selected = observations[:8]
-    card_h = min(1.00, (content_h - 3 * 0.12) / 4)
+
+    # Check if observations represent a multi-period series for comparison
+    periods_set = {obs.period for obs in observations if obs.period}
+    metrics_by_name: dict[str, list[Observation]] = {}
+    for obs in observations:
+        m_name = display_metric_name(obs)
+        metrics_by_name.setdefault(m_name, []).append(obs)
+
+    is_multi_period = len(periods_set) >= 2 and any(len(obs_list) >= 2 for obs_list in metrics_by_name.values())
+
+    if is_multi_period:
+        _render_data_comparison_table(slide, slide_plan, metrics_by_name, content_top, content_h)
+        return
+
+    selected = observations[:4]
+    card_count = len(selected)
+    card_h = min(1.30, (content_h - 0.20) / max(card_count, 1)) if card_count <= 2 else min(1.10, (content_h - 0.15) / 2)
 
     for index, item in enumerate(selected):
-        column = index % 2
-        row = index // 2
-        left = 0.45 + column * 5.95
-        y = content_top + row * (card_h + 0.12)
+        if card_count <= 2:
+            left = 0.45 + index * 5.95
+            y = content_top + 0.40
+            w = 5.75
+        else:
+            column = index % 2
+            row = index // 2
+            left = 0.45 + column * 5.95
+            y = content_top + row * (card_h + 0.20)
+            w = 5.75
         pages = ", ".join(map(str, sorted({source.page for source in item.evidence})))
 
-        # Use metric semantic classifier to avoid "% of RMB" or labeling currency as percent
         semantic = classify_metric(
             display_metric_name(item),
             value=item.value,
             raw_unit=item.raw_unit,
             unit=item.unit,
         )
-        metric_title = semantic.clean_name
+        metric_title = semantic.short_display_name or semantic.clean_name
 
         value_str = format_metric_display_value(
             item.raw_value,
@@ -648,16 +648,88 @@ def _add_planned_data_slide(
             currency=item.currency,
         )
 
-        # Format period cleanly (e.g. 30 Apr 2025*)
         is_bs = any(term in metric_title.casefold() for term in ("liabilit", "cash", "balance", "receiv", "payab", "inventor"))
         period_str = format_period_label(item.period, is_balance_sheet=is_bs)
 
-        _panel(slide, left, y, 5.75, card_h, fill=FOURIER_BG_CARD)
+        _panel(slide, left, y, w, card_h, fill=FOURIER_BG_CARD)
         _text(slide, _summary_text(metric_title, 48), left + 0.20, y + 0.12, 3.60, 0.32, size=12, color=FOURIER_MUTED, bold=True)
         _text(slide, _summary_text(value_str, 42), left + 0.20, y + 0.46, 3.60, 0.45, size=19, color=FOURIER_DARK, bold=True)
         _text(slide, period_str or item.entity or "Reported value", left + 3.80, y + 0.50, 1.75, 0.30, size=11, color=FOURIER_TECH_BLUE, bold=True, align="right")
         if pages:
             _text(slide, f"p. {pages}", left + 4.30, y + 0.12, 1.25, 0.24, size=9, color=FOURIER_MUTED, align="right")
+
+
+def _render_data_comparison_table(
+    slide: Any,
+    slide_plan: PresentationSlide,
+    metrics_by_name: dict[str, list[Observation]],
+    content_top: float,
+    content_h: float,
+) -> None:
+    from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
+    from pptx.util import Inches
+    from adaptive_document_agent.document_model import period_sort_key
+    from adaptive_document_agent.services.language_qa import clean_metric_label
+
+    all_periods = sorted(
+        {obs.period for obs_list in metrics_by_name.values() for obs in obs_list if obs.period},
+        key=period_sort_key,
+    )
+    headers = ["Metric"] + [format_period_label(p) or p for p in all_periods]
+    rows: list[tuple[str, list[str]]] = []
+    all_pages: set[int] = set()
+
+    for raw_m_name, obs_list in metrics_by_name.items():
+        pres_label = clean_metric_label(raw_m_name)
+        obs_by_p = {obs.period: obs for obs in obs_list if obs.period}
+        vals: list[str] = []
+        for p in all_periods:
+            obs = obs_by_p.get(p)
+            if obs:
+                semantic = classify_metric(display_metric_name(obs), value=obs.value, raw_unit=obs.raw_unit, unit=obs.unit)
+                val_str = format_metric_display_value(obs.raw_value, obs.value, semantic, raw_unit=_display_source_unit(obs), currency=obs.currency, compact=True)
+                vals.append(val_str)
+                all_pages.update(s.page for s in obs.evidence if getattr(s, "page", None))
+            else:
+                vals.append("—")
+        rows.append((pres_label, vals))
+
+    num_rows = len(rows) + 1
+    num_cols = len(headers)
+    table_top = content_top + 0.15
+    table_h = min(4.20, num_rows * 0.45)
+    table_shape = slide.shapes.add_table(num_rows, num_cols, Inches(0.85), Inches(table_top), Inches(10.90), Inches(table_h))
+    table = table_shape.table
+
+    metric_w = max(3.50, 10.90 - (num_cols - 1) * 1.60)
+    col_w = (10.90 - metric_w) / max(num_cols - 1, 1)
+    table.columns[0].width = Inches(metric_w)
+    for c in range(1, num_cols):
+        table.columns[c].width = Inches(col_w)
+
+    for c, h in enumerate(headers):
+        cell = table.cell(0, c)
+        cell.text = h
+        _cell_style(cell, fill=FOURIER_PURPLE, color=WHITE, bold=True, size=11.0)
+        cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+        if c > 0:
+            cell.text_frame.paragraphs[0].alignment = PP_ALIGN.RIGHT
+
+    for r_idx, (m_label, vals) in enumerate(rows, start=1):
+        row_fill = WHITE if r_idx % 2 == 0 else FOURIER_BG_CARD
+        cell0 = table.cell(r_idx, 0)
+        cell0.text = m_label
+        _cell_style(cell0, fill=row_fill, color=FOURIER_DARK, bold=True, size=10.5)
+        cell0.vertical_anchor = MSO_ANCHOR.MIDDLE
+        for c_idx, val in enumerate(vals, start=1):
+            cell = table.cell(r_idx, c_idx)
+            cell.text = val
+            _cell_style(cell, fill=row_fill, color=FOURIER_DARK, bold=False, size=10.5)
+            cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+            cell.text_frame.paragraphs[0].alignment = PP_ALIGN.RIGHT
+
+    if all_pages:
+        _text(slide, f"Source pages  {', '.join(map(str, sorted(all_pages)))}", 0.85, 6.25, 10.90, 0.25, size=9.5, color=FOURIER_MUTED)
 
 
 def _add_planned_text_slide(presentation: Any, result: PipelineResult, slide_plan: PresentationSlide) -> None:
@@ -1311,13 +1383,15 @@ def _add_evidence_table_slides(
         )
         unit_str = _appendix_display_unit(item, semantic)
         display_value = _appendix_display_value(item, semantic)
-        period_key = item.period or "Reported"
+        is_item_bs = any(term in metric_name.casefold() for term in ("liabilit", "cash", "balance", "receiv", "payab", "inventor", "asset", "equity"))
+        period_key = format_period_label(item.period, is_balance_sheet=is_item_bs) or item.period or "Reported"
         all_periods_set.add(period_key)
 
         theme_dict = metrics_by_theme.setdefault(theme, {})
         metric_entry = theme_dict.setdefault(metric_name, {"unit": unit_str, "periods": {}, "pages": set()})
 
-        metric_entry["periods"][period_key] = display_value
+        if period_key not in metric_entry["periods"] or display_value != "—":
+            metric_entry["periods"][period_key] = display_value
         for ev in item.evidence:
             if getattr(ev, "page", None):
                 metric_entry["pages"].add(ev.page)
@@ -1383,18 +1457,29 @@ def _add_evidence_table_slides(
         slide = _base_slide(presentation, title, slide_subtitle)
         content_top, content_h = _content_zone(slide)
 
-        formatted_headers = ["Financial Metric", "Unit"] + [
-            format_period_label(p, is_balance_sheet=is_bs) or p
-            for p in p_chunk
-        ]
+        # Deduplicate and filter out columns that have no values across all metrics in this spec
+        active_p_chunk = []
+        for p in p_chunk:
+            has_val = any(
+                m_data["periods"].get(p) not in (None, "", "—")
+                for _, metrics_dict in theme_entries
+                for m_data in metrics_dict.values()
+            )
+            if has_val and p not in active_p_chunk:
+                active_p_chunk.append(p)
+
+        if not active_p_chunk:
+            active_p_chunk = p_chunk[:1] if p_chunk else ["Reported"]
+
+        formatted_headers = ["Financial Metric", "Unit"] + active_p_chunk
 
         table_rows: list[tuple[str, str, list[str], bool]] = []
         slide_pages: set[int] = set()
 
         for theme, metrics_dict in theme_entries:
-            table_rows.append((theme, "", ["" for _ in p_chunk], True))
+            table_rows.append((theme, "", ["" for _ in active_p_chunk], True))
             for m_name, m_data in metrics_dict.items():
-                row_vals = [m_data["periods"].get(p, "—") for p in p_chunk]
+                row_vals = [m_data["periods"].get(p, "—") for p in active_p_chunk]
                 table_rows.append((m_name, m_data.get("unit", ""), row_vals, False))
                 slide_pages.update(m_data["pages"])
 
@@ -2061,16 +2146,19 @@ def _appendix_display_value(item: Observation, semantic: Any) -> str:
     if not semantic.is_currency or item.value is None:
         return str(item.raw_value)
 
-    source_unit = normalize_raw_unit(item.raw_unit, default_currency=item.currency or "RMB").casefold()
-    scale = item.unit_scale or 1.0
-    if scale == 1.0:
+    if (item.unit_scale or 1.0) > 1.0:
+        base_val = float(item.value)
+    else:
+        source_unit = normalize_raw_unit(item.raw_unit, default_currency=item.currency or "RMB").casefold()
+        scale = 1.0
         if "'000" in source_unit or "thousand" in source_unit:
             scale = 1_000.0
         elif "billion" in source_unit:
             scale = 1_000_000_000.0
         elif "million" in source_unit:
             scale = 1_000_000.0
-    value_in_millions = float(item.value) * scale / 1_000_000.0
+        base_val = float(item.value) * scale
+    value_in_millions = base_val / 1_000_000.0
     return _format_scaled(value_in_millions, 1.0)
 
 
@@ -2125,9 +2213,12 @@ def _page_ranges(result: PipelineResult) -> str:
     return ", ".join(f"{start}-{end}" for start, end in ranges) if ranges else f"1-{result.document.page_count}"
 
 
-def _summary_text(value: str, maximum: int) -> str:
-    clean = " ".join(value.replace("—", "-").replace("–", "-").split())
+def _summary_text(value: str, maximum: int, allow_ellipsis: bool = False) -> str:
+    from adaptive_document_agent.services.language_qa import clean_presentation_text
+    clean = clean_presentation_text(" ".join(value.replace("—", "-").replace("–", "-").split()))
     if len(clean) <= maximum:
         return clean
-    clipped = clean[:maximum].rsplit(" ", 1)[0].rstrip(" ,:;-")
-    return f"{clipped}..." if clipped else f"{clean[:maximum]}..."
+    clipped = clean[:maximum].rsplit(" ", 1)[0].rstrip(" ,:;-.")
+    if allow_ellipsis:
+        return f"{clipped}..." if clipped else f"{clean[:maximum]}..."
+    return clipped if clipped else clean[:maximum]

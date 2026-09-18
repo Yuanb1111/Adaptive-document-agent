@@ -92,12 +92,11 @@ def format_period_label(
             return f"{last_day} {mon_str} 20{year_suffix}*"
         return f"{prefix}20{year_suffix}"
 
-    # 5. Explicit FY
+    # 5. Explicit FY or year
     if m := re.match(r"(?i)^(?:FY\s*)?(20\d{2})$", p):
         year = m.group(1)
-        if is_balance_sheet and is_unaudited:
-            return f"30 Apr {year}*"
-        return f"FY{year}"
+        star = "*" if (is_unaudited or "*" in p) else ""
+        return f"FY{year}{star}"
 
     if is_unaudited and not p.endswith("*"):
         return f"{p}*"
@@ -170,22 +169,41 @@ def classify_period(period: str | None, *, is_balance_sheet: bool = False) -> Pe
     as_of: str | None = None
     if m := re.search(r"\b(20\d{2})[-/.](0[1-9]|1[0-2])[-/.](0[1-9]|[12]\d|3[01])\b", p):
         as_of = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    elif m := re.search(r"(?i)\b([0-3]?\d)\s+([A-Za-z]+)\s+(20\d{2})\b", p):
+        d, m_str, y = int(m.group(1)), m.group(2).casefold(), int(m.group(3))
+        if m_str in MONTH_MAP:
+            as_of = f"{y}-{MONTH_MAP[m_str]:02d}-{d:02d}"
+    elif m := re.search(r"(?i)\b([A-Za-z]+)\s+([0-3]?\d)[,\s]+(20\d{2})\b", p):
+        m_str, d, y = m.group(1).casefold(), int(m.group(2)), int(m.group(3))
+        if m_str in MONTH_MAP:
+            as_of = f"{y}-{MONTH_MAP[m_str]:02d}-{d:02d}"
     elif m := re.search(r"(20\d{2})年([0-1]?\d)月([0-3]?\d)日?", p):
         as_of = f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
 
-    ptype = "fiscal_year"
-    if as_of or (is_balance_sheet and (is_interim or any(mon in formatted.casefold() for mon in ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov")))):
+    if as_of:
+        ptype = "balance_sheet_date" if is_balance_sheet else "point_in_time"
+    elif is_balance_sheet and (is_interim or any(mon in formatted.casefold() for mon in ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov"))):
         ptype = "balance_sheet_date"
+    elif re.search(r"(?i)\b(?:Q[1-4]|1Q|2Q|3Q|4Q)\s*(?:20)?\d{2}\b", p):
+        ptype = "quarter"
+    elif re.search(r"(?i)\b(?:1H|2H|H1|H2)\s*(?:20)?\d{2}\b", p):
+        ptype = "interim_period"
+    elif re.search(r"(?i)\bYTD\b", p):
+        ptype = "ytd"
     elif is_interim and re.match(r"(?i)^[0-9]{1,2}m", p):
         ptype = "interim_flow"
     elif is_interim:
         ptype = "interim_flow"
+    elif re.match(r"(?i)^(?:FY\s*)?(?:19|20)\d{2}$", p):
+        ptype = "fiscal_year"
+    else:
+        ptype = "generic"
 
     return PeriodSemantic(
         period_type=ptype,
         clean_label=formatted,
         is_unaudited=is_unaudited,
         is_interim=is_interim,
-        as_of_date=as_of or formatted if ptype == "balance_sheet_date" else None,
+        as_of_date=as_of or (formatted if ptype in {"balance_sheet_date", "point_in_time"} else None),
     )
 

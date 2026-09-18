@@ -128,26 +128,39 @@ def format_compact_currency(
     raw_unit: str | None = None,
     currency: str | None = "RMB",
     unit_scale: float | None = None,
+    is_base_value: bool | None = None,
 ) -> str:
     """Format currency values into compact financial notation (e.g. 'RMB 174.3m', 'RMB 1.57bn', 'RMB 450k').
 
-    Handles both already-scaled amounts (e.g. 174,314,000.0) and unscaled thousands figures.
+    Handles both already-scaled base amounts (e.g. 174,314,000.0) and unscaled thousands figures.
     """
     curr = normalize_currency_symbol(currency)
-
-    # Detect if scale factor needs to be applied
     val = float(amount)
-    if unit_scale and unit_scale > 1.0 and abs(val) < 100_000_000:
-        val = val * unit_scale
-    elif raw_unit and any(term in raw_unit.lower() for term in ("thousand", "'000", "inthousands")) and abs(val) < 100_000_000:
-        val = val * 1000.0
+
+    if is_base_value is True:
+        # Value is already in base currency units: do not multiply by scale
+        pass
+    elif is_base_value is False:
+        if unit_scale and unit_scale > 1.0:
+            val = val * unit_scale
+        elif raw_unit and any(term in raw_unit.lower() for term in ("thousand", "'000", "inthousands")):
+            val = val * 1000.0
+        elif raw_unit and any(term in raw_unit.lower() for term in ("billion", "bn", "十亿")):
+            val = val * 1_000_000_000.0
+        elif raw_unit and any(term in raw_unit.lower() for term in ("million", "mn", "百万")):
+            val = val * 1_000_000.0
+    else:
+        # Backward-compatible auto-detection for standalone unscaled numbers passed without flag
+        if unit_scale and unit_scale > 1.0 and abs(val) < 20_000_000:
+            val = val * unit_scale
+        elif raw_unit and any(term in raw_unit.lower() for term in ("thousand", "'000", "inthousands")) and abs(val) < 20_000_000:
+            val = val * 1000.0
 
     is_negative = val < 0
     abs_val = abs(val)
 
     if abs_val >= 1_000_000_000:
         scaled = abs_val / 1_000_000_000.0
-        # If integer or single decimal, format cleanly
         formatted = f"{curr} {scaled:.2f}bn" if scaled < 10 else f"{curr} {scaled:.1f}bn"
     elif abs_val >= 1_000_000:
         scaled = abs_val / 1_000_000.0
@@ -166,45 +179,9 @@ def format_compact_currency(
 
 def shorten_metric_title(name: str) -> str:
     """Shorten verbose accounting lines for KPI cards and chart titles."""
-    clean = " ".join(name.strip().split())
+    from adaptive_document_agent.services.language_qa import clean_metric_label
 
-    # Map expense ratios
-    if re.search(r"(?i)cost\s+of\s+(?:sales|revenue)\s*(?::\s*share\s+of\s+revenue|\s*as\s*%\s*of\s*revenue|\s*/\s*revenue|\s*ratio)", clean):
-        return "Cost of Sales / Revenue"
-    if re.search(r"(?i)selling\s+(?:and|&)\s+distribution(?:\s+expenses?)?\s*(?::\s*share\s+of\s+revenue|\s*as\s*%\s*of\s*revenue|\s*/\s*revenue|\s*ratio)", clean):
-        return "Selling & Distribution / Revenue"
-    if re.search(r"(?i)administrative\s+expenses?\s*(?::\s*share\s+of\s+revenue|\s*as\s*%\s*of\s*revenue|\s*/\s*revenue|\s*ratio)", clean):
-        return "Admin / Revenue"
-    if re.search(r"(?i)research\s+(?:and|&)\s+development(?:\s+expenses?)?\s*(?::\s*share\s+of\s+revenue|\s*as\s*%\s*of\s*revenue|\s*/\s*revenue|\s*ratio)", clean):
-        return "R&D / Revenue"
-
-    # Map balance sheet items
-    if re.search(r"(?i)\bcash\s+and\s+cash\s+equivalents\b", clean):
-        return "Cash & Cash Equivalents"
-    if re.search(r"(?i)\btrade\s+and\s+(?:bills\s+)?receivables\b", clean):
-        return "Trade Receivables"
-    if re.search(r"(?i)\btrade\s+and\s+(?:bills\s+)?payables\b", clean):
-        return "Trade Payables"
-    if re.search(r"(?i)\bgross\s+profit\s+margin\b", clean):
-        return "Gross Margin"
-    if re.search(r"(?i)\boperating\s+profit\s+margin\b", clean):
-        return "Operating Margin"
-    if re.search(r"(?i)\bnet\s+profit\s+margin\b", clean):
-        return "Net Margin"
-    if re.search(r"(?i)\bcontract\s+liabilities\b", clean):
-        return "Contract Liabilities"
-    if re.search(r"(?i)\bgearing\s+ratio\b", clean):
-        return "Gearing Ratio"
-    if re.search(r"(?i)\bcurrent\s+ratio\b", clean):
-        return "Current Ratio"
-    if re.search(r"(?i)\bquick\s+ratio\b", clean):
-        return "Quick Ratio"
-
-    # Remove verbose prefixes/suffixes
-    clean = re.sub(r"(?i)^the\s+group'?s?\s+", "", clean)
-    clean = re.sub(r"(?i)\s+for\s+the\s+year$", "", clean)
-    clean = re.sub(r"(?i)\s+for\s+the\s+period$", "", clean)
-    return clean
+    return clean_metric_label(name)
 
 
 def is_expense_ratio_metric(name: str) -> bool:
@@ -270,8 +247,8 @@ def format_financial_movement(
     if is_loss or (start_val < 0 and end_val < 0):
         s_abs = abs(start_val)
         e_abs = abs(end_val)
-        start_fmt = format_compact_currency(s_abs, currency=currency, unit_scale=scale)
-        end_fmt = format_compact_currency(e_abs, currency=currency, unit_scale=scale)
+        start_fmt = format_compact_currency(s_abs, currency=currency, is_base_value=True)
+        end_fmt = format_compact_currency(e_abs, currency=currency, is_base_value=True)
         if e_abs < s_abs:
             return f"Loss narrowed from {start_fmt} to {end_fmt}"
         return f"Loss widened from {start_fmt} to {end_fmt}"
@@ -279,7 +256,7 @@ def format_financial_movement(
     # 6. Liabilities / Indebtedness
     if is_liab and start_val > 0 and end_val > 0:
         diff_abs = abs(end_val - start_val)
-        diff_fmt = format_compact_currency(diff_abs, currency=currency, unit_scale=scale)
+        diff_fmt = format_compact_currency(diff_abs, currency=currency, is_base_value=True)
         action = "widened" if end_val > start_val else "narrowed"
         return f"Liability {action} by {diff_fmt}"
 
@@ -289,4 +266,4 @@ def format_financial_movement(
         return f"{pct_change:+.1f}%"
 
     diff_val = end_val - start_val
-    return format_compact_currency(diff_val, currency=currency, unit_scale=scale)
+    return format_compact_currency(diff_val, currency=currency, is_base_value=True)
