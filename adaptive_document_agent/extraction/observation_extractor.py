@@ -5,6 +5,7 @@ import re
 from adaptive_document_agent.document_model.metric_semantic_classifier import (
     classify_metric,
     format_metric_display_value,
+    is_financial_statement_metric,
     is_multiple_metric,
     sanitize_metric_label,
 )
@@ -186,20 +187,21 @@ class ObservationExtractor:
             semantic_type = "days"
             unit_family = "days"
             display_unit = "days"
-        elif col_type == "count":
+        elif col_type == "count" and not is_financial_statement_metric(metric):
             unit, currency, scale = "count", None, 1.0
             value = number.value
             semantic_type = "count"
             unit_family = "count"
             display_unit = "units"
         else:
-            # col_type is unknown / generic: determine semantics by metric and header
+            # col_type is unknown / generic / financial: determine semantics by metric and header
             semantic = classify_metric(
                 metric,
                 value=number.value,
                 raw_unit=number.raw_unit or table.default_raw_unit,
                 unit=unit or table.default_unit,
             )
+            is_fin = is_financial_statement_metric(metric) or semantic.is_currency
             if semantic.is_percentage or (("%" in header_lower or "percent" in header_lower) and not is_nonsensical_pct_header):
                 unit, currency, scale = "percent", None, 1.0
                 value = number.value
@@ -209,18 +211,21 @@ class ObservationExtractor:
                 if value is not None and (value > 1000.0 or value < -1000.0):
                     validation_status = "suspicious_alignment"
             elif (
-                any(term in header_lower for term in ("volume", "quantity", "units sold", "count", "shipment", "sales volume", "出货量", "销售量", "销量"))
-                or (
-                    any(term in metric.casefold() for term in ("volume", "quantity", "units sold", "shipment", "sales volume", "number of units", "fleet size", "heads", "sets", "pieces", "销量", "销售量", "出货量", "数量", "台", "件", "套"))
-                    and not any(asp in metric.casefold() for asp in ("average selling price", "asp", "unit price", "price per", "单价", "平均售价"))
+                not is_fin
+                and (
+                    any(term in header_lower for term in ("volume", "quantity", "units sold", "count", "shipment", "sales volume", "出货量", "销售量", "销量"))
+                    or (
+                        any(term in metric.casefold() for term in ("volume", "quantity", "units sold", "shipment", "sales volume", "number of units", "fleet size", "heads", "sets", "pieces", "销量", "销售量", "出货量", "数量", "台", "件", "套"))
+                        and not any(asp in metric.casefold() for asp in ("average selling price", "asp", "unit price", "price per", "单价", "平均售价"))
+                    )
                 )
             ):
                 unit, currency, scale = "count", None, 1.0
                 value = number.value
                 semantic_type, unit_family, display_unit = "count", "count", "units"
-            elif semantic.is_currency or unit == "currency" or table.default_unit == "currency":
+            elif is_fin or unit == "currency" or table.default_unit == "currency" or table.default_currency:
                 unit = "currency"
-                currency = currency or table.default_currency
+                currency = currency or (table.column_currencies[column] if column is not None and column < len(table.column_currencies) and table.column_currencies[column] else None) or table.default_currency
                 scale = (table.column_scales[column] if column is not None and column < len(table.column_scales) and table.column_scales[column] else None) or table.default_unit_scale or 1.0
                 value = number.value * scale if (number.value is not None and scale != 1.0) else number.value
                 semantic_type = "monetary_amount"
@@ -230,12 +235,12 @@ class ObservationExtractor:
                     validation_status = "suspicious_alignment"
                     anomaly_notes.append(f"Amount column contains explicit '%' in raw cell: '{raw}'")
             else:
-                unit = unit or table.default_unit or "generic"
+                unit = unit or table.default_unit or "unknown"
                 currency = currency or table.default_currency
                 value = number.value
                 semantic_type = semantic.semantic_type
                 unit_family = semantic.unit_family
-                display_unit = semantic.display_unit
+                display_unit = semantic.display_unit if semantic.display_unit != "units" else "unknown"
 
         confidence = min(table.confidence, number.confidence, 0.9 if period else 0.75)
         evidence = SourceEvidence(

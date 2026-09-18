@@ -332,10 +332,18 @@ class PresentationPlanRepairer:
 
         if not resolved and title.strip():
             norm_title = cls._normalized_text(title)
+            ignored_tokens = {
+                "cost", "costs", "profit", "profits", "expense", "expenses", "revenue",
+                "loss", "losses", "income", "net", "gross", "financial", "operating",
+                "trajectory", "analysis", "trend", "chart", "values", "reported", "and", "the",
+            }
+            title_tokens = {t for t in norm_title.split() if len(t) >= 3 and t not in ignored_tokens}
             for norm_key, cid in normalized_charts.items():
-                if norm_key and len(norm_key) >= 4 and (norm_key in norm_title or norm_title in norm_key):
-                    resolved.append(cid)
-                    break
+                if norm_key:
+                    key_tokens = {t for t in norm_key.split() if len(t) >= 3 and t not in ignored_tokens}
+                    if title_tokens and key_tokens and (title_tokens & key_tokens):
+                        resolved.append(cid)
+                        break
 
         return cls._unique(resolved)
 

@@ -299,7 +299,7 @@ def test_negative_value_language_sanitization() -> None:
     assert "widened" in text_liab.lower() or "increased" in text_liab.lower()
 
     text_narrowed = format_metric_change(200.0, 150.0, 1.0, sem_liab)
-    assert "narrowed" in text_narrowed.lower() or "contracted" in text_narrowed.lower()
+    assert "decreased" in text_narrowed.lower() or "narrowed" in text_narrowed.lower() or "contracted" in text_narrowed.lower()
 
     narrative_in = "Net loss widened by -12.5% while revenue increased by -5.2% and net profit was -30.0m."
     sanitized = _sanitize_investor_narrative(narrative_in)

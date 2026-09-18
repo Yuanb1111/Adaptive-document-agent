@@ -72,13 +72,23 @@ def sanitize_company_identity_contradictions(result: PipelineResult) -> list[QAI
         return fixes
 
     company = plan.company
-    is_resolved = company.identity_state == "RESOLVED" or (company.name and "unnamed" not in company.name.casefold())
+    # identity_state is the single canonical authority.  A plausible-looking
+    # string alone is not enough to promote an unevidenced identity.
+    is_resolved = company.identity_state == "RESOLVED" and bool(company.name) and "unnamed" not in company.name.casefold()
     company_name = company.name or ""
 
     _UNNAMED_ISSUER_PHRASES = [
         "unnamed issuer",
+        "issuer unnamed",
         "issuer unknown",
         "unidentified issuer",
+        "unnamed company",
+        "company unnamed",
+        "issuer is unnamed",
+        "company is unnamed",
+        "issuer not named",
+        "company not named",
+        "unnamed entity",
         "issuer name is not stated",
         "company name is not stated",
         "issuer/company name is not stated",
@@ -92,17 +102,37 @@ def sanitize_company_identity_contradictions(result: PipelineResult) -> list[QAI
     def _clean_text(text: str) -> str:
         """Remove or replace unnamed-issuer disclaimers when company is resolved."""
         result_text = text
-        result_text = _re.sub(r"(?i)\(?(?:prospectus|document)\s+for\s+an\s+unnamed\s+issuer\)?", "", result_text)
-        result_text = _re.sub(r"(?i)\bunnamed\s+issuer\b", company_name, result_text)
+        result_text = _re.sub(r"(?i)\(?(?:prospectus|document)\s+for\s+an?\s+(?:unnamed\s+issuer|issuer\s+unnamed)\)?", f"(prospectus for {company_name})", result_text)
+        result_text = _re.sub(r"(?i)\b(?:unnamed\s+issuer|issuer\s+unnamed)\b", company_name, result_text)
+        result_text = _re.sub(r"(?i)\b(?:unnamed\s+company|company\s+unnamed)\b", company_name, result_text)
+        result_text = _re.sub(r"(?i)\b(?:issuer|company)\s+(?:is\s+)?unnamed\b", company_name, result_text)
         result_text = _re.sub(r"(?i)\bissuer\s+unknown\b", company_name, result_text)
         result_text = _re.sub(r"(?i)\bunidentified\s+issuer\b", company_name, result_text)
-        result_text = _re.sub(r"(?i)\bissuer(?:/company)?\s+name\s+is\s+not\s+stated\.?\s*", "", result_text)
-        result_text = _re.sub(r"(?i)\bthe\s+issuer\s+name\s+is\s+not\s+stated\.?\s*", "", result_text)
-        result_text = _re.sub(r"(?i)\bcompany\s+name\s+is\s+not\s+stated\.?\s*", "", result_text)
+        result_text = _re.sub(r"(?i)\b(?:the\s+)?(?:issuer|company)(?:/company)?\s+name\s+is\s+not\s+stated\.?\s*", "", result_text)
+        result_text = _re.sub(r"(?i)\b(?:the\s+)?(?:issuer|company)\s+(?:is\s+)?not\s+named\.?\s*", "", result_text)
         result_text = _re.sub(r"[ \t]{2,}", " ", result_text).strip(" .")
         return result_text
 
     if is_resolved:
+        # Sanitize profile data_quality_notes
+        if hasattr(result, "profile") and result.profile:
+            cleaned_notes = []
+            for note in result.profile.data_quality_notes:
+                if _contains_unnamed(note):
+                    cleaned = _clean_text(note)
+                    if cleaned:
+                        cleaned_notes.append(cleaned)
+                else:
+                    cleaned_notes.append(note)
+            result.profile.data_quality_notes = cleaned_notes
+
+        # Sanitize validation_warnings
+        if hasattr(result, "validation_warnings"):
+            result.validation_warnings = [
+                w for w in result.validation_warnings
+                if not (hasattr(w, "message") and _contains_unnamed(w.message))
+            ]
+
         # Sanitize company description
         if company.one_line_description and _contains_unnamed(company.one_line_description):
             cleaned = _clean_text(company.one_line_description)
@@ -114,8 +144,25 @@ def sanitize_company_identity_contradictions(result: PipelineResult) -> list[QAI
                     message="Removed 'unnamed issuer' contradiction from resolved company description.",
                 ))
 
+        # Presentation and slide titles are part of the same identity surface.
+        if plan.title and _contains_unnamed(plan.title):
+            plan.title = _clean_text(plan.title)
+            fixes.append(QAItem(
+                code="company_identity_reconciled",
+                severity="INFO",
+                message="Removed issuer-name contradiction from presentation title.",
+            ))
+
         # Sanitize all slides: bullets, message, subtitle
         for slide in plan.slides:
+            if slide.title and _contains_unnamed(slide.title):
+                slide.title = _clean_text(slide.title)
+                fixes.append(QAItem(
+                    code="company_identity_reconciled",
+                    severity="INFO",
+                    message=f"Removed issuer-name contradiction from {slide.slide_type} slide title.",
+                    slide_id=slide.id,
+                ))
             # Bullets: remove bullets that are unnamed-issuer disclaimers
             clean_bullets = []
             for b in slide.bullets:
@@ -328,9 +375,38 @@ def run_comprehensive_qa(result: PipelineResult, auto_repair: bool = True) -> QA
 
     # 5. Check chart mismatches
     if result.presentation_plan:
+        # Imported lazily to avoid making the QA model layer depend on PPTX at
+        # module-import time.
+        from adaptive_document_agent.services.pptx_export import (
+            _extract_topic_tokens,
+            _metrics_match_topic,
+        )
+
         obs_ids = {obs.id for obs in result.observations}
+        obs_by_id = {obs.id: obs for obs in result.observations}
         chart_by_id = {c.id: c for c in result.charts}
         for slide in result.presentation_plan.slides:
+            title_tokens = _extract_topic_tokens(slide.title)
+
+            # Validate directly linked table/KPI rows against a specific slide
+            # topic. Broad titles intentionally have no strong topic tokens.
+            if title_tokens and slide.slide_type == "analysis":
+                for observation_id in slide.observation_ids:
+                    observation = obs_by_id.get(observation_id)
+                    if observation and not _metrics_match_topic(observation, "", slide.title):
+                        report.critical_errors.append(
+                            QAItem(
+                                code="slide_topic_mismatch",
+                                severity="CRITICAL",
+                                message=(
+                                    f"Slide {slide.id} topic '{slide.title}' is not aligned with linked "
+                                    f"observation {observation.id} ({observation.metric_original})."
+                                ),
+                                slide_id=slide.id,
+                                related_ids=[observation.id],
+                            )
+                        )
+
             for cid in getattr(slide, "chart_ids", []):
                 if cid not in chart_by_id:
                     report.critical_errors.append(
@@ -353,6 +429,30 @@ def run_comprehensive_qa(result: PipelineResult, auto_repair: bool = True) -> QA
                                 slide_id=slide.id,
                             )
                         )
+                    elif title_tokens and slide.slide_type == "analysis":
+                        chart_observations = [obs_by_id[oid] for oid in chart.observation_ids]
+                        chart_canon = (
+                            chart_observations[0].metric_canonical
+                            or chart_observations[0].metric_original
+                        ).strip().casefold() if chart_observations else ""
+                        mismatched = [
+                            item for item in chart_observations
+                            if not _metrics_match_topic(item, chart_canon, slide.title)
+                        ]
+                        if mismatched:
+                            report.critical_errors.append(
+                                QAItem(
+                                    code="chart_topic_mismatch",
+                                    severity="CRITICAL",
+                                    message=(
+                                        f"Chart {cid} on slide {slide.id} contains metrics unrelated to "
+                                        f"the slide topic '{slide.title}': "
+                                        + ", ".join(item.metric_original for item in mismatched)
+                                    ),
+                                    slide_id=slide.id,
+                                    related_ids=[item.id for item in mismatched],
+                                )
+                            )
 
     report.is_export_blocked = report.has_critical_errors
     return report
@@ -410,4 +510,3 @@ def generate_artifacts(result: PipelineResult, output_dir: Path | str) -> dict[s
         "slide_plan": slide_plan_file,
         "qa_report": qa_file,
     }
-

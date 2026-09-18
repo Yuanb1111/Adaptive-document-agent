@@ -177,6 +177,66 @@ _CURRENCY_KEYWORDS = (
     "权益总额",
 )
 
+_FINANCIAL_STATEMENT_KEYWORDS = (
+    "receivable",
+    "receivables",
+    "asset",
+    "assets",
+    "liabilit",
+    "payable",
+    "payables",
+    "equity",
+    "expense",
+    "expenses",
+    "expenditure",
+    "cash",
+    "borrowing",
+    "borrowings",
+    "debt",
+    "indebtedness",
+    "revenue",
+    "profit",
+    "loss",
+    "cost",
+    "capex",
+    "capital expenditure",
+    "deficit",
+    "dividend",
+    "dividends",
+    "tax",
+    "working capital",
+    "share capital",
+    "retained earnings",
+    "reserve",
+    "reserves",
+    "应收",
+    "应付",
+    "资产",
+    "负债",
+    "权益",
+    "现金",
+    "开支",
+    "费用",
+    "收入",
+    "利润",
+    "亏损",
+    "成本",
+    "借款",
+    "资本开支",
+)
+
+
+def is_financial_statement_metric(name: str) -> bool:
+    """Return whether a metric represents a financial statement item."""
+    if not name:
+        return False
+    lower = name.strip().casefold()
+    if any(k in lower for k in _MARGIN_KEYWORDS) or any(k in lower for k in _SHARE_KEYWORDS):
+        return False
+    if any(k in lower for k in ("%", "margin", "ratio", "multiple", "days", "turnover", "dso", "dio", "dpo")):
+        return False
+    return any(k in lower for k in _FINANCIAL_STATEMENT_KEYWORDS) or any(k in lower for k in _CURRENCY_KEYWORDS)
+
 _DAYS_KEYWORDS = (
     "turnover days",
     "days sales outstanding",
@@ -252,7 +312,12 @@ def classify_metric(
 
     # 3. Volume / Count metrics (Units sold, Sales volume, Shipment)
     is_asp = any(asp in lower for asp in ("average selling price", "asp", "unit price", "price per", "单价", "平均售价"))
-    if any(k in lower for k in _VOLUME_KEYWORDS) and not is_asp and not any(k in lower for k in ("share", "%", "margin", "ratio", "revenue", "cost")):
+    is_fin = is_financial_statement_metric(clean)
+    volume_match = any(
+        bool(re.search(r"\b" + re.escape(k) + r"\b", lower)) if k.isascii() and k.isalnum() else k in lower
+        for k in _VOLUME_KEYWORDS
+    )
+    if volume_match and not is_fin and not is_asp and not any(k in lower for k in ("share", "%", "margin", "ratio", "revenue", "cost")):
         return MetricSemantic(
             metric_type="count",
             unit_family="count",
@@ -299,9 +364,9 @@ def classify_metric(
 
     # 5. Currency line items (Revenue, Gross profit, Loss from operations, Cash, Liabilities, etc.)
     # Protect absolute financial amounts from spurious '%' unit hints.
-    if any(k in lower for k in _CURRENCY_KEYWORDS):
+    if is_financial_statement_metric(clean) or any(k in lower for k in _CURRENCY_KEYWORDS):
         # Check if this is explicitly a share or margin sub-metric
-        if "share" in lower or "%" in lower or "margin" in lower or "/ revenue" in lower:
+        if any(k in lower for k in _SHARE_KEYWORDS) or "%" in lower or "margin" in lower or "/ revenue" in lower:
             return MetricSemantic(
                 metric_type="percentage",
                 unit_family="percentage",

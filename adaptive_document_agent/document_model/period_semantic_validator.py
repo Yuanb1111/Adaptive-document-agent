@@ -46,6 +46,33 @@ def format_period_label(
         return ""
     p = " ".join(str(period).strip().split())
 
+    num_word_map = {
+        "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+        "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12,
+        "一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6,
+        "七": 7, "八": 8, "九": 9, "十": 10, "十一": 11, "十二": 12,
+    }
+
+    # 0. Interim month flow periods: e.g. "six months ended 30 Jun 2021" -> "6M2021"
+    if not is_balance_sheet:
+        if m := re.search(r"(?i)(?:for\s+the\s+)?(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|\d{1,2})\s*months?\s*ended\s+.*?\b(20\d{2})\b", p):
+            count_str = m.group(1).casefold()
+            count_num = num_word_map.get(count_str, int(count_str) if count_str.isdigit() else None)
+            year_num = m.group(2)
+            if count_num:
+                star = "*" if (is_unaudited or "*" in p) else ""
+                return f"{count_num}M{year_num}{star}"
+
+        if m := re.search(r"(?:截至\s*)?(20\d{2})年.*?止\s*([一二三四五六七八九十0-9]{1,2})\s*个?月", p):
+            year_num = m.group(1)
+            count_str = m.group(2)
+            count_num = num_word_map.get(count_str, int(count_str) if count_str.isdigit() else None)
+            if count_num:
+                star = "*" if (is_unaudited or "*" in p) else ""
+                return f"{count_num}M{year_num}{star}"
+
+    is_bs_point = is_balance_sheet or bool(re.search(r"(?i)\b(?:as\s+at|as\s+of|at)\b", p))
+
     # 1. ISO Date: YYYY-MM-DD
     if m := re.search(r"\b(20\d{2})[-/.](0[1-9]|1[0-2])[-/.](0[1-9]|[12]\d|3[01])\b", p):
         year, month, day = int(m.group(1)), int(m.group(2)), int(m.group(3))
@@ -241,7 +268,14 @@ def classify_period(period: str | None, *, is_balance_sheet: bool = False) -> Pe
     elif m := re.search(r"(20\d{2})年([0-1]?\d)月([0-3]?\d)日?", p):
         as_of = f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
 
-    if as_of:
+    # A date inside an interim flow label is the period end, not a point-in-time
+    # balance-sheet observation.  Classify the duration before considering the
+    # embedded date.
+    formatted_basis = extract_period_basis(formatted)
+    if formatted_basis not in {"generic", "FY", "point_in_time"} and not is_balance_sheet:
+        ptype = "interim_flow"
+        as_of = None
+    elif as_of:
         ptype = "balance_sheet_date" if is_balance_sheet else "point_in_time"
     elif is_balance_sheet and (is_interim or any(mon in formatted.casefold() for mon in ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov"))):
         ptype = "balance_sheet_date"
@@ -251,7 +285,7 @@ def classify_period(period: str | None, *, is_balance_sheet: bool = False) -> Pe
         ptype = "interim_period"
     elif re.search(r"(?i)\bYTD\b", p):
         ptype = "ytd"
-    elif is_interim and re.match(r"(?i)^[0-9]{1,2}m", p):
+    elif re.match(r"(?i)^[0-9]{1,2}m", formatted) or (is_interim and re.match(r"(?i)^[0-9]{1,2}m", p)):
         ptype = "interim_flow"
     elif is_interim:
         ptype = "interim_flow"
@@ -267,4 +301,41 @@ def classify_period(period: str | None, *, is_balance_sheet: bool = False) -> Pe
         is_interim=is_interim,
         as_of_date=as_of or (formatted if ptype in {"balance_sheet_date", "point_in_time"} else None),
     )
+
+
+def extract_period_basis(period: str | None) -> str:
+    """Extract standard period basis duration/type ('FY', '6M', '3M', '4M', '9M', 'point_in_time', 'generic')."""
+    if not period:
+        return "generic"
+    p = str(period).strip()
+    if m := re.search(r"(?i)\b([0-9]{1,2})M(?:\d{2,4})?\b", p):
+        return f"{m.group(1)}M".upper()
+    if re.search(r"(?i)\b(?:1H|2H|H1|H2)\b", p):
+        return "6M"
+    if re.search(r"(?i)\b(?:Q[1-4]|[1-4]Q)\b", p):
+        return "3M"
+    if re.search(r"(?i)six\s*months?\s*ended", p) or "六个月" in p:
+        return "6M"
+    if re.search(r"(?i)three\s*months?\s*ended", p) or "三个月" in p:
+        return "3M"
+    if re.search(r"(?i)four\s*months?\s*ended", p) or "四个月" in p:
+        return "4M"
+    if re.search(r"(?i)nine\s*months?\s*ended", p) or "九个月" in p:
+        return "9M"
+    if re.search(r"(?i)\b(?:as\s+at|as\s+of)\b", p) or re.search(r"\b\d{1,2}\s+[A-Za-z]{3,}\s+\d{4}\b", p):
+        return "point_in_time"
+    if re.search(r"(?i)year\s*ended|^\s*(?:FY\s*)?(?:19|20)\d{2}\*?\s*$", p):
+        return "FY"
+    return "generic"
+
+
+def are_periods_comparable(p1: str | None, p2: str | None) -> tuple[bool, str]:
+    """Check if two periods are comparable for trends/movements (e.g. FY vs FY, 6M vs 6M)."""
+    b1 = extract_period_basis(p1)
+    b2 = extract_period_basis(p2)
+    if b1 == "generic" or b2 == "generic":
+        return True, ""
+    if b1 != b2:
+        return False, f"Incompatible period basis: '{b1}' ({p1}) vs '{b2}' ({p2})"
+    return True, ""
 

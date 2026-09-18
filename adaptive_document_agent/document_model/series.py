@@ -8,6 +8,7 @@ from collections.abc import Iterable
 from math import isclose
 
 from adaptive_document_agent.models import Observation
+from .period_semantic_validator import extract_period_basis
 
 
 _METRIC_NOISE_WORDS = {
@@ -160,8 +161,12 @@ def best_period_series(observations: Iterable[Observation], *, minimum_periods: 
         if item.value is None or not item.period:
             continue
         ident = metric_identity_key(item)
-        p_type = getattr(item, "period_type", "fiscal_year")
-        groups[(ident, p_type, item.currency)].append(item)
+        p_type = getattr(item, "period_type", "generic") or "generic"
+        # period_type is frequently generic in imported or legacy observations.
+        # The display label still carries enough duration semantics to keep FY,
+        # half-year, quarter and point-in-time series separate.
+        period_basis = extract_period_basis(item.period)
+        groups[(ident, p_type, period_basis, item.currency)].append(item)
 
     candidates: list[list[Observation]] = []
     for values in groups.values():

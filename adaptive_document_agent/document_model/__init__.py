@@ -20,14 +20,29 @@ from .series import (
     reconcile_observations,
 )
 
+from .period_semantic_validator import (
+    are_periods_comparable,
+    classify_period,
+    extract_period_basis,
+    format_canonical_period,
+    format_observation_period,
+    format_period_label,
+)
+
 __all__ = [
     "ChartabilityResult",
     "DocumentIndex",
     "DocumentModelBuilder",
+    "are_periods_comparable",
     "best_period_series",
+    "classify_period",
     "conflicting_groups",
     "context_key",
     "display_metric_name",
+    "extract_period_basis",
+    "format_canonical_period",
+    "format_observation_period",
+    "format_period_label",
     "is_generic_metric_label",
     "is_meaningful_metric",
     "is_meaningful_metric_name",

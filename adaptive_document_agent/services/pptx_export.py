@@ -23,10 +23,13 @@ from adaptive_document_agent.document_model.metric_semantic_classifier import (
     classify_metric,
     format_metric_change,
     format_metric_display_value,
+    is_financial_statement_metric,
     sanitize_metric_label,
 )
 from adaptive_document_agent.document_model.period_semantic_validator import (
+    are_periods_comparable,
     classify_period,
+    extract_period_basis,
     format_canonical_period,
     format_observation_period,
     format_period_label,
@@ -598,6 +601,87 @@ def _add_planned_summary(
     _add_numbered_messages(slide, findings[:5], source_pages=slide_plan.source_pages)
 
 
+def _extract_topic_tokens(text: str) -> set[str]:
+    ignored = {
+        "cost", "costs", "profit", "profits", "expense", "expenses", "revenue",
+        "loss", "losses", "income", "net", "gross", "financial", "operating",
+        "trajectory", "analysis", "trend", "trends", "and", "the", "key", "performance",
+        "deep", "dive", "overview", "reported", "evidence", "measures", "values",
+        "ratio", "ratios", "margin", "margins", "summary", "executive", "is", "was",
+        "for", "from", "to", "in", "of", "by", "at", "as", "during", "across",
+        "increased", "decreased", "rose", "fell", "declined", "grew", "growth",
+        "widened", "narrowed", "improved", "deteriorated", "stable", "change",
+        "profitable", "profitability", "turned", "reversed", "recovered", "transition",
+        "changes", "movement", "movements", "fiscal", "year", "period", "company",
+        "liquidity", "solvency", "efficiency", "position", "results",
+    }
+    norm = text.casefold()
+    strong_aliases = (
+        (r"\bresearch\s+(?:and|&)\s+development\b|\br\s*&\s*d\b", "rdtopic"),
+        (r"\bgross\s+profit\b", "grossprofit"),
+        (r"\bcurrent\s+liabilit(?:y|ies)\b", "currentliabilities"),
+        (r"\bnet\s+(?:current\s+)?liabilit(?:y|ies)\b", "netliabilities"),
+        (r"\btrade\s+(?:and\s+other\s+)?receivables?\b", "tradereceivables"),
+        (r"\bselling\s+(?:and|&)\s+distribution\b", "sellingdistribution"),
+        (r"\bworking\s+capital\b", "workingcapital"),
+    )
+    for pattern, alias in strong_aliases:
+        norm = re.sub(pattern, alias, norm)
+    norm = re.sub(r"\bp\s*&\s*l\b", "pltopic", norm)
+    return {
+        token
+        for token in re.findall(r"[^\W_]{2,}", norm)
+        if token not in ignored and len(token) >= 2 and not any(char.isdigit() for char in token)
+    }
+
+
+def _metrics_match_topic(obs: Observation, chart_canon: str, slide_title: str) -> bool:
+    obs_canon = (getattr(obs, "metric_canonical", "") or "").strip().casefold()
+    obs_name = display_metric_name(obs).casefold()
+
+    # 1. Exact canonical or name match
+    if chart_canon and (obs_canon == chart_canon or obs_name == chart_canon):
+        return True
+
+    # 2. Strict topic alignment: check specific non-generic tokens
+    title_tokens = _extract_topic_tokens(slide_title)
+    context = " ".join(
+        [
+            obs_canon,
+            obs_name,
+            getattr(obs, "entity", None) or "",
+            *(str(value) for value in getattr(obs, "dimensions", {}).values()),
+        ]
+    )
+    obs_tokens = _extract_topic_tokens(context)
+    if title_tokens and (title_tokens & obs_tokens):
+        return True
+
+    return False
+
+
+def _filter_observations_by_slide_topic(observations: list[Observation], slide_title: str) -> list[Observation]:
+    if not observations or not slide_title:
+        return observations
+    title_tokens = _extract_topic_tokens(slide_title)
+    if not title_tokens:
+        return observations
+
+    matching = []
+    for obs in observations:
+        obs_name = display_metric_name(obs)
+        obs_canon = getattr(obs, "metric_canonical", "") or ""
+        context = " ".join(
+            [obs_canon, obs_name, getattr(obs, "entity", None) or "", *(str(value) for value in obs.dimensions.values())]
+        )
+        obs_tokens = _extract_topic_tokens(context)
+        if obs_tokens & title_tokens:
+            matching.append(obs)
+    # A specific title with no matching evidence is an invalid binding.  Do not
+    # silently fill the slide with unrelated rows.
+    return matching
+
+
 def _add_planned_data_slide(
     presentation: Any,
     slide_plan: PresentationSlide,
@@ -606,10 +690,12 @@ def _add_planned_data_slide(
     slide = _base_slide(presentation, slide_plan.title, slide_plan.message)
     content_top, content_h = _content_zone(slide)
 
+    filtered_observations = _filter_observations_by_slide_topic(observations, slide_plan.title)
+
     # Check if observations represent a multi-period series for comparison
-    periods_set = {obs.period for obs in observations if obs.period}
+    periods_set = {obs.period for obs in filtered_observations if obs.period}
     metrics_by_name: dict[str, list[Observation]] = {}
-    for obs in observations:
+    for obs in filtered_observations:
         m_name = display_metric_name(obs)
         metrics_by_name.setdefault(m_name, []).append(obs)
 
@@ -619,7 +705,7 @@ def _add_planned_data_slide(
         _render_data_comparison_table(slide, slide_plan, metrics_by_name, content_top, content_h)
         return
 
-    selected = observations[:4]
+    selected = filtered_observations[:4]
     card_count = len(selected)
     card_h = min(1.30, (content_h - 0.20) / max(card_count, 1)) if card_count <= 2 else min(1.10, (content_h - 0.15) / 2)
 
@@ -687,7 +773,7 @@ def _render_data_comparison_table(
                 _period_obs_lookup[obs.period] = obs
     headers = ["Metric"] + [
         (format_observation_period(_period_obs_lookup[p]) if p in _period_obs_lookup
-         else format_period_label(p, is_balance_sheet=is_interim_date(p))) or p
+         else format_canonical_period(p)) or p
         for p in all_periods
     ]
     rows: list[tuple[str, list[str]]] = []
@@ -1021,7 +1107,21 @@ def _add_chart_plus_kpis_slide(
     # Right: KPI Cards stack (35% width = 3.95 in)
     right_left = 8.20
     right_width = 3.95
-    kpi_items = supporting_observations or values[-4:]
+    if supporting_observations and _extract_topic_tokens(display_title):
+        chart_canon = (
+            getattr(values[0], "metric_canonical", "") or display_metric_name(values[0])
+        ).strip().casefold()
+        matched_support = [
+            item for item in supporting_observations
+            if _metrics_match_topic(item, chart_canon, display_title)
+        ]
+        # When the requested KPI evidence does not belong to the chart topic,
+        # fall back to chart evidence rather than displaying unrelated metrics.
+        kpi_items = (matched_support or values[-4:])[:4]
+    elif supporting_observations:
+        kpi_items = supporting_observations[:4]
+    else:
+        kpi_items = values[-4:]
     kpi_count = min(len(kpi_items), 4)
     card_h = min(1.05, (content_h - (kpi_count - 1) * 0.12) / max(kpi_count, 1))
 
@@ -1357,10 +1457,26 @@ def _add_quality_slide(presentation: Any, result: PipelineResult, *, title: str 
 
     # Clean wording: resolve company name issue if company is identified
     company_name = result.presentation_plan.company.name if result.presentation_plan and result.presentation_plan.company else ""
+    is_company_resolved = bool(
+        company_name
+        and company_name != "Company overview"
+        and not any(p in company_name.casefold() for p in ("unnamed", "unidentified", "unknown"))
+    )
+    unnamed_phrases = (
+        "issuer/company name is not stated",
+        "company name is not stated",
+        "issuer name is not stated",
+        "unnamed issuer",
+        "issuer unnamed",
+        "issuer unknown",
+        "company unnamed",
+        "unnamed company",
+        "unidentified issuer",
+    )
     messages = []
     for msg in raw_messages:
-        if "issuer/company name is not stated" in msg.casefold() or "company name is not stated" in msg.casefold():
-            if company_name and company_name != "Company overview":
+        if any(phrase in msg.casefold() for phrase in unnamed_phrases):
+            if is_company_resolved:
                 messages.append(
                     "The company is identified in introductory/source pages, while many pages within the Financial Information section refer only to the Company or Group."
                 )
@@ -1910,7 +2026,23 @@ def _change_summary(observations: list[Observation], scale: float) -> tuple[str,
     ordered = sorted(by_period.values(), key=lambda item: period_sort_key(item.period))
     if len(ordered) < 2:
         return None
+
+    # Enforce period basis comparability: do not compare FY with 6M directly
+    if not are_periods_comparable(ordered[0].period, ordered[-1].period)[0]:
+        basis_groups: dict[str, list[Observation]] = {}
+        for it in ordered:
+            b = extract_period_basis(it.period)
+            basis_groups.setdefault(b, []).append(it)
+        comparable_candidates = [grp for grp in basis_groups.values() if len(grp) >= 2]
+        if not comparable_candidates:
+            return None
+        # Prefer candidate with the most items, or FY
+        ordered = max(comparable_candidates, key=lambda grp: (extract_period_basis(grp[0].period) == "FY", len(grp)))
+
     first, last = ordered[0], ordered[-1]
+    if not are_periods_comparable(first.period, last.period)[0]:
+        return None
+
     start, end = float(first.value or 0), float(last.value or 0)
 
     # Check metric semantic using shared FinancialMovementFormatter
@@ -1990,6 +2122,12 @@ def _charts_belong_together(left: ChartPlan, right: ChartPlan, index: DocumentIn
     if shared_context:
         return True
 
+    # Exact canonical metric match
+    left_canon = (getattr(left_values[0], "metric_canonical", "") or display_metric_name(left_values[0])).strip().casefold()
+    right_canon = (getattr(right_values[0], "metric_canonical", "") or display_metric_name(right_values[0])).strip().casefold()
+    if left_canon and right_canon and left_canon == right_canon:
+        return True
+
     left_name = (left.title or (display_metric_name(left_values[0]) if left_values else "")).casefold()
     right_name = (right.title or (display_metric_name(right_values[0]) if right_values else "")).casefold()
 
@@ -2047,11 +2185,16 @@ def _chart_source_pages(plan: ChartPlan, values: list[Observation]) -> set[int]:
 
 def _chart_title_tokens(plan: ChartPlan, values: list[Observation]) -> set[str]:
     labels = " ".join([plan.title, *(display_metric_name(item) for item in values)])
-    ignored = {"and", "the", "reported", "values", "value", "analysis", "chart", "total"}
+    ignored = {
+        "and", "the", "reported", "values", "value", "analysis", "chart", "total",
+        "cost", "costs", "profit", "profits", "expense", "expenses", "revenue",
+        "loss", "losses", "income", "net", "gross", "financial", "operating",
+        "trajectory", "trend", "performance", "group", "company", "information",
+    }
     return {
         token
         for token in re.findall(r"[^\W_]{2,}", labels.casefold(), flags=re.UNICODE)
-        if token not in ignored
+        if token not in ignored and len(token) >= 3
     }
 
 
@@ -2192,7 +2335,14 @@ def _unit_label(observations: list[Observation], scale_label: str) -> str:
         return "x"
     if "percent" in units or "percentage" in families:
         return "%"
-    if "count" in units or "count" in families or any(getattr(item, "is_volume", False) for item in observations):
+    is_financial = any(
+        is_financial_statement_metric(display_metric_name(item))
+        or getattr(item, "is_currency", False)
+        or getattr(item, "unit_family", "") == "currency"
+        or getattr(item, "currency", None)
+        for item in observations
+    )
+    if ("count" in units or "count" in families or any(getattr(item, "is_volume", False) for item in observations)) and not is_financial:
         return "units"
     currencies = {item.currency for item in observations if item.currency}
     raw_units = {item.raw_unit for item in observations if item.raw_unit}
@@ -2201,7 +2351,9 @@ def _unit_label(observations: list[Observation], scale_label: str) -> str:
         return f"{base} {scale_label}" if scale_label else base
     if raw_units:
         return normalize_raw_unit(next(iter(raw_units)))
-    return scale_label or "units"
+    if is_financial:
+        return scale_label or "unknown"
+    return scale_label or "unknown"
 
 
 def _display_source_unit(item: Observation) -> str:
@@ -2210,9 +2362,17 @@ def _display_source_unit(item: Observation) -> str:
         return "x"
     if semantic.is_percentage:
         return "%"
-    if semantic.is_volume or semantic.unit_family == "count":
+    is_financial = semantic.is_currency or is_financial_statement_metric(display_metric_name(item))
+    if (semantic.is_volume or semantic.unit_family == "count") and not is_financial:
         return "units"
+    if is_financial:
+        curr = item.currency or (item.raw_unit if item.raw_unit and item.raw_unit != "units" else None)
+        if curr:
+            return normalize_raw_unit(curr, default_currency=item.currency or "RMB")
+        return "unknown"
     value = item.raw_unit or _unit_label([item], "")
+    if value == "units":
+        return "unknown"
     return normalize_raw_unit(value, default_currency=item.currency or "RMB")
 
 

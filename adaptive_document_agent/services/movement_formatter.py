@@ -145,15 +145,15 @@ class FinancialMovementFormatter:
             else:
                 return f"{prefix}remained flat"
 
-        # 3. BALANCE_SHEET Family / Liabilities (Deficit, Borrowings, Debt, Liabilities)
-        is_liab = any(k in lower_name for k in ("liabilit", "borrowing", "debt", "indebtedness", "deficit", "负债", "借款"))
-        if is_liab or (family == MetricSemanticFamily.BALANCE_SHEET and is_deficit_or_net_liability_metric(clean_name, canonical_name)):
+        # 3. Deficit / Net Liabilities (Net current liabilities, Net liabilities, Deficit, Shareholders' deficit)
+        # Magnitude semantics: widened / narrowed. Standard liabilities (Current liabilities, Borrowings, etc.) use increased / decreased.
+        if is_deficit_or_net_liability_metric(clean_name, canonical_name):
             s_mag = abs(start_val)
             e_mag = abs(end_val)
             diff = abs(e_mag - s_mag)
             diff_str = cls._format_diff_amount(diff, currency=currency, scale=scale, parent_magnitude=parent_mag)
 
-            # More negative or larger liability magnitude = widened / deteriorated
+            # More negative or larger deficit magnitude = widened / deteriorated
             if e_mag > s_mag:
                 verb = "widened"
             elif e_mag < s_mag:

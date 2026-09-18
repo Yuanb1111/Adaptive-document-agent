@@ -2,7 +2,13 @@
 
 from math import isfinite
 
-from adaptive_document_agent.document_model import DocumentIndex, conflicting_groups, paired_observations, reconcile_observations
+from adaptive_document_agent.document_model import (
+    DocumentIndex,
+    are_periods_comparable,
+    conflicting_groups,
+    paired_observations,
+    reconcile_observations,
+)
 from adaptive_document_agent.extraction.normalizer import UnitSignature, compatible_units
 from adaptive_document_agent.models import AnalysisResult, AnalysisTask, Observation
 from adaptive_document_agent.tools import ToolRegistry, create_default_registry
@@ -28,6 +34,7 @@ class AnalysisExecutor:
             if conflicts:
                 raise ValueError("Calculation blocked because same-context source values conflict.")
             self._validate_units(valid, task.analysis_type)
+            self._validate_periods(valid, task.analysis_type)
             if task.formula:
                 variables = {self._variable_name(item): float(item.value) for item in valid}
                 value = evaluate_formula(task.formula, variables)
@@ -96,6 +103,22 @@ class AnalysisExecutor:
             first = next(iter(signatures))
             if not all(compatible_units(first, other) for other in signatures):
                 raise ValueError("Analysis inputs have incompatible units or currencies.")
+
+    @staticmethod
+    def _validate_periods(observations: list[Observation], analysis_type: str) -> None:
+        """Block flow/trend calculations across incompatible reporting durations."""
+        period_analyses = {
+            "absolute_change", "percentage_change", "growth_rate", "cagr",
+            "linear_trend", "moving_average", "compare_periods",
+        }
+        if analysis_type not in period_analyses:
+            return
+        periods = [item.period for item in observations if item.period]
+        for index, left in enumerate(periods):
+            for right in periods[index + 1:]:
+                comparable, reason = are_periods_comparable(left, right)
+                if not comparable:
+                    raise ValueError(f"Analysis inputs have incompatible periods: {reason}")
 
     @staticmethod
     def _variable_name(observation: Observation) -> str:

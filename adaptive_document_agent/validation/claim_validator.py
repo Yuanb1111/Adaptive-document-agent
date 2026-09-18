@@ -32,7 +32,7 @@ from enum import Enum
 import re
 from typing import Any
 
-from adaptive_document_agent.document_model import period_sort_key
+from adaptive_document_agent.document_model import are_periods_comparable, period_sort_key
 from adaptive_document_agent.models import Observation, PresentationPlan, PresentationSlide, ValidationIssue
 
 
@@ -114,7 +114,7 @@ def are_observations_compatible(obs1: Observation, obs2: Observation) -> tuple[b
     if (curr1 and not curr2 and u2_fam == "currency") or (curr2 and not curr1 and u1_fam == "currency"):
         return False, f"Currency specification mismatch: '{curr1 or 'unspecified'}' vs '{curr2 or 'unspecified'}'"
 
-    # 4. Period types
+    # 4. Period types & basis compatibility
     p1 = (obs1.period_type or "generic").strip().casefold()
     p2 = (obs2.period_type or "generic").strip().casefold()
     if p1 != "generic" and p2 != "generic":
@@ -124,6 +124,10 @@ def are_observations_compatible(obs1: Observation, obs2: Observation) -> tuple[b
             return False, f"Incompatible period types: balance sheet point-in-time '{p1}' vs flow period '{p2}'"
         if (p1 == "fiscal_year" and p2 == "interim_flow") or (p2 == "fiscal_year" and p1 == "interim_flow"):
             return False, f"Incompatible period types: full fiscal year '{p1}' vs interim flow '{p2}'"
+
+    is_comp, reason = are_periods_comparable(obs1.period, obs2.period)
+    if not is_comp:
+        return False, f"Incompatible period basis: {reason}"
 
     # 5. Reporting basis
     b1 = (obs1.dimensions.get("reporting_basis") or obs1.dimensions.get("basis") or "").strip().casefold()

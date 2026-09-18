@@ -3,6 +3,7 @@
 import re
 from dataclasses import dataclass
 
+from adaptive_document_agent.document_model.period_semantic_validator import format_period_label
 from adaptive_document_agent.models.table import ExtractedTable, TableRow
 from adaptive_document_agent.utils.ids import stable_id
 
@@ -135,7 +136,7 @@ class BorderlessTableExtractor:
             month_match = re.search(r"(three|six|nine|twelve)\s*months?", context)
             month_label = {"three": "3M", "six": "6M", "nine": "9M", "twelve": "12M"}.get(month_match.group(1), "M") if month_match else "M"
             labels = [f"FY{year}" if index < duplicate_at else f"{month_label}{year}" for index, year in enumerate(years)]
-        elif duplicate_at is not None and re.search(r"as\s*of", context) and len(dates) >= 2:
+        elif duplicate_at is not None and re.search(r"as\s+(?:of|at)", context) and len(dates) >= 2:
             date_split = years.index(years[duplicate_at])
             trailing = len(years) - date_split
             later_dates = dates[-trailing:]
@@ -161,6 +162,10 @@ class BorderlessTableExtractor:
         labels: list[str] = []
         for match in re.finditer(r"\b(" + "|".join(months) + r")\s*(\d{1,2})\b", context):
             label = f"{months[match.group(1)]:02d}-{int(match.group(2)):02d}"
+            if label not in labels:
+                labels.append(label)
+        for match in re.finditer(r"\b(\d{1,2})\s+(" + "|".join(months) + r")\b", context):
+            label = f"{months[match.group(2)]:02d}-{int(match.group(1)):02d}"
             if label not in labels:
                 labels.append(label)
         return labels
@@ -243,8 +248,11 @@ class BorderlessTableExtractor:
         if month_match := re.search(r"(three|six|nine|twelve)\s*months?\s*ended", lowered):
             label = {"three": "3M", "six": "6M", "nine": "9M", "twelve": "12M"}[month_match.group(1)]
             return f"{label}{year}"
-        if re.search(r"as\s*of", lowered):
-            return year
+        if re.search(r"as\s+(?:of|at)", lowered):
+            formatted = format_period_label(line, is_balance_sheet=True)
+            # A bare year is insufficient for a point-in-time label. Preserve
+            # uncertainty instead of turning it into an FY period downstream.
+            return formatted if re.search(r"\b\d{1,2}\s+[A-Za-z]{3}\s+20\d{2}\*?$", formatted) else None
         return None
 
     @staticmethod
