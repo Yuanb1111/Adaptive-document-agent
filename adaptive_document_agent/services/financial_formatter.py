@@ -201,69 +201,16 @@ def format_financial_movement(
     scale: float = 1.0,
     currency: str = "RMB",
 ) -> str:
-    """Generate standard institutional financial phrasing for analytical movements.
+    """Generate standard institutional financial phrasing for analytical movements using FinancialMovementFormatter."""
+    from adaptive_document_agent.services.movement_formatter import FinancialMovementFormatter
 
-    - Expense ratios: 'Cost of sales ratio increased by 6.6 pp' (never 'Loss widened')
-    - Margins: 'Gross margin expanded by 3.2 pp' or 'contracted by 1.5 pp'
-    - Multiples: '+0.20x'
-    - Liabilities: 'Liability widened by RMB 50m' or 'narrowed by RMB 20m'
-    - Losses: 'Loss narrowed from RMB 683m to RMB 25m'
-    """
-    clean_title = shorten_metric_title(metric_name)
-    lower = clean_title.casefold()
+    return FinancialMovementFormatter.format_movement(
+        metric_name,
+        start_val,
+        end_val,
+        currency=currency,
+        scale=scale,
+        unit_family=unit_family,
+        include_metric_name=True,
+    )
 
-    is_exp_ratio = is_expense_ratio_metric(clean_title)
-    is_margin = "margin" in lower or "毛利" in lower or "净利" in lower
-    is_liab = any(k in lower for k in _LIABILITY_KEYWORDS)
-    is_loss = "loss" in lower or "亏损" in lower or (start_val < 0 and end_val < 0)
-
-    # 1. Expense Ratios (e.g. Cost of sales / revenue, Selling / revenue)
-    if is_exp_ratio:
-        # Normalize accounting negative values to positive intensity
-        s = abs(start_val)
-        e = abs(end_val)
-        diff = e - s
-        direction = "increased" if diff >= 0 else "decreased"
-        return f"{clean_title} {direction} by {abs(diff):.1f} pp"
-
-    # 2. Margins (Gross Margin, Operating Margin, Net Margin)
-    if is_margin or (unit_family == "percentage" and not is_loss):
-        diff = end_val - start_val
-        direction = "expanded" if diff >= 0 else "contracted"
-        return f"{clean_title} {direction} by {abs(diff):.1f} pp"
-
-    # 3. Multiples (Current ratio, Quick ratio, Gearing)
-    if unit_family == "multiple" or "ratio" in lower:
-        diff = end_val - start_val
-        return f"{diff:+.2f}x"
-
-    # 4. Turnaround (Negative to Positive or vice versa)
-    if start_val < 0 <= end_val:
-        return "Turned profitable" if "profit" in lower or "loss" in lower else "Turned positive"
-    if start_val > 0 >= end_val:
-        return "Turned loss-making" if "profit" in lower or "loss" in lower else "Turned negative"
-
-    # 5. Losses (Both negative)
-    if is_loss or (start_val < 0 and end_val < 0):
-        s_abs = abs(start_val)
-        e_abs = abs(end_val)
-        start_fmt = format_compact_currency(s_abs, currency=currency, is_base_value=True)
-        end_fmt = format_compact_currency(e_abs, currency=currency, is_base_value=True)
-        if e_abs < s_abs:
-            return f"Loss narrowed from {start_fmt} to {end_fmt}"
-        return f"Loss widened from {start_fmt} to {end_fmt}"
-
-    # 6. Liabilities / Indebtedness
-    if is_liab and start_val > 0 and end_val > 0:
-        diff_abs = abs(end_val - start_val)
-        diff_fmt = format_compact_currency(diff_abs, currency=currency, is_base_value=True)
-        action = "widened" if end_val > start_val else "narrowed"
-        return f"Liability {action} by {diff_fmt}"
-
-    # 7. Standard currency growth rate
-    if start_val != 0:
-        pct_change = ((end_val - start_val) / abs(start_val)) * 100.0
-        return f"{pct_change:+.1f}%"
-
-    diff_val = end_val - start_val
-    return format_compact_currency(diff_val, currency=currency, is_base_value=True)

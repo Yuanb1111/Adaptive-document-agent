@@ -405,57 +405,29 @@ def is_multiple_metric(name: str) -> bool:
 
 
 def format_metric_change(start: float, end: float, scale: float, semantic: MetricSemantic) -> str:
-    """Format analytical change summary adhering to financial conventions.
+    """Format analytical change summary adhering to financial conventions using FinancialMovementFormatter."""
+    from adaptive_document_agent.services.movement_formatter import FinancialMovementFormatter
 
-    - Expense ratios: 'Cost of sales ratio increased by 6.6 pp' (never 'Loss widened')
-    - Multiples change by '+0.20x' (never 'pp')
-    - Percentages/margins change by '+2.0 pp'
-    - Negative-to-negative currency changes explain 'Loss narrowed by X' or 'Loss widened by X'
-    - Standard currency amounts change by '+15.2%'
-    """
-    name_lower = semantic.clean_name.casefold()
-    is_liability = any(k in name_lower for k in ("liabilit", "borrowing", "debt", "indebtedness", "deficit", "负债", "借款"))
+    metric_name = semantic.short_display_name or semantic.clean_name
+    unit_fam = getattr(semantic, "unit_family", "generic")
+    if getattr(semantic, "is_multiple", False):
+        unit_fam = "multiple"
+    elif getattr(semantic, "is_percentage", False):
+        unit_fam = "percentage"
+    elif getattr(semantic, "is_currency", False):
+        unit_fam = "currency"
 
-    if semantic.is_expense_ratio:
-        s = abs(start)
-        e = abs(end)
-        diff = e - s
-        direction = "increased" if diff >= 0 else "decreased"
-        title = semantic.short_display_name or semantic.clean_name
-        return f"{title} ratio {direction} by {abs(diff):.1f} pp"
+    return FinancialMovementFormatter.format_movement_headline(
+        metric_name,
+        start,
+        end,
+        scale=scale,
+        currency="",
+        unit=unit_fam,
+        unit_family=unit_fam,
+    )
 
-    if start < 0 <= end:
-        return "Turned positive"
-    if start > 0 >= end:
-        return "Turned negative"
 
-    if start < 0 and end < 0:
-        diff_scaled = abs(start - end) / scale
-        if is_liability:
-            return f"Liability narrowed by {diff_scaled:,.1f}" if end > start else f"Liability widened by {diff_scaled:,.1f}"
-        if end > start:
-            return f"Loss narrowed by {diff_scaled:,.1f}" if diff_scaled >= 1 else "Loss narrowed"
-        return f"Loss widened by {diff_scaled:,.1f}" if diff_scaled >= 1 else "Loss widened"
-
-    if is_liability and start > 0 and end > 0:
-        diff_scaled = abs(end - start) / scale
-        if end > start:
-            return f"Widened by {diff_scaled:,.1f}" if diff_scaled >= 1 else "Widened"
-        return f"Narrowed by {diff_scaled:,.1f}" if diff_scaled >= 1 else "Narrowed"
-
-    if semantic.is_multiple or semantic.unit_family == "multiple":
-        diff = end - start
-        return f"{diff:+.2f}x"
-
-    if semantic.is_percentage or semantic.unit_family == "percentage":
-        diff = end - start
-        return f"{diff:+.1f} pp"
-
-    if start != 0:
-        growth = (end / start - 1) * 100.0
-        return f"{growth:+.1f}%"
-
-    return f"{(end - start) / scale:+,.1f}"
 
 
 def format_metric_display_value(

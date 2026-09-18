@@ -27,6 +27,7 @@ from adaptive_document_agent.document_model.metric_semantic_classifier import (
 )
 from adaptive_document_agent.document_model.period_semantic_validator import (
     classify_period,
+    format_canonical_period,
     format_observation_period,
     format_period_label,
     is_interim_date,
@@ -38,6 +39,7 @@ from adaptive_document_agent.services.financial_formatter import (
     normalize_raw_unit,
     shorten_metric_title,
 )
+from adaptive_document_agent.services.movement_formatter import FinancialMovementFormatter
 from adaptive_document_agent.services.ppt_preflight import PresentationPreflight
 from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
 
@@ -1108,6 +1110,19 @@ def _add_chart_cluster_slide(
         _text(slide, f"p. {pages}", left + panel_width - 1.00, footer_top, 0.85, 0.22, size=8.5, color=FOURIER_MUTED, align="right")
 
 
+def _chart_number_format(values: list[float]) -> str:
+    """Determine dynamic number format preserving signed notation and necessary precision."""
+    valid = [float(v) for v in values if v is not None]
+    if not valid:
+        return "0.0;-0.0;0.0"
+    # If any value requires 2 decimal places (e.g. -1.57, -1.13, -0.83)
+    if any(round(v, 1) != round(v, 2) for v in valid):
+        return "0.00;-0.00;0.00"
+    if any(round(v, 0) != round(v, 1) for v in valid):
+        return "0.0;-0.0;0.0"
+    return "#,##0;-#,##0;0"
+
+
 def _add_native_chart(
     slide: Any,
     plan: ChartPlan,
@@ -1133,6 +1148,9 @@ def _add_native_chart(
     metric_name = plan.title or (values[0].metric_original if values else "")
     is_bs = any(term in metric_name.casefold() for term in ("liabilit", "cash", "balance", "receiv", "payab", "inventor"))
     has_negative = False
+    all_negative = False
+    has_positive = False
+    scaled_vals: list[float] = []
 
     if plan.chart_type == "scatter" and plan.x_metric and plan.y_metric:
         data = XyChartData()
@@ -1146,6 +1164,8 @@ def _add_native_chart(
         has_negative = any(row[2] is not None and row[2] < 0 for row in rows)
         all_negative = bool(rows) and all(row[2] is not None and row[2] < 0 for row in rows)
         has_positive = any(row[2] is not None and row[2] > 0 for row in rows)
+        numeric_vals = [row[2] for row in rows if row[2] is not None]
+        scaled_vals = [v / scale for v in numeric_vals] if numeric_vals else []
         categories = list(dict.fromkeys(row[0] for row in rows))
         series_names = list(dict.fromkeys(row[1] for row in rows))
         data = CategoryChartData()
@@ -1177,6 +1197,9 @@ def _add_native_chart(
             series.format.line.color.rgb = _rgb(color)
         except (AttributeError, ValueError):
             pass
+
+    num_fmt = _chart_number_format(scaled_vals)
+
     try:
         chart.plots[0].has_data_labels = plan.show_data_labels
         labels = chart.plots[0].data_labels
@@ -1189,8 +1212,8 @@ def _add_native_chart(
         labels.font.name = FONT
         labels.font.size = Pt(12 if compact else 14)
         labels.font.bold = True
-        # Signed format: positive;negative;zero — preserves minus sign on negative data labels
-        labels.number_format = "0.0;-0.0;0.0"
+        # Signed dynamic format preserves minus sign and exact precision
+        labels.number_format = num_fmt
         labels.number_format_is_linked = False
     except (AttributeError, ValueError):
         pass
@@ -1208,7 +1231,7 @@ def _add_native_chart(
             chart.value_axis.tick_labels.font.name = FONT
             chart.value_axis.tick_labels.font.size = Pt(10 if compact else 11)
             # Signed format preserves minus signs on axis tick labels
-            chart.value_axis.tick_labels.number_format = "0.0;-0.0;0.0"
+            chart.value_axis.tick_labels.number_format = num_fmt
             chart.value_axis.tick_labels.number_format_is_linked = False
             # Clean institutional styling: NO BACKGROUND HORIZONTAL GRIDLINES
             chart.value_axis.has_major_gridlines = False
@@ -1217,19 +1240,23 @@ def _add_native_chart(
 
             # Fix axis scaling for negative-only and mixed series so bars render visibly
             try:
-                numeric_vals = [row[2] for row in rows if row[2] is not None]  # type: ignore[name-defined]
-                if numeric_vals:
-                    scaled_vals = [v / scale for v in numeric_vals]
+                if scaled_vals:
                     min_scaled = min(scaled_vals)
                     max_scaled = max(scaled_vals)
-                    if all_negative:  # type: ignore[name-defined]
-                        # Anchor the top of the chart at zero; extend bottom with 15% headroom
+                    if all_negative:
+                        # Anchor the top of the chart at zero; extend bottom with 30% headroom
                         chart.value_axis.maximum_scale = 0.0
-                        chart.value_axis.minimum_scale = min_scaled * 1.15
-                    elif has_negative and has_positive:  # type: ignore[name-defined]
+                        chart.value_axis.minimum_scale = min_scaled * 1.30
+                        try:
+                            chart.category_axis.crosses_at = 0.0
+                        except (AttributeError, ValueError):
+                            pass
+                        chart.category_axis.tick_label_position = XL_TICK_LABEL_POSITION.LOW
+                    elif has_negative and has_positive:
                         # Mixed series: symmetric headroom on both sides
-                        chart.value_axis.maximum_scale = max_scaled * 1.15 if max_scaled > 0 else 0.0
-                        chart.value_axis.minimum_scale = min_scaled * 1.15 if min_scaled < 0 else 0.0
+                        chart.value_axis.maximum_scale = max_scaled * 1.20 if max_scaled > 0 else 0.0
+                        chart.value_axis.minimum_scale = min_scaled * 1.20 if min_scaled < 0 else 0.0
+                        chart.category_axis.tick_label_position = XL_TICK_LABEL_POSITION.LOW
             except (AttributeError, ValueError, TypeError, NameError):
                 pass
     except (AttributeError, ValueError):
@@ -1260,8 +1287,6 @@ def _add_findings_slide(
     charts: list[ChartPlan],
     index: DocumentIndex,
 ) -> None:
-    slide = _base_slide(presentation, "Key findings", "Evidence-backed conclusions from the analysis")
-    content_top, content_h = _content_zone(slide)
     findings = _chart_findings(charts, index)
     seen_titles = {str(item["title"]).casefold() for item in findings}
     model_findings = [
@@ -1273,7 +1298,7 @@ def _add_findings_slide(
         for finding in sorted(result.insights, key=lambda item: (item.importance, item.confidence), reverse=True)
     ]
     for finding in model_findings:
-        if len(findings) >= 4:
+        if len(findings) >= 10:
             break
         candidate_title = str(finding["title"]).casefold()
         if any(
@@ -1285,24 +1310,41 @@ def _add_findings_slide(
             continue
         findings.append(finding)
         seen_titles.add(str(finding["title"]).casefold())
+
     if not findings:
+        slide = _base_slide(presentation, "Key findings", "Evidence-backed conclusions from the analysis")
+        content_top, content_h = _content_zone(slide)
         _panel(slide, 0.45, content_top, 11.70, content_h, fill=FOURIER_BG_CARD)
         _text(slide, "No validated analytical findings were produced.", 0.9, 3.2, 10.8, 0.8, size=20, color=FOURIER_MUTED, align="center")
         return
-    count = len(findings)
-    card_height = min(0.95, (content_h - (count - 1) * 0.12) / max(count, 1))
-    top = content_top
-    for number, finding in enumerate(findings, start=1):
-        y = top + (number - 1) * (card_height + 0.12)
-        _panel(slide, 0.45, y, 11.70, card_height, fill=FOURIER_BG_CARD)
-        _text(slide, f"{number:02d}", 0.65, y + 0.15, 0.55, 0.35, size=15, color=FOURIER_PURPLE, bold=True)
-        title_text = _sanitize_investor_narrative(str(finding["title"]))
-        narrative_text = _sanitize_investor_narrative(str(finding["narrative"]))
-        _text(slide, _summary_text(title_text, 55), 1.30, y + 0.12, 3.80, card_height - 0.20, size=13.5, color=FOURIER_DARK, bold=True)
-        pages = list(finding.get("pages", []))
-        source = f"Pages {', '.join(map(str, pages))}" if pages else "Calculated from retained evidence"
-        _text(slide, _summary_text(narrative_text, 160), 5.25, y + 0.12, 5.20, card_height - 0.20, size=13, color=FOURIER_DARK)
-        _text(slide, source, 10.55, y + 0.15, 1.45, 0.35, size=8.5, color=FOURIER_MUTED, align="right")
+
+    # Maximum 5 findings per slide to guarantee fixed internal padding and prevent overflow
+    max_per_slide = 5
+    chunks = [findings[i : i + max_per_slide] for i in range(0, len(findings), max_per_slide)]
+    total_chunks = len(chunks)
+
+    global_number = 1
+    for chunk_idx, chunk in enumerate(chunks):
+        title_str = "Key findings" if total_chunks == 1 else f"Key findings ({chunk_idx + 1}/{total_chunks})"
+        slide = _base_slide(presentation, title_str, "Evidence-backed conclusions from the analysis")
+        content_top, content_h = _content_zone(slide)
+
+        card_h = 0.72
+        gap = 0.12
+        top = content_top
+
+        for local_idx, finding in enumerate(chunk):
+            y = top + local_idx * (card_h + gap)
+            _panel(slide, 0.45, y, 11.70, card_h, fill=FOURIER_BG_CARD)
+            _text(slide, f"{global_number:02d}", 0.65, y + 0.16, 0.55, 0.35, size=14, color=FOURIER_PURPLE, bold=True)
+            title_text = _sanitize_investor_narrative(str(finding["title"]))
+            narrative_text = _sanitize_investor_narrative(str(finding["narrative"]))
+            _text(slide, _summary_text(title_text, 45), 1.30, y + 0.10, 3.80, card_h - 0.20, size=12.5, color=FOURIER_DARK, bold=True)
+            pages = list(finding.get("pages", []))
+            source = f"Pages {', '.join(map(str, pages))}" if pages else "Calculated"
+            _text(slide, _summary_text(narrative_text, 120), 5.25, y + 0.10, 5.10, card_h - 0.20, size=11.5, color=FOURIER_DARK)
+            _text(slide, source, 10.45, y + 0.16, 1.55, 0.30, size=8.5, color=FOURIER_MUTED, align="right")
+            global_number += 1
 
 
 def _add_quality_slide(presentation: Any, result: PipelineResult, *, title: str = "Limits that affect interpretation") -> None:
@@ -1871,12 +1913,21 @@ def _change_summary(observations: list[Observation], scale: float) -> tuple[str,
     first, last = ordered[0], ordered[-1]
     start, end = float(first.value or 0), float(last.value or 0)
 
-    # Check metric semantic
+    # Check metric semantic using shared FinancialMovementFormatter
     semantic = classify_metric(first.metric_original, value=start, raw_unit=first.raw_unit, unit=first.unit)
-    headline = format_metric_change(start, end, scale, semantic)
+    headline = FinancialMovementFormatter.format_movement_headline(
+        first.metric_original,
+        start,
+        end,
+        canonical_name=first.metric_canonical,
+        currency=first.currency or "RMB",
+        scale=scale,
+        unit=first.unit,
+        unit_family=first.unit_family,
+    )
 
-    p_first = format_period_label(first.period)
-    p_last = format_period_label(last.period)
+    p_first = format_canonical_period(first)
+    p_last = format_canonical_period(last)
     if semantic.is_multiple:
         detail = f"{start:.2f}x in {p_first} to {end:.2f}x in {p_last}"
     elif semantic.is_percentage:
@@ -2079,18 +2130,13 @@ def _chart_findings(charts: list[ChartPlan], index: DocumentIndex) -> list[dict[
             continue
         first, last = ordered[0], ordered[-1]
         scale, scale_label = _display_scale(ordered, max(abs(float(item.value or 0)) for item in ordered))
-        start, end = float(first.value or 0), float(last.value or 0)
-        direction = "increased" if end > start else "decreased"
-        if start < 0 <= end:
-            direction = "moved from negative to positive"
-        elif start > 0 >= end:
-            direction = "moved from positive to negative"
         label = sanitize_metric_label(display_metric_name(first))
-        start_text = _finding_value(first, scale, scale_label)
-        end_text = _finding_value(last, scale, scale_label)
-        movement = _change_summary(ordered, scale)
-        change_text = f" ({movement[0]})" if movement else ""
-        narrative = f"{label} {direction} from {start_text} in {first.period} to {end_text} in {last.period}{change_text}."
+        narrative = FinancialMovementFormatter.format_movement_narrative(
+            first,
+            last,
+            currency=first.currency or "RMB",
+            scale=scale,
+        )
         output.append({
             "title": label,
             "narrative": narrative,

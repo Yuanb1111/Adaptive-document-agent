@@ -200,7 +200,6 @@ def classify_metric_semantic_family(
     # 2. RATIO (margins, percentages, multipliers)
     ratio_indicators = (
         "margin",
-        "ratio",
         "% of",
         "percentage",
         "multiple",
@@ -212,7 +211,7 @@ def classify_metric_semantic_family(
         "营业利润率",
         "负债率",
     )
-    if any(p in name_normalized for p in ratio_indicators):
+    if any(p in name_normalized for p in ratio_indicators) or re.search(r"\bratios?\b", name_normalized):
         return MetricSemanticFamily.RATIO
 
     # 3. EXPENSE (costs, expenses, R&D, D&A, finance costs)

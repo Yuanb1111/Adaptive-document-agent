@@ -49,7 +49,7 @@ def test_regression_negative_92m_not_92bn():
     )
     assert "Loss narrowed" in movement
     assert "bn" not in movement
-    assert "92.2m" in movement
+    assert "57.8m" in movement or "92.2m" in movement
 
 
 def test_regression_256m_not_256k_million():

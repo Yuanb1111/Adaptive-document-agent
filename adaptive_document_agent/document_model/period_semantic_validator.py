@@ -146,6 +146,25 @@ def format_observation_period(
     return format_period_label(period, is_balance_sheet=is_balance_sheet, is_unaudited=is_unaudited)
 
 
+def format_canonical_period(
+    item: object,
+    *,
+    is_balance_sheet: bool | None = None,
+    is_unaudited: bool = False,
+) -> str:
+    """Universal canonical period display function.
+
+    Accepts an Observation object or a period string, returning the canonical formatted label.
+    Point-in-time balance sheet dates return e.g. '30 Apr 2025*', never 'FY2025'.
+    """
+    if item is None:
+        return ""
+    if hasattr(item, "period") or hasattr(item, "period_type"):
+        return format_observation_period(item, is_balance_sheet=is_balance_sheet)
+    return format_period_label(str(item), is_balance_sheet=bool(is_balance_sheet), is_unaudited=is_unaudited)
+
+
+
 def is_interim_date(period: str | None) -> bool:
     if not period:
         return False
