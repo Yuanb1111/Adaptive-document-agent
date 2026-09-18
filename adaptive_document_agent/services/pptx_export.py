@@ -27,7 +27,9 @@ from adaptive_document_agent.document_model.metric_semantic_classifier import (
 )
 from adaptive_document_agent.document_model.period_semantic_validator import (
     classify_period,
+    format_observation_period,
     format_period_label,
+    is_interim_date,
 )
 from adaptive_document_agent.models import ChartPlan, Observation, PipelineResult, PresentationSlide
 from adaptive_document_agent.services.financial_formatter import (
@@ -648,8 +650,8 @@ def _add_planned_data_slide(
             currency=item.currency,
         )
 
-        is_bs = any(term in metric_title.casefold() for term in ("liabilit", "cash", "balance", "receiv", "payab", "inventor"))
-        period_str = format_period_label(item.period, is_balance_sheet=is_bs)
+        is_bs = any(term in metric_title.casefold() for term in ("liabilit", "cash", "balance", "receiv", "payab", "inventor", "asset", "equity", "deficit"))
+        period_str = format_observation_period(item) or format_period_label(item.period, is_balance_sheet=is_bs)
 
         _panel(slide, left, y, w, card_h, fill=FOURIER_BG_CARD)
         _text(slide, _summary_text(metric_title, 48), left + 0.20, y + 0.12, 3.60, 0.32, size=12, color=FOURIER_MUTED, bold=True)
@@ -675,7 +677,17 @@ def _render_data_comparison_table(
         {obs.period for obs_list in metrics_by_name.values() for obs in obs_list if obs.period},
         key=period_sort_key,
     )
-    headers = ["Metric"] + [format_period_label(p) or p for p in all_periods]
+    # Build a period-to-best-obs lookup for accurate is_balance_sheet detection
+    _period_obs_lookup: dict[str, Observation] = {}
+    for obs_list in metrics_by_name.values():
+        for obs in obs_list:
+            if obs.period and obs.period not in _period_obs_lookup:
+                _period_obs_lookup[obs.period] = obs
+    headers = ["Metric"] + [
+        (format_observation_period(_period_obs_lookup[p]) if p in _period_obs_lookup
+         else format_period_label(p, is_balance_sheet=is_interim_date(p))) or p
+        for p in all_periods
+    ]
     rows: list[tuple[str, list[str]]] = []
     all_pages: set[int] = set()
 
@@ -1016,8 +1028,8 @@ def _add_chart_plus_kpis_slide(
         _panel(slide, right_left, card_y, right_width, card_h, fill=FOURIER_BG_CARD)
         semantic = classify_metric(display_metric_name(item), value=item.value, raw_unit=item.raw_unit, unit=item.unit)
         short_title = semantic.short_display_name or semantic.clean_name
-        is_bs = any(term in short_title.casefold() for term in ("liabilit", "cash", "balance", "receiv", "payab", "inventor"))
-        period_str = format_period_label(item.period, is_balance_sheet=is_bs) or item.period or ""
+        is_bs = any(term in short_title.casefold() for term in ("liabilit", "cash", "balance", "receiv", "payab", "inventor", "asset", "equity", "deficit"))
+        period_str = format_observation_period(item) or format_period_label(item.period, is_balance_sheet=is_bs) or item.period or ""
         val_str = format_metric_display_value(item.raw_value, item.value, semantic, raw_unit=_display_source_unit(item), currency=item.currency, compact=True)
 
         _text(slide, _summary_text(short_title, 32), right_left + 0.18, card_y + 0.10, right_width - 0.36, 0.24, size=11, color=FOURIER_MUTED, bold=True)
@@ -1132,6 +1144,8 @@ def _add_native_chart(
     else:
         rows = _series_rows(plan, values, is_balance_sheet=is_bs)
         has_negative = any(row[2] is not None and row[2] < 0 for row in rows)
+        all_negative = bool(rows) and all(row[2] is not None and row[2] < 0 for row in rows)
+        has_positive = any(row[2] is not None and row[2] > 0 for row in rows)
         categories = list(dict.fromkeys(row[0] for row in rows))
         series_names = list(dict.fromkeys(row[1] for row in rows))
         data = CategoryChartData()
@@ -1175,7 +1189,9 @@ def _add_native_chart(
         labels.font.name = FONT
         labels.font.size = Pt(12 if compact else 14)
         labels.font.bold = True
-        labels.number_format = "0.0"
+        # Signed format: positive;negative;zero — preserves minus sign on negative data labels
+        labels.number_format = "0.0;-0.0;0.0"
+        labels.number_format_is_linked = False
     except (AttributeError, ValueError):
         pass
     try:
@@ -1191,12 +1207,31 @@ def _add_native_chart(
         if hasattr(chart, "value_axis") and chart.value_axis is not None:
             chart.value_axis.tick_labels.font.name = FONT
             chart.value_axis.tick_labels.font.size = Pt(10 if compact else 11)
-            chart.value_axis.tick_labels.number_format = "0.0"
+            # Signed format preserves minus signs on axis tick labels
+            chart.value_axis.tick_labels.number_format = "0.0;-0.0;0.0"
             chart.value_axis.tick_labels.number_format_is_linked = False
             # Clean institutional styling: NO BACKGROUND HORIZONTAL GRIDLINES
             chart.value_axis.has_major_gridlines = False
             chart.value_axis.has_minor_gridlines = False
             chart.value_axis.axis_title.text_frame.paragraphs[0].text = ""
+
+            # Fix axis scaling for negative-only and mixed series so bars render visibly
+            try:
+                numeric_vals = [row[2] for row in rows if row[2] is not None]  # type: ignore[name-defined]
+                if numeric_vals:
+                    scaled_vals = [v / scale for v in numeric_vals]
+                    min_scaled = min(scaled_vals)
+                    max_scaled = max(scaled_vals)
+                    if all_negative:  # type: ignore[name-defined]
+                        # Anchor the top of the chart at zero; extend bottom with 15% headroom
+                        chart.value_axis.maximum_scale = 0.0
+                        chart.value_axis.minimum_scale = min_scaled * 1.15
+                    elif has_negative and has_positive:  # type: ignore[name-defined]
+                        # Mixed series: symmetric headroom on both sides
+                        chart.value_axis.maximum_scale = max_scaled * 1.15 if max_scaled > 0 else 0.0
+                        chart.value_axis.minimum_scale = min_scaled * 1.15 if min_scaled < 0 else 0.0
+            except (AttributeError, ValueError, TypeError, NameError):
+                pass
     except (AttributeError, ValueError):
         pass
     return scale, scale_label
@@ -1383,8 +1418,8 @@ def _add_evidence_table_slides(
         )
         unit_str = _appendix_display_unit(item, semantic)
         display_value = _appendix_display_value(item, semantic)
-        is_item_bs = any(term in metric_name.casefold() for term in ("liabilit", "cash", "balance", "receiv", "payab", "inventor", "asset", "equity"))
-        period_key = format_period_label(item.period, is_balance_sheet=is_item_bs) or item.period or "Reported"
+        is_item_bs = any(term in metric_name.casefold() for term in ("liabilit", "cash", "balance", "receiv", "payab", "inventor", "asset", "equity", "deficit"))
+        period_key = format_observation_period(item) or format_period_label(item.period, is_balance_sheet=is_item_bs) or item.period or "Reported"
         all_periods_set.add(period_key)
 
         theme_dict = metrics_by_theme.setdefault(theme, {})
@@ -1756,8 +1791,13 @@ def _series_rows(plan: ChartPlan, observations: list[Observation], *, is_balance
             axis_dimension, label = next(iter(item.dimensions.items()))
         label = label or item.entity or item.metric_original
 
-        # Format label with interim notation if applicable
-        label = format_period_label(label, is_balance_sheet=is_balance_sheet)
+        # Format label with interim notation if applicable.
+        # When the label is the observation's own period, use the full observation metadata
+        # for accurate balance-sheet / unaudited detection (avoids FY2025 for Apr 30, 2025).
+        if label == item.period and item.period:
+            label = format_observation_period(item) or label
+        else:
+            label = format_period_label(label, is_balance_sheet=is_balance_sheet)
 
         base_series = str(item.entity or display_metric_name(item))
         ignored_dimensions = {axis_dimension, "table_context", "period_basis"}

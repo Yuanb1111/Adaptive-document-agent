@@ -104,6 +104,48 @@ def format_period_label(
     return p
 
 
+def format_observation_period(
+    obs: object,
+    *,
+    is_balance_sheet: bool | None = None,
+) -> str:
+    """Format a period label from an Observation, auto-detecting balance-sheet status.
+
+    Priority order:
+    1. Use obs.as_of_date (ISO date) if present — most precise.
+    2. Derive is_balance_sheet from obs.period_type if not explicitly provided.
+    3. Append '*' when obs.audited_status == 'unaudited' or period is interim.
+    4. Fall back to format_period_label(obs.period, is_balance_sheet=...).
+    """
+    period: str | None = getattr(obs, "period", None)
+    period_type: str = getattr(obs, "period_type", "generic") or "generic"
+    as_of_date: str | None = getattr(obs, "as_of_date", None)
+    audited_status: str = getattr(obs, "audited_status", "unknown") or "unknown"
+
+    # Determine is_balance_sheet if not explicitly supplied
+    if is_balance_sheet is None:
+        is_balance_sheet = period_type in ("balance_sheet_date", "point_in_time")
+        if not is_balance_sheet:
+            metric_str = (
+                f"{getattr(obs, 'metric_canonical', '') or ''} "
+                f"{getattr(obs, 'metric_original', '') or ''}"
+            ).casefold()
+            bs_keywords = (
+                "liabilit", "asset", "equity", "cash", "balance",
+                "receiv", "payab", "inventor", "deficit", "borrowing",
+                "working capital", "net current", "资产", "负债", "资本",
+            )
+            is_balance_sheet = any(k in metric_str for k in bs_keywords)
+
+    is_unaudited = audited_status == "unaudited"
+
+    # Use as_of_date (most precise source)
+    if as_of_date:
+        return format_period_label(as_of_date, is_balance_sheet=is_balance_sheet, is_unaudited=is_unaudited)
+
+    return format_period_label(period, is_balance_sheet=is_balance_sheet, is_unaudited=is_unaudited)
+
+
 def is_interim_date(period: str | None) -> bool:
     if not period:
         return False

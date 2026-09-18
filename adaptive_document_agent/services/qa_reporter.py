@@ -65,6 +65,7 @@ class QAReport(BaseModel):
 
 def sanitize_company_identity_contradictions(result: PipelineResult) -> list[QAItem]:
     """Resolve and eliminate contradictions between Company at a Glance and Data Quality notes."""
+    import re as _re
     fixes: list[QAItem] = []
     plan = result.presentation_plan
     if not plan or not plan.company:
@@ -72,32 +73,82 @@ def sanitize_company_identity_contradictions(result: PipelineResult) -> list[QAI
 
     company = plan.company
     is_resolved = company.identity_state == "RESOLVED" or (company.name and "unnamed" not in company.name.casefold())
+    company_name = company.name or ""
+
+    _UNNAMED_ISSUER_PHRASES = [
+        "unnamed issuer",
+        "issuer unknown",
+        "unidentified issuer",
+        "issuer name is not stated",
+        "company name is not stated",
+        "issuer/company name is not stated",
+        "the issuer name is not stated",
+    ]
+
+    def _contains_unnamed(text: str) -> bool:
+        t = text.casefold()
+        return any(phrase in t for phrase in _UNNAMED_ISSUER_PHRASES)
+
+    def _clean_text(text: str) -> str:
+        """Remove or replace unnamed-issuer disclaimers when company is resolved."""
+        result_text = text
+        result_text = _re.sub(r"(?i)\(?(?:prospectus|document)\s+for\s+an\s+unnamed\s+issuer\)?", "", result_text)
+        result_text = _re.sub(r"(?i)\bunnamed\s+issuer\b", company_name, result_text)
+        result_text = _re.sub(r"(?i)\bissuer\s+unknown\b", company_name, result_text)
+        result_text = _re.sub(r"(?i)\bunidentified\s+issuer\b", company_name, result_text)
+        result_text = _re.sub(r"(?i)\bissuer(?:/company)?\s+name\s+is\s+not\s+stated\.?\s*", "", result_text)
+        result_text = _re.sub(r"(?i)\bthe\s+issuer\s+name\s+is\s+not\s+stated\.?\s*", "", result_text)
+        result_text = _re.sub(r"(?i)\bcompany\s+name\s+is\s+not\s+stated\.?\s*", "", result_text)
+        result_text = _re.sub(r"[ \t]{2,}", " ", result_text).strip(" .")
+        return result_text
 
     if is_resolved:
         # Sanitize company description
-        if company.one_line_description and "unnamed issuer" in company.one_line_description.casefold():
-            company.one_line_description = company.one_line_description.replace("(prospectus for an unnamed issuer)", "").replace("prospectus for an unnamed issuer", "").strip(" .")
-            fixes.append(QAItem(
-                code="company_identity_reconciled",
-                severity="INFO",
-                message="Removed 'unnamed issuer' contradiction from resolved company description.",
-            ))
+        if company.one_line_description and _contains_unnamed(company.one_line_description):
+            cleaned = _clean_text(company.one_line_description)
+            if cleaned != company.one_line_description:
+                company.one_line_description = cleaned
+                fixes.append(QAItem(
+                    code="company_identity_reconciled",
+                    severity="INFO",
+                    message="Removed 'unnamed issuer' contradiction from resolved company description.",
+                ))
 
-        # Sanitize data quality slide and bullets
+        # Sanitize all slides: bullets, message, subtitle
         for slide in plan.slides:
-            if slide.slide_type in ("data_quality", "company_overview"):
-                clean_bullets = []
-                for b in slide.bullets:
-                    if "unnamed issuer" in b.casefold() or "issuer unknown" in b.casefold() or "unidentified issuer" in b.casefold():
-                        fixes.append(QAItem(
-                            code="company_identity_reconciled",
-                            severity="INFO",
-                            message=f"Removed conflicting issuer disclaimer from {slide.slide_type} slide.",
-                            slide_id=slide.id,
-                        ))
-                    else:
-                        clean_bullets.append(b)
-                slide.bullets = clean_bullets
+            # Bullets: remove bullets that are unnamed-issuer disclaimers
+            clean_bullets = []
+            for b in slide.bullets:
+                if _contains_unnamed(b):
+                    fixes.append(QAItem(
+                        code="company_identity_reconciled",
+                        severity="INFO",
+                        message=f"Removed conflicting issuer disclaimer from {slide.slide_type} slide.",
+                        slide_id=slide.id,
+                    ))
+                else:
+                    clean_bullets.append(b)
+            slide.bullets = clean_bullets
+
+            # Message: clean inline unnamed-issuer text
+            if slide.message and _contains_unnamed(slide.message):
+                slide.message = _clean_text(slide.message)
+                fixes.append(QAItem(
+                    code="company_identity_reconciled",
+                    severity="INFO",
+                    message=f"Removed issuer-name disclaimer from {slide.slide_type} slide message.",
+                    slide_id=slide.id,
+                ))
+
+            # Subtitle: clean inline unnamed-issuer text
+            if hasattr(slide, "subtitle") and slide.subtitle and _contains_unnamed(slide.subtitle):
+                slide.subtitle = _clean_text(slide.subtitle)
+                fixes.append(QAItem(
+                    code="company_identity_reconciled",
+                    severity="INFO",
+                    message=f"Removed issuer-name disclaimer from {slide.slide_type} slide subtitle.",
+                    slide_id=slide.id,
+                ))
 
     return fixes
 
@@ -112,6 +163,74 @@ def repair_presentation_plan_claims(result: PipelineResult) -> list[str]:
     result.presentation_plan = plan
     return repairs
 
+
+# Patterns in slide titles / messages that claim a multi-period trend
+_MULTI_PERIOD_CLAIM_PATTERNS = [
+    re.compile(r"(?i)\bacross\s+the\s+(?:track\s+record|review)\s+period\b"),
+    re.compile(r"(?i)\bover\s+the\s+(?:track\s+record|review|reporting|full)\s+period\b"),
+    re.compile(r"(?i)\bthroughout\s+the\s+(?:track\s+record|review|reporting)\s+period\b"),
+    re.compile(r"(?i)\bover\s+(?:FY|the)\s*20\d{2}[-–]20\d{2}\b"),
+    re.compile(r"(?i)\byear(?:-over-year|[- ]on[- ]year|ly\s+(?:growth|increase|decrease|decline|trend))\b"),
+]
+
+
+def check_evidence_completeness_for_title_claims(
+    plan: PresentationPlan,
+    observations: list[Observation],
+) -> list[QAItem]:
+    """Check that slides claiming multi-period trends have ≥2 distinct periods in evidence.
+
+    If a slide title asserts a multi-period claim (e.g. 'across the Track Record Period')
+    but has fewer than 2 distinct observation periods, repair the title by stripping the
+    unsupported multi-period qualifier.
+    """
+    issues: list[QAItem] = []
+    obs_by_id = {obs.id: obs for obs in observations}
+
+    for slide in plan.slides:
+        if slide.slide_type in ("cover", "contents", "appendix", "data_quality", "section_divider", "divider"):
+            continue
+        title = slide.title or ""
+        if not any(p.search(title) for p in _MULTI_PERIOD_CLAIM_PATTERNS):
+            continue
+
+        # Count distinct periods among linked observations
+        slide_obs = [obs_by_id[oid] for oid in slide.observation_ids if oid in obs_by_id]
+        for block in getattr(slide, "visual_blocks", []):
+            for oid in getattr(block, "observation_ids", []):
+                if oid in obs_by_id and obs_by_id[oid] not in slide_obs:
+                    slide_obs.append(obs_by_id[oid])
+
+        distinct_periods: set[str] = {obs.period for obs in slide_obs if obs.period}
+        if len(distinct_periods) < 2:
+            # Repair: strip the unsupported multi-period qualifier from the title
+            repaired_title = title
+            for pat in _MULTI_PERIOD_CLAIM_PATTERNS:
+                repaired_title = pat.sub("", repaired_title).strip(" .,;–-")
+            if repaired_title and repaired_title != title:
+                slide.title = repaired_title
+                issues.append(QAItem(
+                    code="evidence_incomplete_title_claim",
+                    severity="WARNING",
+                    message=(
+                        f"Slide {slide.id} title claimed multi-period trend "
+                        f"but has only {len(distinct_periods)} distinct period(s) in evidence. "
+                        f"Title updated: '{title}' → '{repaired_title}'"
+                    ),
+                    slide_id=slide.id,
+                ))
+            else:
+                issues.append(QAItem(
+                    code="evidence_incomplete_title_claim",
+                    severity="WARNING",
+                    message=(
+                        f"Slide {slide.id} title claimed multi-period trend "
+                        f"but has only {len(distinct_periods)} distinct period(s) in evidence: '{title}'"
+                    ),
+                    slide_id=slide.id,
+                ))
+
+    return issues
 
 def run_comprehensive_qa(result: PipelineResult, auto_repair: bool = True) -> QAReport:
     """Execute complete QA audit across numerical, semantic, period, claim, and presentation layers."""
@@ -176,6 +295,13 @@ def run_comprehensive_qa(result: PipelineResult, auto_repair: bool = True) -> QA
                         message=r,
                     )
                 )
+
+            # 4b. Check evidence completeness for multi-period title claims
+            evidence_issues = check_evidence_completeness_for_title_claims(
+                result.presentation_plan, result.observations
+            )
+            for ei in evidence_issues:
+                report.warnings.append(ei)
 
         # Revalidation pass
         validator = ClaimValidator()

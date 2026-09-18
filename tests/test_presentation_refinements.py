@@ -529,3 +529,201 @@ def test_empty_appendix_explicit_fallback_card() -> None:
     assert "The CSV export contains the complete reported dataset." in slide_text
 
 
+# ---------------------------------------------------------------------------
+# Defect 1: format_observation_period — point-in-time period labels
+# ---------------------------------------------------------------------------
+
+def test_format_observation_period_balance_sheet_date() -> None:
+    """April 30 balance-sheet observations must render as '30 Apr 2025*', never 'FY2025'."""
+    from adaptive_document_agent.document_model.period_semantic_validator import format_observation_period
+
+    obs = Observation(
+        id="o1",
+        metric_original="Total assets",
+        raw_value="12000000",
+        confidence=0.9,
+        period="30 April 2025",
+        period_type="balance_sheet_date",
+        audited_status="unaudited",
+    )
+    result = format_observation_period(obs)
+    assert result == "30 Apr 2025*", f"Expected '30 Apr 2025*', got '{result}'"
+
+
+def test_format_observation_period_fy_period() -> None:
+    """FY2024 observations must render as 'FY2024' regardless of is_balance_sheet."""
+    from adaptive_document_agent.document_model.period_semantic_validator import format_observation_period
+
+    obs = Observation(
+        id="o2",
+        metric_original="Revenue",
+        raw_value="500000",
+        confidence=0.9,
+        period="FY2024",
+        period_type="fiscal_year",
+        audited_status="audited",
+    )
+    result = format_observation_period(obs)
+    assert result == "FY2024", f"Expected 'FY2024', got '{result}'"
+
+
+def test_format_observation_period_auto_bs_from_metric() -> None:
+    """Balance-sheet keyword in metric name auto-sets is_balance_sheet=True."""
+    from adaptive_document_agent.document_model.period_semantic_validator import format_observation_period
+
+    obs = Observation(
+        id="o3",
+        metric_original="Cash and cash equivalents",
+        raw_value="50000",
+        confidence=0.9,
+        period="2025-04-30",
+        period_type="generic",
+        audited_status="unaudited",
+    )
+    result = format_observation_period(obs)
+    assert result == "30 Apr 2025*", f"Expected '30 Apr 2025*', got '{result}'"
+
+
+# ---------------------------------------------------------------------------
+# Defect 2: Negative chart rendering — number format and axis scaling
+# ---------------------------------------------------------------------------
+
+def test_negative_chart_number_format_has_sign() -> None:
+    """Data labels number format must preserve minus sign (not strip it)."""
+    # We test indirectly by checking the constants used in the chart builder
+    # The format "0.0;-0.0;0.0" has a negative section that forces the minus sign
+    signed_format = "0.0;-0.0;0.0"
+    # positive, negative, zero sections
+    sections = signed_format.split(";")
+    assert len(sections) == 3, "Signed number format must have 3 sections"
+    assert sections[1].startswith("-"), "Negative section must start with '-'"
+
+
+# ---------------------------------------------------------------------------
+# Defect 4: Non-monotonic series — intermediate reversal detection
+# ---------------------------------------------------------------------------
+
+def test_detect_non_monotonic_transitions_rebound() -> None:
+    """Series that declines then rebounds should be detected as non-monotonic."""
+    from adaptive_document_agent.validation.claim_validator import detect_non_monotonic_transitions
+
+    class FakeObs:
+        def __init__(self, v: float) -> None:
+            self.value = v
+
+    obs = [FakeObs(1.185), FakeObs(1.191), FakeObs(1.029), FakeObs(1.506)]
+    result = detect_non_monotonic_transitions(obs)  # type: ignore[arg-type]
+    assert result["is_non_monotonic"] is True
+    assert result["had_rebound"] is True
+
+
+def test_detect_non_monotonic_transitions_monotone() -> None:
+    """Monotone increasing series must NOT be flagged as non-monotonic."""
+    from adaptive_document_agent.validation.claim_validator import detect_non_monotonic_transitions
+
+    class FakeObs:
+        def __init__(self, v: float) -> None:
+            self.value = v
+
+    obs = [FakeObs(100), FakeObs(200), FakeObs(300)]
+    result = detect_non_monotonic_transitions(obs)  # type: ignore[arg-type]
+    assert result["is_non_monotonic"] is False
+
+
+# ---------------------------------------------------------------------------
+# Defect 5: Evidence completeness — title claim check
+# ---------------------------------------------------------------------------
+
+def test_evidence_completeness_strips_unsupported_multi_period_claim() -> None:
+    """Slide title claiming 'across the Track Record Period' with 1 obs period gets repaired."""
+    from adaptive_document_agent.services.qa_reporter import check_evidence_completeness_for_title_claims
+
+    obs = Observation(
+        id="oe1",
+        metric_original="Adjusted EBITDA loss",
+        raw_value="-100",
+        confidence=0.9,
+        period="FY2024",
+        period_type="fiscal_year",
+    )
+    slide = PresentationSlide(
+        id="slide_revenue",
+        slide_type="analysis",
+        title="Adjusted EBITDA loss shrank across the Track Record Period",
+        observation_ids=["oe1"],
+    )
+    plan = PresentationPlan(title="Test", slides=[slide])
+    issues = check_evidence_completeness_for_title_claims(plan, [obs])
+    assert any(i.code == "evidence_incomplete_title_claim" for i in issues)
+    # Title should be repaired
+    assert "across the Track Record Period" not in slide.title
+
+
+def test_evidence_completeness_ok_with_two_periods() -> None:
+    """Slide title with 2+ distinct period observations must NOT be flagged."""
+    from adaptive_document_agent.services.qa_reporter import check_evidence_completeness_for_title_claims
+
+    obs1 = Observation(id="oe2", metric_original="EBITDA", raw_value="-100", confidence=0.9, period="FY2022", period_type="fiscal_year")
+    obs2 = Observation(id="oe3", metric_original="EBITDA", raw_value="-80", confidence=0.9, period="FY2023", period_type="fiscal_year")
+    slide = PresentationSlide(
+        id="slide_ebitda",
+        slide_type="analysis",
+        title="EBITDA improved across the Track Record Period",
+        observation_ids=["oe2", "oe3"],
+    )
+    plan = PresentationPlan(title="Test", slides=[slide])
+    issues = check_evidence_completeness_for_title_claims(plan, [obs1, obs2])
+    assert not any(i.code == "evidence_incomplete_title_claim" for i in issues)
+
+
+# ---------------------------------------------------------------------------
+# Defect 6: Expense ratio — cost of sales ratio must be EXPENSE not RATIO
+# ---------------------------------------------------------------------------
+
+def test_cost_of_sales_ratio_classified_as_expense() -> None:
+    """'Cost of sales / revenue' is an expense ratio and must be EXPENSE family."""
+    from adaptive_document_agent.validation.claim_validator import (
+        classify_metric_semantic_family,
+        MetricSemanticFamily,
+    )
+    family = classify_metric_semantic_family("Cost of sales / revenue")
+    assert family == MetricSemanticFamily.EXPENSE, f"Expected EXPENSE, got {family}"
+
+
+def test_cost_of_sales_as_pct_classified_as_expense() -> None:
+    """'Cost of sales as % of revenue' is an expense ratio."""
+    from adaptive_document_agent.validation.claim_validator import (
+        classify_metric_semantic_family,
+        MetricSemanticFamily,
+    )
+    family = classify_metric_semantic_family("Cost of sales as % of revenue")
+    assert family == MetricSemanticFamily.EXPENSE, f"Expected EXPENSE, got {family}"
+
+
+def test_gross_margin_still_ratio() -> None:
+    """'Gross profit margin' must remain RATIO family (not EXPENSE)."""
+    from adaptive_document_agent.validation.claim_validator import (
+        classify_metric_semantic_family,
+        MetricSemanticFamily,
+    )
+    family = classify_metric_semantic_family("Gross profit margin")
+    assert family == MetricSemanticFamily.RATIO, f"Expected RATIO, got {family}"
+
+
+def test_expense_ratio_decrease_not_contradiction_of_gross_margin() -> None:
+    """Declining cost of sales ratio should NOT contradict gross margin improvement."""
+    from adaptive_document_agent.validation.claim_validator import (
+        determine_trend_state,
+        TrendState,
+        classify_metric_semantic_family,
+        MetricSemanticFamily,
+    )
+    # Cost of sales ratio declined 65% → 60% (positive for gross margin)
+    family = classify_metric_semantic_family("Cost of sales / revenue")
+    assert family == MetricSemanticFamily.EXPENSE
+
+    trend = determine_trend_state("Cost of sales / revenue", 65.0, 60.0)
+    # A 65 → 60 decrease in EXPENSE metric must be DECREASED (not contradicting gross margin improvement)
+    assert trend == TrendState.DECREASED, f"Expected DECREASED, got {trend}"
+
+

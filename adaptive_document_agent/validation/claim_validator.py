@@ -177,6 +177,26 @@ def classify_metric_semantic_family(
     if any(p in name_normalized for p in cash_flow_indicators):
         return MetricSemanticFamily.CASH_FLOW
 
+    # 1b. EXPENSE_RATIO: cost / expense ratios expressed as "X as % of revenue" or "X / revenue"
+    # Must precede generic RATIO so these get EXPENSE semantics (declining ratio = DECREASED not INCREASED)
+    expense_ratio_indicators = (
+        "cost of sales",
+        "cost of revenue",
+        "cost of goods",
+        "cost of service",
+        "selling expenses",
+        "administrative expenses",
+        "operating expenses",
+        "r&d expenses",
+        "research and development expenses",
+        "staff costs",
+        "employee benefit expenses",
+    )
+    has_expense_ratio_head = any(p in name_normalized for p in expense_ratio_indicators)
+    has_ratio_qualifier = any(p in name_normalized for p in ("% of", "/ revenue", "as a percentage", "as percentage", "share of revenue", "ratio"))
+    if has_expense_ratio_head and has_ratio_qualifier:
+        return MetricSemanticFamily.EXPENSE
+
     # 2. RATIO (margins, percentages, multipliers)
     ratio_indicators = (
         "margin",
@@ -349,6 +369,52 @@ def is_signed_gain_loss_metric(
     ):
         return True
     return False
+
+
+# Patterns that indicate an intermediate reversal is being described in text
+_NON_MONOTONIC_BEFORE_PATTERN = re.compile(
+    r"(?i)\b(declined?|decreas(?:ed|ing)|fell|drop(?:ped)?|contract(?:ed)?|narrowed?)\b"
+    r".{0,60}"
+    r"\b(before|prior\s+to)\s+"
+    r"\b(rebounding?|recovering?|ris(?:ing|e|es)|increas(?:ing|ed)|expand(?:ing|ed)|improv(?:ing|ed)|bouncing?\s+back)\b"
+)
+_NON_MONOTONIC_REBOUND_PATTERN = re.compile(
+    r"(?i)\b(rebounding?|recovering?|bouncing?\s+back)\b"
+)
+_NON_MONOTONIC_DECLINE_THEN_RECOVER = re.compile(
+    r"(?i)\b(fell|drop(?:ped)?|declined?|decreas(?:ed)?|contract(?:ed)?|slump(?:ed)?)\b"
+    r".{0,80}"
+    r"\b(rebounded?|recovered?|rose|surged?|bounced?\s+back|picked?\s+up)\b"
+)
+
+
+def detect_non_monotonic_transitions(
+    sorted_obs: list[object],
+) -> dict[str, bool]:
+    """Detect whether a sorted observation series has intermediate reversals.
+
+    Returns a dict with keys:
+    - 'had_intermediate_decline': True if any adjacent step went down after a prior up-step
+    - 'had_rebound': True if any adjacent step went up after a prior down-step
+    - 'is_non_monotonic': True if the series changed direction at least once
+    """
+    if len(sorted_obs) < 3:
+        return {"had_intermediate_decline": False, "had_rebound": False, "is_non_monotonic": False}
+
+    values: list[float] = [float(getattr(o, "value", 0) or 0) for o in sorted_obs]
+    steps = [values[i + 1] - values[i] for i in range(len(values) - 1)]
+    up_steps = [s > 0 for s in steps]
+    down_steps = [s < 0 for s in steps]
+
+    had_intermediate_decline = any(down_steps[1:]) and any(up_steps[:len(up_steps) - 1])
+    had_rebound = any(up_steps[1:]) and any(down_steps[:len(down_steps) - 1])
+    is_non_monotonic = (any(up_steps) and any(down_steps))
+
+    return {
+        "had_intermediate_decline": had_intermediate_decline,
+        "had_rebound": had_rebound,
+        "is_non_monotonic": is_non_monotonic,
+    }
 
 
 def determine_trend_state(
@@ -1262,6 +1328,7 @@ class ClaimValidator:
             metric_info[metric_name] = {
                 "first": first,
                 "last": last,
+                "sorted_obs": sorted_obs,
                 "val_start": val_start,
                 "val_end": val_end,
                 "is_comp": is_comp,
@@ -1269,6 +1336,7 @@ class ClaimValidator:
                 "family": family,
                 "bs_subtype": bs_subtype,
                 "trend_state": trend_state,
+                "non_monotonic": detect_non_monotonic_transitions(sorted_obs),
             }
 
         if not metric_info:
@@ -1403,6 +1471,20 @@ class ClaimValidator:
 
                     offending = _detect_offending_in_text(dir_word, trend_state, family)
                     if offending:
+                        # Non-monotonic exemption: if the series has intermediate reversals
+                        # AND the clause text explicitly describes that pattern,
+                        # do NOT flag it as a contradiction.
+                        non_monotonic = info.get("non_monotonic", {})
+                        if non_monotonic.get("is_non_monotonic"):
+                            clause_lower = clause.casefold()
+                            is_exempt = (
+                                _NON_MONOTONIC_BEFORE_PATTERN.search(clause_lower) is not None
+                                or _NON_MONOTONIC_DECLINE_THEN_RECOVER.search(clause_lower) is not None
+                                or (non_monotonic.get("had_rebound") and _NON_MONOTONIC_REBOUND_PATTERN.search(clause_lower) is not None)
+                            )
+                            if is_exempt:
+                                continue
+
                         seen_issues.add(issue_key)
                         verb = (
                             "narrowed" if trend_state in (TrendState.LOSS_NARROWED, TrendState.DEFICIT_NARROWED)
