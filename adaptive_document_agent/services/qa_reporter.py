@@ -29,7 +29,10 @@ from adaptive_document_agent.models import (
     PipelineResult,
     SourceEvidence,
 )
-from adaptive_document_agent.validation.claim_validator import ClaimValidator
+from adaptive_document_agent.validation.claim_validator import (
+    ClaimValidator,
+    repair_presentation_plan,
+)
 
 
 class CriticalQAError(ValueError):
@@ -99,7 +102,18 @@ def sanitize_company_identity_contradictions(result: PipelineResult) -> list[QAI
     return fixes
 
 
-def run_comprehensive_qa(result: PipelineResult) -> QAReport:
+def repair_presentation_plan_claims(result: PipelineResult) -> list[str]:
+    """Execute the automatic claim repair loop:
+    Presentation Plan -> Claim Validation -> Repair contradictory wording -> Revalidate.
+    """
+    if not result.presentation_plan:
+        return []
+    plan, repairs = repair_presentation_plan(result.presentation_plan, result.observations)
+    result.presentation_plan = plan
+    return repairs
+
+
+def run_comprehensive_qa(result: PipelineResult, auto_repair: bool = True) -> QAReport:
     """Execute complete QA audit across numerical, semantic, period, claim, and presentation layers."""
     report = QAReport(
         document_title=result.profile.overview_title or "Financial Document",
@@ -150,8 +164,20 @@ def run_comprehensive_qa(result: PipelineResult) -> QAReport:
                     )
                 )
 
-    # 4. Check presentation claims against facts
+    # 4. Check presentation claims against facts (with auto-repair loop)
     if result.presentation_plan:
+        if auto_repair:
+            repairs = repair_presentation_plan_claims(result)
+            for r in repairs:
+                report.info.append(
+                    QAItem(
+                        code="claim_contradiction_repaired",
+                        severity="INFO",
+                        message=r,
+                    )
+                )
+
+        # Revalidation pass
         validator = ClaimValidator()
         claim_issues = validator.validate_plan(result.presentation_plan, result.observations)
         for issue in claim_issues:
@@ -211,6 +237,9 @@ def generate_artifacts(result: PipelineResult, output_dir: Path | str) -> dict[s
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
+    # Run QA and claim repair loop before writing artifacts
+    qa = run_comprehensive_qa(result, auto_repair=True)
+
     # 1. extracted_facts.json
     extracted = [
         {
@@ -238,14 +267,13 @@ def generate_artifacts(result: PipelineResult, output_dir: Path | str) -> dict[s
     with open(normalized_file, "w", encoding="utf-8") as f:
         json.dump(normalized, f, indent=2, ensure_ascii=False)
 
-    # 3. slide_plan.json
+    # 3. slide_plan.json (reflecting repaired plan)
     slide_plan_file = out_path / "slide_plan.json"
     slide_data = result.presentation_plan.model_dump() if result.presentation_plan else {}
     with open(slide_plan_file, "w", encoding="utf-8") as f:
         json.dump(slide_data, f, indent=2, ensure_ascii=False)
 
     # 4. qa_report.json
-    qa = run_comprehensive_qa(result)
     qa_file = out_path / "qa_report.json"
     with open(qa_file, "w", encoding="utf-8") as f:
         json.dump(qa.model_dump(), f, indent=2, ensure_ascii=False)
@@ -256,3 +284,4 @@ def generate_artifacts(result: PipelineResult, output_dir: Path | str) -> dict[s
         "slide_plan": slide_plan_file,
         "qa_report": qa_file,
     }
+

@@ -54,7 +54,9 @@ def export_pptx(
 ) -> bytes:
     from .qa_reporter import CriticalQAError, run_comprehensive_qa
 
-    qa = run_comprehensive_qa(result)
+    # Automatic QA repair loop:
+    # Presentation Plan -> Claim Validation -> Repair contradictory wording -> Revalidate -> Export only if valid.
+    qa = run_comprehensive_qa(result, auto_repair=True)
     if not force and qa.has_critical_errors:
         reasons = "\n - ".join(e.message for e in qa.critical_errors)
         raise CriticalQAError(f"PowerPoint export blocked due to critical QA errors:\n - {reasons}")

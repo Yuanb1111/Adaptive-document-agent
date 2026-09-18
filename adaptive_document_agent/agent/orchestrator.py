@@ -297,6 +297,19 @@ class DocumentOrchestrator:
                             )
                         )
 
+                if presentation_plan:
+                    from adaptive_document_agent.validation.claim_validator import repair_presentation_plan
+                    presentation_plan, plan_repairs = repair_presentation_plan(presentation_plan, index.observations)
+                    for repair_msg in plan_repairs:
+                        issues.append(
+                            ValidationIssue(
+                                code="claim_contradiction_repaired",
+                                message=repair_msg,
+                                severity="info",
+                                stage="presentation",
+                            )
+                        )
+
         notify("Complete")
         return PipelineResult(
             document=document,

@@ -158,13 +158,53 @@ def run_app() -> None:
         quality.render(st, result)
     with tab_technical:
         technical.render(st, result)
-    st.download_button(
-        "Download presentation (.pptx)",
-        export_pptx(result),
-        "analysis_presentation.pptx",
-        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        type="primary",
-    )
-    st.download_button("Download Markdown", export_markdown(result), "analysis_report.md", "text/markdown")
-    st.download_button("Download report (.pdf)", export_pdf(result), "analysis_report.pdf", "application/pdf")
-    st.download_button("Download CSV", export_csv(result), "extracted_observations.csv", "text/csv")
+    st.subheader("Exports & Deliverables")
+    from adaptive_document_agent.services.qa_reporter import CriticalQAError, run_comprehensive_qa
+
+    pptx_bytes: bytes | None = None
+    qa_error: CriticalQAError | None = None
+    try:
+        pptx_bytes = export_pptx(result)
+    except CriticalQAError as exc:
+        qa_error = exc
+    except Exception as exc:
+        qa_error = CriticalQAError(f"Unexpected export error: {exc}")
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        if pptx_bytes:
+            st.download_button(
+                "Download presentation (.pptx)",
+                pptx_bytes,
+                "analysis_presentation.pptx",
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                type="primary",
+                use_container_width=True,
+            )
+        else:
+            st.button("Download presentation (.pptx)", disabled=True, use_container_width=True, help="Export blocked by Critical QA")
+    with col2:
+        st.download_button("Download Markdown", export_markdown(result), "analysis_report.md", "text/markdown", use_container_width=True)
+    with col3:
+        st.download_button("Download report (.pdf)", export_pdf(result), "analysis_report.pdf", "application/pdf", use_container_width=True)
+    with col4:
+        st.download_button("Download CSV", export_csv(result), "extracted_observations.csv", "text/csv", use_container_width=True)
+
+    if qa_error:
+        st.error("⚠️ **PowerPoint Export Blocked by Critical QA Audit**")
+        st.markdown(
+            "The presentation export was blocked because critical financial or factual contradictions "
+            "were detected that could not be automatically resolved. Review the issues below:"
+        )
+        qa = run_comprehensive_qa(result)
+        for err in qa.critical_errors:
+            st.error(f"🔴 **[{err.code}]**: {err.message}")
+
+        with st.expander("🔍 View Detailed QA Audit Report & Artifacts", expanded=False):
+            st.json(qa.model_dump())
+            st.download_button(
+                "Download QA Audit Report (qa_report.json)",
+                qa.model_dump_json(indent=2),
+                "qa_report.json",
+                "application/json",
+            )
