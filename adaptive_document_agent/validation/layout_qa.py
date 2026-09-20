@@ -334,4 +334,72 @@ def validate_presentation_layout(
                 )
             )
 
+    # 7. Low-density analysis slide check (no chart, no table, <2 observations, single short message)
+    repaired_slides_density: list[PresentationSlide] = []
+    for slide in list(plan.slides):
+        if slide.slide_type != "analysis":
+            repaired_slides_density.append(slide)
+            continue
+
+        has_chart = bool(slide.chart_ids or any(b.chart_ids for b in getattr(slide, "visual_blocks", [])))
+        effective_obs = list(slide.observation_ids)
+        for b in getattr(slide, "visual_blocks", []):
+            effective_obs.extend(b.observation_ids)
+        effective_obs = list(dict.fromkeys(effective_obs))
+
+        is_table = slide.layout in {"data_overview", "table_plus_kpis", "chart_with_data"} and len(effective_obs) >= 2
+        has_obs = len(effective_obs) >= 2
+        has_blocks = any(len(b.chart_ids) > 0 or len(b.observation_ids) >= 2 for b in getattr(slide, "visual_blocks", []))
+
+        is_sufficient = has_chart or is_table or has_obs or has_blocks
+        if not is_sufficient:
+            if auto_repair:
+                # Merge into neighbouring analysis slide if possible, or omit
+                other_analysis = [s for s in repaired_slides_density if s.slide_type == "analysis"]
+                current_idx = plan.slides.index(slide)
+                future_analysis = [s for s in plan.slides[current_idx + 1 :] if s.slide_type == "analysis"]
+                target = None
+                if other_analysis:
+                    target = next((s for s in reversed(other_analysis) if s.section_id == slide.section_id), other_analysis[-1])
+                elif future_analysis:
+                    target = future_analysis[0]
+
+                if target is not None:
+                    target.insight_ids = list(dict.fromkeys([*target.insight_ids, *slide.insight_ids]))
+                    if slide.message and slide.message != target.message and slide.message not in target.bullets:
+                        target.bullets = [*target.bullets, slide.message][:5]
+                    for b in slide.bullets:
+                        if b not in target.bullets:
+                            target.bullets = [*target.bullets, b][:5]
+                    target.source_pages = sorted(set(target.source_pages) | set(slide.source_pages))
+                    if slide.observation_ids:
+                        target.observation_ids = list(dict.fromkeys([*target.observation_ids, *slide.observation_ids]))
+                    issues.append(
+                        QAItem(
+                            code="low_density_analysis_slide_repaired",
+                            severity="INFO",
+                            message=f"Slide '{slide.id}' had low content density; merged into '{target.id}'.",
+                            slide_id=slide.id,
+                        )
+                    )
+                    continue
+
+                # If no other analysis slide exists anywhere in the deck, do not omit sole analysis slide
+                repaired_slides_density.append(slide)
+            else:
+                issues.append(
+                    QAItem(
+                        code="low_density_analysis_slide",
+                        severity="WARNING",
+                        message=f"Slide '{slide.id}' has low content density: lacks a chart, table, or at least 2 observations.",
+                        slide_id=slide.id,
+                    )
+                )
+                repaired_slides_density.append(slide)
+        else:
+            repaired_slides_density.append(slide)
+
+    if auto_repair:
+        plan.slides = repaired_slides_density
+
     return issues

@@ -177,6 +177,18 @@ class PresentationPlanValidator:
                 errors.append(f"slide {slide.id} contains source pages outside the document")
             if slide.slide_type in {"analysis", "risks"} and not (chart_ids or observation_ids or insight_ids):
                 errors.append(f"slide {slide.id} has no retained evidence references")
+            if slide.slide_type == "analysis":
+                has_chart = bool(chart_ids or any(b.chart_ids for b in slide.visual_blocks))
+                effective_obs = {*observation_ids, *(o for b in slide.visual_blocks for o in b.observation_ids)}
+                has_table = slide.layout in {"data_overview", "table_plus_kpis", "chart_with_data"} and len(effective_obs) >= 2
+                has_obs = len(effective_obs) >= 2
+                has_blocks = any(b.chart_ids or len(b.observation_ids) >= 2 for b in slide.visual_blocks)
+                if not (has_chart or has_table or has_obs or has_blocks) and not effective_obs:
+                    errors.append(
+                        f"analysis slide {slide.id} has insufficient data density: insight_ids alone do not justify "
+                        "an analysis slide. Must include a chart, data table, at least 2 structured observations, "
+                        "or a meaningful visual block."
+                    )
             if slide.slide_type == "analysis" and not slide.message.strip():
                 errors.append(f"analysis slide {slide.id} must state one message")
             if slide.slide_type == "analysis":

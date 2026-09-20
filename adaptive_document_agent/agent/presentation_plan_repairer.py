@@ -44,6 +44,7 @@ class PresentationPlanRepairer:
 
         cleaned_company = self._clean_company(plan.company, result, valid_pages)
         repaired_slides: list[PresentationSlide] = []
+        pending_under_supported: list[tuple[list[str], str, list[str], list[int], list[str], str]] = []
 
         for ordinal, slide in enumerate(plan.slides):
             if slide.slide_type not in {
@@ -124,6 +125,68 @@ class PresentationPlanRepairer:
             ):
                 continue
 
+            layout = slide.layout
+            # Check analysis slide data density: insight_ids alone cannot justify a standalone analysis slide
+            if slide.slide_type == "analysis":
+                has_chart = bool(chart_ids or any(b.chart_ids for b in blocks))
+                effective_obs = [oid for oid in observation_ids]
+                for b in blocks:
+                    effective_obs.extend(b.observation_ids)
+                effective_obs = list(dict.fromkeys(effective_obs))
+
+                has_table = slide.layout in {"data_overview", "table_plus_kpis", "chart_with_data"} and len(effective_obs) >= 2
+                has_obs = len(effective_obs) >= 2
+                has_blocks = any(len(b.chart_ids) > 0 or len(b.observation_ids) >= 2 for b in blocks)
+                is_sufficient = has_chart or has_table or has_obs or has_blocks
+
+                if not is_sufficient:
+                    # Resolution 1: Generate a small evidence table if sufficient structured observations exist
+                    table_obs = self._find_observations_for_topic(title, insight_ids, insights, index)
+                    if len(table_obs) >= 2:
+                        observation_ids = [o.id for o in table_obs[:4]]
+                        referenced_pages = self._reference_pages(
+                            chart_ids, observation_ids, insight_ids, blocks, observations, insights, charts
+                        )
+                        source_pages = sorted(set(source_pages) | referenced_pages)
+                        layout = "data_overview" if slide.layout in {"auto", "single"} else slide.layout
+                        is_sufficient = True
+                    else:
+                        # Resolution 2: Merge into the most relevant neighbouring analysis slide if possible
+                        existing_analysis = [s for s in repaired_slides if s.slide_type == "analysis"]
+                        if existing_analysis:
+                            # Prefer same section or immediate previous analysis slide
+                            target = next(
+                                (s for s in reversed(existing_analysis) if s.section_id == section_id),
+                                existing_analysis[-1],
+                            )
+                            target.insight_ids = list(dict.fromkeys([*target.insight_ids, *insight_ids]))
+                            if message and message != target.message and message not in target.bullets:
+                                target.bullets = [*target.bullets, message][:5]
+                            for b in bullets:
+                                if b not in target.bullets:
+                                    target.bullets = [*target.bullets, b][:5]
+                            if observation_ids:
+                                target.observation_ids = list(dict.fromkeys([*target.observation_ids, *observation_ids]))
+                            target.source_pages = sorted(set(target.source_pages) | set(source_pages))
+                            continue
+                        else:
+                            # Resolution 3: Queue for merging into the next valid analysis slide, or omit
+                            pending_under_supported.append((insight_ids, message, bullets, source_pages, observation_ids, section_id))
+                            continue
+
+                # If this analysis slide is valid and there are pending under-supported insights from preceding slides, merge them here
+                if pending_under_supported:
+                    for p_ins, p_msg, p_bul, p_pages, p_obs, _ in pending_under_supported:
+                        insight_ids = list(dict.fromkeys([*insight_ids, *p_ins]))
+                        if p_msg and p_msg != message and p_msg not in bullets:
+                            bullets = [*bullets, p_msg][:5]
+                        for b in p_bul:
+                            if b not in bullets:
+                                bullets = [*bullets, b][:5]
+                        observation_ids = list(dict.fromkeys([*observation_ids, *p_obs]))
+                        source_pages = sorted(set(source_pages) | set(p_pages))
+                    pending_under_supported.clear()
+
             if slide.slide_type == "analysis" and not message:
                 message = "Evidence-backed comparison of retained reported values."
 
@@ -149,7 +212,7 @@ class PresentationPlanRepairer:
                     section_id=section_id,
                     section_title=section_title,
                     slide_role=slide.slide_role,
-                    layout=slide.layout,
+                    layout=layout,
                     message=message,
                     bullets=bullets[:5],
                     chart_ids=chart_ids,
@@ -159,6 +222,41 @@ class PresentationPlanRepairer:
                     source_pages=source_pages,
                 )
             )
+
+        if pending_under_supported:
+            final_analysis = [s for s in repaired_slides if s.slide_type == "analysis"]
+            if final_analysis:
+                target = final_analysis[-1]
+                for p_ins, p_msg, p_bul, p_pages, p_obs, _ in pending_under_supported:
+                    target.insight_ids = list(dict.fromkeys([*target.insight_ids, *p_ins]))
+                    if p_msg and p_msg != target.message and p_msg not in target.bullets:
+                        target.bullets = [*target.bullets, p_msg][:5]
+                    for b in p_bul:
+                        if b not in target.bullets:
+                            target.bullets = [*target.bullets, b][:5]
+                    target.source_pages = sorted(set(target.source_pages) | set(p_pages))
+            elif any(p_obs for _, _, _, _, p_obs, _ in pending_under_supported):
+                all_ins = [ins for p_ins, _, _, _, _, _ in pending_under_supported for ins in p_ins]
+                all_obs = [obs for _, _, _, _, p_obs, _ in pending_under_supported for obs in p_obs]
+                all_pages = [page for _, _, _, p_pages, _, _ in pending_under_supported for page in p_pages]
+                first_msg = next((msg for _, msg, _, _, _, _ in pending_under_supported if msg), "Evidence-backed analysis.")
+                all_buls = [b for _, _, buls, _, _, _ in pending_under_supported for b in buls][:5]
+                repaired_slides.append(
+                    PresentationSlide(
+                        id=stable_id("slide", "analysis", 1),
+                        slide_type="analysis",
+                        title="Key Analysis",
+                        section_id="analysis_1",
+                        section_title="Analysis",
+                        layout="data_overview" if len(all_obs) >= 2 else "auto",
+                        message=first_msg,
+                        bullets=all_buls,
+                        observation_ids=list(dict.fromkeys(all_obs)),
+                        insight_ids=list(dict.fromkeys(all_ins)),
+                        source_pages=sorted(set(all_pages)),
+                    )
+                )
+            pending_under_supported.clear()
 
         # Backfill analysis slides if AI analysis slides were lost or empty despite usable charts
         repaired_analysis = [s for s in repaired_slides if s.slide_type == "analysis"]
@@ -728,3 +826,33 @@ class PresentationPlanRepairer:
             "data_quality": "Data Quality and Scope",
             "appendix": "Source Data Appendix",
         }.get(slide_type, "Analysis")
+
+    @staticmethod
+    def _find_observations_for_topic(
+        title: str,
+        insight_ids: list[str],
+        insights: dict[str, object],
+        index: object,
+    ) -> list[object]:
+        from adaptive_document_agent.document_model.topic_matcher import extract_topic_tokens
+
+        candidate_metrics: list[str] = []
+        for iid in insight_ids:
+            ins = insights.get(iid)
+            if ins:
+                m = getattr(ins, "metric", None)
+                if m:
+                    candidate_metrics.append(m)
+        title_tokens = extract_topic_tokens(title)
+        if hasattr(index, "metrics"):
+            for m in index.metrics():
+                m_tokens = extract_topic_tokens(m)
+                if m_tokens and (m_tokens.issubset(title_tokens) or title_tokens.issubset(m_tokens)):
+                    candidate_metrics.append(m)
+
+        for metric in candidate_metrics:
+            obs = index.for_metric(metric) if hasattr(index, "for_metric") else []
+            valid_obs = [o for o in obs if getattr(o, "value", None) is not None]
+            if len(valid_obs) >= 2:
+                return valid_obs
+        return []

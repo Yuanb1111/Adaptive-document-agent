@@ -346,10 +346,20 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
                 ordinal += 1
             else:
                 observations = _planned_observations(slide_plan, index)
+                if not observations:
+                    insight_by_id = {item.id: item for item in result.insights}
+                    candidate_obs = []
+                    for iid in slide_plan.insight_ids:
+                        ins = insight_by_id.get(iid)
+                        if ins and ins.metric:
+                            candidate_obs.extend([o for o in index.for_metric(ins.metric) if o.value is not None])
+                    if len(candidate_obs) >= 2:
+                        observations = candidate_obs[:4]
+
                 if observations:
                     _add_planned_data_slide(presentation, slide_plan, observations)
                 else:
-                    _add_planned_text_slide(presentation, result, slide_plan)
+                    continue
         elif slide_plan.slide_type == "risks":
             _add_planned_text_slide(presentation, result, slide_plan)
         elif slide_plan.slide_type == "data_quality":
