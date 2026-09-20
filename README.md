@@ -1,48 +1,94 @@
 # Adaptive Document Intelligence Agent
 
-An evidence-grounded, provider-independent application for analysing arbitrary data-rich PDFs. The system inspects the actual document before deciding which analyses are useful. It does not ask the user to choose a hard-coded document type and does not use LLMs for arithmetic.
+Adaptive Document Intelligence Agent is a production-minded Streamlit prototype for analysing an unfamiliar, data-rich PDF without asking the user to choose a document type first. It preserves page-level evidence, discovers what information is actually present, selects analyses supported by that evidence, performs calculations in deterministic Python, and produces a traceable report and presentation.
+
+The project currently processes one PDF synchronously. Its generic analysis pipeline works end to end, and the repository now also contains a stronger financial-document layer for normalized facts, period semantics, sign-aware claims, and presentation QA. OCR execution and pixel-backed chart interpretation remain extension points rather than bundled capabilities.
 
 ## Project Overview
 
-The application accepts one PDF, preserves page-level text/table/image provenance, discovers the document's purpose and available information, builds a global observation model, proposes and scores possible analyses, executes supported calculations in Python, validates results, and renders a dynamic report.
+The application can:
 
-Its central responsibility split is:
+- validate and hash an uploaded PDF;
+- build a page map and require confirmation of the page ranges selected for deep analysis;
+- extract digital text, bordered tables, aligned borderless tables, images, and page-level provenance;
+- reconstruct table structure and likely cross-page continuations;
+- discover the document purpose, sections, metrics, dimensions, entities, periods, units, and limitations;
+- preserve raw values while building normalized observations and, where applicable, typed financial facts;
+- propose, score, and execute only analyses supported by the available data;
+- run arithmetic and statistics through deterministic tools and a restricted formula evaluator;
+- validate extraction, semantics, units, periods, calculations, evidence, narrative claims, and presentation consistency;
+- generate a dynamic Markdown report, interactive Plotly charts, a formatted PDF, and an editable PowerPoint presentation;
+- block PowerPoint export when critical factual or financial contradictions remain unresolved.
 
-- LLM: semantic discovery, metric interpretation, analysis value judgment, insight language.
-- Python: parsing, normalisation, arithmetic, statistics, ranking, unit checks, safe formulas, consistency checks.
-- Validators: decide whether extracted data and results are trustworthy enough to show.
+The responsibility split is:
 
-PDF text is always treated as untrusted source material. Instructions embedded in a PDF are never executed or followed.
+- **LLMs:** semantic discovery, conservative metric resolution, analysis prioritisation, insight wording, report organisation, and presentation story planning.
+- **Python:** extraction, normalization, arithmetic, statistics, ranking, safe formula evaluation, chart construction, and deterministic validation.
+- **Validators:** decide what is sufficiently supported to retain, repair, warn about, or block from export.
+
+PDF contents are untrusted source material. Instructions embedded in a document are treated as data, never as commands.
 
 ## Architecture
 
 ```text
-PDF -> page parser -> text/tables/images -> document discovery
-    -> semantic resolution -> global observation index
-    -> candidate generation -> value scoring -> validated plan
-    -> targeted observations -> deterministic tools -> validators
-    -> grounded insights -> dynamic report/chart plans -> Streamlit UI
+PDF
+  -> validation, hashing, page-level parsing, and cache
+  -> model-selected page ranges -> user scope confirmation
+  -> text, table, image, and OCR/vision requirement detection
+  -> document discovery and semantic resolution
+  -> observations -> normalized financial facts where applicable
+  -> global document index
+  -> candidate generation -> value scoring -> validated analysis plan
+  -> targeted extraction -> deterministic tool execution
+  -> extraction, semantic, consistency, calculation, evidence, and coverage validation
+  -> grounded insights -> dynamic report and chart plans
+  -> evidence-bound presentation plan -> repair/recovery and comprehensive QA
+  -> Streamlit results and exports
 ```
 
-Provider calls use this boundary:
+All model access crosses one provider-independent boundary:
 
 ```text
-Agent module -> LLMGateway -> LLMClient -> LiteLLMProvider -> configured provider
+Agent modules -> LLMGateway -> LLMClient -> LiteLLMProvider -> configured provider
 ```
 
-No analysis module imports a provider-specific SDK or LiteLLM.
+Agent modules do not import provider SDKs or LiteLLM directly. Stage-specific model routing is supported without changing business logic.
+
+The main programmatic entry point is:
+
+```python
+from adaptive_document_agent.agent.orchestrator import analyse_pdf
+
+result = analyse_pdf(pdf_bytes, gateway=gateway, scope=confirmed_scope)
+```
+
+The Streamlit UI uses `DocumentOrchestrator.preview_scope(...)` before `analyse_pdf(...)`, so deep processing starts only after the proposed page ranges have been reviewed and confirmed.
+
+## Repository Layout
+
+```text
+app.py                              Streamlit entry point
+adaptive_document_agent/
+  agent/                            discovery, planning, execution, reporting, presentation
+  document_model/                   global index, comparable series, period/topic semantics
+  extraction/                       PDF, text, table, image, numeric, OCR, and vision adapters
+  models/                           evidence, observations, canonical facts, reports, presentations
+  prompts/                          prompts that treat document text as untrusted
+  services/                         LLM boundary, normalization, exports, QA, formatting
+  templates/                        bundled FOURIER PowerPoint template
+  tools/                            deterministic calculations and safe formula evaluator
+  ui/                               Streamlit views and deployment/session handling
+  validation/                       analysis, claim, layout, coverage, and cross-slide validators
+docs/MASTER_PROMPT.md               authoritative engineering specification
+tests/                              unit, regression, export, and pipeline tests
+```
 
 ## Installation
 
 Python 3.11 or newer is required.
 
-```bash
-python -m venv .venv
-```
-
-On Windows:
-
 ```powershell
+python -m venv .venv
 .venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
 ```
@@ -54,36 +100,54 @@ python -m pip install -r requirements-dev.txt
 python -m pytest
 ```
 
+A Python 3.11 development-container configuration is included in `.devcontainer/` and starts Streamlit on port 8501 after attachment.
+
 ## Configuration
 
-Copy `.env.example` to `.env` and fill only the values needed for the selected provider. Never commit `.env` or API keys.
-
-Common settings:
+Copy `.env.example` to `.env` and set only the values required by the selected provider. Never commit `.env` or real API keys.
 
 ```dotenv
 EXECUTION_MODE=auto
 LOCAL_ONLY=false
+PUBLIC_DEPLOYMENT=false
+
 LLM_PROVIDER=ollama
-LLM_MODEL=llama3.1
+LLM_MODEL=
 LLM_API_KEY=
 LLM_BASE_URL=http://localhost:11434
 LLM_TIMEOUT_SECONDS=120
 LLM_TEMPERATURE=0
+
+LOG_LEVEL=INFO
+CACHE_DIR=.adaptive_document_cache
 ```
 
-Optional stage-specific model routes are supported with `LLM_DISCOVERY_MODEL`, `LLM_SEMANTIC_MODEL`, `LLM_EXTRACTION_MODEL`, `LLM_PLANNER_MODEL`, `LLM_VISION_MODEL`, `LLM_INSIGHT_MODEL`, `LLM_REPORT_MODEL`, and `LLM_PRESENTATION_MODEL`.
+`EXECUTION_MODE` accepts `auto`, `cloud`, or `local_only`. Setting `LOCAL_ONLY=true` takes precedence and forces Local Only mode.
 
-The Streamlit sidebar can also accept a key for the current process. UI-entered keys are masked, not written to disk, and not logged.
+Optional stage routes are:
+
+```dotenv
+LLM_DISCOVERY_MODEL=
+LLM_SEMANTIC_MODEL=
+LLM_EXTRACTION_MODEL=
+LLM_PLANNER_MODEL=
+LLM_VISION_MODEL=
+LLM_INSIGHT_MODEL=
+LLM_REPORT_MODEL=
+LLM_PRESENTATION_MODEL=
+```
+
+The sidebar can override the provider, model, base URL, execution mode, and API key for the current process. UI-entered keys are masked and are not written to disk, logs, reports, or exports.
 
 ## Cloud Providers
 
-Cloud mode sends relevant, targeted document content to the configured provider. The UI shows this explicitly.
+Cloud mode sends relevant, selected document content to the configured provider. Provider switching is configuration-only.
 
 ### OpenAI
 
 ```dotenv
 LLM_PROVIDER=openai
-LLM_MODEL=gpt-5.6-terra
+LLM_MODEL=<OpenAI model name>
 OPENAI_API_KEY=...
 ```
 
@@ -91,7 +155,7 @@ OPENAI_API_KEY=...
 
 ```dotenv
 LLM_PROVIDER=deepseek
-LLM_MODEL=deepseek-flash
+LLM_MODEL=<DeepSeek model name>
 DEEPSEEK_API_KEY=...
 LLM_BASE_URL=https://api.deepseek.com
 ```
@@ -100,7 +164,7 @@ LLM_BASE_URL=https://api.deepseek.com
 
 ```dotenv
 LLM_PROVIDER=gemini
-LLM_MODEL=gemini-2.5-flash
+LLM_MODEL=<Gemini model name>
 GEMINI_API_KEY=...
 ```
 
@@ -108,136 +172,195 @@ GEMINI_API_KEY=...
 
 ```dotenv
 LLM_PROVIDER=openrouter
-LLM_MODEL=openai/gpt-4.1-mini
+LLM_MODEL=<provider/model name>
 OPENROUTER_API_KEY=...
 LLM_BASE_URL=https://openrouter.ai/api/v1
 ```
 
-Provider switching is configuration-only; agent business logic does not change.
+`LLM_API_KEY` can be used as the common key setting; otherwise the application looks for the provider-specific variable.
 
 ## Local Ollama
 
-Start Ollama and ensure the configured model is already available locally:
+Start Ollama separately and make sure the selected model is already installed locally:
 
 ```dotenv
 EXECUTION_MODE=local_only
 LOCAL_ONLY=true
 LLM_PROVIDER=ollama
-LLM_MODEL=llama3.1
+LLM_MODEL=<local model name>
 LLM_BASE_URL=http://localhost:11434
 ```
 
-Then launch the application. Local Only mode rejects a cloud provider and never silently falls back to one.
+Local Only mode rejects cloud providers and never falls back to one if the local service fails.
 
 ## Local OpenAI-Compatible Server
 
-For vLLM or another local OpenAI-compatible endpoint:
+For vLLM or another OpenAI-compatible server running on the same machine:
 
 ```dotenv
 EXECUTION_MODE=local_only
 LOCAL_ONLY=true
 LLM_PROVIDER=openai_compatible
-LLM_MODEL=your-local-model
+LLM_MODEL=<served model name>
 LLM_BASE_URL=http://localhost:8000/v1
 LLM_API_KEY=
 ```
 
-Local Only accepts only loopback hosts (`localhost`, `127.0.0.1`, or `::1`) for compatible endpoints. A remote URL is treated as cloud even if the provider name is `openai_compatible`.
+In Local Only mode, compatible endpoints must resolve to a loopback hostname: `localhost`, `127.0.0.1`, or `::1`. A remote compatible endpoint is classified as cloud.
 
-## Privacy
-
-- No document content is persisted outside the local content-addressed cache.
-- API keys are represented as secret values and never written or intentionally logged.
-- Local Only is enforced when constructing the gateway, before document content can be sent.
-- There is no local-to-cloud fallback path.
-- Full confidential document text is not included in routine logs.
-- Uploaded filenames are not trusted; internal IDs derive from SHA-256 content hashes.
-
-Delete `.adaptive_document_cache/` if local extraction caching is not desired between runs.
-
-## How Analysis Works
-
-1. Validate PDF signature, readability, encryption state, size, and page count.
-2. Extract page text/layout with PyMuPDF, bordered and aligned-borderless tables with pdfplumber-backed strategies, and image candidates.
-3. Flag pages that likely require OCR instead of silently ignoring them.
-4. Build a compact page map for large documents, let the configured LLM route the user's focus to complete relevant page ranges, and require the user to review and confirm that scope before deep processing.
-5. Discover purpose, sections, metrics, dimensions, entities, periods, units, and limitations.
-6. Preserve original metric names while applying only high-confidence semantic mappings.
-7. Build and query a global observation index.
-8. Generate analyses only when required structures exist, then score and bound the list.
-9. Execute calculations through the deterministic tool registry or safe AST formula engine.
-10. Validate extraction, semantics, calculations, mathematical consistency, evidence, and report language.
-11. Generate evidence-backed insights and a document-specific report structure.
-12. Plan charts only where they answer a useful analytical question, show direct value labels and provenance, and offer compatible line, bar, area, pie, scatter, horizontal-bar, and data-table views.
-13. Ask the AI presentation planner to select evidence-backed themes, group related charts, and write one-message slide titles using only retained observation, insight, chart, and page references.
-14. Validate the presentation plan deterministically, rejecting unknown IDs, unsupported numeric claims, missing provenance, invalid page references, and oversized main narratives.
-15. Export an editable widescreen PowerPoint with a mandatory company or document overview, executive summary, planned analysis story, limitations, and paginated source-data appendices.
-16. Export the generated analysis as a readable PDF while retaining CSV for the complete structured fact base and JSON, including the presentation plan, for internal integrations.
-
-## Data Model
-
-`Observation` is the central generic fact model. It stores the original and optional canonical metric, numeric and raw values, unit/scale/currency, period, entity, arbitrary dimensions, confidence, and one or more `SourceEvidence` records.
-
-Every source includes a one-based page number, extraction method, confidence, and optional text, table ID, row/column labels, and bounding box. Results list all input observation IDs and carry their evidence forward.
-
-## Validation
-
-The initial implementation includes:
-
-- extraction checks for missing, low-confidence, duplicate, and conflicting observations;
-- semantic checks for risky merges of differently qualified metrics;
-- unit/currency compatibility and sample-size gates before execution;
-- calculation checks for failures, non-finite values, divide-by-zero, and unsafe formulas;
-- generic total-versus-component consistency checks;
-- evidence requirements for numeric results;
-- report checks for unsupported causal language.
-
-A failed or uncertain stage produces a visible warning or excludes the result. It never fabricates a replacement value.
-
-## Launch
+## Launch and Use
 
 ```powershell
 python -m streamlit run app.py
 ```
 
-Configure a provider and model in the sidebar. Optionally describe an analysis focus in plain language, upload one PDF, select **Review analysis scope**, inspect the proposed page ranges, and then select **Analyse selected pages** after confirmation. Leaving the focus blank uses automatic discovery. The results area contains Overview, Analysis, Charts, Extracted Data, Sources, Data Quality, and Technical Details tabs, followed by editable PowerPoint, formatted PDF, Markdown, and CSV downloads. Structured JSON remains available to developers through the export service.
+Then:
 
-## Streamlit Community Cloud
+1. Configure an execution mode, provider, and model in the sidebar.
+2. Optionally describe an analysis focus in plain language.
+3. Upload one PDF.
+4. Select **Review analysis scope**.
+5. Inspect the model-selected page ranges and their reasons.
+6. Confirm the ranges and select **Analyse selected pages**.
+7. Review the Overview, Analysis, Charts, Extracted Data, Sources, Data Quality, and Technical Details tabs.
+8. Download the available deliverables.
 
-Deploy `app.py` from the repository root and set the following safe, non-secret value in Advanced settings → Secrets:
+Interactive charts expose the exact retained observations used, their source pages, selectable compatible chart types, and optional direct data labels.
+
+## How Analysis Works
+
+1. The parser verifies the PDF signature, readability, encryption state, size, and page count, then computes a SHA-256 content hash.
+2. PyMuPDF extracts page text and layout. Table strategies use pdfplumber-derived structure, including aligned borderless layouts. Image-heavy or low-text pages are flagged for OCR.
+3. A compact page map is routed to complete, evidence-bearing page ranges. The user confirms those ranges before deeper processing.
+4. Discovery identifies the document's purpose and the information actually present; no document-type workflow is selected.
+5. Extraction preserves original metric names, raw values, table coordinates, sections, and page evidence. Semantic mappings are applied only above a confidence threshold.
+6. Financial observations, when present, receive typed units, cleaned numeric representations, period basis, audit/IFRS status, display forms, and validation status without discarding the raw source form.
+7. The global document index groups comparable observations while guarding against mixed periods, incompatible units, different dimensions, and over-normalized metrics.
+8. Candidate analyses are generated from available structures, scored for value, deduplicated, and converted into executable tasks only when their inputs exist.
+9. Python tools compute changes, growth, ratios, shares, rankings, descriptive statistics, trends, correlations, and outliers. Arbitrary Python and unrestricted formulas are never executed.
+10. Validators check extraction quality, semantic safety, consistency, coverage, calculation validity, evidence, and report language.
+11. Evidence-grounded insights, report sections, and charts are generated from retained results. A recovery pass rechecks extraction when the narrative appears materially richer than the structured evidence.
+12. The presentation planner references retained observation, insight, chart, and page IDs. Invalid model output is repaired or replaced with an evidence-only fallback plan.
+13. Before PowerPoint export, deterministic QA checks claim direction, period comparability, sign semantics, currency and scale, company identity, chart-topic alignment, source coverage, cross-slide consistency, and layout risks. Safe issues are auto-repaired; unresolved critical issues block the export.
+
+## Data Model
+
+`Observation` is the central generic fact model. It preserves:
+
+- original and optional canonical metric names;
+- numeric, raw, normalized, and display values;
+- raw and normalized units, scale, and currency;
+- period label, period type/basis, dates, entity, and arbitrary dimensions;
+- table/row/column structure, section context, and additive/subtractive row behavior;
+- extraction, semantic, chartability, and validation status;
+- one or more `SourceEvidence` records with one-based pages and optional text, table labels, and bounding boxes.
+
+For financial evidence, `CanonicalFact` provides a strict raw/normalized/display separation together with audit status, IFRS or adjusted status, fact type, period semantics, confidence, and source excerpt. It supplements the generic observation model; it does not turn the pipeline into a fixed financial-report workflow.
+
+Analysis results retain all input observation IDs and carry their evidence forward. Presentation slides and visual blocks likewise reference retained IDs instead of accepting free-floating numeric claims.
+
+## Validation and Presentation QA
+
+The current validation stack includes:
+
+- missing, duplicate, low-confidence, conflicting, or suspiciously aligned extraction checks;
+- conservative semantic normalization and compatible-series partitioning;
+- unit, currency, scale, period, dimension, and minimum-sample gates;
+- calculation checks for missing inputs, divide-by-zero, non-finite values, unsafe formulas, and invalid denominators;
+- total/component consistency and evidence coverage checks;
+- signed gain/loss, deficit/net-liability, profitability, balance-sheet, and mixed-period direction semantics;
+- clause-level claim validation and targeted wording repair;
+- company identity reconciliation and source-only company overview construction;
+- chart/slide topic alignment based on positive semantic evidence;
+- cross-slide checks for contradictory summaries, placeholders, float artifacts, working-capital wording, and inconsistent detail;
+- layout QA for cramped multi-chart slides, unreadable scatter charts, long titles, zero-crossing labels, KPI spacing, and legend/unit collisions;
+- a final PowerPoint preflight and a hard export blocker for unresolved critical contradictions.
+
+Warnings and repairs are retained in the pipeline result and exposed in the Data Quality or Technical Details views. The system does not fabricate replacement facts when validation fails.
+
+## Exports and Developer Artifacts
+
+The Streamlit UI provides:
+
+- `analysis_presentation.pptx` — editable widescreen presentation based on the bundled FOURIER template, subject to critical QA;
+- `analysis_report.pdf` — formatted report;
+- `analysis_report.md` — dynamic Markdown report;
+- `extracted_observations.csv` — complete retained observation table with raw values and source pages.
+
+The export service also supports a complete structured JSON serialization through `export_json(result)`. For QA and integration work, `generate_artifacts(result, output_dir)` writes:
+
+- `extracted_facts.json`;
+- `normalized_facts.json`;
+- `slide_plan.json`;
+- `qa_report.json`.
+
+These JSON artifacts are programmatic outputs; only the QA report is conditionally offered in the UI when PowerPoint export is blocked.
+
+## Privacy and Security
+
+- Local Only is enforced by `LLMGateway` before document or derived content can be sent.
+- There is no local-to-cloud fallback path.
+- Routine logs avoid complete confidential document content and all secrets.
+- Uploaded filenames are not trusted; internal identities derive from content hashes.
+- PDF text is delimited as untrusted data in model prompts.
+- Embedded scripts, macros, commands, and document instructions are never executed.
+- Generated formulas use an allowlisted AST evaluator, not `eval()`.
+- The local content-addressed cache lives in `.adaptive_document_cache/`; delete that directory to remove cached extraction data.
+
+### Public Streamlit Deployment
+
+For Streamlit Community Cloud, deploy `app.py` from the repository root and set this non-secret value in Advanced settings -> Secrets:
 
 ```toml
 PUBLIC_DEPLOYMENT = "true"
 ```
 
-Do not add a provider API key to the hosted app's secrets. In public deployment mode, local providers and Local Only mode are unavailable, environment-backed API keys are ignored, and every visitor must enter their own cloud-provider key. The key remains in that visitor's current Streamlit session and is not written to disk, logs, reports, or exports.
+Do not store a provider key in the hosted app's secrets. Public mode:
 
-Public deployment mode also assigns each Streamlit session its own temporary extraction cache. This prevents visitors from sharing the normal local content-addressed cache; the temporary directory is removed on a best-effort basis when its session object is released.
+- exposes cloud providers only;
+- ignores environment-backed API keys;
+- requires each visitor to enter a key for the current session;
+- disables Local Only and local providers;
+- allocates a separate temporary extraction cache per Streamlit session and removes it on a best-effort basis when the session object is released.
 
 ## Testing
 
-Tests use generated PDFs and `MockLLMClient`; no real API key is required.
+The suite uses generated PDFs and `MockLLMClient`; normal test runs require no provider credentials.
 
 ```powershell
 python -m pytest
 ```
 
-Coverage includes provider/privacy rules, structured-output repair, PDF validation, OCR detection, table reconstruction, semantic conservatism, observation indexing, candidate/planner gates, numeric parsing, deterministic tools, safe formulas, validators, report/chart planning, exports, and an end-to-end synthetic PDF pipeline.
+Coverage includes PDF validation and routing, OCR detection, bordered and borderless tables, table reconstruction, numeric parsing, semantic conservatism, observation indexing, planners and tools, structured-output recovery, privacy and public deployment, financial fact normalization, period and sign semantics, claim repair, cross-slide consistency, chart selection, PowerPoint layout/preflight, PDF/PPTX exports, and end-to-end pipeline and presentation regressions.
 
 ## Known Limitations
 
-- OCR has an adapter and page detection but no bundled OCR engine.
-- Vision/chart candidates are detected, but pixel extraction and provider-specific image transport are not yet implemented; unsupported vision is reported explicitly.
-- PDF tables vary widely; bordered and aligned-borderless layouts are supported, while ambiguous or image-only tables remain explicitly unresolved.
-- Text observation extraction recognises a narrow explicit metric-period-value form; rich table extraction is the stronger first-version path.
-- Consistency checks currently implement generic total/component relationships; LLM-discovered formula relationships can be expanded later.
-- A live provider integration test is intentionally absent from the default suite.
-- The prototype processes one PDF synchronously and has no authentication, database, or background queue.
+- Only one PDF is processed at a time, synchronously; there is no API server, database, authentication, queue, or multi-user workspace.
+- The parser currently enforces a 200 MiB upload limit in code. Although `MAX_UPLOAD_MB` is present in `.env.example`, that environment value is not yet wired into the parser.
+- Scope review is mandatory in the Streamlit workflow. The selected ranges improve cost and focus but can omit relevant material if the routing model misses it; the user should inspect the proposed ranges.
+- OCR-required pages are detected through an adapter, but no OCR engine is bundled.
+- Image/chart candidates are detected, but pixel extraction and provider-specific vision transport are not implemented. Such content is reported as unavailable rather than silently interpreted.
+- PDF table extraction remains layout-dependent. Bordered and aligned borderless tables are supported, while ambiguous, highly graphical, and image-only tables can remain unresolved.
+- Explicit metric-period-value text extraction is deliberately narrow; structured digital tables are the strongest input path.
+- The generic pipeline supports varied data-rich documents, but the newest and deepest narrative/presentation QA is currently strongest for financial and offering-style material.
+- Presentation rendering uses the bundled FOURIER template as its current visual base; it is not yet a user-selectable template system.
+- Provider behavior is abstracted through LiteLLM, but live provider contract tests are intentionally excluded from the default offline suite.
 
 ## Future Roadmap
 
-Recommended next steps are a local OCR implementation, pixel-backed vision adapter, broader targeted text observation schemas, formula-relationship discovery, more table-layout fixtures, provider contract tests behind opt-in credentials, and background execution for very large documents. The package boundaries also allow future multi-PDF comparison, CSV/Excel/DOCX/PPTX ingestion, API endpoints, persistence, and batch analysis without rewriting the core pipeline.
+The highest-value next steps are:
+
+- a bundled local OCR implementation;
+- pixel-backed vision/chart extraction;
+- broader targeted text-observation schemas;
+- more generic non-financial claim and presentation semantics;
+- user-selectable presentation templates;
+- additional table-layout and live-provider contract fixtures;
+- background execution and resumable processing for very large documents;
+- an API surface and structured JSON download in the UI.
+
+The existing package boundaries are intended to support later multi-PDF comparison, CSV/Excel/DOCX/PPTX input, persistence, batch analysis, and shared workspaces without rewriting the core evidence model.
 
 ## Engineering Specification
 
-The authoritative specification is [docs/MASTER_PROMPT.md](docs/MASTER_PROMPT.md). Repository-specific instructions are in [AGENTS.md](AGENTS.md).
+The authoritative specification is [docs/MASTER_PROMPT.md](docs/MASTER_PROMPT.md). Repository-specific working instructions are in [AGENTS.md](AGENTS.md).
