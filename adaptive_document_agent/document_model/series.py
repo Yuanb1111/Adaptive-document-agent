@@ -57,7 +57,10 @@ def metric_label(observation: Observation) -> str:
     canonical_folded = canonical.casefold()
     if original_folded == canonical_folded:
         return canonical
-    qualifier_terms = ("%", "percent", "percentage", "margin", "rate", "ratio", "share", " per ", " of ")
+    qualifier_terms = (
+        "%", "percent", "percentage", "margin", "rate", "ratio", "share", " per ", " of ",
+        "adjusted", "adj.", "non-ifrs", "non ifrs", "non-gaap", "经调整", "非国际",
+    )
     if canonical_folded in original_folded or any(term in original_folded for term in qualifier_terms):
         return original
     return canonical
@@ -212,6 +215,11 @@ def canonical_series_partition_key(obs: Observation) -> tuple[object, ...]:
         or ""
     ).strip().casefold()
 
+    ifrs = (getattr(obs, "ifrs_status", "") or "UNSPECIFIED").strip().upper()
+    if not ifrs or ifrs == "UNSPECIFIED":
+        combined = f"{obs.metric_canonical or ''} {obs.metric_original or ''}".casefold()
+        ifrs = "ADJUSTED" if any(k in combined for k in ("adjusted", "non-ifrs", "non-gaap", "经调整", "非国际")) else "IFRS"
+
     if obs.category_dimensions:
         core_dims = tuple(sorted((k, str(v).strip().casefold()) for k, v in obs.category_dimensions.items()))
     else:
@@ -219,12 +227,12 @@ def canonical_series_partition_key(obs: Observation) -> tuple[object, ...]:
             sorted(
                 (k, str(v).strip().casefold())
                 for k, v in obs.dimensions.items()
-                if k not in {"table_context", "section", "period_basis", "reporting_basis", "basis", "restatement", "restated"}
+                if k not in {"table_context", "section", "period_basis", "reporting_basis", "basis", "restatement", "restated", "ifrs_status"}
             )
         )
     entity = (obs.entity or "").strip().casefold()
 
-    return (m_name, is_pct, u_fam, curr, p_basis, rep_basis, restatement, core_dims, entity)
+    return (m_name, ifrs, is_pct, u_fam, curr, p_basis, rep_basis, restatement, core_dims, entity)
 
 
 def group_comparable_series(

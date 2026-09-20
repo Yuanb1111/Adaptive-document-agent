@@ -1854,7 +1854,9 @@ def update_geometry(
 
 
 def _base_slide(presentation: Any, title: str, subtitle: str = "", *, background: str | None = None) -> Any:
-    clean_title = _summary_text(title, 118)
+    from adaptive_document_agent.services.language_qa import polish_slide_title
+
+    clean_title = polish_slide_title(_summary_text(title, 118))
     clean_subtitle = _summary_text(subtitle, 175) if subtitle else ""
     layout_idx = 5 if len(clean_title) <= 52 else 6
     if layout_idx < len(presentation.slide_layouts):

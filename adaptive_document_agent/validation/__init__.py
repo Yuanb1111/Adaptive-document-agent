@@ -16,6 +16,7 @@ from .claim_validator import (
 )
 from .consistency_checker import ConsistencyChecker
 from .coverage_validator import CoverageValidator, assess_coverage
+from .cross_slide_validator import CrossSlideValidator
 from .evidence_validator import EvidenceValidator
 from .extraction_validator import ExtractionValidator
 from .presentation_plan_validator import PresentationPlanValidator
@@ -27,6 +28,7 @@ __all__ = [
     "ClaimValidator",
     "ConsistencyChecker",
     "CoverageValidator",
+    "CrossSlideValidator",
     "DirectionalClaimIssue",
     "EvidenceValidator",
     "ExtractionValidator",

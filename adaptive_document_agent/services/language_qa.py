@@ -233,3 +233,29 @@ def clean_metric_label(name: str, max_length: int | None = None) -> str:
     clean = re.sub(r"(?:\.{2,}|\u2026)+$", "", clean).strip()
 
     return clean
+
+
+def polish_slide_title(title: str) -> str:
+    """Polish presentation slide titles to maintain institutional quality.
+
+    Avoids awkward machine-assembled titles such as:
+    'Net Widened From FY2020 to FY2022 and Trajectory' -> 'Net Loss Widened Across FY2020–FY2022'
+    """
+    if not title:
+        return ""
+    t = " ".join(title.strip().split())
+
+    # Remove redundant 'and Trajectory' or trailing 'Trajectory' when a trend verb is already present
+    t = re.sub(r"(?i)\s+and\s+trajectory\b", "", t).strip()
+    trend_words = ("widened", "narrowed", "increased", "decreased", "grew", "contracted", "turned", "swung")
+    if any(w in t.casefold() for w in trend_words):
+        t = re.sub(r"(?i)\s+trajectory\b", "", t).strip()
+
+    # Expand solitary 'Net' before trend verb to 'Net Loss' or 'Net Profit'
+    t = re.sub(r"(?i)^Net\s+(widened|narrowed)\b", r"Net Loss \1", t)
+    t = re.sub(r"(?i)^Net\s+(increased|decreased|grew)\b", r"Net Profit \1", t)
+
+    # Clean awkward 'From ... to ...' phrasing into professional range
+    t = re.sub(r"(?i)\bfrom\s+(FY\d{4}|20\d{2})\s+to\s+(FY\d{4}|20\d{2})\b", r"Across \1–\2", t)
+
+    return t

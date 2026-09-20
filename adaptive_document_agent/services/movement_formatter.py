@@ -54,7 +54,8 @@ class FinancialMovementFormatter:
             # Small unscaled numbers without currency (e.g. -200 -> -150, diff = 50.0)
             return f"{diff_abs:,.1f}"
 
-        formatted = format_compact_currency(diff_abs, currency=currency, is_base_value=True)
+        effective_diff = diff_abs * scale if (scale and scale > 1.0 and parent_magnitude < 100_000) else diff_abs
+        formatted = format_compact_currency(effective_diff, currency=currency, is_base_value=True)
         return re.sub(r"^(RMB|USD|HKD|CNY|EUR)\s+", r"\1", formatted)
 
     @classmethod
@@ -122,12 +123,14 @@ class FinancialMovementFormatter:
                 e_mag = abs(end_val)
                 diff = abs(s_mag - e_mag)
                 diff_str = cls._format_diff_amount(diff, currency=currency, scale=scale, parent_magnitude=parent_mag)
+                base_name = re.sub(r"(?i)\s+flow\b", "", clean_name).strip()
+                outflow_name = f"{base_name} cash outflow" if "cash" not in base_name.lower() else f"{base_name} outflow"
                 if e_mag < s_mag:
-                    return f"{clean_name} outflow narrowed by {diff_str}" if include_metric_name else f"Outflow narrowed by {diff_str}"
+                    return f"{outflow_name} narrowed by {diff_str}" if include_metric_name else f"Outflow narrowed by {diff_str}"
                 elif e_mag > s_mag:
-                    return f"{clean_name} outflow widened by {diff_str}" if include_metric_name else f"Outflow widened by {diff_str}"
+                    return f"{outflow_name} increased by {diff_str}" if include_metric_name else f"Outflow increased by {diff_str}"
                 else:
-                    return f"{clean_name} outflow remained flat"
+                    return f"{outflow_name} remained flat"
 
             # Reversals
             if start_val < 0 and end_val > 0:
@@ -169,11 +172,16 @@ class FinancialMovementFormatter:
         # 4. PROFIT_LOSS Family
         if family == MetricSemanticFamily.PROFIT_LOSS:
             is_named_loss = "loss" in lower_name or "亏损" in lower_name
+            is_gross_profit = "gross profit" in lower_name or "毛利" in lower_name
 
             # Zero-crossing
             if start_val < 0 and end_val > 0:
+                if is_gross_profit:
+                    return f"{prefix}turned into gross profit"
                 return f"{prefix}turned profitable" if is_named_loss or "profit" in lower_name else f"{prefix}turned positive"
             if start_val > 0 and end_val < 0:
+                if is_gross_profit:
+                    return f"{prefix}turned into gross loss"
                 return f"{prefix}swung into loss" if is_named_loss or "profit" in lower_name else f"{prefix}turned negative"
 
             # Both negative (Loss narrowed / widened)
@@ -182,7 +190,16 @@ class FinancialMovementFormatter:
                 e_mag = abs(end_val)
                 diff = abs(s_mag - e_mag)
                 diff_str = cls._format_diff_amount(diff, currency=currency, scale=scale, parent_magnitude=parent_mag)
-                loss_title = clean_name if is_named_loss else "Loss"
+                if is_gross_profit:
+                    loss_title = "Gross loss"
+                elif is_named_loss:
+                    loss_title = clean_name
+                elif "net" in lower_name:
+                    loss_title = "Net loss"
+                elif "operating" in lower_name:
+                    loss_title = "Operating loss"
+                else:
+                    loss_title = "Loss"
                 verb = "narrowed" if e_mag < s_mag else "widened"
                 if include_metric_name:
                     return f"{loss_title} {verb} by {diff_str}"

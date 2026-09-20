@@ -490,6 +490,19 @@ def run_comprehensive_qa(result: PipelineResult, auto_repair: bool = True) -> QA
             else:
                 report.info.append(issue)
 
+    # 7. Cross-slide validation (placeholders, float artifacts, working capital, summary vs detail consistency)
+    if result.presentation_plan:
+        from adaptive_document_agent.validation.cross_slide_validator import CrossSlideValidator
+
+        cross_issues = CrossSlideValidator(result.presentation_plan, result.observations).validate_and_repair(auto_repair=auto_repair)
+        for issue in cross_issues:
+            if issue.severity == "CRITICAL":
+                report.critical_errors.append(issue)
+            elif issue.severity == "WARNING":
+                report.warnings.append(issue)
+            else:
+                report.info.append(issue)
+
     report.is_export_blocked = report.has_critical_errors
     return report
 
@@ -521,9 +534,10 @@ def generate_artifacts(result: PipelineResult, output_dir: Path | str) -> dict[s
         json.dump(extracted, f, indent=2, ensure_ascii=False)
 
     # 2. normalized_facts.json
+    from adaptive_document_agent.services.financial_normalizer import FinancialNormalizer
     normalized = [
-        (o.to_canonical_fact().model_dump() if hasattr(o, "to_canonical_fact") else o.model_dump())
-        for o in result.observations
+        fact.model_dump()
+        for fact in FinancialNormalizer.to_canonical_facts(result.observations)
     ]
     normalized_file = out_path / "normalized_facts.json"
     with open(normalized_file, "w", encoding="utf-8") as f:

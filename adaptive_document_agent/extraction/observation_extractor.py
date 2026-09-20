@@ -9,7 +9,10 @@ from adaptive_document_agent.document_model.metric_semantic_classifier import (
     is_multiple_metric,
     sanitize_metric_label,
 )
-from adaptive_document_agent.document_model.period_semantic_validator import classify_period
+from adaptive_document_agent.document_model.period_semantic_validator import (
+    classify_period,
+    extract_period_basis,
+)
 from adaptive_document_agent.models import Observation, ParsedDocument, SourceEvidence
 from adaptive_document_agent.models.table import ExtractedTable
 from adaptive_document_agent.utils.ids import stable_id
@@ -235,12 +238,12 @@ class ObservationExtractor:
                     validation_status = "suspicious_alignment"
                     anomaly_notes.append(f"Amount column contains explicit '%' in raw cell: '{raw}'")
             else:
-                unit = unit or table.default_unit or "unknown"
+                unit = unit or table.default_unit or (semantic.metric_type if semantic.unit_family != "generic" else "unknown")
                 currency = currency or table.default_currency
                 value = number.value
                 semantic_type = semantic.semantic_type
                 unit_family = semantic.unit_family
-                display_unit = semantic.display_unit if semantic.display_unit != "units" else "unknown"
+                display_unit = semantic.display_unit if semantic.display_unit else (unit or "")
 
         confidence = min(table.confidence, number.confidence, 0.9 if period else 0.75)
         evidence = SourceEvidence(
@@ -302,8 +305,11 @@ class ObservationExtractor:
             normalized_value=value,
             normalized_unit=unit,
             period_type=period_sem.period_type,
+            period_basis=extract_period_basis(period),
             as_of_date=period_sem.as_of_date or (period_sem.clean_label if (is_bs or period_sem.period_type == "balance_sheet_date") else None),
             audited_status="unaudited" if period_sem.is_unaudited else "audited",
+            ifrs_status="ADJUSTED" if any(k in f"{metric}".casefold() for k in ("adjusted", "non-ifrs", "non-gaap", "经调整", "非国际财务报告准则")) else "IFRS",
+            fact_type="reported_fact",
             validation_status=validation_status,
         )
 

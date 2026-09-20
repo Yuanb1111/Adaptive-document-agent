@@ -47,6 +47,9 @@ class Observation(BaseModel):
     period_end: str | None = None
     as_of_date: str | None = None
     audited_status: str = "unknown"  # audited, unaudited, unknown
+    ifrs_status: str = "UNSPECIFIED"  # IFRS, NON_IFRS, ADJUSTED, UNSPECIFIED
+    fact_type: str = "reported_fact"  # reported_fact, calculated_fact, interpretation, watch_item
+    period_basis: str = ""  # FY, 6M, 3M, 9M, YTD, point_in_time, generic
     validation_status: str = "valid"  # valid, partially_valid, ambiguous, suspicious_alignment, invalid
 
     @property

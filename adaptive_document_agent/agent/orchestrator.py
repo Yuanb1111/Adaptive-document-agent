@@ -105,6 +105,15 @@ class DocumentOrchestrator:
                 if mapping and mapping.confidence >= 0.7:
                     observation.metric_canonical = mapping.canonical_name
 
+        notify("Normalizing financial data layer")
+        with record_timing(timings, "financial_normalization"):
+            from adaptive_document_agent.services.financial_normalizer import FinancialNormalizer
+
+            observations = FinancialNormalizer.normalize_observations(
+                observations,
+                default_currency=getattr(profile, "currency", "RMB") or "RMB",
+            )
+
         notify("Building document model")
         with record_timing(timings, "document_model"):
             index = DocumentModelBuilder().build(observations)
@@ -128,6 +137,10 @@ class DocumentOrchestrator:
                     if mapping and mapping.confidence >= 0.7:
                         observation.metric_canonical = mapping.canonical_name
                 observations = self._merge_observations(observations, targeted)
+                observations = FinancialNormalizer.normalize_observations(
+                    observations,
+                    default_currency=getattr(profile, "currency", "RMB") or "RMB",
+                )
                 index = DocumentModelBuilder().build(observations)
 
         notify("Running deterministic calculations")
@@ -299,6 +312,8 @@ class DocumentOrchestrator:
 
                 if presentation_plan:
                     from adaptive_document_agent.validation.claim_validator import repair_presentation_plan
+                    from adaptive_document_agent.validation.cross_slide_validator import CrossSlideValidator
+
                     presentation_plan, plan_repairs = repair_presentation_plan(presentation_plan, index.observations)
                     for repair_msg in plan_repairs:
                         issues.append(
@@ -306,6 +321,17 @@ class DocumentOrchestrator:
                                 code="claim_contradiction_repaired",
                                 message=repair_msg,
                                 severity="info",
+                                stage="presentation",
+                            )
+                        )
+                    cross_val = CrossSlideValidator(presentation_plan, index.observations)
+                    cross_issues = cross_val.validate_and_repair(auto_repair=True)
+                    for c_issue in cross_issues:
+                        issues.append(
+                            ValidationIssue(
+                                code=c_issue.code,
+                                message=c_issue.message,
+                                severity="info" if c_issue.severity == "INFO" else ("error" if c_issue.severity == "CRITICAL" else "warning"),
                                 stage="presentation",
                             )
                         )

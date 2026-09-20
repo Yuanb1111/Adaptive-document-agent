@@ -25,6 +25,9 @@ class CanonicalFact(BaseModel):
     period_end: str | None = None
     as_of_date: str | None = None
     audited_status: str = "unknown"  # audited, unaudited, unknown
+    ifrs_status: str = "UNSPECIFIED"  # IFRS, NON_IFRS, ADJUSTED, UNSPECIFIED
+    fact_type: str = "reported_fact"  # reported_fact, calculated_fact, interpretation, watch_item
+    period_basis: str = ""  # FY, 6M, 3M, 9M, YTD, point_in_time, generic
     source_page: int | None = None
     source_excerpt: str | None = None
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
@@ -78,6 +81,9 @@ class CanonicalFact(BaseModel):
             period_end=getattr(obs, "period_end", None),
             as_of_date=getattr(obs, "as_of_date", None),
             audited_status=getattr(obs, "audited_status", "unknown"),
+            ifrs_status=getattr(obs, "ifrs_status", "UNSPECIFIED") or "UNSPECIFIED",
+            fact_type=getattr(obs, "fact_type", "reported_fact") or "reported_fact",
+            period_basis=getattr(obs, "period_basis", "") or "",
             source_page=page,
             source_excerpt=excerpt,
             confidence=obs.confidence,
