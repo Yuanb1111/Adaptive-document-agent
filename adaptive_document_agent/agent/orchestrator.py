@@ -80,7 +80,7 @@ class DocumentOrchestrator:
                 else None
             )
             scope = sha256_bytes(str(profile.analysis_page_ranges or "all").encode("utf-8"))[:16]
-            cached_tables = self.cache.get_model(f"tables-v5-{digest}-{scope}", ParsedDocument) if self.cache else None
+            cached_tables = self.cache.get_model(f"tables-v6-{digest}-{scope}", ParsedDocument) if self.cache else None
             if cached_tables is not None:
                 document = cached_tables
             else:
@@ -89,7 +89,7 @@ class DocumentOrchestrator:
                     page.tables = tables_by_page.get(page.page_number, [])
                 self._reconstruct_tables(document)
                 if self.cache:
-                    self.cache.set_model(f"tables-v5-{digest}-{scope}", document)
+                    self.cache.set_model(f"tables-v6-{digest}-{scope}", document)
 
         notify("Extracting structured observations")
         with record_timing(timings, "observation_extraction"):
@@ -223,22 +223,27 @@ class DocumentOrchestrator:
                 for ins in insights
             )
             if (not charts or len(index.observations) < 4) and (quantitative_claim_count >= 2 or len(insights) >= 2):
-                notify("Evidence unexpectedly sparse; triggering extraction recovery pass")
+                notify("Evidence unexpectedly sparse; triggering multi-strategy extraction recovery pass")
                 from adaptive_document_agent.extraction.borderless_table_extractor import BorderlessTableExtractor
+                from adaptive_document_agent.extraction.table_candidate_selector import TableCandidateSelector
                 from adaptive_document_agent.services.financial_normalizer import FinancialNormalizer
 
-                # 1. Reconstruct all extracted tables with multi-tier header repair
+                # 1. Run multiple extraction strategies across relevant pages and select/merge best candidates
                 reconstructor = TableReconstructor()
                 for p in document.pages:
-                    if p.tables:
-                        p.tables = [reconstructor.reconstruct(t) for t in p.tables]
-                    else:
-                        borderless = BorderlessTableExtractor().extract(p, p.page_number)
-                        if borderless:
-                            p.tables.extend([reconstructor.reconstruct(t) for t in borderless])
+                    reconstructed = [reconstructor.reconstruct(t) for t in p.tables] if p.tables else []
+                    borderless = BorderlessTableExtractor().extract(p, p.page_number)
+                    borderless_reconstructed = [reconstructor.reconstruct(t) for t in borderless] if borderless else []
+
+                    if reconstructed and borderless_reconstructed:
+                        p.tables = TableCandidateSelector.merge_or_replace_tables(reconstructed, borderless_reconstructed)
+                    elif borderless_reconstructed:
+                        p.tables = borderless_reconstructed
+                    elif reconstructed:
+                        p.tables = reconstructed
                 self._reconstruct_tables(document)
 
-                # 2. Re-extract observations across full document
+                # 2. Re-extract observations across full document (includes deterministic vertical text fallback)
                 recovered = extractor.extract(document, page_ranges=profile.analysis_page_ranges or None)
                 if recovered:
                     recovered = FinancialNormalizer.normalize_observations(
@@ -273,6 +278,20 @@ class DocumentOrchestrator:
                             observations=index.observations,
                             charts=charts,
                         )
+
+            # 4. Diagnostics when charts == 0
+            if not charts:
+                diag_summary, failure_reasons = self._diagnose_zero_charts(document, observations, index)
+                logger.warning("Zero charts planned diagnostics:\n%s", diag_summary)
+                issues.append(
+                    ValidationIssue(
+                        code="CHARTS_ZERO_DIAGNOSTIC",
+                        severity="warning",
+                        message=diag_summary,
+                        stage="chart_planning",
+                    )
+                )
+                notify(f"Diagnostics: 0 charts retained. {len(index.metrics())} metrics found; {len(failure_reasons)} candidate series failed chartability.")
 
         presentation_plan = None
         if self.gateway:
@@ -429,6 +448,68 @@ class DocumentOrchestrator:
             by_page.setdefault(table.page, []).append(table)
         for page in document.pages:
             page.tables = by_page.get(page.page_number, [])  # type: ignore[assignment]
+
+    @staticmethod
+    def _diagnose_zero_charts(
+        document: ParsedDocument,
+        observations: list[Observation],
+        index: object,
+    ) -> tuple[str, dict[str, list[str]]]:
+        from adaptive_document_agent.document_model.chartability import score_chartability
+        from adaptive_document_agent.document_model.series import (
+            best_period_series,
+            conflicting_groups,
+            is_meaningful_metric,
+        )
+
+        tables_detected = sum(len(p.tables) for p in document.pages)
+        observations_extracted = len(observations)
+        observations_retained = len(getattr(index, "observations", []))
+        metrics_found = sorted(index.metrics()) if hasattr(index, "metrics") else []
+
+        failure_reasons: dict[str, list[str]] = {}
+        for metric in metrics_found:
+            m_obs = index.for_metric(metric) if hasattr(index, "for_metric") else []
+            if not m_obs:
+                failure_reasons[metric] = ["No observations found in index for metric"]
+                continue
+            if not is_meaningful_metric(m_obs[0]):
+                failure_reasons[metric] = ["Failed is_meaningful_metric check (generic/non-metric label)"]
+                continue
+            if conflicting_groups(m_obs):
+                failure_reasons[metric] = ["Conflicting observation groups detected for metric"]
+                continue
+            series = best_period_series(m_obs)
+            if len(series) < 2:
+                periods_found = [o.period for o in m_obs if o.period]
+                failure_reasons[metric] = [
+                    f"Fewer than 2 distinct periods in best series (periods found: {periods_found})"
+                ]
+                continue
+            if any(not item.evidence for item in series):
+                failure_reasons[metric] = ["Series observations missing source evidence"]
+                continue
+            res = score_chartability(series)
+            if not res.is_chartable:
+                failure_reasons[metric] = res.reasons or [
+                    f"score_chartability returned is_chartable=False (score={res.score:.2f})"
+                ]
+
+        lines = [
+            "[DIAGNOSTIC: charts == 0]",
+            f"Tables detected across document: {tables_detected}",
+            f"Observations extracted: {observations_extracted}",
+            f"Observations retained in model index: {observations_retained}",
+            f"Metrics found ({len(metrics_found)}): {', '.join(metrics_found) if metrics_found else 'None'}",
+        ]
+        if failure_reasons:
+            lines.append("Chartability failure reasons by candidate metric:")
+            for m, reasons in sorted(failure_reasons.items()):
+                lines.append(f"  - '{m}': {'; '.join(reasons)}")
+        else:
+            lines.append("No candidate metrics evaluated for chartability.")
+
+        return "\n".join(lines), failure_reasons
 
 
 def analyse_pdf(

@@ -412,4 +412,179 @@ class ObservationExtractor:
                         audited_status="unaudited" if period_sem.is_unaudited else "audited",
                     )
                 )
+        output.extend(self._extract_vertical_text_series(page, text))
+        seen_keys: set[tuple[str, str | None]] = set()
+        deduped: list[Observation] = []
+        for item in output:
+            key = (item.metric_original.casefold(), item.period)
+            if key not in seen_keys:
+                seen_keys.add(key)
+                deduped.append(item)
+        return deduped
+
+    def _extract_vertical_text_series(self, page: int, text: str) -> list[Observation]:
+        """Deterministic financial text fallback for vertical series:
+        Metric (unit)
+        2023  xxx
+        2024  xxx
+        2025  xxx
+        """
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if not lines:
+            return []
+
+        period_row_re = re.compile(
+            r"^((?:(?:FY|1H|2H|3M|6M|9M|12M|Q[1-4])\s*)?(?:19|20)\d{2}(?:\s*(?:FY|1H|2H|3M|6M|9M|12M|Q[1-4]))?(?:年|年度)?)\s*(?:[:=：\-—]\s*|\s{1,8})([^\n;]+)$",
+            re.IGNORECASE,
+        )
+
+        output: list[Observation] = []
+        i = 0
+        while i < len(lines):
+            cand_line = lines[i]
+            if period_row_re.match(cand_line) or len(cand_line) > 70 or len(cand_line) < 2:
+                i += 1
+                continue
+            if re.match(r"^(?:page|p\.|\-|\d+)", cand_line.casefold()):
+                i += 1
+                continue
+
+            unit_hint = ""
+            m_unit = re.match(r"^([^\(（]+)(?:[\(（]([^\)）]+)[\)）])?$", cand_line)
+            if m_unit:
+                base_label = m_unit.group(1).strip()
+                unit_hint = m_unit.group(2).strip() if m_unit.group(2) else ""
+            else:
+                base_label = cand_line.strip()
+
+            if not any(c.isalpha() or "\u4e00" <= c <= "\u9fff" for c in base_label):
+                i += 1
+                continue
+
+            sem = classify_metric(base_label)
+            is_fin = is_financial_statement_metric(base_label) or sem.is_currency or sem.is_percentage
+            if not is_fin and sem.metric_type == "unknown":
+                i += 1
+                continue
+
+            j = i + 1
+            pairs: list[tuple[str, str, object]] = []
+            while j < len(lines):
+                match = period_row_re.match(lines[j])
+                if not match:
+                    break
+                period_str = match.group(1).strip()
+                val_str = match.group(2).strip()
+                num = parse_number(val_str)
+                if num is None or num.value is None:
+                    break
+                pairs.append((period_str, val_str, num))
+                j += 1
+
+            if len(pairs) >= 2:
+                default_currency = None
+                default_scale = 1.0
+                default_unit = None
+                if unit_hint:
+                    from .normalizer import infer_unit_defaults
+
+                    defaults = infer_unit_defaults(unit_hint)
+                    default_currency = defaults.currency
+                    default_scale = defaults.scale or 1.0
+                    default_unit = defaults.unit
+                    if not default_currency and not defaults.scale:
+                        hint_num = parse_number(f"1 {unit_hint}")
+                        if hint_num:
+                            default_currency = hint_num.currency
+                            default_scale = hint_num.scale
+                            default_unit = hint_num.unit
+
+                for period_str, val_str, num in pairs:
+                    period_sem = classify_period(period_str)
+                    currency = num.currency or default_currency
+                    scale = num.scale if num.scale != 1.0 else default_scale
+                    value = (
+                        num.value * scale
+                        if (num.value is not None and scale != 1.0 and (currency or default_unit == "currency"))
+                        else num.value
+                    )
+
+                    is_pct = (
+                        sem.is_percentage
+                        or "%" in val_str
+                        or (default_unit == "percent")
+                        or (unit_hint and "%" in unit_hint)
+                    )
+                    if is_pct:
+                        unit_val = "percent"
+                        currency = None
+                        scale = 1.0
+                        value = num.value
+                        sem_type = (
+                            "margin"
+                            if "margin" in base_label.casefold() or "利润率" in base_label
+                            else "ratio_share"
+                        )
+                        unit_fam = "percentage"
+                        disp_unit = "%"
+                    elif is_multiple_metric(base_label) or (default_unit == "multiple"):
+                        unit_val = "multiple"
+                        currency = None
+                        scale = 1.0
+                        sem_type = "multiple"
+                        unit_fam = "multiple"
+                        disp_unit = "x"
+                    else:
+                        unit_val = num.unit or default_unit or ("currency" if (currency or is_fin) else sem.metric_type)
+                        sem_type = "monetary_amount" if (currency or unit_val == "currency") else sem.semantic_type
+                        unit_fam = "currency" if (currency or unit_val == "currency") else sem.unit_family
+                        disp_unit = unit_hint or num.raw_unit or currency or sem.display_unit
+
+                    pres_label = sanitize_metric_label(base_label)
+                    disp_val = format_metric_display_value(
+                        val_str,
+                        value,
+                        sem,
+                        raw_unit=num.raw_unit or unit_hint,
+                        currency=currency,
+                        compact=False,
+                    )
+                    confidence = 0.85
+                    evidence_text = f"{cand_line}\n{period_str} {val_str}"
+
+                    output.append(
+                        Observation(
+                            id=stable_id("observation", "text_fallback", page, base_label, period_str),
+                            metric_original=base_label,
+                            value=value,
+                            raw_value=val_str,
+                            unit=unit_val,
+                            raw_unit=num.raw_unit or unit_hint,
+                            unit_scale=scale,
+                            currency=currency,
+                            period=period_str,
+                            evidence=[
+                                SourceEvidence(
+                                    page=page,
+                                    text=evidence_text,
+                                    extraction_method="digital_text",
+                                    confidence=confidence,
+                                )
+                            ],
+                            confidence=confidence,
+                            semantic_type=sem_type,
+                            unit_family=unit_fam,
+                            display_unit=disp_unit,
+                            display_value=disp_val,
+                            presentation_label=pres_label,
+                            normalized_value=value,
+                            normalized_unit=unit_val,
+                            period_type=period_sem.period_type,
+                            audited_status="unaudited" if period_sem.is_unaudited else "audited",
+                        )
+                    )
+                i = j
+            else:
+                i += 1
+
         return output

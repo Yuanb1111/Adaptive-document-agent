@@ -62,8 +62,10 @@ class TableExtractor:
                                 context_label=table_title or self._context_label(context),
                             )
                         )
-                    if not page_tables:
-                        page_tables.extend(BorderlessTableExtractor().extract(page, page_number))
+                    borderless_tables = BorderlessTableExtractor().extract(page, page_number)
+                    if borderless_tables:
+                        from .table_candidate_selector import TableCandidateSelector
+                        page_tables = TableCandidateSelector.merge_or_replace_tables(page_tables, borderless_tables)
                     result[page_number] = page_tables
         except Exception:
             return result
