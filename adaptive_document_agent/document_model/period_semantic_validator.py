@@ -322,6 +322,8 @@ def extract_period_basis(period: str | None) -> str:
         return "4M"
     if re.search(r"(?i)nine\s*months?\s*ended", p) or "九个月" in p:
         return "9M"
+    if re.search(r"(?i)\bYTD\b|year[\s-]to[\s-]date|年初至今", p):
+        return "YTD"
     if re.search(r"(?i)\b(?:as\s+at|as\s+of)\b", p) or re.search(r"\b\d{1,2}\s+[A-Za-z]{3,}\s+\d{4}\b", p):
         return "point_in_time"
     if re.search(r"(?i)year\s*ended|^\s*(?:FY\s*)?(?:19|20)\d{2}\*?\s*$", p):
@@ -338,4 +340,3 @@ def are_periods_comparable(p1: str | None, p2: str | None) -> tuple[bool, str]:
     if b1 != b2:
         return False, f"Incompatible period basis: '{b1}' ({p1}) vs '{b2}' ({p2})"
     return True, ""
-

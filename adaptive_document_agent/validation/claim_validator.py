@@ -28,11 +28,18 @@ Rules:
 
 from __future__ import annotations
 
+from collections import defaultdict
 from enum import Enum
 import re
 from typing import Any
 
-from adaptive_document_agent.document_model import are_periods_comparable, period_sort_key
+from adaptive_document_agent.document_model import (
+    are_periods_comparable,
+    canonical_series_partition_key,
+    group_comparable_series,
+    period_sort_key,
+)
+from adaptive_document_agent.document_model.period_semantic_validator import extract_period_basis
 from adaptive_document_agent.models import Observation, PresentationPlan, PresentationSlide, ValidationIssue
 
 
@@ -80,6 +87,111 @@ class DirectionalClaimIssue(ValidationIssue):
     offending_direction: str = ""  # Contradictory word/phrase in text
     target_component: str = ""  # "title", "message", "bullet"
     bullet_index: int | None = None
+    start_period: str = ""
+    end_period: str = ""
+    period_basis: str = ""
+    is_mixed_period_repair: bool = False
+    supported_period_text: str = ""
+
+
+def observation_series_partition_key(obs: Observation) -> tuple:
+    """Generate partition key for grouping compatible metric observations using canonical definition."""
+    return canonical_series_partition_key(obs)
+
+
+def partition_compatible_series(
+    obs_list: list[Observation],
+    metric_name: str,
+) -> list[dict[str, Any]]:
+    """Partition observations for a metric into compatible period series.
+    
+    Ensures first and last are strictly computed within each compatible series
+    and never across incompatible period bases (e.g. FY vs 6M).
+    """
+    partition_groups: dict[tuple, list[Observation]] = defaultdict(list)
+    for obs in obs_list:
+        if obs.value is None or not obs.period:
+            continue
+        key = observation_series_partition_key(obs)
+        partition_groups[key].append(obs)
+
+    series_list: list[dict[str, Any]] = []
+    for key, items in partition_groups.items():
+        by_period: dict[str, list[Observation]] = defaultdict(list)
+        for o in items:
+            by_period[o.period or ""].append(o)
+        deduped = [max(g, key=lambda it: (it.confidence, len(it.evidence))) for g in by_period.values()]
+        sorted_obs = sorted(deduped, key=lambda o: period_sort_key(o.period))
+        if len(sorted_obs) < 2:
+            continue
+        first = sorted_obs[0]
+        last = sorted_obs[-1]
+        val_start = float(first.value)
+        val_end = float(last.value)
+        is_comp, comp_reason = are_observations_compatible(first, last)
+        family = classify_metric_semantic_family(metric_name, canonical_name=first.metric_canonical)
+        bs_subtype = (
+            classify_balance_sheet_subtype(metric_name, canonical_name=first.metric_canonical)
+            if family == MetricSemanticFamily.BALANCE_SHEET
+            else BalanceSheetSubtype.STANDARD
+        )
+        trend_state = determine_trend_state(
+            metric_name,
+            val_start,
+            val_end,
+            canonical_name=first.metric_canonical,
+        ) if is_comp else None
+        p_basis = extract_period_basis(first.period)
+
+        series_list.append({
+            "first": first,
+            "last": last,
+            "sorted_obs": sorted_obs,
+            "val_start": val_start,
+            "val_end": val_end,
+            "is_comp": is_comp,
+            "comp_reason": comp_reason,
+            "family": family,
+            "bs_subtype": bs_subtype,
+            "trend_state": trend_state,
+            "period_basis": p_basis,
+            "start_period": str(first.period),
+            "end_period": str(last.period),
+            "non_monotonic": detect_non_monotonic_transitions(sorted_obs),
+        })
+
+    # If no partition has >= 2 observations, but overall obs_list has >= 2:
+    if not series_list and len(obs_list) >= 2:
+        sorted_obs = sorted(obs_list, key=lambda o: period_sort_key(o.period))
+        first = sorted_obs[0]
+        last = sorted_obs[-1]
+        val_start = float(first.value or 0.0)
+        val_end = float(last.value or 0.0)
+        is_comp, comp_reason = are_observations_compatible(first, last)
+        family = classify_metric_semantic_family(metric_name, canonical_name=first.metric_canonical)
+        bs_subtype = (
+            classify_balance_sheet_subtype(metric_name, canonical_name=first.metric_canonical)
+            if family == MetricSemanticFamily.BALANCE_SHEET
+            else BalanceSheetSubtype.STANDARD
+        )
+        series_list.append({
+            "first": first,
+            "last": last,
+            "sorted_obs": sorted_obs,
+            "val_start": val_start,
+            "val_end": val_end,
+            "is_comp": is_comp,
+            "comp_reason": comp_reason,
+            "family": family,
+            "bs_subtype": bs_subtype,
+            "trend_state": None,
+            "period_basis": extract_period_basis(first.period),
+            "start_period": str(first.period),
+            "end_period": str(last.period),
+            "non_monotonic": {},
+        })
+
+    return series_list
 
 
 def are_observations_compatible(obs1: Observation, obs2: Observation) -> tuple[bool, str]:
@@ -620,11 +732,18 @@ def replace_word_preserving_case(text: str, target: str, replacement: str) -> tu
         nonlocal replaced
         replaced = True
         matched = match.group(0)
-        if matched.isupper():
+        if matched.isupper() and len(replacement.split()) == 1:
             return replacement.upper()
+        matched_words = [w for w in matched.split() if w]
+        if len(matched_words) >= 2 and all(w[0].isupper() for w in matched_words):
+            repl_words = replacement.split(" ")
+            for i in range(min(len(matched_words), len(repl_words))):
+                if repl_words[i]:
+                    repl_words[i] = repl_words[i][0].upper() + repl_words[i][1:]
+            return " ".join(repl_words)
         if matched[0].isupper():
-            return replacement.capitalize()
-        return replacement.lower()
+            return replacement[0].upper() + replacement[1:]
+        return replacement[0].lower() + replacement[1:]
 
     new_text = pattern.sub(_repl, text)
     return new_text, replaced
@@ -749,6 +868,11 @@ _LOSS_NARROWED_REPLACEMENTS: dict[str, str] = {
     "widening": "narrowing",
     "widens": "narrows",
     "widen": "narrow",
+    "loss widened": "loss narrowed",
+    "loss widening": "loss narrowing",
+    "losses widened": "losses narrowed",
+    "net loss widened": "net loss narrowed",
+    "net loss widening": "net loss narrowing",
     "deteriorated": "improved",
     "deteriorating": "improving",
     "deteriorates": "improves",
@@ -765,10 +889,15 @@ _LOSS_WIDENED_REPLACEMENTS: dict[str, str] = {
     "narrowing": "widening",
     "narrows": "widens",
     "narrow": "widen",
-    "improved": "deteriorated",
-    "improving": "deteriorating",
-    "improves": "deteriorates",
-    "improvement": "deterioration",
+    "loss narrowed": "loss widened",
+    "loss narrowing": "loss widening",
+    "losses narrowed": "losses widened",
+    "net loss narrowed": "net loss widened",
+    "net loss narrowing": "net loss widening",
+    "deteriorated": "improved",
+    "deteriorating": "improving",
+    "deteriorates": "improves",
+    "deterioration": "improvement",
     "decreased": "widened",
     "decreasing": "widening",
     "decreases": "widens",
@@ -1280,73 +1409,41 @@ class ClaimValidator:
         if not by_metric:
             return issues
 
-        metric_info: dict[str, dict[str, Any]] = {}
+        metric_series_map: dict[str, list[dict[str, Any]]] = {}
         metric_aliases_map: dict[str, list[str]] = {}
         metric_values_map: dict[str, list[str]] = {}
 
         for metric_name, obs_list in by_metric.items():
             if len(obs_list) < 2:
                 continue
-            sorted_obs = sorted(obs_list, key=lambda o: period_sort_key(o.period))
-            first = sorted_obs[0]
-            last = sorted_obs[-1]
+            series_list = partition_compatible_series(obs_list, metric_name)
+            if not series_list:
+                continue
+            metric_series_map[metric_name] = series_list
 
-            val_start = float(first.value)
-            val_end = float(last.value)
-
-            is_comp, comp_reason = are_observations_compatible(first, last)
-            family = classify_metric_semantic_family(metric_name, canonical_name=first.metric_canonical)
-            bs_subtype = (
-                classify_balance_sheet_subtype(metric_name, canonical_name=first.metric_canonical)
-                if family == MetricSemanticFamily.BALANCE_SHEET
-                else BalanceSheetSubtype.STANDARD
-            )
-
-            if is_comp:
-                trend_state = determine_trend_state(
-                    metric_name,
-                    val_start,
-                    val_end,
-                    canonical_name=first.metric_canonical,
-                )
-            else:
-                trend_state = None
-
+            first_obs = series_list[0]["first"]
             aliases = extract_metric_aliases(
                 metric_name,
-                canonical_name=first.metric_canonical,
-                pres_label=getattr(first, "presentation_label", None),
+                canonical_name=first_obs.metric_canonical,
+                pres_label=getattr(first_obs, "presentation_label", None),
             )
             metric_aliases_map[metric_name] = aliases
 
-            vals = []
-            s_s = str(round(val_start, 2)).rstrip("0").rstrip(".")
-            s_e = str(round(val_end, 2)).rstrip("0").rstrip(".")
-            if s_s and s_s != "0":
-                vals.append(s_s)
-            if s_e and s_e != "0":
-                vals.append(s_e)
+            vals: list[str] = []
+            for s in series_list:
+                s_s = str(round(s["val_start"], 2)).rstrip("0").rstrip(".")
+                s_e = str(round(s["val_end"], 2)).rstrip("0").rstrip(".")
+                if s_s and s_s != "0" and s_s not in vals:
+                    vals.append(s_s)
+                if s_e and s_e != "0" and s_e not in vals:
+                    vals.append(s_e)
             metric_values_map[metric_name] = vals
 
-            metric_info[metric_name] = {
-                "first": first,
-                "last": last,
-                "sorted_obs": sorted_obs,
-                "val_start": val_start,
-                "val_end": val_end,
-                "is_comp": is_comp,
-                "comp_reason": comp_reason,
-                "family": family,
-                "bs_subtype": bs_subtype,
-                "trend_state": trend_state,
-                "non_monotonic": detect_non_monotonic_transitions(sorted_obs),
-            }
-
-        if not metric_info:
+        if not metric_series_map:
             return issues
 
-        is_only_metric = len(metric_info) == 1
-        only_metric_name = next(iter(metric_info)) if is_only_metric else None
+        is_only_metric = len(metric_series_map) == 1
+        only_metric_name = next(iter(metric_series_map)) if is_only_metric else None
 
         components = [
             ("title", slide.title, None),
@@ -1354,43 +1451,47 @@ class ClaimValidator:
             *[(f"bullet", bullet, idx) for idx, bullet in enumerate(slide.bullets)],
         ]
 
-        seen_issues: set[tuple[str, str, int | None, str]] = set()
+        seen_issues: set[tuple] = set()
 
         for comp_type, comp_text, bullet_idx in components:
             if not comp_text.strip():
                 continue
 
             # Check if component mentions an ambiguous-sign metric
-            for m_name, info in metric_info.items():
-                if info["trend_state"] == TrendState.AMBIGUOUS:
-                    aliases = metric_aliases_map.get(m_name, [])
-                    mentioned = any(re.search(r"\b" + re.escape(a.casefold()) + r"\b", comp_text.casefold()) for a in aliases) or is_only_metric
-                    if mentioned:
-                        issue_key = (m_name, comp_type, bullet_idx, "ambiguous_semantics")
-                        if issue_key not in seen_issues:
-                            seen_issues.add(issue_key)
-                            issues.append(
-                                DirectionalClaimIssue(
-                                    code="directional_contradiction",
-                                    message=(
-                                        f"Slide {slide.id} has ambiguous sign semantics for metric '{m_name}' "
-                                        f"transitioning from {info['val_start']} to {info['val_end']}. Export blocked."
-                                    ),
-                                    severity="error",
-                                    stage="presentation",
-                                    slide_id=slide.id,
-                                    metric_name=m_name,
-                                    semantic_family=info["family"].value,
-                                    balance_sheet_subtype=info["bs_subtype"].value,
-                                    related_ids=[info["first"].id, info["last"].id],
-                                    start_value=info["val_start"],
-                                    end_value=info["val_end"],
-                                    expected_direction=TrendState.AMBIGUOUS.value,
-                                    offending_direction="ambiguous_semantics",
-                                    target_component=comp_type,
-                                    bullet_index=bullet_idx,
+            for m_name, s_list in metric_series_map.items():
+                for s in s_list:
+                    if s.get("trend_state") == TrendState.AMBIGUOUS:
+                        aliases = metric_aliases_map.get(m_name, [])
+                        mentioned = any(re.search(r"\b" + re.escape(a.casefold()) + r"\b", comp_text.casefold()) for a in aliases) or is_only_metric
+                        if mentioned:
+                            issue_key = (slide.id, m_name.casefold(), comp_type, bullet_idx, "ambiguous", s["start_period"])
+                            if issue_key not in seen_issues:
+                                seen_issues.add(issue_key)
+                                issues.append(
+                                    DirectionalClaimIssue(
+                                        code="directional_contradiction",
+                                        message=(
+                                            f"Slide {slide.id} has ambiguous sign semantics for metric '{m_name}' "
+                                            f"transitioning from {s['val_start']} to {s['val_end']}. Export blocked."
+                                        ),
+                                        severity="error",
+                                        stage="presentation",
+                                        slide_id=slide.id,
+                                        metric_name=m_name,
+                                        semantic_family=s["family"].value,
+                                        balance_sheet_subtype=s["bs_subtype"].value,
+                                        related_ids=[s["first"].id, s["last"].id],
+                                        start_value=s["val_start"],
+                                        end_value=s["val_end"],
+                                        expected_direction=TrendState.AMBIGUOUS.value,
+                                        offending_direction="ambiguous_semantics",
+                                        target_component=comp_type,
+                                        bullet_index=bullet_idx,
+                                        start_period=s["start_period"],
+                                        end_period=s["end_period"],
+                                        period_basis=s["period_basis"],
+                                    )
                                 )
-                            )
 
             clauses = split_into_clauses(comp_text)
             for clause in clauses:
@@ -1403,128 +1504,319 @@ class ClaimValidator:
                 )
 
                 for m_name, dir_word in assocs:
-                    if m_name not in metric_info:
+                    if m_name not in metric_series_map:
                         continue
-                    info = metric_info[m_name]
-                    first = info["first"]
-                    last = info["last"]
-                    val_start = info["val_start"]
-                    val_end = info["val_end"]
-                    is_comp = info["is_comp"]
-                    comp_reason = info["comp_reason"]
-                    family = info["family"]
-                    bs_subtype = info["bs_subtype"]
-                    trend_state = info["trend_state"]
+                    series_list = metric_series_map[m_name]
 
-                    issue_key = (m_name, comp_type, bullet_idx, dir_word.casefold())
-                    if issue_key in seen_issues:
-                        continue
-
-                    if not is_comp:
-                        seen_issues.add(issue_key)
-                        issues.append(
-                            DirectionalClaimIssue(
-                                code="directional_contradiction",
-                                message=(
-                                    f"Slide {slide.id} asserts directional movement '{dir_word}' for '{m_name}', "
-                                    f"but observations are incompatible: {comp_reason}. Export blocked."
-                                ),
-                                severity="error",
-                                stage="presentation",
-                                slide_id=slide.id,
-                                metric_name=m_name,
-                                semantic_family=family.value,
-                                balance_sheet_subtype=bs_subtype.value,
-                                related_ids=[first.id, last.id],
-                                start_value=val_start,
-                                end_value=val_end,
-                                expected_direction="INCOMPATIBLE",
-                                offending_direction=dir_word,
-                                target_component=comp_type,
-                                bullet_index=bullet_idx,
+                    # 1. Incompatible series check (e.g. only currency mismatch or incompatible periods without comparable series)
+                    incomp_series = [s for s in series_list if not s["is_comp"]]
+                    if incomp_series:
+                        s = incomp_series[0]
+                        issue_key = (slide.id, m_name.casefold(), comp_type, bullet_idx, "incompatible")
+                        if issue_key not in seen_issues:
+                            seen_issues.add(issue_key)
+                            issues.append(
+                                DirectionalClaimIssue(
+                                    code="directional_contradiction",
+                                    message=(
+                                        f"Slide {slide.id} asserts directional movement '{dir_word}' for '{m_name}', "
+                                        f"but observations are incompatible: {s['comp_reason']}. Export blocked."
+                                    ),
+                                    severity="error",
+                                    stage="presentation",
+                                    slide_id=slide.id,
+                                    metric_name=m_name,
+                                    semantic_family=s["family"].value,
+                                    balance_sheet_subtype=s["bs_subtype"].value,
+                                    related_ids=[s["first"].id, s["last"].id],
+                                    start_value=s["val_start"],
+                                    end_value=s["val_end"],
+                                    expected_direction="INCOMPATIBLE",
+                                    offending_direction=dir_word,
+                                    target_component=comp_type,
+                                    bullet_index=bullet_idx,
+                                    start_period=s["start_period"],
+                                    end_period=s["end_period"],
+                                    period_basis=s["period_basis"],
+                                )
                             )
-                        )
                         continue
 
-                    if trend_state == TrendState.AMBIGUOUS:
-                        seen_issues.add(issue_key)
-                        issues.append(
-                            DirectionalClaimIssue(
-                                code="directional_contradiction",
-                                message=(
-                                    f"Slide {slide.id} has ambiguous sign semantics for metric '{m_name}' "
-                                    f"transitioning from {val_start} to {val_end}. Export blocked."
-                                ),
-                                severity="error",
-                                stage="presentation",
-                                slide_id=slide.id,
-                                metric_name=m_name,
-                                semantic_family=family.value,
-                                balance_sheet_subtype=bs_subtype.value,
-                                related_ids=[first.id, last.id],
-                                start_value=val_start,
-                                end_value=val_end,
-                                expected_direction=TrendState.AMBIGUOUS.value,
-                                offending_direction=dir_word,
-                                target_component=comp_type,
-                                bullet_index=bullet_idx,
-                            )
-                        )
+                    # 2. Check for explicit invalid cross-period comparison in clause (e.g. "FY2019 to 6M2021")
+                    has_cross_series = False
+                    if len(series_list) > 1:
+                        for i, s1 in enumerate(series_list):
+                            for s2 in series_list[i+1:]:
+                                p1_first, p1_last = str(s1["first"].period).strip(), str(s1["last"].period).strip()
+                                p2_first, p2_last = str(s2["first"].period).strip(), str(s2["last"].period).strip()
+                                p1_pat = rf"\b(?:{re.escape(p1_first)}|{re.escape(p1_last)})\b"
+                                p2_pat = rf"\b(?:{re.escape(p2_first)}|{re.escape(p2_last)})\b"
+                                cross_pat = re.compile(
+                                    rf"(?:{p1_pat})\s*(?:to|through|until|–|-|vs\.?)\s*(?:{p2_pat})|"
+                                    rf"(?:{p2_pat})\s*(?:to|through|until|–|-|vs\.?)\s*(?:{p1_pat})",
+                                    re.IGNORECASE,
+                                )
+                                if cross_pat.search(clause):
+                                    has_cross_series = True
+                                    _, cross_reason = are_observations_compatible(s1["first"], s2["last"])
+                                    issue_key = (slide.id, m_name.casefold(), comp_type, bullet_idx, "incompatible")
+                                    if issue_key not in seen_issues:
+                                        seen_issues.add(issue_key)
+                                        issues.append(
+                                            DirectionalClaimIssue(
+                                                code="directional_contradiction",
+                                                message=(
+                                                    f"Slide {slide.id} asserts directional movement '{dir_word}' for '{m_name}' "
+                                                    f"across incompatible periods: {cross_reason}. Export blocked."
+                                                ),
+                                                severity="error",
+                                                stage="presentation",
+                                                slide_id=slide.id,
+                                                metric_name=m_name,
+                                                semantic_family=s1["family"].value,
+                                                balance_sheet_subtype=s1["bs_subtype"].value,
+                                                related_ids=[s1["first"].id, s2["last"].id],
+                                                start_value=s1["val_start"],
+                                                end_value=s2["val_end"],
+                                                expected_direction="INCOMPATIBLE",
+                                                offending_direction=dir_word,
+                                                target_component=comp_type,
+                                                bullet_index=bullet_idx,
+                                                start_period=s1["start_period"],
+                                                end_period=s2["end_period"],
+                                                period_basis=s1["period_basis"],
+                                            )
+                                        )
+                                    break
+                            if has_cross_series:
+                                break
+                    if has_cross_series:
                         continue
 
-                    offending = _detect_offending_in_text(dir_word, trend_state, family)
-                    if offending:
-                        # Non-monotonic exemption: if the series has intermediate reversals
-                        # AND the clause text explicitly describes that pattern,
-                        # do NOT flag it as a contradiction.
-                        non_monotonic = info.get("non_monotonic", {})
-                        if non_monotonic.get("is_non_monotonic"):
-                            clause_lower = clause.casefold()
-                            is_exempt = (
-                                _NON_MONOTONIC_BEFORE_PATTERN.search(clause_lower) is not None
-                                or _NON_MONOTONIC_DECLINE_THEN_RECOVER.search(clause_lower) is not None
-                                or (non_monotonic.get("had_rebound") and _NON_MONOTONIC_REBOUND_PATTERN.search(clause_lower) is not None)
-                            )
-                            if is_exempt:
-                                continue
+                    # 3. Identify matching series for the clause
+                    matching_series = []
+                    for s in series_list:
+                        p_first, p_last = str(s["first"].period).strip(), str(s["last"].period).strip()
+                        pat = rf"\b(?:{re.escape(p_first)}|{re.escape(p_last)})\b"
+                        if re.search(pat, clause, re.IGNORECASE):
+                            matching_series.append(s)
+                        elif s["period_basis"] == "6M" and re.search(r"(?i)\b(?:6M|1H|2H|interim|half[- ]year)\b", clause):
+                            matching_series.append(s)
+                        elif s["period_basis"] == "3M" and re.search(r"(?i)\b(?:3M|Q[1-4]|quarter)\b", clause):
+                            matching_series.append(s)
+                        elif s["period_basis"] == "FY" and re.search(r"(?i)\b(?:FY|full\s*year|fiscal\s*year)\b", clause):
+                            matching_series.append(s)
 
-                        seen_issues.add(issue_key)
-                        verb = (
-                            "narrowed" if trend_state in (TrendState.LOSS_NARROWED, TrendState.DEFICIT_NARROWED)
-                            else "widened" if trend_state in (TrendState.LOSS_WIDENED, TrendState.DEFICIT_WIDENED)
-                            else "turned profitable" if trend_state == TrendState.LOSS_TO_PROFIT
-                            else "swung into loss" if trend_state == TrendState.PROFIT_TO_LOSS
-                            else "swung from gain to loss" if trend_state == TrendState.GAIN_TO_LOSS
-                            else "swung from loss to gain" if trend_state == TrendState.LOSS_TO_GAIN
-                            else "turned positive" if trend_state == TrendState.TURNED_POSITIVE
-                            else "turned negative" if trend_state == TrendState.TURNED_NEGATIVE
-                            else "cash outflow narrowed / increased" if (trend_state == TrendState.INCREASED and family == MetricSemanticFamily.CASH_FLOW)
-                            else "increased" if trend_state == TrendState.INCREASED
-                            else "decreased" if trend_state == TrendState.DECREASED
-                            else "held flat"
-                        )
-                        issues.append(
-                            DirectionalClaimIssue(
-                                code="directional_contradiction",
-                                message=(
-                                    f"Slide {slide.id} {comp_type} asserts '{offending}' for '{m_name}', "
-                                    f"but underlying values {verb} from {val_start} to {val_end} ({trend_state.value})."
-                                ),
-                                severity="error",
-                                stage="presentation",
-                                slide_id=slide.id,
-                                metric_name=m_name,
-                                semantic_family=family.value,
-                                balance_sheet_subtype=bs_subtype.value,
-                                related_ids=[first.id, last.id],
-                                start_value=val_start,
-                                end_value=val_end,
-                                expected_direction=trend_state.value,
-                                offending_direction=offending,
-                                target_component=comp_type,
-                                bullet_index=bullet_idx,
+                    # 4. If no specific period bounds matched
+                    if not matching_series:
+                        if len(series_list) == 1:
+                            matching_series = series_list
+                        else:
+                            # Unqualified claim across multiple incompatible series (e.g. "Revenue increased")
+                            trends = {s["trend_state"] for s in series_list}
+                            if len(trends) == 1 and None not in trends:
+                                common_trend = next(iter(trends))
+                                periods_text = " and ".join(f"from {s['first'].period} to {s['last'].period}" for s in series_list)
+                                issue_key = (slide.id, m_name.casefold(), comp_type, bullet_idx, "unqualified_mixed")
+                                if issue_key not in seen_issues:
+                                    seen_issues.add(issue_key)
+                                    s0 = series_list[0]
+                                    issues.append(
+                                        DirectionalClaimIssue(
+                                            code="directional_contradiction",
+                                            message=(
+                                                f"Slide {slide.id} asserts unqualified directional movement '{dir_word}' for '{m_name}' "
+                                                f"across multiple period series ({periods_text}). Explicit period bounds required."
+                                            ),
+                                            severity="error",
+                                            stage="presentation",
+                                            slide_id=slide.id,
+                                            metric_name=m_name,
+                                            semantic_family=s0["family"].value,
+                                            balance_sheet_subtype=s0["bs_subtype"].value,
+                                            related_ids=[s0["first"].id, s0["last"].id],
+                                            start_value=s0["val_start"],
+                                            end_value=s0["val_end"],
+                                            expected_direction=common_trend.value,
+                                            offending_direction=dir_word,
+                                            target_component=comp_type,
+                                            bullet_index=bullet_idx,
+                                            is_mixed_period_repair=True,
+                                            supported_period_text=periods_text,
+                                            start_period=s0["start_period"],
+                                            end_period=s0["end_period"],
+                                            period_basis=s0["period_basis"],
+                                        )
+                                    )
+                            else:
+                                supported_s = [
+                                    s for s in series_list
+                                    if not _detect_offending_in_text(dir_word, s["trend_state"], s["family"])
+                                ]
+                                if supported_s:
+                                    s = supported_s[0]
+                                    periods_text = f"from {s['first'].period} to {s['last'].period}"
+                                    issue_key = (slide.id, m_name.casefold(), comp_type, bullet_idx, "unqualified_mixed")
+                                    if issue_key not in seen_issues:
+                                        seen_issues.add(issue_key)
+                                        issues.append(
+                                            DirectionalClaimIssue(
+                                                code="directional_contradiction",
+                                                message=(
+                                                    f"Slide {slide.id} asserts directional movement '{dir_word}' for '{m_name}', "
+                                                    f"supported across {periods_text}. Auto-repairing to explicit period comparison."
+                                                ),
+                                                severity="error",
+                                                stage="presentation",
+                                                slide_id=slide.id,
+                                                metric_name=m_name,
+                                                semantic_family=s["family"].value,
+                                                balance_sheet_subtype=s["bs_subtype"].value,
+                                                related_ids=[s["first"].id, s["last"].id],
+                                                start_value=s["val_start"],
+                                                end_value=s["val_end"],
+                                                expected_direction=s["trend_state"].value,
+                                                offending_direction=dir_word,
+                                                target_component=comp_type,
+                                                bullet_index=bullet_idx,
+                                                is_mixed_period_repair=True,
+                                                supported_period_text=periods_text,
+                                                start_period=s["start_period"],
+                                                end_period=s["end_period"],
+                                                period_basis=s["period_basis"],
+                                            )
+                                        )
+                                else:
+                                    primary_s = next((s for s in series_list if s["period_basis"] == "FY"), series_list[0])
+                                    periods_text = f"from {primary_s['first'].period} to {primary_s['last'].period}"
+                                    issue_key = (slide.id, m_name.casefold(), comp_type, bullet_idx, "unqualified_mixed")
+                                    if issue_key not in seen_issues:
+                                        seen_issues.add(issue_key)
+                                        issues.append(
+                                            DirectionalClaimIssue(
+                                                code="directional_contradiction",
+                                                message=(
+                                                    f"Slide {slide.id} asserts '{dir_word}' for '{m_name}', "
+                                                    f"contradicting underlying values ({primary_s['trend_state'].value})."
+                                                ),
+                                                severity="error",
+                                                stage="presentation",
+                                                slide_id=slide.id,
+                                                metric_name=m_name,
+                                                semantic_family=primary_s["family"].value,
+                                                balance_sheet_subtype=primary_s["bs_subtype"].value,
+                                                related_ids=[primary_s["first"].id, primary_s["last"].id],
+                                                start_value=primary_s["val_start"],
+                                                end_value=primary_s["val_end"],
+                                                expected_direction=primary_s["trend_state"].value,
+                                                offending_direction=dir_word,
+                                                target_component=comp_type,
+                                                bullet_index=bullet_idx,
+                                                is_mixed_period_repair=True,
+                                                supported_period_text=periods_text,
+                                                start_period=primary_s["start_period"],
+                                                end_period=primary_s["end_period"],
+                                                period_basis=primary_s["period_basis"],
+                                            )
+                                        )
+                            continue
+
+                    # 5. Validate matching series
+                    for info in matching_series:
+                        first = info["first"]
+                        last = info["last"]
+                        val_start = info["val_start"]
+                        val_end = info["val_end"]
+                        family = info["family"]
+                        bs_subtype = info["bs_subtype"]
+                        trend_state = info["trend_state"]
+
+                        issue_key = (slide.id, m_name.casefold(), comp_type, bullet_idx, info["period_basis"], info["start_period"], info["end_period"])
+                        if issue_key in seen_issues:
+                            continue
+
+                        if trend_state == TrendState.AMBIGUOUS:
+                            seen_issues.add(issue_key)
+                            issues.append(
+                                DirectionalClaimIssue(
+                                    code="directional_contradiction",
+                                    message=(
+                                        f"Slide {slide.id} has ambiguous sign semantics for metric '{m_name}' "
+                                        f"transitioning from {val_start} to {val_end}. Export blocked."
+                                    ),
+                                    severity="error",
+                                    stage="presentation",
+                                    slide_id=slide.id,
+                                    metric_name=m_name,
+                                    semantic_family=family.value,
+                                    balance_sheet_subtype=bs_subtype.value,
+                                    related_ids=[first.id, last.id],
+                                    start_value=val_start,
+                                    end_value=val_end,
+                                    expected_direction=TrendState.AMBIGUOUS.value,
+                                    offending_direction=dir_word,
+                                    target_component=comp_type,
+                                    bullet_index=bullet_idx,
+                                    start_period=info["start_period"],
+                                    end_period=info["end_period"],
+                                    period_basis=info["period_basis"],
+                                )
                             )
-                        )
+                            continue
+
+                        offending = _detect_offending_in_text(dir_word, trend_state, family)
+                        if offending:
+                            non_monotonic = info.get("non_monotonic", {})
+                            if non_monotonic.get("is_non_monotonic"):
+                                clause_lower = clause.casefold()
+                                is_exempt = (
+                                    _NON_MONOTONIC_BEFORE_PATTERN.search(clause_lower) is not None
+                                    or _NON_MONOTONIC_DECLINE_THEN_RECOVER.search(clause_lower) is not None
+                                    or (non_monotonic.get("had_rebound") and _NON_MONOTONIC_REBOUND_PATTERN.search(clause_lower) is not None)
+                                )
+                                if is_exempt:
+                                    continue
+
+                            seen_issues.add(issue_key)
+                            verb = (
+                                "narrowed" if trend_state in (TrendState.LOSS_NARROWED, TrendState.DEFICIT_NARROWED)
+                                else "widened" if trend_state in (TrendState.LOSS_WIDENED, TrendState.DEFICIT_WIDENED)
+                                else "turned profitable" if trend_state == TrendState.LOSS_TO_PROFIT
+                                else "swung into loss" if trend_state == TrendState.PROFIT_TO_LOSS
+                                else "swung from gain to loss" if trend_state == TrendState.GAIN_TO_LOSS
+                                else "swung from loss to gain" if trend_state == TrendState.LOSS_TO_GAIN
+                                else "turned positive" if trend_state == TrendState.TURNED_POSITIVE
+                                else "turned negative" if trend_state == TrendState.TURNED_NEGATIVE
+                                else "cash outflow narrowed / increased" if (trend_state == TrendState.INCREASED and family == MetricSemanticFamily.CASH_FLOW)
+                                else "increased" if trend_state == TrendState.INCREASED
+                                else "decreased" if trend_state == TrendState.DECREASED
+                                else "held flat"
+                            )
+                            issues.append(
+                                DirectionalClaimIssue(
+                                    code="directional_contradiction",
+                                    message=(
+                                        f"Slide {slide.id} {comp_type} asserts '{offending}' for '{m_name}', "
+                                        f"but underlying values {verb} from {val_start} to {val_end} ({trend_state.value})."
+                                    ),
+                                    severity="error",
+                                    stage="presentation",
+                                    slide_id=slide.id,
+                                    metric_name=m_name,
+                                    semantic_family=family.value,
+                                    balance_sheet_subtype=bs_subtype.value,
+                                    related_ids=[first.id, last.id],
+                                    start_value=val_start,
+                                    end_value=val_end,
+                                    expected_direction=trend_state.value,
+                                    offending_direction=offending,
+                                    target_component=comp_type,
+                                    bullet_index=bullet_idx,
+                                    start_period=info["start_period"],
+                                    end_period=info["end_period"],
+                                    period_basis=info["period_basis"],
+                                )
+                            )
 
         return issues
 
@@ -1595,6 +1887,10 @@ def apply_structured_issue_replacement(text: str, issue: DirectionalClaimIssue) 
             if bad_p in replacement.casefold():
                 replacement = "increased" if state == TrendState.INCREASED.value else "decreased"
 
+    if issue.is_mixed_period_repair and issue.supported_period_text:
+        if issue.supported_period_text.casefold() not in replacement.casefold():
+            replacement = f"{replacement} {issue.supported_period_text}"
+
     # Clause-aware replacement: find the specific clause mentioning issue.metric_name
     delims = r"(\r?\n+|;\s*|\s+[—–]\s+|(?<!\d)\.(?!\d)\s+|,\s*(?:while|whilst|whereas|although|though|but|however|yet)\b|\b(?:while|whilst|whereas|although|though|but|however|yet)\b|(?<!\d),(?!\d)\s+(?=[a-zA-Z]))"
     parts = re.split(delims, text, flags=re.IGNORECASE)
@@ -1607,6 +1903,9 @@ def apply_structured_issue_replacement(text: str, issue: DirectionalClaimIssue) 
         if not replaced and any(re.search(pat, p.casefold()) for pat in alias_patterns):
             pat_off = r"\b" + re.escape(offending) + r"\b"
             if re.search(pat_off, p, flags=re.IGNORECASE):
+                if issue.is_mixed_period_repair and issue.supported_period_text:
+                    p = re.sub(r"(?i)\s+(?:across|over|during|throughout)\s+(?:the\s+)?(?:track\s+record|review|reporting|full)?\s*period\b", "", p)
+                    p = re.sub(r"(?i)\s+compared\s+to\s+the\s+prior\s+(?:fiscal\s+year|period)\b", "", p)
                 p, replaced = replace_word_preserving_case(p, offending, replacement)
         new_parts.append(p)
 
@@ -1614,7 +1913,11 @@ def apply_structured_issue_replacement(text: str, issue: DirectionalClaimIssue) 
         return "".join(new_parts), True
 
     # Fallback to general replace if metric was not isolated in a single clause
-    return replace_word_preserving_case(text, offending, replacement)
+    fallback_text = text
+    if issue.is_mixed_period_repair and issue.supported_period_text:
+        fallback_text = re.sub(r"(?i)\s+(?:across|over|during|throughout)\s+(?:the\s+)?(?:track\s+record|review|reporting|full)?\s*period\b", "", fallback_text)
+        fallback_text = re.sub(r"(?i)\s+compared\s+to\s+the\s+prior\s+(?:fiscal\s+year|period)\b", "", fallback_text)
+    return replace_word_preserving_case(fallback_text, offending, replacement)
 
 
 def repair_presentation_plan_from_issues(

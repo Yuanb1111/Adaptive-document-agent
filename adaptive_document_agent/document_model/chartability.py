@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from adaptive_document_agent.models import Observation
 
 
+from adaptive_document_agent.document_model.period_semantic_validator import extract_period_basis
 from adaptive_document_agent.document_model.series import metric_key
 
 
@@ -59,12 +60,17 @@ def score_chartability(series: list[Observation]) -> ChartabilityResult:
         reasons.append("Duplicate observations found with identical metric, period, and category dimensions")
         return ChartabilityResult(status="INVALID", score=0.0, reasons=reasons, is_chartable=False)
 
-    # 5. Period type coherence (do not mix balance_sheet_date with fiscal_year within same metric)
+    # 5. Period type coherence (do not mix balance_sheet_date with fiscal_year or mixed bases within same metric)
     for metric_name in {metric_key(o) for o in series}:
         m_obs = [o for o in series if metric_key(o) == metric_name]
         period_types = {getattr(o, "period_type", "fiscal_year") for o in m_obs}
         if len(period_types) > 1 and "balance_sheet_date" in period_types and "fiscal_year" in period_types:
             reasons.append(f"Mixed balance sheet point-in-time dates with full fiscal year flow periods for '{metric_name}'")
+            return ChartabilityResult(status="INVALID", score=0.0, reasons=reasons, is_chartable=False)
+        bases = {extract_period_basis(o.period) for o in m_obs if o.period}
+        bases.discard("generic")
+        if len(bases) > 1:
+            reasons.append(f"Mixed period bases {sorted(bases)} for '{metric_name}'")
             return ChartabilityResult(status="INVALID", score=0.0, reasons=reasons, is_chartable=False)
 
     # 6. Suspicious alignment & anomaly check

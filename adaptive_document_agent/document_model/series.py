@@ -154,46 +154,117 @@ def presentation_sign_variant_groups(observations: Iterable[Observation]) -> lis
     return [items for items in groups.values() if _is_presentation_sign_variant(items)]
 
 
-def best_period_series(observations: Iterable[Observation], *, minimum_periods: int = 2) -> list[Observation]:
-    """Select one coherent, comparable source series across compatible periods."""
+def canonical_series_partition_key(obs: Observation) -> tuple[object, ...]:
+    """Generate canonical partition key for grouping compatible metric observations.
+
+    Criteria:
+    - canonical metric: normalized canonical name, falling back to specific display qualifier
+    - unit/currency: (is_percentage, unit_family, currency)
+    - period basis: 'FY' / '6M' / '3M' / 'YTD' / 'point_in_time' / other duration
+    - reporting basis: consolidated vs standalone
+    - restatement basis: restated vs original
+    - relevant dimensions: core category dimensions (excluding context noise)
+    - entity: normalized entity
+    """
+    if is_generic_metric_label(obs.metric_original) or (obs.metric_canonical and is_generic_metric_label(obs.metric_canonical)):
+        m_name = metric_key(obs)
+    else:
+        m_name = (obs.metric_canonical or metric_label(obs)).strip().casefold()
+
+    u_fam = (getattr(obs, "unit_family", None) or obs.unit or "generic").strip().casefold()
+    unit = (obs.unit or obs.raw_unit or "").strip().casefold()
+    is_pct = "%" in unit or u_fam == "percentage"
+    curr = (obs.currency or "").strip().upper()
+
+    ptype = (getattr(obs, "period_type", None) or "generic").strip().casefold()
+    basis = extract_period_basis(obs.period)
+    if ptype in {"balance_sheet_date", "point_in_time"} or basis == "point_in_time":
+        p_basis = "point_in_time"
+    elif ptype == "fiscal_year" and basis == "generic":
+        p_basis = "FY"
+    else:
+        p_basis = basis
+
+    rep_basis = (
+        obs.dimensions.get("reporting_basis")
+        or obs.dimensions.get("basis")
+        or ""
+    ).strip().casefold()
+    restatement = (
+        obs.dimensions.get("restatement")
+        or obs.dimensions.get("restated")
+        or ""
+    ).strip().casefold()
+
+    if obs.category_dimensions:
+        core_dims = tuple(sorted((k, str(v).strip().casefold()) for k, v in obs.category_dimensions.items()))
+    else:
+        core_dims = tuple(
+            sorted(
+                (k, str(v).strip().casefold())
+                for k, v in obs.dimensions.items()
+                if k not in {"table_context", "section", "period_basis", "reporting_basis", "basis", "restatement", "restated"}
+            )
+        )
+    entity = (obs.entity or "").strip().casefold()
+
+    return (m_name, is_pct, u_fam, curr, p_basis, rep_basis, restatement, core_dims, entity)
+
+
+def group_comparable_series(
+    observations: Iterable[Observation],
+    *,
+    minimum_periods: int = 2,
+) -> list[list[Observation]]:
+    """Partition observations into strictly compatible comparable series.
+
+    Guarantees:
+    - Never mixes different period bases (FY, 6M, 3M, YTD, point_in_time)
+    - Never mixes currencies, percentage types, reporting bases, or restatements
+    - Within each group, reconciles presentation-sign duplicates and picks highest confidence
+    - Returns lists of observations sorted chronologically by period_sort_key
+    """
     groups: dict[tuple[object, ...], list[Observation]] = defaultdict(list)
     for item in observations:
         if item.value is None or not item.period:
             continue
-        ident = metric_identity_key(item)
-        p_type = getattr(item, "period_type", "generic") or "generic"
-        # period_type is frequently generic in imported or legacy observations.
-        # The display label still carries enough duration semantics to keep FY,
-        # half-year, quarter and point-in-time series separate.
-        period_basis = extract_period_basis(item.period)
-        groups[(ident, p_type, period_basis, item.currency)].append(item)
+        key = canonical_series_partition_key(item)
+        groups[key].append(item)
 
-    candidates: list[list[Observation]] = []
-    for values in groups.values():
+    results: list[list[Observation]] = []
+    for key, items in groups.items():
         by_period: dict[str, list[Observation]] = defaultdict(list)
-        for item in values:
+        for item in items:
             by_period[item.period or ""].append(item)
         if len(by_period) < minimum_periods:
             continue
         series: list[Observation] = []
         has_fatal_conflict = False
-        for period_key, items in by_period.items():
-            if _has_conflict(items):
-                reconciled, _ = reconcile_observations(items)
+        for period_key, period_items in by_period.items():
+            if _has_conflict(period_items):
+                reconciled, _ = reconcile_observations(period_items)
                 if _has_conflict(reconciled):
                     has_fatal_conflict = True
                     break
-                items = reconciled
-            series.append(max(items, key=lambda it: (it.confidence, len(it.evidence))))
+                period_items = reconciled
+            series.append(max(period_items, key=lambda it: (it.confidence, len(it.evidence))))
         if not has_fatal_conflict and len(series) >= minimum_periods:
-            candidates.append(sorted(series, key=lambda item: period_sort_key(item.period)))
+            results.append(sorted(series, key=lambda item: period_sort_key(item.period)))
 
+    return results
+
+
+def best_period_series(observations: Iterable[Observation], *, minimum_periods: int = 2) -> list[Observation]:
+    """Select one coherent, comparable source series across compatible periods."""
+    candidates = group_comparable_series(observations, minimum_periods=minimum_periods)
     if not candidates:
         return []
 
+    # Prioritize FY series if available, then length, confidence, and page evidence
     return max(
         candidates,
         key=lambda series: (
+            extract_period_basis(series[0].period) == "FY",
             len(series),
             sum(item.confidence for item in series) / len(series),
             len({source.page for item in series for source in item.evidence}),

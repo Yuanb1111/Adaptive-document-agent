@@ -82,10 +82,6 @@ class ChartPlanner:
             if len(observations) < 2:
                 continue
 
-            chartability = score_chartability(observations)
-            if not chartability.is_chartable:
-                continue
-
             x_metric = task.required_metrics[0] if task.required_metrics else None
             y_metric = task.required_metrics[1] if len(task.required_metrics) > 1 else x_metric
 
@@ -98,8 +94,17 @@ class ChartPlanner:
                 observations = [item for pair in pairs for item in pair]
                 identifiers = [item.id for item in observations]
             else:
-                observations = sorted(observations, key=lambda item: period_sort_key(item.period))
+                distinct_periods = {item.period for item in observations if item.period}
+                if len(distinct_periods) >= 2:
+                    coherent_series = best_period_series(observations)
+                    if len(coherent_series) < 2:
+                        continue
+                    observations = coherent_series
                 identifiers = [item.id for item in observations]
+
+            chartability = score_chartability(observations)
+            if not chartability.is_chartable:
+                continue
 
             score = self._score_task_candidate(
                 task,
