@@ -223,6 +223,20 @@ def _build_legacy_presentation(presentation: Any, result: PipelineResult) -> Non
     _add_evidence_table_slides(presentation, result, presentation_charts)
 
 
+def _is_cramped_cluster_render(charts: list[ChartPlan], index: DocumentIndex) -> bool:
+    for chart in charts:
+        obs = [index.get(oid) for oid in chart.observation_ids if index.get(oid)]
+        series_names = {
+            item.dimensions.get("series") or item.dimensions.get("breakdown") or item.entity
+            for item in obs
+            if item
+        }
+        series_names.discard(None)
+        if len(series_names) > 1 or len(chart.title) > 32:
+            return True
+    return False
+
+
 def _build_planned_presentation(presentation: Any, result: PipelineResult) -> None:
     """Render the validated AI narrative while keeping all evidence deterministic."""
     plan = result.presentation_plan
@@ -299,6 +313,25 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
                         ordinal=ordinal,
                         title=slide_plan.title,
                         subtitle=slide_plan.message,
+                    )
+                elif len(charts) == 3 and _is_cramped_cluster_render(charts, index):
+                    # Spacing is insufficient for 3 charts: split into two slides
+                    _add_chart_cluster_slide(
+                        presentation,
+                        charts[:2],
+                        index,
+                        title=slide_plan.title,
+                        subtitle=slide_plan.message,
+                        layout="two_up",
+                        supporting_observations=_planned_observations(slide_plan, index),
+                    )
+                    _add_chart_plus_kpis_slide(
+                        presentation,
+                        charts[2],
+                        index,
+                        title=f"{slide_plan.title} (Cont.)",
+                        subtitle=slide_plan.message,
+                        supporting_observations=_planned_observations(slide_plan, index),
                     )
                 else:
                     _add_chart_cluster_slide(
@@ -420,115 +453,138 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
     plan = result.presentation_plan
     if plan is None:  # pragma: no cover - guarded by caller
         return
-    company = plan.company
-    has_company_identity = bool(company.name.strip() and company.name.strip().casefold() != "company overview")
+
+    from adaptive_document_agent.services.company_extractor import extract_structured_company_fields
+
+    company = extract_structured_company_fields(plan.company, result)
+    plan.company = company
+
+    has_company_identity = getattr(company, "identity_state", "") == "RESOLVED" or bool(
+        company.name.strip()
+        and company.name.strip().casefold()
+        not in {
+            "company overview",
+            "document overview",
+            "document at a glance",
+            "company at a glance",
+            "document",
+            "unnamed issuer",
+            "company not identified",
+        }
+    )
+
     slide_title = slide_plan.title if has_company_identity else "Document at a Glance"
     slide = _base_slide(presentation, slide_title, company.document_type or result.profile.document_type)
     content_top, content_h = _content_zone(slide)
 
-    name = company.name.strip() or result.profile.overview_title or "Document Overview"
-    desc_candidates = [
-        company.one_line_description,
-        result.profile.document_summary,
-        result.profile.document_purpose,
-    ]
-    desc_parts = [p.strip() for p in desc_candidates if p and p.strip()]
-    description = ""
-    seen_desc = set()
-    for part in desc_parts:
-        key = part.casefold()
-        if key not in seen_desc and len(description) < 300:
-            seen_desc.add(key)
-            description = f"{description} {part}".strip() if description else part
-    if not description:
-        description = "Document-grounded overview of the reported issuer and business context."
+    # Fixed structured snapshot layout: 2 columns x 2 rows inside standard container
+    _panel(slide, 0.45, content_top, 11.70, content_h, fill=FOURIER_BG_CARD)
 
-    if has_company_identity or getattr(company, "identity_state", "") == "RESOLVED":
-        description = re.sub(r"(?i)\(?(?:prospectus|document)\s+for\s+an\s+unnamed\s+issuer\)?", "", description)
-        description = re.sub(r"(?i)\bunnamed\s+issuer\b", name, description)
-        description = re.sub(r"(?i)\bcompany\s+not\s+identified\b", name, description)
-        description = re.sub(r"[ \t]{2,}", " ", description).strip()
+    card_w = 5.65
+    gap_x = 0.20
+    col1_left = 0.55
+    col2_left = col1_left + card_w + gap_x  # 6.40
+    card_h = (content_h - 0.50) / 2
+    row1_top = content_top + 0.15
+    row2_top = row1_top + card_h + 0.15
 
-    products = list(dict.fromkeys(p for p in company.products if p.strip()))[:3]
-    geos = list(dict.fromkeys(g for g in company.geographies if g.strip()))[:3]
-    customer_types = list(dict.fromkeys(item for item in company.customer_types if item.strip()))[:3]
-    b_model = company.business_model.strip() or (company.segments[0] if company.segments else "")
-    topics: list[str] = []
-    if products:
-        topics.append(f"Products: {', '.join(products)}")
-    if geos:
-        topics.append(f"Markets: {', '.join(geos)}")
-    if customer_types:
-        topics.append(f"Customers: {', '.join(customer_types)}")
-    if b_model:
-        topics.append(f"Business model: {b_model}")
+    # --- CARD 1 (Top-Left): Issuer Identity & Scope ---
+    _panel(slide, col1_left, row1_top, card_w, card_h, fill=WHITE)
+    _text(slide, "ISSUER PROFILE & IDENTITY", col1_left + 0.20, row1_top + 0.15, card_w - 0.40, 0.22, size=10.0, color=FOURIER_PURPLE, bold=True)
+    _rule(slide, col1_left + 0.20, row1_top + 0.40, card_w - 0.40, 0.01, FOURIER_BORDER)
 
-    # Format profile metadata line
-    meta_items: list[str] = []
-    if getattr(company, "stock_code", ""):
-        meta_items.append(f"Stock Code: {company.stock_code}")
-    if getattr(company, "offering_type", ""):
-        meta_items.append(f"Offering: {company.offering_type}")
-    if getattr(company, "reporting_currency", ""):
-        meta_items.append(f"Currency: {company.reporting_currency}")
-    if company.listing_market:
-        meta_items.append(f"Listing: {company.listing_market}")
+    name_display = company.name.strip() if has_company_identity else "Document Overview"
+    _text(slide, _summary_text(name_display, 42), col1_left + 0.20, row1_top + 0.48, card_w - 0.40, 0.32, size=15.0, color=FOURIER_DARK, bold=True)
+
+    y_id = row1_top + 0.82
+    if not has_company_identity:
+        _text(slide, "Issuer name not identified in supplied pages", col1_left + 0.20, y_id, card_w - 0.40, 0.22, size=9.5, color=FOURIER_PURPLE, bold=True)
+        y_id += 0.28
+
+    id_bullets: list[str] = []
+    if company.industry:
+        id_bullets.append(f"Industry: {company.industry}")
     if company.headquarters:
-        meta_items.append(f"HQ: {company.headquarters}")
+        id_bullets.append(f"Headquarters: {company.headquarters}")
+    if company.reporting_currency:
+        id_bullets.append(f"Currency: {company.reporting_currency}")
     if company.track_record_period:
-        meta_items.append(f"Track Record: {company.track_record_period}")
-    meta_line = "   |   ".join(meta_items)
+        id_bullets.append(f"Track Record: {company.track_record_period}")
+    if not id_bullets:
+        id_bullets.append("Document-grounded analysis of reported business operations.")
 
-    facts = [(item.label, item.value) for item in company.key_facts if item.label.strip() and item.value.strip()][:6]
+    for b in id_bullets[:3]:
+        _text(slide, f"•  {_summary_text(b, 55)}", col1_left + 0.20, y_id, card_w - 0.40, 0.24, size=10.5, color=FOURIER_DARK)
+        y_id += 0.28
 
-    if facts:
-        # Two-panel layout: Left (Profile & Business), Right (Key facts)
-        _panel(slide, 0.45, content_top, 7.20, content_h, fill=FOURIER_BG_CARD)
-        _text(slide, _summary_text(name, 80), 0.70, content_top + 0.20, 6.70, 0.45, size=22, color=FOURIER_DARK, bold=True)
-        top_offset = content_top + 0.70
-        if meta_line:
-            _text(slide, _summary_text(meta_line, 100), 0.70, top_offset, 6.70, 0.25, size=11.0, color=FOURIER_PURPLE, bold=True)
-            top_offset += 0.30
-        _text(slide, _summary_text(description, 360), 0.70, top_offset, 6.70, 1.30, size=13.0, color=FOURIER_MUTED)
+    # --- CARD 2 (Top-Right): Business Focus & Model ---
+    _panel(slide, col2_left, row1_top, card_w, card_h, fill=WHITE)
+    _text(slide, "BUSINESS FOCUS & MODEL", col2_left + 0.20, row1_top + 0.15, card_w - 0.40, 0.22, size=10.0, color=FOURIER_PURPLE, bold=True)
+    _rule(slide, col2_left + 0.20, row1_top + 0.40, card_w - 0.40, 0.01, FOURIER_BORDER)
 
-        if topics:
-            _text(slide, "BUSINESS FOCUS", 0.70, content_top + 2.55, 4.0, 0.26, size=10.5, color=FOURIER_PURPLE, bold=True)
-            _rule(slide, 0.70, content_top + 2.85, 6.70, 0.01, FOURIER_BORDER)
-            topic_text = "\n".join(f"{index:02d}  {_summary_text(item, 72)}" for index, item in enumerate(topics, start=1))
-            _text(slide, topic_text, 0.70, content_top + 2.95, 6.70, 1.40, size=12.5, color=FOURIER_DARK, bold=True)
+    bm_bullets: list[str] = []
+    if company.business_model:
+        for part in re.split(r"[;\n]", company.business_model):
+            if part.strip():
+                bm_bullets.append(part.strip())
+    if company.customer_types:
+        bm_bullets.append(f"Target Customers: {', '.join(company.customer_types[:3])}")
+    if not bm_bullets and company.segments:
+        bm_bullets.extend(company.segments[:2])
+    if not bm_bullets:
+        bm_bullets.append("Core commercial activities and reported operating model.")
 
-        _panel(slide, 7.85, content_top, 4.30, content_h, fill=FOURIER_BG_CARD)
-        _text(slide, "KEY FACTS", 8.10, content_top + 0.20, 3.80, 0.26, size=10.5, color=FOURIER_PURPLE, bold=True)
-        _rule(slide, 8.10, content_top + 0.50, 3.80, 0.01, FOURIER_BORDER)
-        fact_top = content_top + 0.62
-        for label, value in facts:
-            _text(slide, label.upper(), 8.10, fact_top, 3.80, 0.22, size=9, color=FOURIER_MUTED, bold=True)
-            val_h = 0.45 if len(value) > 36 else 0.30
-            _text(slide, _summary_text(value, 86), 8.10, fact_top + 0.20, 3.80, val_h, size=12.0, color=FOURIER_DARK, bold=True)
-            fact_top += val_h + 0.24
-    else:
-        # Full-width card layout when key_facts is empty: do not render empty KEY FACTS block
-        _panel(slide, 0.45, content_top, 11.70, content_h, fill=FOURIER_BG_CARD)
-        _text(slide, _summary_text(name, 100), 0.75, content_top + 0.25, 11.10, 0.50, size=24, color=FOURIER_DARK, bold=True)
-        top_offset = content_top + 0.80
-        if meta_line:
-            _text(slide, _summary_text(meta_line, 140), 0.75, top_offset, 11.10, 0.28, size=11.5, color=FOURIER_PURPLE, bold=True)
-            top_offset += 0.35
-        _text(slide, _summary_text(description, 450), 0.75, top_offset, 11.10, 1.35, size=13.5, color=FOURIER_MUTED)
-        if topics:
-            _text(slide, "BUSINESS FOCUS", 0.75, content_top + 2.65, 6.0, 0.26, size=11.0, color=FOURIER_PURPLE, bold=True)
-            _rule(slide, 0.75, content_top + 2.95, 11.10, 0.01, FOURIER_BORDER)
-            col1 = topics[:3]
-            col2 = topics[3:6]
-            col1_text = "\n".join(f"{index:02d}  {_summary_text(item, 72)}" for index, item in enumerate(col1, start=1))
-            _text(slide, col1_text, 0.75, content_top + 3.05, 5.30, 1.40, size=13.0, color=FOURIER_DARK, bold=True)
-            if col2:
-                col2_text = "\n".join(f"{index:02d}  {_summary_text(item, 72)}" for index, item in enumerate(col2, start=4))
-                _text(slide, col2_text, 6.35, content_top + 3.05, 5.30, 1.40, size=13.0, color=FOURIER_DARK, bold=True)
+    y_bm = row1_top + 0.50
+    for b in bm_bullets[:4]:
+        _text(slide, f"•  {_summary_text(b, 56)}", col2_left + 0.20, y_bm, card_w - 0.40, 0.32, size=10.5, color=FOURIER_DARK)
+        y_bm += 0.36
+
+    # --- CARD 3 (Bottom-Left): Core Products & Offerings ---
+    _panel(slide, col1_left, row2_top, card_w, card_h, fill=WHITE)
+    _text(slide, "CORE PRODUCTS & OFFERINGS", col1_left + 0.20, row2_top + 0.15, card_w - 0.40, 0.22, size=10.0, color=FOURIER_PURPLE, bold=True)
+    _rule(slide, col1_left + 0.20, row2_top + 0.40, card_w - 0.40, 0.01, FOURIER_BORDER)
+
+    prod_bullets: list[str] = []
+    for p in company.products:
+        if p.strip():
+            prod_bullets.append(p.strip())
+    if not prod_bullets and company.segments:
+        prod_bullets.extend(company.segments)
+    if not prod_bullets:
+        prod_bullets.append("Key product and service lines as disclosed in documentation.")
+
+    y_prod = row2_top + 0.50
+    for idx, p in enumerate(prod_bullets[:4], start=1):
+        _text(slide, f"{idx:02d}  {_summary_text(p, 54)}", col1_left + 0.20, y_prod, card_w - 0.40, 0.32, size=10.5, color=FOURIER_DARK, bold=True)
+        y_prod += 0.36
+
+    # --- CARD 4 (Bottom-Right): Markets, Position & Listing Facts ---
+    _panel(slide, col2_left, row2_top, card_w, card_h, fill=WHITE)
+    _text(slide, "MARKETS, POSITION & LISTING", col2_left + 0.20, row2_top + 0.15, card_w - 0.40, 0.22, size=10.0, color=FOURIER_PURPLE, bold=True)
+    _rule(slide, col2_left + 0.20, row2_top + 0.40, card_w - 0.40, 0.01, FOURIER_BORDER)
+
+    mkt_bullets: list[str] = []
+    if company.geographies:
+        mkt_bullets.append(f"Geographic Markets: {', '.join(company.geographies[:3])}")
+    if getattr(company, "market_position", ""):
+        mkt_bullets.append(f"Market Position: {company.market_position}")
+    if company.listing_market:
+        mkt_bullets.append(f"Listing Exchange: {company.listing_market}")
+    if getattr(company, "stock_code", ""):
+        mkt_bullets.append(f"Stock Code: {company.stock_code}")
+    if getattr(company, "offering_type", ""):
+        mkt_bullets.append(f"Offering: {company.offering_type}")
+    if not mkt_bullets:
+        mkt_bullets.append("Multi-regional market footprint with commercial presence.")
+
+    y_mkt = row2_top + 0.50
+    for b in mkt_bullets[:4]:
+        _text(slide, f"•  {_summary_text(b, 56)}", col2_left + 0.20, y_mkt, card_w - 0.40, 0.32, size=10.5, color=FOURIER_DARK)
+        y_mkt += 0.36
 
     pages = sorted({*company.source_pages, *slide_plan.source_pages, *(page for fact in company.key_facts for page in fact.source_pages)})
     if pages:
-        _text(slide, f"Source pages  {', '.join(map(str, pages))}", 0.45, 6.22, 11.70, 0.25, size=9.5, color=FOURIER_MUTED)
+        _text(slide, f"Source pages  {', '.join(map(str, pages))}", 0.45, 6.55, 11.70, 0.25, size=9.5, color=FOURIER_MUTED)
 
 
 def _is_calc_artifact(text: str) -> bool:
@@ -1195,19 +1251,21 @@ def _add_chart_cluster_slide(
         if not values:
             _text(slide, "No usable values", left + 0.18, top + panel_height / 2, panel_width - 0.36, 0.4, size=12, color=FOURIER_MUTED, align="center")
             continue
-        footer_height = 0.65
-        chart_bounds = (left + 0.15, top + 0.60, panel_width - 0.30, panel_height - 0.70 - footer_height)
+        footer_height = 0.72
+        chart_bounds = (left + 0.15, top + 0.58, panel_width - 0.30, panel_height - 0.65 - footer_height)
         scale, scale_label = _add_native_chart(slide, plan, values, chart_bounds, compact=True)
         movement = _change_summary(values, scale)
         unit = _unit_label(values, scale_label)
         pages = ", ".join(map(str, plan.source_pages)) or "not available"
-        footer_top = top + panel_height - footer_height + 0.05
+        footer_top = top + panel_height - footer_height + 0.08
         if movement:
-            _text(slide, movement[0], left + 0.18, footer_top, panel_width * 0.45, 0.28, size=12, color=CHART_PALETTE[position % len(CHART_PALETTE)], bold=True)
-            _text(slide, _summary_text(movement[1], 48), left + panel_width * 0.45, footer_top, panel_width * 0.50, 0.28, size=9, color=FOURIER_DARK, align="right")
-            footer_top += 0.26
-        _text(slide, _summary_text(unit, 36), left + 0.18, footer_top, panel_width - 1.10, 0.22, size=8.5, color=FOURIER_MUTED)
-        _text(slide, f"p. {pages}", left + panel_width - 1.00, footer_top, 0.85, 0.22, size=8.5, color=FOURIER_MUTED, align="right")
+            _text(slide, movement[0], left + 0.18, footer_top, panel_width * 0.40, 0.28, size=11.5, color=CHART_PALETTE[position % len(CHART_PALETTE)], bold=True)
+            _text(slide, _summary_text(movement[1], 40), left + panel_width * 0.42, footer_top, panel_width * 0.54, 0.28, size=8.5, color=FOURIER_DARK, align="right")
+            footer_top += 0.28
+        unit_w = (panel_width - 0.36) * 0.58
+        pages_w = (panel_width - 0.36) * 0.40
+        _text(slide, _summary_text(unit, 30), left + 0.18, footer_top, unit_w, 0.22, size=8.0, color=FOURIER_MUTED)
+        _text(slide, f"p. {_summary_text(pages, 16)}", left + 0.18 + unit_w + 0.04, footer_top, pages_w, 0.22, size=8.0, color=FOURIER_MUTED, align="right")
 
 
 def _chart_number_format(values: list[float]) -> str:
@@ -1252,7 +1310,26 @@ def _add_native_chart(
     has_positive = False
     scaled_vals: list[float] = []
 
+    is_valid_scatter = False
     if plan.chart_type == "scatter" and plan.x_metric and plan.y_metric:
+        num_pat = re.compile(r"^\s*[-+]?(?:\d{1,3}(?:,\d{3})*|\d+)(?:\.\d+)?\s*$")
+        if (
+            not num_pat.match(plan.x_metric)
+            and not num_pat.match(plan.y_metric)
+            and re.search(r"[A-Za-z\u4e00-\u9fa5]", plan.x_metric)
+            and re.search(r"[A-Za-z\u4e00-\u9fa5]", plan.y_metric)
+        ):
+            pairs = paired_observations(values, plan.x_metric, plan.y_metric)
+            if len(pairs) >= 5:
+                has_arbitrary_cats = any(
+                    any(isinstance(v, str) and num_pat.match(v) and "." in v for v in item.dimensions.values())
+                    for pair in pairs
+                    for item in pair
+                )
+                if not has_arbitrary_cats:
+                    is_valid_scatter = True
+
+    if is_valid_scatter:
         data = XyChartData()
         series_title = f"{shorten_metric_title(plan.y_metric)} vs {shorten_metric_title(plan.x_metric)}"
         series = data.add_series(series_title)
@@ -1278,16 +1355,17 @@ def _add_native_chart(
             "area": XL_CHART_TYPE.AREA,
             "pie": XL_CHART_TYPE.PIE,
             "horizontal_bar": XL_CHART_TYPE.BAR_CLUSTERED,
-        }.get(plan.chart_type, XL_CHART_TYPE.COLUMN_CLUSTERED)
+        }.get(plan.chart_type if plan.chart_type != "scatter" else "line", XL_CHART_TYPE.COLUMN_CLUSTERED)
         chart = slide.shapes.add_chart(chart_type, chart_left, chart_top, chart_width, chart_height, data).chart
 
     chart.has_title = False
     _normalize_axis_ids(chart)
     chart.has_legend = len(getattr(chart, "series", [])) > 1
     if chart.has_legend:
-        chart.legend.position = XL_LEGEND_POSITION.BOTTOM
+        # Position legend at TOP so it never collides with panel footers or explanatory text
+        chart.legend.position = XL_LEGEND_POSITION.TOP
         chart.legend.font.name = FONT
-        chart.legend.font.size = Pt(9 if compact else 11)
+        chart.legend.font.size = Pt(8.0 if (compact or chart_width < 5.5) else 9.5)
     chart.chart_style = 10
     for series_index, series in enumerate(chart.series):
         color = CHART_PALETTE[series_index % len(CHART_PALETTE)]

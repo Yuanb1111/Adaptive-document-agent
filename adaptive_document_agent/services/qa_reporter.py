@@ -442,17 +442,30 @@ def run_comprehensive_qa(result: PipelineResult, auto_repair: bool = True) -> QA
                         if mismatched:
                             report.critical_errors.append(
                                 QAItem(
-                                    code="chart_topic_mismatch",
-                                    severity="CRITICAL",
-                                    message=(
-                                        f"Chart {cid} on slide {slide.id} contains metrics unrelated to "
-                                        f"the slide topic '{slide.title}': "
-                                        + ", ".join(item.metric_original for item in mismatched)
-                                    ),
-                                    slide_id=slide.id,
-                                    related_ids=[item.id for item in mismatched],
-                                )
+                                code="chart_topic_mismatch",
+                                severity="CRITICAL",
+                                message=(
+                                    f"Chart {cid} on slide {slide.id} contains metrics unrelated to "
+                                    f"the slide topic '{slide.title}': "
+                                    + ", ".join(item.metric_original for item in mismatched)
+                                ),
+                                slide_id=slide.id,
+                                related_ids=[item.id for item in mismatched],
                             )
+                        )
+
+    # 6. PPT layout QA (scatter readability, cramped multi-chart splitting, long paragraph overflow)
+    if result.presentation_plan:
+        from adaptive_document_agent.validation.layout_qa import validate_presentation_layout
+
+        layout_issues = validate_presentation_layout(result, auto_repair=auto_repair)
+        for issue in layout_issues:
+            if issue.severity == "CRITICAL":
+                report.critical_errors.append(issue)
+            elif issue.severity == "WARNING":
+                report.warnings.append(issue)
+            else:
+                report.info.append(issue)
 
     report.is_export_blocked = report.has_critical_errors
     return report

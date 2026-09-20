@@ -26,6 +26,81 @@ from adaptive_document_agent.models import (
 from adaptive_document_agent.utils.ids import stable_id
 
 
+_NUMERIC_CATEGORY_PATTERN = re.compile(r"^\s*[-+]?(?:\d{1,3}(?:,\d{3})*|\d+)(?:\.\d+)?\s*$")
+
+
+def is_valid_scatter_candidate(
+    task: AnalysisTask,
+    observations: list[Observation],
+    x_metric: str | None = None,
+    y_metric: str | None = None,
+) -> bool:
+    """Validate that scatter charts are only used for genuine continuous relationships.
+
+    Requirements:
+    - x-axis and y-axis are clearly meaningful numeric variables (not arbitrary numbers/codes).
+    - Both axes have explicit labels.
+    - The relationship between them is explicitly explained.
+    - Not arbitrary numeric categories (such as 70.901, 131.843, etc.).
+    - Fallback to line, bar, or table if continuous relationship is not well-defined.
+    """
+    x_m = x_metric or (task.required_metrics[0] if task.required_metrics else None)
+    y_m = y_metric or (task.required_metrics[1] if len(task.required_metrics) > 1 else None)
+    if not x_m or not y_m:
+        return False
+    if x_m.strip().casefold() == y_m.strip().casefold():
+        return False
+
+    # Reject arbitrary numeric literals, ratios, or table coordinates for metric names
+    if _NUMERIC_CATEGORY_PATTERN.match(x_m) or _NUMERIC_CATEGORY_PATTERN.match(y_m):
+        return False
+
+    # Must contain alphabetic characters indicating a genuine metric name
+    if not re.search(r"[A-Za-z\u4e00-\u9fa5]", x_m) or not re.search(r"[A-Za-z\u4e00-\u9fa5]", y_m):
+        return False
+
+    # Explicit labels check
+    x_title = ChartPlanner._x_title(task, observations)
+    y_title = ChartPlanner._y_title(task, observations)
+    if not x_title or not y_title:
+        return False
+    if x_title.casefold() in {"category", "unknown", "first metric"} or y_title.casefold() in {"unknown"}:
+        return False
+    if _NUMERIC_CATEGORY_PATTERN.match(x_title) or _NUMERIC_CATEGORY_PATTERN.match(y_title):
+        return False
+
+    # Check that relationship is explicitly explained
+    task_desc = getattr(task, "description", "") or getattr(task, "question", "")
+    task_reason = getattr(task, "reason", "")
+    explanation = f"{task_desc} {task_reason}".strip()
+    if len(explanation) < 8:
+        return False
+    has_rel_word = bool(
+        re.search(r"(?i)\b(correlat|relationship|versus|vs\.?|against|impact|depend|link|interact|trend)\b", explanation)
+    )
+    has_metrics = (x_m.casefold() in explanation.casefold()) or (y_m.casefold() in explanation.casefold())
+    if not (has_rel_word or has_metrics):
+        return False
+
+    # Pairs check
+    pairs = paired_observations(observations, x_m, y_m)
+    if len(pairs) < 5:
+        return False
+
+    x_vals = [float(p[0].value) for p in pairs if p[0].value is not None]
+    y_vals = [float(p[1].value) for p in pairs if p[1].value is not None]
+    if len(set(x_vals)) < 3 or len(set(y_vals)) < 3:
+        return False
+
+    # Check for arbitrary numeric categories in observations
+    for left, right in pairs:
+        for dim_val in (*left.dimensions.values(), *right.dimensions.values()):
+            if isinstance(dim_val, str) and _NUMERIC_CATEGORY_PATTERN.match(dim_val) and "." in dim_val:
+                return False
+
+    return True
+
+
 class ChartPlanner:
     _MAPPING = {
         "linear_trend": "line",
@@ -86,13 +161,21 @@ class ChartPlanner:
             y_metric = task.required_metrics[1] if len(task.required_metrics) > 1 else x_metric
 
             if supported_type == "scatter":
-                if not x_metric or not y_metric:
-                    continue
-                pairs = paired_observations(observations, x_metric, y_metric)
-                if len(pairs) < 5:
-                    continue
-                observations = [item for pair in pairs for item in pair]
-                identifiers = [item.id for item in observations]
+                if not x_metric or not y_metric or not is_valid_scatter_candidate(task, observations, x_metric, y_metric):
+                    # Fallback: do not use scatter for arbitrary numeric categories or ill-defined relationships
+                    distinct_periods = {item.period for item in observations if item.period}
+                    if len(distinct_periods) >= 2:
+                        coherent_series = best_period_series(observations)
+                        if len(coherent_series) < 2:
+                            continue
+                        observations = coherent_series
+                    identifiers = [item.id for item in observations]
+                else:
+                    pairs = paired_observations(observations, x_metric, y_metric)
+                    if len(pairs) < 5:
+                        continue
+                    observations = [item for pair in pairs for item in pair]
+                    identifiers = [item.id for item in observations]
             else:
                 distinct_periods = {item.period for item in observations if item.period}
                 if len(distinct_periods) >= 2:
@@ -347,7 +430,15 @@ class ChartPlanner:
     ) -> ChartType:
         """Choose the most truthful view, then balance equally valid period charts."""
         if task.analysis_type in {"pearson_correlation", "spearman_correlation"}:
-            return "scatter"
+            x_m = task.required_metrics[0] if task.required_metrics else None
+            y_m = task.required_metrics[1] if len(task.required_metrics) > 1 else None
+            if is_valid_scatter_candidate(task, observations, x_m, y_m):
+                return "scatter"
+            # Fallback to line, bar, or table if continuous relationship is not well-defined
+            periods = {item.period for item in observations if item.period}
+            if len(periods) >= 2:
+                return self._select_period_chart_type(observations, chart_type_counts)
+            return self._category_chart_type(task, observations)
         if task.analysis_type == "contribution_share":
             if self._is_complete_share(observations):
                 return "pie"
@@ -404,7 +495,14 @@ class ChartPlanner:
     @staticmethod
     def _available_types(task: AnalysisTask, observations: list[Observation]) -> list[ChartType]:
         if task.analysis_type in {"pearson_correlation", "spearman_correlation"}:
-            return ["scatter", "table"]
+            x_m = task.required_metrics[0] if task.required_metrics else None
+            y_m = task.required_metrics[1] if len(task.required_metrics) > 1 else None
+            if is_valid_scatter_candidate(task, observations, x_m, y_m):
+                return ["scatter", "table"]
+            periods = {item.period for item in observations if item.period}
+            if len(periods) >= 2:
+                return ["line", "bar", "table"]
+            return ["bar", "horizontal_bar", "table"]
         if task.analysis_type in {"rank_values", "compare_categories"}:
             return ["bar", "horizontal_bar", "table"]
         if task.analysis_type == "contribution_share":
@@ -423,6 +521,14 @@ class ChartPlanner:
         if any(item.period for item in observations):
             return "Period"
         return "Category"
+
+    @staticmethod
+    def _y_title(task: AnalysisTask, observations: list[Observation]) -> str:
+        if len(task.required_metrics) > 1:
+            return task.required_metrics[1].replace("_", " ").title()
+        if observations:
+            return (observations[0].metric_original or observations[0].canonical_name or "Value").replace("_", " ").title()
+        return "Value"
 
     @staticmethod
     def _metric_title(metric: str | None, observations: list[Observation]) -> str:

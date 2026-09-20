@@ -63,6 +63,8 @@ class CompanyProfile(BaseModel):
     geographies: list[str] = Field(default_factory=list, max_length=6)
     business_model: str = ""
     customer_types: list[str] = Field(default_factory=list, max_length=6)
+    market_position: str = ""
+    listing_facts: list[str] = Field(default_factory=list, max_length=6)
     identity_state: Literal["UNRESOLVED", "PARTIALLY_RESOLVED", "RESOLVED"] = "UNRESOLVED"
     key_facts: list[CompanyFact] = Field(default_factory=list, max_length=8)
     source_pages: list[int] = Field(default_factory=list)
