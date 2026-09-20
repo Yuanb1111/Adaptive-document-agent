@@ -20,6 +20,7 @@ from adaptive_document_agent.validation.claim_validator import (
     MetricSemanticFamily,
     classify_metric_semantic_family,
     is_deficit_or_net_liability_metric,
+    is_expense_metric,
 )
 
 
@@ -72,6 +73,7 @@ class FinancialMovementFormatter:
         raw_unit: str | None = None,
         unit_family: str = "generic",
         include_metric_name: bool = True,
+        values: list[float] | None = None,
     ) -> str:
         """Generate standardized institutional movement text for a metric between two values."""
         clean_name = shorten_metric_title(metric_name)
@@ -90,7 +92,7 @@ class FinancialMovementFormatter:
             return f"{prefix}{diff:+.2f}x"
 
         # 1. EXPENSE Family
-        if family == MetricSemanticFamily.EXPENSE:
+        if family == MetricSemanticFamily.EXPENSE or is_expense_metric(clean_name, canonical_name):
             start_mag = abs(start_val)
             end_mag = abs(end_val)
             diff = abs(end_mag - start_mag)
@@ -220,6 +222,9 @@ class FinancialMovementFormatter:
         if family == MetricSemanticFamily.RATIO or unit_family == "percentage" or "%" in (unit or ""):
             diff = end_val - start_val
             is_margin = any(k in lower_name for k in ("margin", "毛利", "净利", "利润率"))
+            if values and len(values) >= 3 and end_val < start_val and values[-1] > min(values):
+                direction_str = "contracted overall" if is_margin else "declined overall"
+                return f"{prefix}{direction_str} by {abs(diff):.1f} pp, with a partial rebound in the final period"
             if is_margin:
                 verb = "expanded" if diff >= 0 else "contracted"
             else:

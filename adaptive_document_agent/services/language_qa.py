@@ -240,22 +240,44 @@ def polish_slide_title(title: str) -> str:
 
     Avoids awkward machine-assembled titles such as:
     'Net Widened From FY2020 to FY2022 and Trajectory' -> 'Net Loss Widened Across FY2020–FY2022'
+    'R&D Expenses Held Broadly Flat Before Rising in Trajectory' -> 'R&D Expenses Held Broadly Flat Before Rising'
+    'Selling and Marketing Expenses Rose, With Trajectory' -> 'Selling and Marketing Expenses Rose'
+    'Robot Lawn Mowers Became a Material Revenue Trajectory' -> 'Robot Lawn Mowers Became a Material Revenue Driver'
     """
     if not title:
         return ""
     t = " ".join(title.strip().split())
 
-    # Remove redundant 'and Trajectory' or trailing 'Trajectory' when a trend verb is already present
+    # Replace awkward noun substitutions like "Material Revenue Trajectory" -> "Material Revenue Driver"
+    t = re.sub(r"(?i)\bmaterial\s+revenue\s+trajectory\b", "Material Revenue Driver", t)
+
+    # Remove redundant prepositions before Trajectory (e.g. ', With Trajectory', ' in Trajectory', ' and Trajectory')
+    t = re.sub(r"(?i)[,\s]+(?:with|in|of|and)\s+trajectory\b", "", t).strip()
     t = re.sub(r"(?i)\s+and\s+trajectory\b", "", t).strip()
-    trend_words = ("widened", "narrowed", "increased", "decreased", "grew", "contracted", "turned", "swung")
-    if any(w in t.casefold() for w in trend_words):
+
+    # Remove trailing Trajectory if title already contains analytical verbs or is a descriptive clause (> 3 words)
+    trend_verbs = (
+        "widened", "narrowed", "increased", "decreased", "grew", "contracted",
+        "turned", "swung", "rose", "fell", "held", "became", "expanded",
+        "surged", "dropped", "declined", "rebounded", "recovered", "rising", "falling",
+    )
+    if any(w in t.casefold() for w in trend_verbs) or len(t.split()) > 3:
         t = re.sub(r"(?i)\s+trajectory\b", "", t).strip()
+
+    # Strip any dangling prepositions/conjunctions left at the end of the title
+    t = re.sub(r"(?i)[,\s]+(?:with|in|of|and|as|at|before|from|to)$", "", t).strip(" ,:;-")
 
     # Expand solitary 'Net' before trend verb to 'Net Loss' or 'Net Profit'
     t = re.sub(r"(?i)^Net\s+(widened|narrowed)\b", r"Net Loss \1", t)
-    t = re.sub(r"(?i)^Net\s+(increased|decreased|grew)\b", r"Net Profit \1", t)
+    t = re.sub(r"(?i)^Net\s+(increased|decreased|grew|rose)\b", r"Net Profit \1", t)
 
     # Clean awkward 'From ... to ...' phrasing into professional range
     t = re.sub(r"(?i)\bfrom\s+(FY\d{4}|20\d{2})\s+to\s+(FY\d{4}|20\d{2})\b", r"Across \1–\2", t)
+
+    # Limit to natural titles under 15 words
+    words = t.split()
+    if len(words) > 15:
+        t = " ".join(words[:14]).strip(" ,:;-")
+        t = re.sub(r"(?i)[,\s]+(?:with|in|of|and|as|at|before|from|to)$", "", t).strip(" ,:;-")
 
     return t

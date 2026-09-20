@@ -100,13 +100,24 @@ class PresentationPlanRepairer:
                 source_pages = sorted(set(slide.source_pages) & valid_pages)
 
             title = slide.title.strip() or self._default_title(slide.slide_type, ordinal)
+            from adaptive_document_agent.services.language_qa import polish_slide_title
+
             if slide.slide_type == "analysis":
                 title = re.sub(r"(?i)^(?:add|less|plus|minus)\s*[:\-\u2013\u2014]\s*", "", title)
                 title = re.sub(r"(?i)^(?:adjustments?|reconciliation|sub-?total|total)\s*[:\-\u2013\u2014]\s*", "", title)
                 title = " ".join(title.split()).strip(" :;,-")
                 if len(title) > 65 and not any(w in title.casefold() for w in ("trajectory", "trend", "movement", "growth", "performance", "increased", "decreased", "stable")):
-                    title = sanitize_metric_for_title(title, max_length=48)
-                    title = f"{title} Trajectory"
+                    title = sanitize_metric_for_title(title, max_length=55)
+            elif slide.slide_type == "appendix":
+                if any(w in title.casefold() for w in ("offering", "proceeds")):
+                    has_offering = any("offering" in (o.metric_canonical or o.metric_original).casefold() or "proceeds" in (o.metric_canonical or o.metric_original).casefold() for o in observations.values())
+                    if not has_offering:
+                        title = "Key Data Appendix"
+                if any(w in (slide.section_title or "").casefold() for w in ("offering", "proceeds")):
+                    has_offering = any("offering" in (o.metric_canonical or o.metric_original).casefold() or "proceeds" in (o.metric_canonical or o.metric_original).casefold() for o in observations.values())
+                    if not has_offering:
+                        slide.section_title = "Appendix"
+            title = polish_slide_title(title)
             message = slide.message.strip()
             bullets = [item.strip() for item in slide.bullets if item.strip()]
 
@@ -290,7 +301,7 @@ class PresentationPlanRepairer:
                 ]
                 clean_title = sanitize_metric_for_title(re.sub(r"(?i)\s+and\s+related\s+measures\b", "", group_title).strip(), max_length=48)
                 clean_title = re.sub(r"(?i)\s+analysis\b", "", clean_title).strip()
-                slide_title = f"{clean_title} Trajectory" if not any(w in clean_title.casefold() for w in ("trajectory", "trend", "movement", "growth", "performance")) else clean_title
+                slide_title = polish_slide_title(clean_title if len(clean_title.split()) >= 2 else f"{clean_title} Overview")
                 backfilled_slides.append(
                     PresentationSlide(
                         id=f"slide_analysis_{g_idx}",
@@ -332,7 +343,7 @@ class PresentationPlanRepairer:
                     ]
                     clean_title2 = sanitize_metric_for_title(re.sub(r"(?i)\s+and\s+related\s+measures\b", "", group_title).strip(), max_length=48)
                     clean_title2 = re.sub(r"(?i)\s+analysis\b", "", clean_title2).strip()
-                    slide_title2 = f"{clean_title2} Trajectory" if not any(w in clean_title2.casefold() for w in ("trajectory", "trend", "movement", "growth", "performance")) else clean_title2
+                    slide_title2 = polish_slide_title(clean_title2 if len(clean_title2.split()) >= 2 else f"{clean_title2} Overview")
                     repaired_slides.append(
                         PresentationSlide(
                             id=f"slide_analysis_{g_idx}",

@@ -122,7 +122,9 @@ class FinancialNormalizer:
         """Deterministically normalize an Observation in-place and return it."""
         from adaptive_document_agent.document_model.metric_semantic_classifier import (
             classify_metric,
+            is_days_metric,
             is_financial_statement_metric,
+            is_margin_metric,
             is_multiple_metric,
             sanitize_metric_label,
         )
@@ -147,25 +149,37 @@ class FinancialNormalizer:
                 obs.metric_canonical = f"{adj_prefix}{metric_canon}"
 
         # 3. Unit and Currency Inference (never leave as 'unknown' for obvious metrics)
-        lower_metric = metric_orig.casefold()
+        lower_metric = f"{metric_orig} {metric_canon}".strip().casefold()
         current_unit = (obs.unit or "").strip().casefold()
 
-        if current_unit in {"", "unknown", "none", "null"} or obs.unit is None:
-            if any(k in lower_metric for k in _DAYS_METRIC_KEYWORDS) or "days" in lower_metric:
-                obs.unit = "days"
-                obs.unit_family = "days"
-                obs.display_unit = "days"
-                obs.semantic_type = "days"
-            elif any(k in lower_metric for k in _MULTIPLE_METRIC_KEYWORDS) or is_multiple_metric(lower_metric):
-                obs.unit = "multiple"
-                obs.unit_family = "multiple"
-                obs.display_unit = "x"
-                obs.semantic_type = "multiple"
-            elif any(k in lower_metric for k in ("margin", "%", "share of", "ratio", "proportion", "growth rate", "cagr", "rate")):
+        if is_days_metric(lower_metric) or any(k in lower_metric for k in _DAYS_METRIC_KEYWORDS):
+            obs.unit = "days"
+            obs.unit_family = "days"
+            obs.display_unit = "days"
+            obs.semantic_type = "days"
+            obs.currency = None
+        elif is_multiple_metric(lower_metric) or any(k in lower_metric for k in _MULTIPLE_METRIC_KEYWORDS):
+            obs.unit = "multiple"
+            obs.unit_family = "multiple"
+            obs.display_unit = "x"
+            obs.semantic_type = "multiple"
+            obs.currency = None
+        elif is_margin_metric(lower_metric):
+            obs.unit = "percent"
+            obs.unit_family = "percentage"
+            obs.display_unit = "%"
+            obs.semantic_type = "margin"
+            obs.currency = None
+            if obs.value is not None and abs(obs.value) > 1000.0 and hasattr(obs, "unit_scale") and (obs.unit_scale or 1.0) > 1.0:
+                obs.value = clean_float_artifacts(obs.value / obs.unit_scale)
+                obs.unit_scale = 1.0
+        elif current_unit in {"", "unknown", "none", "null"} or obs.unit is None:
+            if any(k in lower_metric for k in ("margin", "%", "share of", "ratio", "proportion", "growth rate", "cagr", "rate")):
                 obs.unit = "percent"
                 obs.unit_family = "percentage"
                 obs.display_unit = "%"
                 obs.semantic_type = "margin" if "margin" in lower_metric or "利润率" in lower_metric else "ratio_share"
+                obs.currency = None
             elif is_financial_statement_metric(lower_metric):
                 obs.unit = "currency"
                 obs.unit_family = "currency"
@@ -180,6 +194,11 @@ class FinancialNormalizer:
                     obs.unit_family = sem.unit_family
                     obs.display_unit = sem.display_unit
                     obs.semantic_type = sem.semantic_type
+                elif is_days_metric(metric_orig):
+                    obs.unit = "days"
+                    obs.unit_family = "days"
+                    obs.display_unit = "days"
+                    obs.semantic_type = "days"
 
         # Normalize currency symbol
         if obs.unit_family == "percentage" or obs.unit == "percent":

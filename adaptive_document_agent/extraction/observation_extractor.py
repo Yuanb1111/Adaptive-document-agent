@@ -5,7 +5,9 @@ import re
 from adaptive_document_agent.document_model.metric_semantic_classifier import (
     classify_metric,
     format_metric_display_value,
+    is_days_metric,
     is_financial_statement_metric,
+    is_margin_metric,
     is_multiple_metric,
     sanitize_metric_label,
 )
@@ -188,15 +190,21 @@ class ObservationExtractor:
             semantic_type = "multiple"
             unit_family = "multiple"
             display_unit = "x"
-        elif col_type == "percentage" or ("%" in header_lower and not is_nonsensical_pct_header) or (dimensions and dimensions.get("column_role") == "percentage"):
+        elif is_margin_metric(metric) or col_type == "percentage" or ("%" in header_lower and not is_nonsensical_pct_header) or (dimensions and dimensions.get("column_role") == "percentage"):
             unit, currency, scale = "percent", None, 1.0
             value = number.value
-            semantic_type = "margin" if "margin" in metric.casefold() or "利润率" in metric else "ratio_share"
+            semantic_type = "margin" if (is_margin_metric(metric) or "margin" in metric.casefold() or "利润率" in metric) else "ratio_share"
             unit_family = "percentage"
             display_unit = "%"
             if value is not None and (value > 1000.0 or value < -1000.0):
                 validation_status = "suspicious_alignment"
                 anomaly_notes.append(f"Implausible percentage value {value}% in column '{column_label}'")
+        elif is_days_metric(metric) or col_type == "days":
+            unit, currency, scale = "days", None, 1.0
+            value = number.value
+            semantic_type = "days"
+            unit_family = "days"
+            display_unit = "days"
         elif col_type == "amount":
             unit = "currency"
             currency = (table.column_currencies[column] if column is not None and column < len(table.column_currencies) and table.column_currencies[column] else None) or table.default_currency
@@ -208,12 +216,6 @@ class ObservationExtractor:
             if "%" in raw:
                 validation_status = "suspicious_alignment"
                 anomaly_notes.append(f"Amount column contains explicit '%' in raw cell: '{raw}'")
-        elif col_type == "days":
-            unit, currency, scale = "days", None, 1.0
-            value = number.value
-            semantic_type = "days"
-            unit_family = "days"
-            display_unit = "days"
         elif col_type == "count" and not is_financial_statement_metric(metric):
             unit, currency, scale = "count", None, 1.0
             value = number.value

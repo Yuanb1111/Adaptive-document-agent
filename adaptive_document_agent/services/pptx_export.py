@@ -23,7 +23,9 @@ from adaptive_document_agent.document_model.metric_semantic_classifier import (
     classify_metric,
     format_metric_change,
     format_metric_display_value,
+    is_days_metric,
     is_financial_statement_metric,
+    is_margin_metric,
     sanitize_metric_label,
 )
 from adaptive_document_agent.document_model.period_semantic_validator import (
@@ -1619,6 +1621,15 @@ def _add_evidence_table_slides(
     from pptx.util import Inches
 
     observations = _appendix_observations(result, charts)
+    # Realign title if mislabeled with offering/proceeds without offering data
+    is_offering_title = any(w in title.casefold() for w in ("offering", "proceeds"))
+    has_offering_data = any(
+        "offering" in display_metric_name(o).casefold() or "proceeds" in display_metric_name(o).casefold()
+        for o in (observations or result.observations)
+    )
+    if is_offering_title and not has_offering_data:
+        title = "Key data appendix"
+
     if not observations:
         slide = _base_slide(presentation, title, subtitle or "Source-grounded evidence base")
         content_top, content_h = _content_zone(slide)
@@ -2415,8 +2426,10 @@ def _unit_label(observations: list[Observation], scale_label: str) -> str:
     families = {getattr(item, "unit_family", None) for item in observations}
     if "multiple" in units or "multiple" in families:
         return "x"
-    if "percent" in units or "percentage" in families:
+    if "percent" in units or "percentage" in families or any(is_margin_metric(display_metric_name(item)) for item in observations):
         return "%"
+    if "days" in units or "days" in families or any(is_days_metric(display_metric_name(item)) for item in observations):
+        return "days"
     is_financial = any(
         is_financial_statement_metric(display_metric_name(item))
         or getattr(item, "is_currency", False)
@@ -2433,28 +2446,42 @@ def _unit_label(observations: list[Observation], scale_label: str) -> str:
         return f"{base} {scale_label}" if scale_label else base
     if raw_units:
         return normalize_raw_unit(next(iter(raw_units)))
+    for item in observations:
+        disp_u = getattr(item, "display_unit", None)
+        if disp_u and disp_u not in ("unknown", "none", "null", ""):
+            return disp_u
     if is_financial:
-        return scale_label or "unknown"
-    return scale_label or "unknown"
+        return scale_label or "RMB"
+    return scale_label or ""
 
 
 def _display_source_unit(item: Observation) -> str:
-    semantic = classify_metric(display_metric_name(item), value=item.value, raw_unit=item.raw_unit, unit=item.unit)
+    metric_name = display_metric_name(item)
+    if is_days_metric(metric_name) or item.unit == "days" or getattr(item, "unit_family", "") == "days":
+        return "days"
+    if is_margin_metric(metric_name) or item.unit == "percent" or getattr(item, "unit_family", "") == "percentage":
+        return "%"
+    semantic = classify_metric(metric_name, value=item.value, raw_unit=item.raw_unit, unit=item.unit)
     if semantic.is_multiple:
         return "x"
     if semantic.is_percentage:
         return "%"
-    is_financial = semantic.is_currency or is_financial_statement_metric(display_metric_name(item))
+    if semantic.unit_family == "days" or is_days_metric(metric_name):
+        return "days"
+    is_financial = semantic.is_currency or is_financial_statement_metric(metric_name)
     if (semantic.is_volume or semantic.unit_family == "count") and not is_financial:
         return "units"
     if is_financial:
         curr = item.currency or (item.raw_unit if item.raw_unit and item.raw_unit != "units" else None)
         if curr:
             return normalize_raw_unit(curr, default_currency=item.currency or "RMB")
-        return "unknown"
+        return item.currency or "RMB"
     value = item.raw_unit or _unit_label([item], "")
-    if value == "units":
-        return "unknown"
+    if not value or value in ("units", "unknown"):
+        disp = getattr(item, "display_unit", None)
+        if disp and disp not in ("unknown", "none", "null", ""):
+            return disp
+        return "units" if (semantic.is_volume or semantic.unit_family == "count") else ""
     return normalize_raw_unit(value, default_currency=item.currency or "RMB")
 
 

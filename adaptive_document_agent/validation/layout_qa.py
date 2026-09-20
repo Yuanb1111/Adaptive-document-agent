@@ -243,9 +243,10 @@ def validate_presentation_layout(
         )
         if has_raw_prefix or is_overly_long:
             if auto_repair:
-                clean_t = sanitize_metric_for_title(title, max_length=48)
-                if not any(w in clean_t.casefold() for w in ("trajectory", "trend", "movement", "growth", "performance")):
-                    clean_t = f"{clean_t} Trajectory"
+                from adaptive_document_agent.services.language_qa import polish_slide_title
+
+                clean_t = sanitize_metric_for_title(title, max_length=50)
+                clean_t = polish_slide_title(clean_t if len(clean_t.split()) >= 2 else f"{clean_t} Overview")
                 slide.title = clean_t
                 issues.append(
                     QAItem(

@@ -24,7 +24,13 @@ Use section_id and a concise section_title to group slides into chapters. The co
 Use slide_role to distinguish overview, deep_dive, drivers, watch_items, risk, methodology, and source_data pages. A strong topic may receive an overview plus one or more evidence-supported deep dives.
 Each analysis slide must communicate one message. Every analytical slide title must state the main supported takeaway or movement (e.g. "Current Ratio Declined from 0.4x to 0.2x", "Cash Balances Fell to RMB70m by August 2025", "Inventories Declined Before Partially Rebounding"). Never use generic titles like "Unaudited analysis", "NET CURRENT LIABILITIES analysis", "Trend and related measures analysis", or "[Metric] analysis". The subtitle should explain scope/definition/period, not repeat generic template language.
 Avoid system phrases such as "calculated trend", "supplied observation", "presentation plan", "retained fact", "extracted observation", "parser", "JSON", and "source-only" in audience-facing titles or copy.
-Avoid mathematically confusing negative wording: for liabilities, use "widened" or "narrowed" (e.g. "Net current liabilities widened from RMB1.10bn to RMB1.72bn"); for negative EBITDA/losses, state "loss narrowed" or "loss widened" (e.g. "Adjusted EBITDA loss narrowed from RMB683m to RMB25m").
+Avoid mathematically confusing negative wording:
+- For expenses (R&D, Selling & Marketing, G&A, Cost of Sales, other expenses) stored as negative accounting figures (e.g. -95.9 -> -121.1): interpret expense magnitude correctly (larger absolute negative = expenses increased/rose; smaller absolute negative = expenses decreased/declined). Never say expenses decreased when absolute spending increased!
+- For liabilities and deficits, use "widened" or "narrowed" (e.g. "Net current liabilities widened from RMB1.10bn to RMB1.72bn").
+- For negative EBITDA / losses, state "loss narrowed" or "loss widened" (e.g. "Adjusted EBITDA loss narrowed from RMB683m to RMB25m").
+- For series with net decline and intermediate recovery (e.g. 14.8% -> 7.9% -> 9.3%), describe as "declined overall, with a partial rebound in the final year/period", never "increased overall".
+- Title wording: Write natural, concise slide titles under 15 words. Never mechanically append "Trajectory", "in Trajectory", or ", With Trajectory" to titles.
+- Appendix titles must reflect actual content: never title a financial appendix "Offering and Use of Proceeds Detail" when no offering/proceeds observations exist; use "Key Data Appendix" or "Financial Performance Appendix".
 
 Prefer multiple related evidence blocks on one slide when they support one message (One slide = one message):
 - Group related metrics:

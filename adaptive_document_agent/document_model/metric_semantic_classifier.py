@@ -349,7 +349,7 @@ def classify_metric(
         )
 
     # 5. Explicit Margin metrics (Gross margin, Operating margin, etc.)
-    if any(k in lower for k in _MARGIN_KEYWORDS):
+    if is_margin_metric(clean):
         return MetricSemantic(
             metric_type="percentage",
             unit_family="percentage",
@@ -463,6 +463,20 @@ def is_currency_metric(name: str) -> bool:
 
 def is_percentage_metric(name: str) -> bool:
     return classify_metric(name).is_percentage
+
+
+def is_margin_metric(name: str) -> bool:
+    if not name:
+        return False
+    lower = name.strip().casefold()
+    return any(k in lower for k in _MARGIN_KEYWORDS) or "margin" in lower or "利润率" in lower or "毛利率" in lower or "净利率" in lower
+
+
+def is_days_metric(name: str) -> bool:
+    if not name:
+        return False
+    lower = name.strip().casefold()
+    return any(k in lower for k in _DAYS_KEYWORDS) or "turnover days" in lower or lower.endswith(" days") or "周转天数" in lower or "天数" in lower
 
 
 def is_multiple_metric(name: str) -> bool:

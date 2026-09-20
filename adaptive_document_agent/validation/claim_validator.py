@@ -97,6 +97,8 @@ class DirectionalClaimIssue(ValidationIssue):
     period_basis: str = ""
     is_mixed_period_repair: bool = False
     supported_period_text: str = ""
+    has_rebound: bool = False
+    has_intermediate_decline: bool = False
 
 
 def observation_series_partition_key(obs: Observation) -> tuple:
@@ -338,26 +340,47 @@ def classify_metric_semantic_family(
     # 3. EXPENSE (costs, expenses, R&D, D&A, finance costs)
     expense_indicators = (
         "expense",
+        "expenses",
+        "cost of sales",
+        "cost of revenue",
+        "cost of goods",
+        "cost of service",
         "cost of",
         "operating cost",
+        "operating expense",
+        "operating expenses",
         "r&d",
         "research and development",
+        "selling and marketing",
+        "selling & marketing",
         "selling",
+        "marketing",
+        "distribution",
         "administrative",
+        "general and administrative",
+        "g&a",
+        "sg&a",
         "depreciation",
         "amortization",
         "impairment",
         "credit loss",
         "staff cost",
+        "staff costs",
         "employee benefit",
         "finance cost",
+        "finance costs",
+        "finance expense",
+        "finance expenses",
         "tax expense",
         "taxation",
         "费用",
         "营业成本",
+        "销售成本",
         "研发费用",
         "管理费用",
         "销售费用",
+        "销售及营销费用",
+        "销售及分销费用",
         "财务费用",
     )
     if any(p in name_normalized for p in expense_indicators) or re.search(r"\bcosts?\b", name_normalized) or re.search(r"\bexpenses?\b", name_normalized):
@@ -415,6 +438,14 @@ def classify_metric_semantic_family(
         return MetricSemanticFamily.BALANCE_SHEET
 
     return MetricSemanticFamily.GENERIC
+
+
+def is_expense_metric(
+    metric_name: str,
+    canonical_name: str | None = None,
+) -> bool:
+    """Classify whether a metric belongs to the EXPENSE semantic family."""
+    return classify_metric_semantic_family(metric_name, canonical_name=canonical_name) == MetricSemanticFamily.EXPENSE
 
 
 def is_deficit_or_net_liability_metric(
@@ -1429,9 +1460,16 @@ class ClaimValidator:
                 for oid in getattr(block, "observation_ids", []):
                     if oid in obs_by_id and obs_by_id[oid] not in slide_obs:
                         slide_obs.append(obs_by_id[oid])
+            for chart in getattr(slide, "charts", []):
+                for oid in getattr(chart, "observation_ids", []):
+                    if oid in obs_by_id and obs_by_id[oid] not in slide_obs:
+                        slide_obs.append(obs_by_id[oid])
 
-            # 2. Remove global observation fallback:
-            # If a slide has no linked observations, skip numeric directional validation
+            # For executive summary, synthesize whole document observations
+            if slide.slide_type in ("executive_summary", "summary") and not slide_obs:
+                slide_obs = list(observations)
+
+            # 2. If a slide has no linked observations, skip numeric directional validation
             if not slide_obs:
                 continue
 
@@ -1831,7 +1869,6 @@ class ClaimValidator:
                                 is_exempt = (
                                     _NON_MONOTONIC_BEFORE_PATTERN.search(clause_lower) is not None
                                     or _NON_MONOTONIC_DECLINE_THEN_RECOVER.search(clause_lower) is not None
-                                    or (non_monotonic.get("had_rebound") and _NON_MONOTONIC_REBOUND_PATTERN.search(clause_lower) is not None)
                                 )
                                 if is_exempt:
                                     continue
@@ -1875,6 +1912,8 @@ class ClaimValidator:
                                     start_period=info["start_period"],
                                     end_period=info["end_period"],
                                     period_basis=info["period_basis"],
+                                    has_rebound=bool(non_monotonic.get("had_rebound")),
+                                    has_intermediate_decline=bool(non_monotonic.get("had_intermediate_decline")),
                                 )
                             )
 
@@ -1935,7 +1974,10 @@ def apply_structured_issue_replacement(text: str, issue: DirectionalClaimIssue) 
         else:
             replacement = _STANDARD_INCREASE_REPLACEMENTS.get(offending.casefold(), "increased")
     elif state == TrendState.DECREASED.value:
-        if family == MetricSemanticFamily.EXPENSE.value:
+        if getattr(issue, "has_rebound", False):
+            period_label = "period" if any(k in (issue.end_period or "") for k in ("6M", "3M", "Q", "H", "interim")) else "year"
+            replacement = f"declined overall, with a partial rebound in the final {period_label}"
+        elif family == MetricSemanticFamily.EXPENSE.value:
             replacement = _EXPENSE_DECREASE_REPLACEMENTS.get(offending.casefold(), "decreased")
         else:
             replacement = _STANDARD_DECREASE_REPLACEMENTS.get(offending.casefold(), "decreased")

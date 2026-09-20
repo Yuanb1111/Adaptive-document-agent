@@ -96,7 +96,9 @@ class PresentationPlanRecovery:
             ]
             clean_title = sanitize_metric_for_title(re.sub(r"(?i)\s+and\s+related\s+measures\b", "", group_title).strip(), max_length=48)
             clean_title = re.sub(r"(?i)\s+analysis\b", "", clean_title).strip()
-            slide_title = f"{clean_title} Trajectory" if not any(w in clean_title.casefold() for w in ("trajectory", "trend", "movement", "growth", "performance")) else clean_title
+            from adaptive_document_agent.services.language_qa import polish_slide_title
+
+            slide_title = polish_slide_title(clean_title if len(clean_title.split()) >= 2 else f"{clean_title} Overview")
             slides.append(
                 PresentationSlide(
                     id=f"slide_analysis_{group_index}",

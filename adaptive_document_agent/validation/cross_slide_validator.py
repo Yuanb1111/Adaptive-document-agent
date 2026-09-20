@@ -320,10 +320,18 @@ class CrossSlideValidator:
 
         summary_slide = summaries[0]
 
-        # Extract metric directions established on analysis slides
+        # Extract metric directions established on analysis slides and underlying document observations
+        from collections import defaultdict
+        from adaptive_document_agent.validation.claim_validator import partition_compatible_series
+
         detail_metrics: dict[str, dict[str, Any]] = {}
         for a_slide in analysis_slides:
-            a_obs = [self.obs_by_id[oid] for oid in a_slide.observation_ids if oid in self.obs_by_id]
+            a_obs_ids = list(a_slide.observation_ids)
+            for b in a_slide.visual_blocks:
+                a_obs_ids.extend(b.observation_ids)
+            for c in getattr(a_slide, "charts", []):
+                a_obs_ids.extend(getattr(c, "observation_ids", []))
+            a_obs = [self.obs_by_id[oid] for oid in dict.fromkeys(a_obs_ids) if oid in self.obs_by_id]
             if len(a_obs) < 2:
                 continue
             first = a_obs[0]
@@ -338,58 +346,94 @@ class CrossSlideValidator:
                 "val_end": last.value,
             }
 
-        # Check summary bullets against detailed slide trends
-        clean_summary_bullets: list[str] = []
-        for bullet in summary_slide.bullets:
-            b_lower = bullet.casefold()
-            contradicted = False
+        # Also populate from document-level observations for primary metrics
+        obs_by_metric: dict[str, list[Observation]] = defaultdict(list)
+        for o in self.observations:
+            if o.value is not None and o.period:
+                key = (o.metric_canonical or o.metric_original).strip().casefold()
+                obs_by_metric[key].append(o)
+        for m_name, obs_list in obs_by_metric.items():
+            if m_name not in detail_metrics and len(obs_list) >= 2:
+                series_list = partition_compatible_series(obs_list, m_name)
+                if series_list:
+                    s0 = series_list[0]
+                    detail_metrics[m_name] = {
+                        "slide_id": "document_evidence",
+                        "title": m_name.title(),
+                        "trend": s0["trend_state"],
+                        "val_start": s0["val_start"],
+                        "val_end": s0["val_end"],
+                    }
+
+        # Helper to check and repair a text segment
+        def _check_and_repair_text(text: str, component_name: str) -> tuple[str, list[QAItem]]:
+            c_issues: list[QAItem] = []
+            if not text:
+                return text, c_issues
+            t_lower = text.casefold()
+            repaired_text = text
             for m_name, detail in detail_metrics.items():
-                if m_name in b_lower:
+                m_aliases = [m_name, m_name.replace("_", " "), m_name.replace(" ", "_")]
+                matched = any(a in t_lower for a in m_aliases if len(a) > 2) or (detail["title"] and detail["title"].casefold() in t_lower)
+                if matched:
                     trend = detail["trend"]
                     if trend in (TrendState.INCREASED, TrendState.LOSS_TO_PROFIT):
-                        if any(w in b_lower for w in ("decreased", "declined", "dropped", "fell", "contracted", "swung into loss")):
-                            contradicted = True
+                        if any(w in t_lower for w in ("decreased", "declined", "dropped", "fell", "contracted", "swung into loss")):
                             if auto_repair:
-                                bullet = re.sub(r"(?i)\b(?:decreased|declined|dropped|fell|contracted)\b", "increased", bullet)
-                                bullet = re.sub(r"(?i)\bswung\s+into\s+loss\b", "turned profitable", bullet)
-                                issues.append(_qa_item(
+                                repaired_text = re.sub(r"(?i)\b(?:decreased|declined|dropped|fell|contracted)\b", "increased", repaired_text)
+                                repaired_text = re.sub(r"(?i)\bswung\s+into\s+loss\b", "turned profitable", repaired_text)
+                                c_issues.append(_qa_item(
                                     code="summary_detail_contradiction_repaired",
                                     severity="INFO",
-                                    message=f"Repaired Executive Summary bullet contradiction regarding '{m_name}' to match analysis slide {detail['slide_id']}.",
+                                    message=f"Repaired Executive Summary {component_name} contradiction regarding '{m_name}' to match {detail['slide_id']}.",
                                     slide_id=summary_slide.id,
                                 ))
                             else:
-                                issues.append(_qa_item(
+                                c_issues.append(_qa_item(
                                     code="summary_detail_contradiction",
                                     severity="CRITICAL",
-                                    message=f"Executive Summary contradicts analysis slide {detail['slide_id']} regarding '{m_name}'.",
+                                    message=f"Executive Summary {component_name} contradicts {detail['slide_id']} regarding '{m_name}'.",
                                     slide_id=summary_slide.id,
                                 ))
                     elif trend in (TrendState.DECREASED, TrendState.PROFIT_TO_LOSS, TrendState.LOSS_WIDENED, TrendState.OUTFLOW_INCREASED):
-                        if any(w in b_lower for w in ("increased", "grew", "growth", "expanded", "turned profitable", "narrowed")):
-                            contradicted = True
+                        if any(w in t_lower for w in ("increased", "grew", "growth", "expanded", "turned profitable", "narrowed")):
                             if auto_repair:
                                 if trend == TrendState.LOSS_WIDENED:
-                                    bullet = re.sub(r"(?i)\bnarrowed\b", "widened", bullet)
+                                    repaired_text = re.sub(r"(?i)\bnarrowed\b", "widened", repaired_text)
                                 elif trend == TrendState.OUTFLOW_INCREASED:
-                                    bullet = re.sub(r"(?i)\bnarrowed\b", "increased", bullet)
-
+                                    repaired_text = re.sub(r"(?i)\bnarrowed\b", "increased", repaired_text)
                                 else:
-                                    bullet = re.sub(r"(?i)\b(?:increased|grew|growth|expanded)\b", "decreased", bullet)
-                                issues.append(_qa_item(
+                                    repaired_text = re.sub(r"(?i)\b(?:increased|grew|growth|expanded)\b", "decreased", repaired_text)
+                                c_issues.append(_qa_item(
                                     code="summary_detail_contradiction_repaired",
                                     severity="INFO",
-                                    message=f"Repaired Executive Summary bullet contradiction regarding '{m_name}' to match analysis slide {detail['slide_id']}.",
+                                    message=f"Repaired Executive Summary {component_name} contradiction regarding '{m_name}' to match {detail['slide_id']}.",
                                     slide_id=summary_slide.id,
                                 ))
                             else:
-                                issues.append(_qa_item(
+                                c_issues.append(_qa_item(
                                     code="summary_detail_contradiction",
                                     severity="CRITICAL",
-                                    message=f"Executive Summary contradicts analysis slide {detail['slide_id']} regarding '{m_name}'.",
+                                    message=f"Executive Summary {component_name} contradicts {detail['slide_id']} regarding '{m_name}'.",
                                     slide_id=summary_slide.id,
                                 ))
-            clean_summary_bullets.append(bullet)
+            return repaired_text, c_issues
 
+        # Check and repair summary title and message
+        fixed_title, t_issues = _check_and_repair_text(summary_slide.title, "title")
+        summary_slide.title = fixed_title
+        issues.extend(t_issues)
+
+        fixed_msg, m_issues = _check_and_repair_text(summary_slide.message, "message")
+        summary_slide.message = fixed_msg
+        issues.extend(m_issues)
+
+        # Check and repair summary bullets
+        clean_summary_bullets: list[str] = []
+        for bullet in summary_slide.bullets:
+            fixed_bullet, b_issues = _check_and_repair_text(bullet, "bullet")
+            clean_summary_bullets.append(fixed_bullet)
+            issues.extend(b_issues)
         summary_slide.bullets = clean_summary_bullets
+
         return issues

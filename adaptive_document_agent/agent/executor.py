@@ -66,10 +66,20 @@ class AnalysisExecutor:
             ordered = sorted(observations, key=lambda item: item.period or "")
         else:
             ordered = observations
+        from adaptive_document_agent.validation.claim_validator import is_expense_metric
+
         values = [float(item.value) for item in ordered if item.value is not None]
+        is_exp = any(
+            is_expense_metric(getattr(item, "metric_canonical", "") or getattr(item, "metric_original", ""))
+            for item in ordered
+        )
         if name in {"absolute_change", "percentage_change", "growth_rate"}:
+            if name in {"percentage_change", "growth_rate"} and is_exp:
+                return self.registry.execute(name, start=values[0], end=values[-1], is_expense=True)
             return self.registry.execute(name, start=values[0], end=values[-1])
         if name == "cagr":
+            if is_exp:
+                return self.registry.execute(name, start=values[0], end=values[-1], periods=len(values) - 1, is_expense=True)
             return self.registry.execute(name, start=values[0], end=values[-1], periods=len(values) - 1)
         if name in {"rank_values", "top_n", "bottom_n", "compare_categories"}:
             labels = [next(iter(item.dimensions.values()), item.entity or item.period or item.id) for item in ordered]
