@@ -638,7 +638,7 @@ def test_ambiguous_sign_semantics_blocks_export() -> None:
 def test_regression_operating_cash_flow_outflow_narrowed() -> None:
     """Regression 1: Operating cash flow -100 -> -50:
     - Family: CASH_FLOW
-    - Trend: INCREASED (cash outflow narrowed / value increased)
+    - Trend: OUTFLOW_NARROWED (absolute outflow shrank)
     - NEVER generate 'loss narrowed'
     """
     from adaptive_document_agent.validation.claim_validator import (
@@ -653,7 +653,7 @@ def test_regression_operating_cash_flow_outflow_narrowed() -> None:
     assert family == MetricSemanticFamily.CASH_FLOW
 
     trend = determine_trend_state("Operating cash flow", -100.0, -50.0)
-    assert trend == TrendState.INCREASED
+    assert trend == TrendState.OUTFLOW_NARROWED  # absolute outflow 100 -> 50 = narrowed
     assert trend != TrendState.LOSS_NARROWED
 
     ev = SourceEvidence(page=3, text="-100", extraction_method="digital_table", confidence=0.95)

@@ -373,6 +373,7 @@ class CrossSlideValidator:
                                     bullet = re.sub(r"(?i)\bnarrowed\b", "widened", bullet)
                                 elif trend == TrendState.OUTFLOW_INCREASED:
                                     bullet = re.sub(r"(?i)\bnarrowed\b", "increased", bullet)
+
                                 else:
                                     bullet = re.sub(r"(?i)\b(?:increased|grew|growth|expanded)\b", "decreased", bullet)
                                 issues.append(_qa_item(

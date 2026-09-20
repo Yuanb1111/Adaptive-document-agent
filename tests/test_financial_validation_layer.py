@@ -351,3 +351,70 @@ def test_slide_title_polishing() -> None:
 
     gross_loss = polish_slide_title("Gross Profit Turned Negative Trajectory")
     assert gross_loss == "Gross Profit Turned Negative"
+
+
+# ---------------------------------------------------------------------------
+# Regression: Cash-flow outflow TrendState semantics  (was crashing with
+# "type object 'TrendState' has no attribute 'outflow_increased'")
+# ---------------------------------------------------------------------------
+
+def test_cash_outflow_trendstate_increased() -> None:
+    """-75 → -523: absolute cash outflow grew = OUTFLOW_INCREASED."""
+    state = determine_trend_state("Operating cash flow", -75.0, -523.0, canonical_name="operating_cash_flow")
+    assert state == TrendState.OUTFLOW_INCREASED, f"Expected OUTFLOW_INCREASED, got {state}"
+    assert state != TrendState.INCREASED
+    assert state != TrendState.DECREASED
+
+
+def test_cash_outflow_trendstate_narrowed() -> None:
+    """-523 → -75: absolute cash outflow shrank = OUTFLOW_NARROWED."""
+    state = determine_trend_state("Operating cash flow", -523.0, -75.0, canonical_name="operating_cash_flow")
+    assert state == TrendState.OUTFLOW_NARROWED, f"Expected OUTFLOW_NARROWED, got {state}"
+    assert state != TrendState.INCREASED
+    assert state != TrendState.DECREASED
+
+
+def test_cash_outflow_trendstate_turned_positive() -> None:
+    """-100 → +50: outflow turned into positive cash flow = TURNED_POSITIVE."""
+    state = determine_trend_state("Operating cash flow", -100.0, 50.0, canonical_name="operating_cash_flow")
+    assert state == TrendState.TURNED_POSITIVE, f"Expected TURNED_POSITIVE, got {state}"
+
+
+def test_cash_outflow_trendstate_turned_negative() -> None:
+    """+50 → -100: positive cash flow turned into outflow = TURNED_NEGATIVE."""
+    state = determine_trend_state("Operating cash flow", 50.0, -100.0, canonical_name="operating_cash_flow")
+    assert state == TrendState.TURNED_NEGATIVE, f"Expected TURNED_NEGATIVE, got {state}"
+
+
+def test_cash_outflow_movement_text_outflow_increased() -> None:
+    """-75 → -523: movement text must contain 'outflow' and 'increased' or 'widened'."""
+    text = FinancialMovementFormatter.format_movement(
+        "Operating cash flow", -75.0, -523.0, currency="RMB", scale=1_000_000.0
+    )
+    assert "outflow" in text.lower(), f"'outflow' missing from: {text}"
+    assert ("increased" in text.lower() or "widened" in text.lower()), f"Expected 'increased' or 'widened' in: {text}"
+    assert "narrowed" not in text.lower(), f"'narrowed' must not appear in: {text}"
+
+
+def test_cash_outflow_movement_text_outflow_narrowed() -> None:
+    """-523 → -75: movement text must contain 'outflow' and 'narrowed'."""
+    text = FinancialMovementFormatter.format_movement(
+        "Operating cash flow", -523.0, -75.0, currency="RMB", scale=1_000_000.0
+    )
+    assert "outflow" in text.lower(), f"'outflow' missing from: {text}"
+    assert "narrowed" in text.lower(), f"Expected 'narrowed' in: {text}"
+    assert "increased" not in text.lower(), f"'increased' must not appear in: {text}"
+
+
+def test_trendstate_enum_uppercase_only() -> None:
+    """All TrendState members must be UPPERCASE — no lowercase attribute access should be needed."""
+    for member in TrendState:
+        assert member.name == member.name.upper(), (
+            f"TrendState member '{member.name}' is not uppercase — use TrendState.{member.name.upper()}"
+        )
+    # Verify the new states exist at correct uppercase names
+    assert hasattr(TrendState, "OUTFLOW_INCREASED")
+    assert hasattr(TrendState, "OUTFLOW_NARROWED")
+    assert TrendState.OUTFLOW_INCREASED.value == "OUTFLOW_INCREASED"
+    assert TrendState.OUTFLOW_NARROWED.value == "OUTFLOW_NARROWED"
+

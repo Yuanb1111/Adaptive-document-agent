@@ -71,6 +71,11 @@ class TrendState(str, Enum):
     TURNED_NEGATIVE = "TURNED_NEGATIVE"
     DEFICIT_WIDENED = "DEFICIT_WIDENED"
     DEFICIT_NARROWED = "DEFICIT_NARROWED"
+    # Cash-flow-specific semantic states for negative-outflow transitions:
+    # -75 -> -523: outflow increased (absolute outflow grew)
+    # -523 -> -75: outflow narrowed (absolute outflow shrank)
+    OUTFLOW_INCREASED = "OUTFLOW_INCREASED"
+    OUTFLOW_NARROWED = "OUTFLOW_NARROWED"
     AMBIGUOUS = "AMBIGUOUS"
 
 
@@ -598,7 +603,19 @@ def determine_trend_state(
             return TrendState.TURNED_POSITIVE
         if val_start > 0 and val_end < 0:
             return TrendState.TURNED_NEGATIVE
-        # Numeric difference: -100 -> -50 is diff = +50 (value increased / cash outflow narrowed)
+        # Both negative: cash outflow – use semantic OUTFLOW states, not generic INCREASED/DECREASED
+        # -75 -> -523: absolute outflow grew  = OUTFLOW_INCREASED
+        # -523 -> -75: absolute outflow shrank = OUTFLOW_NARROWED
+        if val_start < 0 and val_end < 0:
+            abs_start = abs(val_start)
+            abs_end = abs(val_end)
+            if abs_end > abs_start:
+                return TrendState.OUTFLOW_INCREASED
+            elif abs_end < abs_start:
+                return TrendState.OUTFLOW_NARROWED
+            else:
+                return TrendState.FLAT
+        # Both positive: normal INCREASED/DECREASED
         diff = val_end - val_start
         if diff > 0:
             return TrendState.INCREASED
@@ -1008,6 +1025,39 @@ _LOSS_TO_GAIN_REPLACEMENTS: dict[str, str] = {
     "widening": "swinging from loss to gain",
 }
 
+# Cash-flow outflow replacement maps (used when both start and end are negative)
+# OUTFLOW_INCREASED: absolute outflow grew  (-75 -> -523)
+_OUTFLOW_INCREASED_REPLACEMENTS: dict[str, str] = {
+    "narrowed": "increased",
+    "narrowing": "increasing",
+    "narrows": "increases",
+    "narrow": "increase",
+    "outflow narrowed": "outflow increased",
+    "cash outflow narrowed": "cash outflow increased",
+    "decreased": "increased",
+    "decreasing": "increasing",
+    "declined": "increased",
+    "declining": "increasing",
+    "fell": "increased",
+    "dropped": "increased",
+    "improved": "increased",
+}
+
+# OUTFLOW_NARROWED: absolute outflow shrank  (-523 -> -75)
+_OUTFLOW_NARROWED_REPLACEMENTS: dict[str, str] = {
+    "increased": "narrowed",
+    "increasing": "narrowing",
+    "increases": "narrows",
+    "increase": "narrow",
+    "outflow increased": "outflow narrowed",
+    "cash outflow increased": "cash outflow narrowed",
+    "widened": "narrowed",
+    "widening": "narrowing",
+    "grew": "narrowed",
+    "expanded": "narrowed",
+    "deteriorated": "improved",
+}
+
 
 def _detect_offending_in_text(
     text: str,
@@ -1063,6 +1113,14 @@ def _detect_offending_in_text(
         for bad_word in _TURNED_NEGATIVE_REPLACEMENTS:
             if re.search(r"\b" + re.escape(bad_word) + r"\b", text_lower):
                 return bad_word
+    elif trend_state == TrendState.OUTFLOW_INCREASED:
+        for bad_word in _OUTFLOW_INCREASED_REPLACEMENTS:
+            if re.search(r"\b" + re.escape(bad_word) + r"\b", text_lower):
+                return bad_word
+    elif trend_state == TrendState.OUTFLOW_NARROWED:
+        for bad_word in _OUTFLOW_NARROWED_REPLACEMENTS:
+            if re.search(r"\b" + re.escape(bad_word) + r"\b", text_lower):
+                return bad_word
     elif trend_state == TrendState.INCREASED:
         if family == MetricSemanticFamily.CASH_FLOW:
             for bad_word in _CASH_FLOW_INCREASE_REPLACEMENTS:
@@ -1087,6 +1145,7 @@ def _detect_offending_in_text(
                     return bad_word
 
     return None
+
 
 
 def split_into_clauses(text: str) -> list[str]:
@@ -1787,7 +1846,8 @@ class ClaimValidator:
                                 else "swung from loss to gain" if trend_state == TrendState.LOSS_TO_GAIN
                                 else "turned positive" if trend_state == TrendState.TURNED_POSITIVE
                                 else "turned negative" if trend_state == TrendState.TURNED_NEGATIVE
-                                else "cash outflow narrowed / increased" if (trend_state == TrendState.INCREASED and family == MetricSemanticFamily.CASH_FLOW)
+                                else "cash outflow increased" if trend_state == TrendState.OUTFLOW_INCREASED
+                                else "cash outflow narrowed" if trend_state == TrendState.OUTFLOW_NARROWED
                                 else "increased" if trend_state == TrendState.INCREASED
                                 else "decreased" if trend_state == TrendState.DECREASED
                                 else "held flat"
@@ -1863,6 +1923,10 @@ def apply_structured_issue_replacement(text: str, issue: DirectionalClaimIssue) 
         replacement = _DEFICIT_WIDENED_REPLACEMENTS.get(offending.casefold(), "widened")
     elif state == TrendState.DEFICIT_NARROWED.value:
         replacement = _DEFICIT_NARROWED_REPLACEMENTS.get(offending.casefold(), "narrowed")
+    elif state == TrendState.OUTFLOW_INCREASED.value:
+        replacement = _OUTFLOW_INCREASED_REPLACEMENTS.get(offending.casefold(), "cash outflow increased")
+    elif state == TrendState.OUTFLOW_NARROWED.value:
+        replacement = _OUTFLOW_NARROWED_REPLACEMENTS.get(offending.casefold(), "cash outflow narrowed")
     elif state == TrendState.INCREASED.value:
         if family == MetricSemanticFamily.CASH_FLOW.value:
             replacement = _CASH_FLOW_INCREASE_REPLACEMENTS.get(offending.casefold(), "increased")
@@ -1877,6 +1941,7 @@ def apply_structured_issue_replacement(text: str, issue: DirectionalClaimIssue) 
             replacement = _STANDARD_DECREASE_REPLACEMENTS.get(offending.casefold(), "decreased")
     else:
         return text, False
+
 
     if not replacement:
         return text, False
