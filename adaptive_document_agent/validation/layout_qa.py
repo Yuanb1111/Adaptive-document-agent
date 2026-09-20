@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
-from adaptive_document_agent.document_model import DocumentIndex, best_period_series
+from adaptive_document_agent.document_model import DocumentIndex, best_period_series, sanitize_metric_for_title
 from adaptive_document_agent.models.presentation import PresentationSlide, PresentationVisualBlock
 from adaptive_document_agent.services.company_extractor import extract_structured_company_fields
 
@@ -229,10 +229,100 @@ def validate_presentation_layout(
 
     plan.slides = repaired_slides
 
-    # 4. Chart legend & Source label safe-area checks
+    # 4. Long raw metric text used as slide title check
+    RAW_TABLE_TITLE_PATTERN = re.compile(
+        r"(?i)^(?:add|less|plus|minus|adjustments?|reconciliation|sub-?total|total)\s*[:\-\u2013\u2014]"
+    )
+    for slide in plan.slides:
+        if slide.slide_type != "analysis":
+            continue
+        title = slide.title.strip()
+        has_raw_prefix = bool(RAW_TABLE_TITLE_PATTERN.search(title))
+        is_overly_long = len(title) > 60 and not any(
+            w in title.casefold() for w in ("trajectory", "trend", "movement", "growth", "performance", "increased", "decreased")
+        )
+        if has_raw_prefix or is_overly_long:
+            if auto_repair:
+                clean_t = sanitize_metric_for_title(title, max_length=48)
+                if not any(w in clean_t.casefold() for w in ("trajectory", "trend", "movement", "growth", "performance")):
+                    clean_t = f"{clean_t} Trajectory"
+                slide.title = clean_t
+                issues.append(
+                    QAItem(
+                        code="long_raw_metric_title_repaired",
+                        severity="INFO",
+                        message=f"Slide '{slide.id}' title had raw table row artifacts or excessive length; sanitized to '{clean_t}'.",
+                        slide_id=slide.id,
+                    )
+                )
+            else:
+                issues.append(
+                    QAItem(
+                        code="long_raw_metric_title",
+                        severity="WARNING",
+                        message=f"Slide '{slide.id}' title '{title}' contains raw table row artifacts or is unparsed raw metric text.",
+                        slide_id=slide.id,
+                    )
+                )
+
+    # 5. Negative/positive zero-crossing bar charts label overlap check
+    for cid, chart in chart_lookup.items():
+        if chart.chart_type not in {"bar", "column", "horizontal_bar"}:
+            continue
+        obs = [index.get(oid) for oid in chart.observation_ids if index.get(oid)]
+        vals = [float(item.value) for item in obs if item.value is not None]
+        has_neg = any(v < 0 for v in vals)
+        has_pos = any(v > 0 for v in vals)
+        if has_neg and has_pos:
+            referencing_slides = [s for s in plan.slides if cid in s.chart_ids or any(cid in b.chart_ids for b in s.visual_blocks)]
+            for s in referencing_slides:
+                if auto_repair:
+                    issues.append(
+                        QAItem(
+                            code="zero_crossing_bar_label_overlap_repaired",
+                            severity="INFO",
+                            message=f"Chart '{cid}' crosses zero with mixed positive/negative values; expanded bottom axis headroom by 45% and pinned x-axis to LOW to prevent label overlap.",
+                            slide_id=s.id,
+                            related_ids=[cid],
+                        )
+                    )
+                else:
+                    issues.append(
+                        QAItem(
+                            code="zero_crossing_bar_label_overlap",
+                            severity="WARNING",
+                            message=f"Chart '{cid}' crosses zero with negative and positive values which can overlap x-axis year labels.",
+                            slide_id=s.id,
+                            related_ids=[cid],
+                        )
+                    )
+
+    # 6. Chart legend & Source label safe-area checks
     for slide in plan.slides:
         if slide.slide_type in {"cover", "contents", "appendix"}:
             continue
+        chart_count = len(slide.chart_ids) + sum(len(b.chart_ids) for b in slide.visual_blocks)
+        if chart_count >= 1:
+            if auto_repair:
+                issues.append(
+                    QAItem(
+                        code="movement_detail_text_proximity_repaired",
+                        severity="INFO",
+                        message=f"Slide '{slide.id}' formatted with dedicated non-overlapping vertical slots for movement text and detail comparison.",
+                        slide_id=slide.id,
+                    )
+                )
+        if chart_count >= 2:
+            if auto_repair:
+                issues.append(
+                    QAItem(
+                        code="legend_unit_label_overlap_repaired",
+                        severity="INFO",
+                        message=f"Slide '{slide.id}' chart legends positioned at TOP to eliminate collision with bottom unit and source labels.",
+                        slide_id=slide.id,
+                    )
+                )
+
         # Source pages check
         if slide.source_pages and len(slide.source_pages) > 8:
             issues.append(

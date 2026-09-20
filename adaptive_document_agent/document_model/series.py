@@ -96,6 +96,9 @@ def display_metric_name(observation: Observation) -> str:
     """Return a clean presentation label without changing the retained source value."""
     label = metric_label(observation)
     label = re.sub(r"^[\s\-\u2013\u2014\u2022]+", "", label)
+    # Strip reconciliation and accounting table prefixes: "Add:", "Add -", "Less:", "Less -", etc.
+    label = re.sub(r"(?i)^(?:add|less|plus|minus)\s*[:\-\u2013\u2014]\s*", "", label)
+    label = re.sub(r"(?i)^(?:adjustments?|reconciliation|sub-?total|total)\s*[:\-\u2013\u2014]\s*", "", label)
     label = _TRAILING_UNIT.sub("", label)
     label = " ".join(label.split()).strip(" :;,-")
 
@@ -111,6 +114,19 @@ def display_metric_name(observation: Observation) -> str:
         if context and len(context) <= 48 and is_meaningful_metric_name(context) and context.casefold() not in label.casefold():
             label = f"{context}: {label}"
     return label
+
+
+def sanitize_metric_for_title(name: str, max_length: int = 50) -> str:
+    """Sanitize metric label to produce clean, concise text suitable for slide titles."""
+    clean = re.sub(r"^[\s\-\u2013\u2014\u2022]+", "", name)
+    clean = re.sub(r"(?i)^(?:add|less|plus|minus)\s*[:\-\u2013\u2014]\s*", "", clean)
+    clean = re.sub(r"(?i)^(?:adjustments?|reconciliation|sub-?total|total)\s*[:\-\u2013\u2014]\s*", "", clean)
+    clean = _TRAILING_UNIT.sub("", clean)
+    clean = re.sub(r"\s*\([^)]*(?:note|unaudited|audited|\'000|thousand|million|rmb|usd|hkd)[^)]*\)", "", clean, flags=re.IGNORECASE)
+    clean = " ".join(clean.split()).strip(" :;,-")
+    if len(clean) > max_length:
+        clean = clean[:max_length].rsplit(" ", 1)[0].rstrip(" ,:;-.")
+    return clean
 
 
 def is_meaningful_metric_name(value: str) -> bool:

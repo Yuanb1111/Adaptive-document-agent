@@ -32,7 +32,7 @@ class PresentationPlanRepairer:
 
     def repair(self, plan: PresentationPlan, result: PipelineResult) -> PresentationPlan:
         """Prune unsupported claims, align citations, and validate the resulting plan."""
-        from adaptive_document_agent.document_model import DocumentIndex, display_metric_name
+        from adaptive_document_agent.document_model import DocumentIndex, display_metric_name, sanitize_metric_for_title
         from adaptive_document_agent.services.pptx_export import _chart_group_title, _group_chart_plans, _usable_charts
 
         observations = {item.id: item for item in result.observations}
@@ -99,6 +99,13 @@ class PresentationPlanRepairer:
                 source_pages = sorted(set(slide.source_pages) & valid_pages)
 
             title = slide.title.strip() or self._default_title(slide.slide_type, ordinal)
+            if slide.slide_type == "analysis":
+                title = re.sub(r"(?i)^(?:add|less|plus|minus)\s*[:\-\u2013\u2014]\s*", "", title)
+                title = re.sub(r"(?i)^(?:adjustments?|reconciliation|sub-?total|total)\s*[:\-\u2013\u2014]\s*", "", title)
+                title = " ".join(title.split()).strip(" :;,-")
+                if len(title) > 65 and not any(w in title.casefold() for w in ("trajectory", "trend", "movement", "growth", "performance", "increased", "decreased", "stable")):
+                    title = sanitize_metric_for_title(title, max_length=48)
+                    title = f"{title} Trajectory"
             message = slide.message.strip()
             bullets = [item.strip() for item in slide.bullets if item.strip()]
 
@@ -183,7 +190,7 @@ class PresentationPlanRepairer:
                     )
                     for i, c in enumerate(group)
                 ]
-                clean_title = re.sub(r"(?i)\s+and\s+related\s+measures\b", "", group_title).strip()
+                clean_title = sanitize_metric_for_title(re.sub(r"(?i)\s+and\s+related\s+measures\b", "", group_title).strip(), max_length=48)
                 clean_title = re.sub(r"(?i)\s+analysis\b", "", clean_title).strip()
                 slide_title = f"{clean_title} Trajectory" if not any(w in clean_title.casefold() for w in ("trajectory", "trend", "movement", "growth", "performance")) else clean_title
                 backfilled_slides.append(
@@ -225,7 +232,7 @@ class PresentationPlanRepairer:
                         )
                         for i, c in enumerate(group)
                     ]
-                    clean_title2 = re.sub(r"(?i)\s+and\s+related\s+measures\b", "", group_title).strip()
+                    clean_title2 = sanitize_metric_for_title(re.sub(r"(?i)\s+and\s+related\s+measures\b", "", group_title).strip(), max_length=48)
                     clean_title2 = re.sub(r"(?i)\s+analysis\b", "", clean_title2).strip()
                     slide_title2 = f"{clean_title2} Trajectory" if not any(w in clean_title2.casefold() for w in ("trajectory", "trend", "movement", "growth", "performance")) else clean_title2
                     repaired_slides.append(

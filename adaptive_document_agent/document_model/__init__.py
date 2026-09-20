@@ -20,6 +20,7 @@ from .series import (
     period_sort_key,
     presentation_sign_variant_groups,
     reconcile_observations,
+    sanitize_metric_for_title,
 )
 
 from .period_semantic_validator import (
@@ -69,5 +70,6 @@ __all__ = [
     "period_sort_key",
     "presentation_sign_variant_groups",
     "reconcile_observations",
+    "sanitize_metric_for_title",
     "score_chartability",
 ]

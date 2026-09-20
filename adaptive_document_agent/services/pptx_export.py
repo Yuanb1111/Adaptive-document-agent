@@ -1048,14 +1048,14 @@ def _add_chart_slide(
     pages = ", ".join(map(str, plan.source_pages)) or "not available"
 
     if movement:
-        _text(slide, movement[0], 0.70, content_top + 0.65, 3.05, 0.70, size=26, color=FOURIER_PURPLE, bold=True)
-        _text(slide, _summary_text(movement[1], 100), 0.70, content_top + 1.45, 3.05, 0.90, size=13, color=FOURIER_DARK)
+        _text(slide, movement[0], 0.70, content_top + 0.65, 3.05, 0.58, size=21, color=FOURIER_PURPLE, bold=True)
+        _text(slide, _summary_text(movement[1], 100), 0.70, content_top + 1.65, 3.05, 0.85, size=12.5, color=FOURIER_DARK)
     else:
-        _text(slide, f"{len(values)}", 0.70, content_top + 0.65, 3.05, 0.70, size=26, color=FOURIER_TECH_BLUE, bold=True)
-        _text(slide, "comparable reported observations", 0.70, content_top + 1.45, 3.05, 0.90, size=13, color=FOURIER_DARK)
+        _text(slide, f"{len(values)}", 0.70, content_top + 0.65, 3.05, 0.58, size=21, color=FOURIER_TECH_BLUE, bold=True)
+        _text(slide, "comparable reported observations", 0.70, content_top + 1.65, 3.05, 0.85, size=12.5, color=FOURIER_DARK)
 
-    _text(slide, "REPORTED UNIT", 0.70, content_top + 2.75, 3.05, 0.24, size=9.5, color=FOURIER_MUTED, bold=True)
-    _text(slide, unit, 0.70, content_top + 3.00, 3.05, 0.45, size=12, color=FOURIER_DARK, bold=True)
+    _text(slide, "REPORTED UNIT", 0.70, content_top + 2.95, 3.05, 0.24, size=9.5, color=FOURIER_MUTED, bold=True)
+    _text(slide, unit, 0.70, content_top + 3.20, 3.05, 0.45, size=12, color=FOURIER_DARK, bold=True)
     _text(slide, f"Source pages  {pages}", 0.70, content_top + content_h - 0.45, 3.05, 0.35, size=9.5, color=FOURIER_MUTED)
 
     # Right card: Chart (no background gridlines)
@@ -1186,21 +1186,70 @@ def _add_chart_cluster_slide(
         if not values:
             _text(slide, "No usable values", left + 0.18, top + panel_height / 2, panel_width - 0.36, 0.4, size=12, color=FOURIER_MUTED, align="center")
             continue
-        footer_height = 0.72
-        chart_bounds = (left + 0.15, top + 0.58, panel_width - 0.30, panel_height - 0.65 - footer_height)
+        # Fixed vertical slots inside each KPI/chart block:
+        # Slot 1: Metric label (top at top + 0.15, height 0.38)
+        # Chart canvas: top + 0.55 to top + panel_height - 1.25
+        # Slot 2: Movement headline text
+        # Slot 3: Period comparison detail
+        # Slot 4 & 5: Reported unit and Source/page label
+        footer_height = 1.25
+        chart_bounds = (left + 0.15, top + 0.55, panel_width - 0.30, panel_height - 0.55 - footer_height)
         scale, scale_label = _add_native_chart(slide, plan, values, chart_bounds, compact=True)
         movement = _change_summary(values, scale)
         unit = _unit_label(values, scale_label)
         pages = ", ".join(map(str, plan.source_pages)) or "not available"
-        footer_top = top + panel_height - footer_height + 0.08
+
+        slot_w = panel_width - 0.36
+        slot_left = left + 0.18
+
+        # Fixed Slot 2: Movement text (y = top + panel_height - 1.20, h = 0.28)
+        slot2_y = top + panel_height - 1.20
         if movement:
-            _text(slide, movement[0], left + 0.18, footer_top, panel_width * 0.40, 0.28, size=11.5, color=CHART_PALETTE[position % len(CHART_PALETTE)], bold=True)
-            _text(slide, _summary_text(movement[1], 40), left + panel_width * 0.42, footer_top, panel_width * 0.54, 0.28, size=8.5, color=FOURIER_DARK, align="right")
-            footer_top += 0.28
-        unit_w = (panel_width - 0.36) * 0.58
-        pages_w = (panel_width - 0.36) * 0.40
-        _text(slide, _summary_text(unit, 30), left + 0.18, footer_top, unit_w, 0.22, size=8.0, color=FOURIER_MUTED)
-        _text(slide, f"p. {_summary_text(pages, 16)}", left + 0.18 + unit_w + 0.04, footer_top, pages_w, 0.22, size=8.0, color=FOURIER_MUTED, align="right")
+            _text(
+                slide,
+                _summary_text(movement[0], 48 if not compact_panel else 36),
+                slot_left,
+                slot2_y,
+                slot_w,
+                0.28,
+                size=11.5 if not compact_panel else 10.5,
+                color=CHART_PALETTE[position % len(CHART_PALETTE)],
+                bold=True,
+            )
+        else:
+            _text(
+                slide,
+                f"{len(values)} comparable reported values",
+                slot_left,
+                slot2_y,
+                slot_w,
+                0.28,
+                size=10.0,
+                color=FOURIER_MUTED,
+                bold=True,
+            )
+
+        # Fixed Slot 3: Period comparison detail (y = slot2_y + 0.32, h = 0.26)
+        slot3_y = slot2_y + 0.32
+        detail_text = movement[1] if movement else ""
+        if detail_text:
+            _text(
+                slide,
+                _summary_text(detail_text, 60 if not compact_panel else 48),
+                slot_left,
+                slot3_y,
+                slot_w,
+                0.26,
+                size=8.5,
+                color=FOURIER_DARK,
+            )
+
+        # Fixed Slot 4 & 5: Reported Unit & Source/page label (y = slot3_y + 0.30, h = 0.22)
+        slot4_y = slot3_y + 0.30
+        unit_w = slot_w * 0.58
+        pages_w = slot_w * 0.40
+        _text(slide, _summary_text(unit, 30), slot_left, slot4_y, unit_w, 0.22, size=8.0, color=FOURIER_MUTED)
+        _text(slide, f"p. {_summary_text(pages, 16)}", slot_left + unit_w + 0.04, slot4_y, pages_w, 0.22, size=8.0, color=FOURIER_MUTED, align="right")
 
 
 def _chart_number_format(values: list[float]) -> str:
@@ -1323,7 +1372,14 @@ def _add_native_chart(
         else:
             labels.position = XL_DATA_LABEL_POSITION.OUTSIDE_END
         labels.font.name = FONT
-        labels.font.size = Pt(12 if compact else 14)
+        if has_negative and has_positive:
+            # Zero-crossing bar labels: use compact size to prevent crowding x-axis
+            labels.font.size = Pt(9 if compact else 10.5)
+            # If vertical space is too cramped (< 2.2 in), hide labels to prevent collision with x-axis
+            if chart_height < 2.2:
+                chart.plots[0].has_data_labels = False
+        else:
+            labels.font.size = Pt(12 if compact else 14)
         labels.font.bold = True
         # Signed dynamic format preserves minus sign and exact precision
         labels.number_format = num_fmt
@@ -1366,9 +1422,10 @@ def _add_native_chart(
                             pass
                         chart.category_axis.tick_label_position = XL_TICK_LABEL_POSITION.LOW
                     elif has_negative and has_positive:
-                        # Mixed series: symmetric headroom on both sides
-                        chart.value_axis.maximum_scale = max_scaled * 1.20 if max_scaled > 0 else 0.0
-                        chart.value_axis.minimum_scale = min_scaled * 1.20 if min_scaled < 0 else 0.0
+                        # Mixed series crossing zero: extend bottom headroom by 45% so negative
+                        # data labels (e.g. -16.45) never collide with bottom x-axis category labels (e.g. FY2021)
+                        chart.value_axis.maximum_scale = max_scaled * 1.25 if max_scaled > 0 else 0.0
+                        chart.value_axis.minimum_scale = min_scaled * 1.45 if min_scaled < 0 else 0.0
                         chart.category_axis.tick_label_position = XL_TICK_LABEL_POSITION.LOW
             except (AttributeError, ValueError, TypeError, NameError):
                 pass

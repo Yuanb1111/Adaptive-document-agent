@@ -9,7 +9,7 @@ when no proposed plan can be retained.
 import re
 from collections import defaultdict
 
-from adaptive_document_agent.document_model import display_metric_name
+from adaptive_document_agent.document_model import display_metric_name, sanitize_metric_for_title
 from adaptive_document_agent.models import (
     ChartPlan,
     CompanyProfile,
@@ -94,7 +94,7 @@ class PresentationPlanRecovery:
                 )
                 for idx, chart in enumerate(group)
             ]
-            clean_title = re.sub(r"(?i)\s+and\s+related\s+measures\b", "", group_title).strip()
+            clean_title = sanitize_metric_for_title(re.sub(r"(?i)\s+and\s+related\s+measures\b", "", group_title).strip(), max_length=48)
             clean_title = re.sub(r"(?i)\s+analysis\b", "", clean_title).strip()
             slide_title = f"{clean_title} Trajectory" if not any(w in clean_title.casefold() for w in ("trajectory", "trend", "movement", "growth", "performance")) else clean_title
             slides.append(

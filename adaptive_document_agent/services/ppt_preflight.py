@@ -360,13 +360,14 @@ class PresentationPreflight:
             r"(?i)\btrend\s+and\s+related\s+measures\b",
             r"(?i)\bevidence-?backed\s+comparison\b",
             r"(?i)\bretained\s+reported\s+values\b",
+            r"(?i)^(?:add|less|plus|minus|adjustments?|reconciliation|sub-?total|total)\s*[:\-\u2013\u2014]",
         ):
             if re.search(pattern, title):
                 self.issues.append(
                     PreflightIssue(
                         idx,
                         "generic_slide_title",
-                        f"Slide {idx + 1} has generic uninformative title: '{title}'",
+                        f"Slide {idx + 1} has generic or unparsed raw table title: '{title}'",
                         severity="warning",
                     )
                 )
