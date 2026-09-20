@@ -377,35 +377,51 @@ def run_comprehensive_qa(result: PipelineResult, auto_repair: bool = True) -> QA
     if result.presentation_plan:
         # Imported lazily to avoid making the QA model layer depend on PPTX at
         # module-import time.
-        from adaptive_document_agent.services.pptx_export import (
-            _extract_topic_tokens,
-            _metrics_match_topic,
+        from adaptive_document_agent.document_model.topic_matcher import (
+            extract_topic_tokens,
+            get_slide_context,
+            is_positive_topic_mismatch,
+            metrics_match_topic,
         )
 
         obs_ids = {obs.id for obs in result.observations}
         obs_by_id = {obs.id: obs for obs in result.observations}
         chart_by_id = {c.id: c for c in result.charts}
         for slide in result.presentation_plan.slides:
-            title_tokens = _extract_topic_tokens(slide.title)
+            slide_ctx = get_slide_context(slide)
 
             # Validate directly linked table/KPI rows against a specific slide
-            # topic. Broad titles intentionally have no strong topic tokens.
-            if title_tokens and slide.slide_type == "analysis":
+            # topic using positive evidence of mismatch. Deduplicated by metric family.
+            if slide.slide_type == "analysis":
+                is_hybrid_kpi_slide = (
+                    getattr(slide, "layout", None) in {"chart_plus_kpis", "table_plus_kpis", "chart_with_data"}
+                    and bool(getattr(slide, "chart_ids", None))
+                )
+                mismatched_by_family: dict[str, list[Observation]] = {}
                 for observation_id in slide.observation_ids:
                     observation = obs_by_id.get(observation_id)
-                    if observation and not _metrics_match_topic(observation, "", slide.title):
-                        report.critical_errors.append(
-                            QAItem(
-                                code="slide_topic_mismatch",
-                                severity="CRITICAL",
-                                message=(
-                                    f"Slide {slide.id} topic '{slide.title}' is not aligned with linked "
-                                    f"observation {observation.id} ({observation.metric_original})."
-                                ),
-                                slide_id=slide.id,
-                                related_ids=[observation.id],
-                            )
+                    if observation and is_positive_topic_mismatch(observation, slide, is_supporting_kpi=is_hybrid_kpi_slide):
+                        family = (
+                            getattr(observation, "metric_canonical", "")
+                            or getattr(observation, "canonical_name", "")
+                            or observation.metric_original
+                        ).strip().casefold()
+                        mismatched_by_family.setdefault(family, []).append(observation)
+
+                for family, m_obs in mismatched_by_family.items():
+                    first_obs = m_obs[0]
+                    report.critical_errors.append(
+                        QAItem(
+                            code="slide_topic_mismatch",
+                            severity="CRITICAL",
+                            message=(
+                                f"Slide {slide.id} topic '{slide.title}' is not aligned with linked "
+                                f"metric '{first_obs.metric_original}'."
+                            ),
+                            slide_id=slide.id,
+                            related_ids=[item.id for item in m_obs],
                         )
+                    )
 
             for cid in getattr(slide, "chart_ids", []):
                 if cid not in chart_by_id:
@@ -429,30 +445,37 @@ def run_comprehensive_qa(result: PipelineResult, auto_repair: bool = True) -> QA
                                 slide_id=slide.id,
                             )
                         )
-                    elif title_tokens and slide.slide_type == "analysis":
-                        chart_observations = [obs_by_id[oid] for oid in chart.observation_ids]
+                    elif slide.slide_type == "analysis":
+                        chart_observations = [obs_by_id[oid] for oid in chart.observation_ids if oid in obs_by_id]
                         chart_canon = (
                             chart_observations[0].metric_canonical
                             or chart_observations[0].metric_original
                         ).strip().casefold() if chart_observations else ""
-                        mismatched = [
-                            item for item in chart_observations
-                            if not _metrics_match_topic(item, chart_canon, slide.title)
-                        ]
-                        if mismatched:
+                        
+                        mismatched_by_family: dict[str, list[Observation]] = {}
+                        for item in chart_observations:
+                            if is_positive_topic_mismatch(item, slide):
+                                family = (
+                                    getattr(item, "metric_canonical", "")
+                                    or getattr(item, "canonical_name", "")
+                                    or item.metric_original
+                                ).strip().casefold()
+                                mismatched_by_family.setdefault(family, []).append(item)
+
+                        for family, m_obs in mismatched_by_family.items():
                             report.critical_errors.append(
                                 QAItem(
-                                code="chart_topic_mismatch",
-                                severity="CRITICAL",
-                                message=(
-                                    f"Chart {cid} on slide {slide.id} contains metrics unrelated to "
-                                    f"the slide topic '{slide.title}': "
-                                    + ", ".join(item.metric_original for item in mismatched)
-                                ),
-                                slide_id=slide.id,
-                                related_ids=[item.id for item in mismatched],
+                                    code="chart_topic_mismatch",
+                                    severity="CRITICAL",
+                                    message=(
+                                        f"Chart {cid} on slide {slide.id} contains metrics unrelated to "
+                                        f"the slide topic '{slide.title}': "
+                                        + ", ".join(dict.fromkeys(item.metric_original for item in m_obs))
+                                    ),
+                                    slide_id=slide.id,
+                                    related_ids=[item.id for item in m_obs],
+                                )
                             )
-                        )
 
     # 6. PPT layout QA (scatter readability, cramped multi-chart splitting, long paragraph overflow)
     if result.presentation_plan:

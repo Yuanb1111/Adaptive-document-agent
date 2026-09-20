@@ -657,85 +657,13 @@ def _add_planned_summary(
     _add_numbered_messages(slide, findings[:5], source_pages=slide_plan.source_pages)
 
 
-def _extract_topic_tokens(text: str) -> set[str]:
-    ignored = {
-        "cost", "costs", "profit", "profits", "expense", "expenses", "revenue",
-        "loss", "losses", "income", "net", "gross", "financial", "operating",
-        "trajectory", "analysis", "trend", "trends", "and", "the", "key", "performance",
-        "deep", "dive", "overview", "reported", "evidence", "measures", "values",
-        "ratio", "ratios", "margin", "margins", "summary", "executive", "is", "was",
-        "for", "from", "to", "in", "of", "by", "at", "as", "during", "across",
-        "increased", "decreased", "rose", "fell", "declined", "grew", "growth",
-        "widened", "narrowed", "improved", "deteriorated", "stable", "change",
-        "profitable", "profitability", "turned", "reversed", "recovered", "transition",
-        "changes", "movement", "movements", "fiscal", "year", "period", "company",
-        "liquidity", "solvency", "efficiency", "position", "results",
-    }
-    norm = text.casefold()
-    strong_aliases = (
-        (r"\bresearch\s+(?:and|&)\s+development\b|\br\s*&\s*d\b", "rdtopic"),
-        (r"\bgross\s+profit\b", "grossprofit"),
-        (r"\bcurrent\s+liabilit(?:y|ies)\b", "currentliabilities"),
-        (r"\bnet\s+(?:current\s+)?liabilit(?:y|ies)\b", "netliabilities"),
-        (r"\btrade\s+(?:and\s+other\s+)?receivables?\b", "tradereceivables"),
-        (r"\bselling\s+(?:and|&)\s+distribution\b", "sellingdistribution"),
-        (r"\bworking\s+capital\b", "workingcapital"),
-    )
-    for pattern, alias in strong_aliases:
-        norm = re.sub(pattern, alias, norm)
-    norm = re.sub(r"\bp\s*&\s*l\b", "pltopic", norm)
-    return {
-        token
-        for token in re.findall(r"[^\W_]{2,}", norm)
-        if token not in ignored and len(token) >= 2 and not any(char.isdigit() for char in token)
-    }
-
-
-def _metrics_match_topic(obs: Observation, chart_canon: str, slide_title: str) -> bool:
-    obs_canon = (getattr(obs, "metric_canonical", "") or "").strip().casefold()
-    obs_name = display_metric_name(obs).casefold()
-
-    # 1. Exact canonical or name match
-    if chart_canon and (obs_canon == chart_canon or obs_name == chart_canon):
-        return True
-
-    # 2. Strict topic alignment: check specific non-generic tokens
-    title_tokens = _extract_topic_tokens(slide_title)
-    context = " ".join(
-        [
-            obs_canon,
-            obs_name,
-            getattr(obs, "entity", None) or "",
-            *(str(value) for value in getattr(obs, "dimensions", {}).values()),
-        ]
-    )
-    obs_tokens = _extract_topic_tokens(context)
-    if title_tokens and (title_tokens & obs_tokens):
-        return True
-
-    return False
-
-
-def _filter_observations_by_slide_topic(observations: list[Observation], slide_title: str) -> list[Observation]:
-    if not observations or not slide_title:
-        return observations
-    title_tokens = _extract_topic_tokens(slide_title)
-    if not title_tokens:
-        return observations
-
-    matching = []
-    for obs in observations:
-        obs_name = display_metric_name(obs)
-        obs_canon = getattr(obs, "metric_canonical", "") or ""
-        context = " ".join(
-            [obs_canon, obs_name, getattr(obs, "entity", None) or "", *(str(value) for value in obs.dimensions.values())]
-        )
-        obs_tokens = _extract_topic_tokens(context)
-        if obs_tokens & title_tokens:
-            matching.append(obs)
-    # A specific title with no matching evidence is an invalid binding.  Do not
-    # silently fill the slide with unrelated rows.
-    return matching
+from adaptive_document_agent.document_model.topic_matcher import (
+    extract_topic_tokens as _extract_topic_tokens,
+    metrics_match_topic as _metrics_match_topic,
+    filter_observations_by_slide_topic as _filter_observations_by_slide_topic,
+    get_slide_context as _get_slide_context,
+    is_positive_topic_mismatch as _is_positive_topic_mismatch,
+)
 
 
 def _add_planned_data_slide(
@@ -746,7 +674,9 @@ def _add_planned_data_slide(
     slide = _base_slide(presentation, slide_plan.title, slide_plan.message)
     content_top, content_h = _content_zone(slide)
 
-    filtered_observations = _filter_observations_by_slide_topic(observations, slide_plan.title)
+    filtered_observations = _filter_observations_by_slide_topic(
+        observations, slide_plan.title, slide_context=_get_slide_context(slide_plan)
+    )
 
     # Check if observations represent a multi-period series for comparison
     periods_set = {obs.period for obs in filtered_observations if obs.period}
@@ -1164,14 +1094,19 @@ def _add_chart_plus_kpis_slide(
     right_left = 8.20
     right_width = 3.95
     if supporting_observations and _extract_topic_tokens(display_title):
-        chart_canon = (
-            getattr(values[0], "metric_canonical", "") or display_metric_name(values[0])
-        ).strip().casefold()
+        temp_slide = PresentationSlide(
+            id=f"kpi_{plan.id}",
+            slide_type="analysis",
+            title=display_title,
+            message=display_subtitle or "",
+            layout="chart_plus_kpis",
+            chart_ids=[plan.id],
+        )
         matched_support = [
             item for item in supporting_observations
-            if _metrics_match_topic(item, chart_canon, display_title)
+            if not _is_positive_topic_mismatch(item, temp_slide, is_supporting_kpi=True)
         ]
-        # When the requested KPI evidence does not belong to the chart topic,
+        # When the requested KPI evidence does not belong to the slide topic,
         # fall back to chart evidence rather than displaying unrelated metrics.
         kpi_items = (matched_support or values[-4:])[:4]
     elif supporting_observations:

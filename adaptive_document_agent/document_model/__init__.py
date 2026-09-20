@@ -30,6 +30,13 @@ from .period_semantic_validator import (
     format_observation_period,
     format_period_label,
 )
+from .topic_matcher import (
+    extract_topic_tokens,
+    filter_observations_by_slide_topic,
+    get_slide_context,
+    is_positive_topic_mismatch,
+    metrics_match_topic,
+)
 
 __all__ = [
     "ChartabilityResult",
@@ -43,16 +50,21 @@ __all__ = [
     "context_key",
     "display_metric_name",
     "extract_period_basis",
+    "extract_topic_tokens",
+    "filter_observations_by_slide_topic",
     "format_canonical_period",
     "format_observation_period",
     "format_period_label",
+    "get_slide_context",
     "group_comparable_series",
     "is_generic_metric_label",
     "is_meaningful_metric",
     "is_meaningful_metric_name",
+    "is_positive_topic_mismatch",
     "metric_identity_key",
     "metric_key",
     "metric_label",
+    "metrics_match_topic",
     "paired_observations",
     "period_sort_key",
     "presentation_sign_variant_groups",
