@@ -217,30 +217,39 @@ class DocumentOrchestrator:
             )
 
             # Minimum evidence sanity check & recovery pass:
-            # If narrative layer identifies quantitative trends but structured evidence is sparse
+            # If narrative layer identifies quantitative trends but structured evidence is sparse or charts == 0
             quantitative_claim_count = sum(
                 len(re.findall(r"\b\d+(?:\.\d+)?%?\b", f"{ins.title} {ins.narrative}"))
                 for ins in insights
             )
-            if (not charts or len(index.observations) < 4) and quantitative_claim_count >= 3:
+            if (not charts or len(index.observations) < 4) and (quantitative_claim_count >= 2 or len(insights) >= 2):
                 notify("Evidence unexpectedly sparse; triggering extraction recovery pass")
-                # 1. Ensure tables are extracted across all document pages
-                missing_table_pages = {p.page_number for p in document.pages if not p.tables}
-                if missing_table_pages:
-                    additional_tables = TableExtractor().extract(raw, page_numbers=missing_table_pages)
-                    for p in document.pages:
-                        if p.page_number in additional_tables:
-                            p.tables.extend(additional_tables[p.page_number])
-                    self._reconstruct_tables(document)
+                from adaptive_document_agent.extraction.borderless_table_extractor import BorderlessTableExtractor
+                from adaptive_document_agent.services.financial_normalizer import FinancialNormalizer
+
+                # 1. Reconstruct all extracted tables with multi-tier header repair
+                reconstructor = TableReconstructor()
+                for p in document.pages:
+                    if p.tables:
+                        p.tables = [reconstructor.reconstruct(t) for t in p.tables]
+                    else:
+                        borderless = BorderlessTableExtractor().extract(p, p.page_number)
+                        if borderless:
+                            p.tables.extend([reconstructor.reconstruct(t) for t in borderless])
+                self._reconstruct_tables(document)
 
                 # 2. Re-extract observations across full document
-                recovered = extractor.extract(document, page_ranges=None)
-                if len(recovered) > len(observations):
+                recovered = extractor.extract(document, page_ranges=profile.analysis_page_ranges or None)
+                if recovered:
+                    recovered = FinancialNormalizer.normalize_observations(
+                        recovered,
+                        default_currency=getattr(profile, "currency", "RMB") or "RMB",
+                    )
                     observations = self._merge_observations(observations, recovered)
                     index = DocumentModelBuilder().build(observations)
-                    
-                    # 3. Regenerate candidate analyses and results if plan lacked depth
-                    if len(results) < 2 or not plan:
+
+                    # 3. Regenerate candidate analyses and results if plan lacked depth or charts == 0
+                    if len(results) < 2 or not plan or not charts:
                         candidates = AnalysisCandidateGenerator(self.gateway).generate(index, profile)
                         scores = AnalysisValueScorer(self.gateway).score(candidates, index, profile)
                         plan = AnalysisPlanner().plan(scores, index)
@@ -255,6 +264,15 @@ class DocumentOrchestrator:
                         report_plan=report_plan,
                         analysis_focus=analysis_focus,
                     )
+                    if charts and report_plan:
+                        markdown = ReportGenerator().generate(
+                            profile,
+                            report_plan,
+                            insights,
+                            issues,
+                            observations=index.observations,
+                            charts=charts,
+                        )
 
         presentation_plan = None
         if self.gateway:

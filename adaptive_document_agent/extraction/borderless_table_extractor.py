@@ -25,7 +25,10 @@ class BorderlessTableExtractor:
     """Recognize dense, aligned numeric row runs without assuming document type."""
 
     def extract(self, page: object, page_number: int) -> list[ExtractedTable]:
-        text = page.extract_text(x_tolerance=2, y_tolerance=3) or ""
+        if hasattr(page, "extract_text"):
+            text = page.extract_text(x_tolerance=2, y_tolerance=3) or ""
+        else:
+            text = getattr(page, "text", "") or ""
         lines = [self._clean_line(" ".join(line.split())) for line in text.splitlines()]
         candidates = [row for index, line in enumerate(lines) if (row := self._parse_row(index, line))]
         groups = self._groups(candidates, lines)
@@ -47,12 +50,41 @@ class BorderlessTableExtractor:
             unit, scale, currency, raw_unit = self._defaults(context)
             table_id = stable_id("borderless_table", page_number, group_index, group[0].line_index, group[-1].line_index)
             context_label = self._context_label(lines, year_index if year_index is not None else group[0].line_index)
+            col_types = ["label"]
+            col_currs: list[str | None] = [None]
+            col_scales: list[float | None] = [None]
+            for h in headers:
+                h_cf = h.casefold()
+                if "%" in h_cf or any(kw in h_cf for kw in ("percent", "share", "margin", "占比", "份额")):
+                    col_types.append("percentage")
+                    col_currs.append(None)
+                    col_scales.append(1.0)
+                elif any(kw in h_cf for kw in ("multiple", "times")):
+                    col_types.append("ratio")
+                    col_currs.append(None)
+                    col_scales.append(1.0)
+                elif any(kw in h_cf for kw in ("days", "dso", "dio", "dpo")):
+                    col_types.append("days")
+                    col_currs.append(None)
+                    col_scales.append(1.0)
+                elif any(kw in h_cf for kw in ("volume", "quantity", "units")):
+                    col_types.append("count")
+                    col_currs.append(None)
+                    col_scales.append(1.0)
+                else:
+                    col_types.append("amount")
+                    col_currs.append(currency)
+                    col_scales.append(scale)
+
             tables.append(
                 ExtractedTable(
                     table_id=table_id,
                     page=page_number,
                     headers=["label", *headers],
                     column_periods=[None, *periods],
+                    column_types=col_types,
+                    column_currencies=col_currs,
+                    column_scales=col_scales,
                     rows=[TableRow(cells=cells, page=page_number, column_periods=row_periods) for cells, row_periods in row_specs],
                     raw_cells=raw_rows,
                     confidence=0.68 if years else 0.55,

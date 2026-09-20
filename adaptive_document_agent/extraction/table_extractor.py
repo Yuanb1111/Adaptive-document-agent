@@ -85,30 +85,57 @@ class TableExtractor:
         default_currency: str | None,
         default_scale: float | None,
     ) -> tuple[list[str], list[str | None], list[list[str | None]], list[str], list[str | None], list[float | None]]:
-        headers, periods, data_rows = self._infer_schema(page, found, raw)
+        from .table_reconstructor import TableReconstructor
 
-        # Multi-tier header detection: check if first data row is a sub-header specifying Amount vs %
-        sub_role_keywords = {"amount", "%", "percent", "percentage", "share", "ratio", "multiple", "days", "count", "units", "rmb'000", "rmb", "usd", "cny", "hkd", "千元", "万元", "亿元", "元"}
-        if data_rows and len(data_rows) >= 2:
-            first_row = data_rows[0]
-            matched_roles = [
-                cell for cell in first_row[1:]
-                if cell and any(kw in cell.casefold() for kw in sub_role_keywords) and not self._numeric_like(cell)
-            ]
-            if len(matched_roles) >= 2:
-                # This is a sub-header row specifying column semantics
-                for idx, cell in enumerate(first_row):
-                    if cell and idx < len(headers):
-                        if headers[idx].startswith("column_") or not headers[idx]:
-                            headers[idx] = cell
-                        elif "%" in cell or "amount" in cell.casefold():
-                            headers[idx] = f"{headers[idx]} {cell}".strip()
-                data_rows = data_rows[1:]
-
-        # Classify column roles
-        col_types, col_currs, col_scales = self._classify_column_roles(
-            headers, periods, data_rows, default_unit, default_currency, default_scale
+        context = self._context_above(page, found, distance=90)
+        headers, periods, data_rows, col_types, col_currs, col_scales = TableReconstructor.reconstruct_multi_tier_headers(
+            raw,
+            default_unit=default_unit,
+            default_currency=default_currency,
+            default_scale=default_scale,
+            context=context,
         )
+
+        width = max(len(r) for r in raw) if raw else 0
+        if width >= 2 and (not any(periods) or None in periods[1:]):
+            words = self._words_above(page, found, distance=65)
+            year_lines: dict[float, list[dict[str, object]]] = {}
+            for word in words:
+                if re.search(r"(?:19|20)\d{2}", str(word["text"])):
+                    year_lines.setdefault(round(float(word["top"]), 1), []).append(word)
+            year_words: list[dict[str, object]] = []
+            if year_lines:
+                year_words = year_lines[max(year_lines)]
+
+            cells = next((row.cells for row in found.rows if any(cell is not None for cell in row.cells)), [])
+            anchors: list[tuple[float, str]] = []
+            for word in year_words:
+                m = re.search(r"(?:19|20)\d{2}", str(word["text"]))
+                if m:
+                    anchors.append((float(word["x0"] + word["x1"]) / 2, m.group(0)))
+
+            if anchors and len(anchors) >= 2:
+                col_count = width - 1
+                if col_count % len(anchors) == 0:
+                    repeats = col_count // len(anchors)
+                    sorted_anchors = sorted(anchors, key=lambda a: a[0])
+                    for a_idx, (_, year_val) in enumerate(sorted_anchors):
+                        start_c = 1 + a_idx * repeats
+                        for c in range(start_c, start_c + repeats):
+                            if c < width and periods[c] is None:
+                                periods[c] = year_val
+                                if headers[c].startswith("column_"):
+                                    sub = "Amount" if col_types[c] == "amount" else ("%" if col_types[c] == "percentage" else "")
+                                    headers[c] = f"{year_val} {sub}".strip()
+                else:
+                    for index, cell in enumerate(cells[:width]):
+                        if index == 0 or cell is None or not anchors or periods[index] is not None:
+                            continue
+                        center = (float(cell[0]) + float(cell[2])) / 2
+                        periods[index] = min(anchors, key=lambda item: abs(item[0] - center))[1]
+                        if headers[index].startswith("column_"):
+                            headers[index] = periods[index]
+
         return headers, periods, data_rows, col_types, col_currs, col_scales
 
     def _infer_schema(self, page: object, found: object, raw: list[list[str | None]]) -> tuple[list[str], list[str | None], list[list[str | None]]]:

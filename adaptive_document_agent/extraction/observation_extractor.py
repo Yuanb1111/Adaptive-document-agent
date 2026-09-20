@@ -85,6 +85,11 @@ class ObservationExtractor:
                     continue
 
                 col_type = table.column_types[column] if column < len(table.column_types) else "unknown"
+                is_pct_col = (
+                    col_type == "percentage"
+                    or "%" in header
+                    or any(kw in header.casefold() for kw in ("percent", "percentage", "share", "margin", "占比", "份额", "比例", "毛利率"))
+                )
                 dimensions: dict[str, str] = {}
                 cat_dims: dict[str, str] = {}
 
@@ -99,10 +104,29 @@ class ObservationExtractor:
                     dim_key = table.headers[0].casefold() if self._meaningful_header(table.headers[0]) else "category"
                     dimensions[dim_key] = clean_label
                     cat_dims[dim_key] = clean_label
-                    if col_type == "percentage":
+                    if is_pct_col:
                         metric = f"{metric} share" if "share" in header.casefold() else f"{metric} margin"
+                        dimensions["column_role"] = "percentage"
+                    else:
+                        dimensions["column_role"] = "amount"
                 else:
-                    metric = f"{clean_label}: {header}" if self._meaningful_header(header) else clean_label
+                    if is_pct_col:
+                        if self._meaningful_header(header):
+                            metric = f"{clean_label}: {header}"
+                        elif "gross profit" in clean_label.casefold() or "毛利" in clean_label:
+                            metric = f"{clean_label} margin"
+                        elif "net profit" in clean_label.casefold() or "net income" in clean_label.casefold() or "net loss" in clean_label.casefold():
+                            metric = f"{clean_label} %"
+                        elif "margin" in header.casefold() or "利润率" in header:
+                            metric = f"{clean_label} margin"
+                        elif "share" in header.casefold() or "份额" in header or "占比" in header:
+                            metric = f"{clean_label} share"
+                        else:
+                            metric = f"{clean_label} %"
+                        dimensions["column_role"] = "percentage"
+                    else:
+                        metric = f"{clean_label}: {header}" if self._meaningful_header(header) else clean_label
+                        dimensions["column_role"] = "amount"
                     if current_section:
                         dimensions["section"] = current_section
 
@@ -164,7 +188,7 @@ class ObservationExtractor:
             semantic_type = "multiple"
             unit_family = "multiple"
             display_unit = "x"
-        elif col_type == "percentage":
+        elif col_type == "percentage" or ("%" in header_lower and not is_nonsensical_pct_header) or (dimensions and dimensions.get("column_role") == "percentage"):
             unit, currency, scale = "percent", None, 1.0
             value = number.value
             semantic_type = "margin" if "margin" in metric.casefold() or "利润率" in metric else "ratio_share"

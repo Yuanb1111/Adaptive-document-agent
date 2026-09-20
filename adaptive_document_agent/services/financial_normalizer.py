@@ -182,7 +182,9 @@ class FinancialNormalizer:
                     obs.semantic_type = sem.semantic_type
 
         # Normalize currency symbol
-        if obs.currency:
+        if obs.unit_family == "percentage" or obs.unit == "percent":
+            obs.currency = None
+        elif obs.currency:
             obs.currency = normalize_currency_symbol(obs.currency)
 
         # Normalize raw unit string if present
