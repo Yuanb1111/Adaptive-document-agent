@@ -536,9 +536,18 @@ def is_signed_gain_loss_metric(
     - FX gain/(loss)
     """
     cn = canonical_name or ""
+    canonical_norm = re.sub(r"[^a-z0-9]+", "_", cn.casefold()).strip("_")
+    if re.search(r"(?:^|_)(?:gain_(?:or_)?loss|loss_(?:or_)?gain)(?:_|$)", canonical_norm):
+        return True
     name_str = f"{cn} {metric_name}".strip().casefold()
     name_norm = re.sub(r"[_\-]+", " ", name_str)
-    if re.search(r"gain\s*[\(\/\\]\s*loss", name_norm) or re.search(r"loss\s*[\(\/\\]\s*gain", name_norm):
+    # Parentheses express the alternate sign label, not grouping that changes
+    # meaning.  Removing them first handles all common statement variants:
+    # gain/(loss), (gain)/loss, loss/(gain), and (loss)/gain.
+    name_norm = name_norm.translate(str.maketrans({"（": "", "）": "", "／": "/", "⁄": "/"}))
+    name_norm = re.sub(r"[()]", "", name_norm)
+    signed_pair = r"(?:gains?\s*(?:/|\\|\bor\b)\s*loss(?:es)?|loss(?:es)?\s*(?:/|\\|\bor\b)\s*gains?)"
+    if re.search(rf"\b{signed_pair}\b", name_norm):
         return True
     if any(
         p in name_norm
@@ -1253,9 +1262,16 @@ def extract_metric_aliases(
         no_punct = re.sub(r"[_\-]+", " ", clean_metric).strip()
         if no_punct:
             aliases.add(no_punct)
-        no_parens = re.sub(r"\s*\(.*?\)", "", no_punct).strip()
-        if no_parens:
-            aliases.add(no_parens)
+        # Keep both useful interpretations of parentheses.  Removing only the
+        # delimiters preserves signed labels such as ``(loss)/gain``; removing
+        # the complete group still supports optional qualifiers such as
+        # ``revenue (reported)``.
+        without_paren_delimiters = re.sub(r"[()]", "", no_punct).strip()
+        if without_paren_delimiters:
+            aliases.add(without_paren_delimiters)
+        without_parenthetical_groups = re.sub(r"\s*\(.*?\)", "", no_punct).strip()
+        if without_parenthetical_groups:
+            aliases.add(without_parenthetical_groups)
 
     if canonical_name:
         clean_can = canonical_name.strip()
@@ -2129,5 +2145,3 @@ def repair_presentation_plan(
     validator = ClaimValidator()
     issues = validator.validate_plan(plan, observations)
     return repair_presentation_plan_from_issues(plan, issues)
-
-

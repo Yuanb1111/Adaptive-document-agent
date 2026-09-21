@@ -21,7 +21,10 @@ from adaptive_document_agent.services.qa_reporter import (
 )
 from adaptive_document_agent.validation.claim_validator import (
     ClaimValidator,
+    TrendState,
     are_observations_compatible,
+    determine_trend_state,
+    is_signed_gain_loss_metric,
     repair_presentation_plan,
     repair_slide_claims,
 )
@@ -1160,6 +1163,160 @@ def test_regression_case_d_fx_gain_loss_transition() -> None:
     assert len(issues) == 0, f"Expected 0 issues, got: {issues}"
 
 
+@pytest.mark.parametrize(
+    "label",
+    [
+        "gain/(loss)",
+        "(gain)/loss",
+        "loss/(gain)",
+        "(loss)/gain",
+        "gain/loss",
+        "loss/gain",
+        "gain or loss",
+        "loss or gain",
+        "net gain/(loss)",
+        "(loss)/gain on disposal of property, plant and equipment (net)",
+    ],
+)
+@pytest.mark.parametrize(
+    ("start_value", "end_value", "expected"),
+    [
+        (-1_156_000.0, 198_000.0, TrendState.LOSS_TO_GAIN),
+        (198_000.0, -1_156_000.0, TrendState.GAIN_TO_LOSS),
+    ],
+)
+def test_signed_gain_loss_label_variants_are_unambiguous_across_zero(
+    label: str,
+    start_value: float,
+    end_value: float,
+    expected: TrendState,
+) -> None:
+    """Parenthesised and plain signed accounting labels retain gain/loss semantics."""
+    assert is_signed_gain_loss_metric(label)
+    trend = determine_trend_state(label, start_value, end_value)
+    assert trend == expected
+    assert trend != TrendState.AMBIGUOUS
+
+
+@pytest.mark.parametrize(
+    ("start_value", "end_value", "expected"),
+    [
+        (-1_156_000.0, -198_000.0, TrendState.LOSS_NARROWED),
+        (-198_000.0, -1_156_000.0, TrendState.LOSS_WIDENED),
+    ],
+)
+def test_signed_gain_loss_negative_transitions_use_loss_magnitude(
+    start_value: float,
+    end_value: float,
+    expected: TrendState,
+) -> None:
+    label = "(loss)/gain on disposal of assets (net)"
+    assert determine_trend_state(label, start_value, end_value) == expected
+
+
+def test_disposal_loss_to_gain_does_not_create_critical_qa_error() -> None:
+    """The reported PPE disposal transition must not block PowerPoint preflight."""
+    label = "(loss)/gain on disposal of property, plant and equipment (net)"
+    assert is_signed_gain_loss_metric("Disposal result", "gain_loss_on_disposal")
+    ev = SourceEvidence(page=8, text=label, extraction_method="digital_table", confidence=0.95)
+    obs = [
+        Observation(
+            id="disposal_2023",
+            metric_original=label,
+            value=-1_156_000.0,
+            raw_value="(1,156,000)",
+            period="FY2023",
+            unit="currency",
+            currency="USD",
+            period_type="fiscal_year",
+            evidence=[ev],
+            confidence=0.95,
+        ),
+        Observation(
+            id="disposal_2024",
+            metric_original=label,
+            value=198_000.0,
+            raw_value="198,000",
+            period="FY2024",
+            unit="currency",
+            currency="USD",
+            period_type="fiscal_year",
+            evidence=[ev],
+            confidence=0.95,
+        ),
+    ]
+    slide = PresentationSlide(
+        id="slide_disposal",
+        slide_type="analysis",
+        title="Disposal result",
+        message=f"{label} swung from loss to gain from FY2023 to FY2024.",
+        observation_ids=["disposal_2023", "disposal_2024"],
+    )
+    result = PipelineResult(
+        document=_sample_doc(),
+        profile=DocumentProfile(document_purpose="signed metric regression"),
+        observations=obs,
+        presentation_plan=PresentationPlan(title="Deck", slides=[slide]),
+    )
+
+    qa = run_comprehensive_qa(result, auto_repair=True)
+
+    assert qa.critical_errors == []
+    assert not qa.is_export_blocked
+
+
+def test_qa_reports_one_ambiguous_contradiction_per_slide_metric_transition() -> None:
+    """Genuinely ambiguous loss-only semantics stay critical without duplicate reporting."""
+    ev = SourceEvidence(page=4, text="loss", extraction_method="digital_table", confidence=0.9)
+    obs = [
+        Observation(
+            id="loss_1",
+            metric_original="Exceptional loss",
+            value=-100.0,
+            raw_value="-100",
+            period="FY2023",
+            unit="currency",
+            currency="USD",
+            period_type="fiscal_year",
+            evidence=[ev],
+            confidence=0.9,
+        ),
+        Observation(
+            id="loss_2",
+            metric_original="Exceptional loss",
+            value=25.0,
+            raw_value="25",
+            period="FY2024",
+            unit="currency",
+            currency="USD",
+            period_type="fiscal_year",
+            evidence=[ev],
+            confidence=0.9,
+        ),
+    ]
+    slide = PresentationSlide(
+        id="slide_ambiguous_loss",
+        slide_type="analysis",
+        title="Exceptional loss movement",
+        message="Exceptional loss changed from FY2023 to FY2024.",
+        bullets=["Exceptional loss requires careful interpretation."],
+        observation_ids=["loss_1", "loss_2"],
+    )
+    result = PipelineResult(
+        document=_sample_doc(),
+        profile=DocumentProfile(document_purpose="ambiguous metric regression"),
+        observations=obs,
+        presentation_plan=PresentationPlan(title="Deck", slides=[slide]),
+    )
+
+    qa = run_comprehensive_qa(result, auto_repair=True)
+    contradictions = [item for item in qa.critical_errors if item.code == "directional_contradiction"]
+
+    assert len(contradictions) == 1
+    assert contradictions[0].slide_id == "slide_ambiguous_loss"
+    assert qa.has_critical_errors
+
+
 def test_regression_case_e_data_quality_slide_no_obs_ids() -> None:
     """Case E: Data Quality slide with no observation_ids:
     Must NOT run directional QA against unrelated financial observations in document.
@@ -1208,4 +1365,3 @@ def test_regression_case_f_appendix_slide_no_narrative_claims() -> None:
     validator = ClaimValidator()
     issues = validator.validate_plan(plan, obs)
     assert len(issues) == 0, f"Expected 0 issues on appendix slide, got: {issues}"
-

@@ -403,13 +403,28 @@ def run_comprehensive_qa(result: PipelineResult, auto_repair: bool = True) -> QA
         # Revalidation pass
         validator = ClaimValidator()
         claim_issues = validator.validate_plan(result.presentation_plan, result.observations)
+        reported_claim_transitions: set[tuple[str, str, str, str]] = set()
         for issue in claim_issues:
             if issue.code == "directional_contradiction":
+                # A single underlying contradiction can appear in a slide title,
+                # message, and bullets.  QA reports the root issue once per
+                # slide, metric, and period transition while the structured
+                # validator remains component-aware for automatic repairs.
+                transition_key = (
+                    str(getattr(issue, "slide_id", "")),
+                    str(getattr(issue, "metric_name", "")).strip().casefold(),
+                    str(getattr(issue, "start_period", "")),
+                    str(getattr(issue, "end_period", "")),
+                )
+                if transition_key in reported_claim_transitions:
+                    continue
+                reported_claim_transitions.add(transition_key)
                 report.critical_errors.append(
                     QAItem(
                         code="directional_contradiction",
                         severity="CRITICAL",
                         message=issue.message,
+                        slide_id=getattr(issue, "slide_id", None) or None,
                         related_ids=issue.related_ids,
                     )
                 )
