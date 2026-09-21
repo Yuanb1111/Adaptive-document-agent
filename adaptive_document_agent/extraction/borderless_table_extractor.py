@@ -9,8 +9,9 @@ from adaptive_document_agent.utils.ids import stable_id
 
 from .normalizer import infer_unit_defaults
 from .column_roles import explicit_percentage
+from .borderless_layout import source_lines, column_anchors, align_sparse_values, geometric_headers
 
-_VALUE = re.compile(r"(?<![A-Za-z0-9])(?:\(?[+-]?(?:\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)\)?%?|[—–])")
+_VALUE = re.compile(r"(?<![A-Za-z0-9])(?:\(?[+-]?(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)\)?[%％]?|[—–]|-(?!\S))")
 _YEAR = re.compile(r"\b(?:19|20)\d{2}\b")
 _WORD = re.compile(r"[%A-Za-z][%A-Za-z/-]*")
 
@@ -20,6 +21,7 @@ class _CandidateRow:
     line_index: int
     label: str
     values: list[str]
+    boxes: tuple[tuple[float, float], ...] = ()
 
 
 class BorderlessTableExtractor:
@@ -30,8 +32,16 @@ class BorderlessTableExtractor:
             text = page.extract_text(x_tolerance=2, y_tolerance=3) or ""
         else:
             text = getattr(page, "text", "") or ""
-        lines = [self._clean_line(" ".join(line.split())) for line in text.splitlines()]
-        candidates = [row for index, line in enumerate(lines) if (row := self._parse_row(index, line))]
+        sources = source_lines(page, text, self._clean_line)
+        lines = [self._clean_line(source.text) for source in sources]
+        candidates = []
+        for index, line in enumerate(lines):
+            if row := self._parse_row(index, line):
+                matches = list(_VALUE.finditer(sources[index].text))[-len(row.values):]
+                boxes = [sources[index].bounds(m.start(), m.end()) for m in matches]
+                if [m.group() for m in matches] == row.values and all(boxes):
+                    row = _CandidateRow(index, row.label, row.values, tuple(boxes))
+                candidates.append(row)
         groups = self._groups(candidates, lines)
         tables: list[ExtractedTable] = []
         for group_index, group in enumerate(groups):
@@ -44,8 +54,14 @@ class BorderlessTableExtractor:
                 continue
             periods = self._expand_periods(years, maximum_values, lines, year_index)
             headers = self._headers(lines, year_index, group[0].line_index, maximum_values)
-            row_specs = self._rows_with_sections(group, lines, maximum_values)
-            raw_rows = [cells for cells, _ in row_specs]
+            anchors = column_anchors([list(r.boxes) for r in group if len(r.values) == maximum_values], maximum_values)
+            header_sources = sources[year_index+1:group[0].line_index] if year_index is not None else []
+            headers = geometric_headers(header_sources, anchors, headers)
+            alignments = {r.line_index: align_sparse_values(r.values, r.boxes, anchors, maximum_values)
+                          for r in group if len(r.values) < maximum_values}
+            row_specs = self._rows_with_sections(group, lines, maximum_values, alignments=alignments)
+            raw_rows = [cells for cells, _, _ in row_specs]
+            has_ambiguous_rows = any(ambiguous for _, _, ambiguous in row_specs)
             context_start = max(0, (year_index if year_index is not None else group[0].line_index) - 8)
             context = " ".join(lines[context_start : group[0].line_index + 1])
             unit, scale, currency, raw_unit = self._defaults(context)
@@ -86,15 +102,18 @@ class BorderlessTableExtractor:
                     column_types=col_types,
                     column_currencies=col_currs,
                     column_scales=col_scales,
-                    rows=[TableRow(cells=cells, page=page_number, column_periods=row_periods) for cells, row_periods in row_specs],
+                    rows=[TableRow(cells=cells, page=page_number, column_periods=row_periods,
+                                   alignment_status="ambiguous" if ambiguous else "resolved") for cells, row_periods, ambiguous in row_specs],
                     raw_cells=raw_rows,
+                    raw_header_lines=[s.text for s in header_sources],
                     confidence=0.68 if years else 0.55,
                     default_unit=unit,
                     default_raw_unit=raw_unit,
                     default_unit_scale=scale,
                     default_currency=currency,
                     context_label=context_label,
-                    warnings=["Recovered from aligned text because no bordered table structure was detected."],
+                    warnings=["Recovered from aligned text because no bordered table structure was detected."] +
+                             (["Sparse rows have ambiguous column alignment; raw cells retained but not interpreted."] if has_ambiguous_rows else []),
                 )
             )
         return tables
@@ -102,6 +121,9 @@ class BorderlessTableExtractor:
     @staticmethod
     def _parse_row(index: int, line: str) -> _CandidateRow | None:
         line = re.sub(r"(?<=[A-Za-z])\(\d+\)", "", line)
+        # A list marker preceding a word belongs to the label, not the first
+        # value. Keep real minus signs, parenthesised losses and empty cells.
+        line = re.sub(r"^\s*[–—•-]\s+(?=[A-Za-z\u3400-\u9fff])", "", line)
         matches = list(_VALUE.finditer(line))
         if len(matches) < 2:
             return None
@@ -223,14 +245,33 @@ class BorderlessTableExtractor:
                 and any(left.casefold() in right.casefold() for left in repeated_phrases for right in repeated_phrases if left != right)
             ):
                 return [phrase for _ in years for phrase in repeated_phrases]
+        # Reassemble full-width tiers without propagating a nearby '%' across
+        # the table. E.g. 'Gross profit ...' / 'profit margin ...' are separate
+        # fragments in each numeric column, not global percentage declarations.
+        tiers = [_WORD.findall(line) for line in context_lines if not line.startswith("(")
+                 and not re.fullmatch(r"(?:%\s*of\s*)+", line, re.I)]
+        tiers = [words for words in tiers if len(words) == width and len({w.casefold() for w in words}) < width]
+        if len(tiers) >= 2:
+            return [" ".join(dict.fromkeys(words[i] for words in tiers)) for i in range(width)]
         for line in reversed(context_lines):
             if line.startswith("("):
                 continue
             words = _WORD.findall(line)
             if len(words) == width and len({word.casefold() for word in words}) < len(words):
-                if any("%" in candidate for candidate in context_lines):
-                    words = [word if word.casefold() in {"amount", "value"} or word.startswith("%") else f"% of {word}" for word in words]
+                # This is a confirmed Amount/% structure: repeated '% of'
+                # fragments and explicitly labelled Amount columns. A general
+                # '(except percentages)' unit note is NOT column evidence.
+                prefix_count = max((len(re.findall(r"%\s*of\b", candidate, re.I)) for candidate in context_lines), default=0)
+                if (years and width == 2*len(years) and prefix_count == len(years)
+                        and all(words[i].casefold() in {"amount", "value"} for i in range(0, width, 2))):
+                    words = [word if i % 2 == 0 or word.startswith("%") else f"% of {word}" for i, word in enumerate(words)]
                 return words
+        # An explicit row of per-column units is sufficient even when semantic
+        # header fragments cannot be safely reassembled.
+        for line in context_lines:
+            unit_cells = re.findall(r"\((?:RMB|CNY|USD|HKD|EUR|GBP|%|％)\)", line, re.I)
+            if len(unit_cells) == width and "".join(line.split()) == "".join(unit_cells):
+                return ["%" if "%" in cell or "％" in cell else "Amount" for cell in unit_cells]
         return [f"column_{index + 2}" for index in range(width)]
 
     @staticmethod
@@ -245,8 +286,8 @@ class BorderlessTableExtractor:
         return " ".join(chunks[0])
 
     @staticmethod
-    def _rows_with_sections(group: list[_CandidateRow], lines: list[str], width: int) -> list[tuple[list[str | None], list[str | None]]]:
-        output: list[tuple[list[str | None], list[str | None]]] = []
+    def _rows_with_sections(group: list[_CandidateRow], lines: list[str], width: int, *, alignments=None) -> list[tuple[list[str | None], list[str | None], bool]]:
+        output: list[tuple[list[str | None], list[str | None], bool]] = []
         initial_context = lines[max(0, group[0].line_index - 5) : group[0].line_index]
         active_period = next((period for line in reversed(initial_context) if (period := BorderlessTableExtractor._period_from_line(line))), None)
         previous_index = group[0].line_index - 2
@@ -255,17 +296,21 @@ class BorderlessTableExtractor:
             period_updates = [period for line in between if (period := BorderlessTableExtractor._period_from_line(line))]
             if period_updates:
                 active_period = period_updates[-1]
-            between = [line for line in between if not BorderlessTableExtractor._period_from_line(line)]
+            between = [line for line in between if not BorderlessTableExtractor._period_from_line(line)
+                       and sum(bool(re.search(r"\d", m.group())) for m in _VALUE.finditer(line)) < 2]
             label = row.label
             if between and label[:1].islower():
                 label = " ".join([*between, label])
             elif between and previous_index >= group[0].line_index:
                 for section in between:
                     if len(section) <= 80 and len(re.findall(r"[A-Za-z]", section)) >= 2:
-                        output.append(([section, *([None] * width)], [None] * (width + 1)))
+                        output.append(([section, *([None] * width)], [None] * (width + 1), False))
             values: list[str | None] = [*row.values[:width], *([None] * max(0, width - len(row.values)))]
+            if alignments and alignments.get(row.line_index) is not None:
+                values = alignments[row.line_index]
             row_periods = [None, *([active_period] * width)] if active_period else [None] * (width + 1)
-            output.append(([label, *values], row_periods))
+            ambiguous = bool(alignments is not None and row.line_index in alignments and alignments[row.line_index] is None)
+            output.append(([label, *values], row_periods, ambiguous))
             previous_index = row.line_index
         return output
 
@@ -303,11 +348,15 @@ class BorderlessTableExtractor:
                 continue
             if re.search(r"year\s*ended|months?\s*ended|as\s*of", lowered):
                 continue
+            if sum(bool(re.search(r"\d", m.group())) for m in _VALUE.finditer(candidate)) >= 2:
+                continue
             if len(re.findall(r"[A-Za-z]", candidate)) < 2:
                 continue
             candidates.append(candidate)
         for candidate in candidates:
-            if candidate.isupper() or candidate.istitle():
+            words = candidate.split()
+            heading_case = bool(words) and all(w[:1].isupper() or w.casefold() in {"and", "of", "the", "by", "in", "for", "to", "&"} for w in words)
+            if candidate.isupper() or heading_case:
                 return candidate
         # A non-heading fragment is still useful as an internal semantic
         # boundary between adjacent tables. Presentation decides separately

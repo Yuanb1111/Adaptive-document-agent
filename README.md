@@ -368,6 +368,8 @@ This gate does not certify visual taste, exact glyph clipping, PowerPoint/Google
 
 ## Known Limitations
 
+Borderless-table extraction preserves multi-line header fragments and uses local PDF word coordinates to align sparse rows, including blank percentage cells beside reported amounts. A nearby `%` or an `except percentages` unit note is not evidence that every column is a percentage. Unresolved sparse rows retain their raw values, are excluded from numeric observations, and block verified export with `ambiguous_table_alignment`; implausible percentages still block export. After updating from the older extractor, restart the app, review the analysis scope and run analysis again (table cache version `tables-v8`). Exporting an old in-memory result does not re-extract its tables.
+
 - Only one PDF is processed at a time, synchronously; there is no API server, database, authentication, queue, or multi-user workspace.
 - The parser currently enforces a 200 MiB upload limit in code. Although `MAX_UPLOAD_MB` is present in `.env.example`, that environment value is not yet wired into the parser.
 - Scope review is mandatory in the Streamlit workflow. The selected ranges improve cost and focus but can omit relevant material if the routing model misses it; the user should inspect the proposed ranges.

@@ -63,6 +63,11 @@ class ObservationExtractor:
         column_metric_mode = len(set(meaningful_header_list)) >= 2
         current_section: str | None = None
         for row_index, row in enumerate(table.rows):
+            if row.alignment_status == "ambiguous":
+                # Preserve unresolved cells in the source table. Never shift
+                # them into year/percentage slots merely to emit observations.
+                current_section = None
+                continue
             if not row.cells:
                 continue
             label = self._row_label(row.cells[0])

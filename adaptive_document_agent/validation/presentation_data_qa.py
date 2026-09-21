@@ -12,6 +12,12 @@ def validate_presentation_data(result: PipelineResult):
     from adaptive_document_agent.services.qa_reporter import QAItem
 
     issues = []
+    for page in result.document.pages:
+        for table in page.tables:
+            for row_index, row in enumerate(table.rows):
+                if row.alignment_status == "ambiguous":
+                    issues.append(QAItem(code="ambiguous_table_alignment", severity="CRITICAL", related_ids=[table.table_id],
+                        message=f"Table {table.table_id}, page {row.page}, row {row_index + 1} has unresolved blank-cell alignment. Raw values are retained; re-extract with source geometry before export."))
     for obs in result.observations:
         is_pct = obs.unit in {"%", "percent", "percentage"} or obs.unit_family == "percentage"
         source_labels = [e.row_label for e in obs.evidence if e.row_label]

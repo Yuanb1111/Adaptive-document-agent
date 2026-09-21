@@ -1,6 +1,7 @@
 """Extracted table models with row-level page provenance."""
 
 from pydantic import BaseModel, Field
+from typing import Literal
 
 
 class TableRow(BaseModel):
@@ -12,6 +13,7 @@ class TableRow(BaseModel):
     is_section_header: bool = False
     is_subtotal: bool = False
     is_deduction: bool = False
+    alignment_status: Literal["resolved", "ambiguous"] = "resolved"
 
 
 class ExtractedTable(BaseModel):
@@ -27,6 +29,7 @@ class ExtractedTable(BaseModel):
     section_path: list[str] = Field(default_factory=list)
     rows: list[TableRow] = Field(default_factory=list)
     raw_cells: list[list[str | None]] = Field(default_factory=list)
+    raw_header_lines: list[str] = Field(default_factory=list)
     bbox: tuple[float, float, float, float] | None = None
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     default_unit: str | None = None
