@@ -3,4 +3,5 @@ libreoffice-calc
 fonts-liberation
 fonts-crosextra-carlito
 fonts-noto-cjk
+fonts-wqy-zenhei
 libseccomp2

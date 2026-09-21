@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import io
 import re
+from hashlib import sha256
 from html import escape
 from pathlib import Path
+from threading import RLock
 from typing import Any
 
 from adaptive_document_agent.models import PipelineResult
+
+
+_FONT_LOCK = RLock()
 
 
 def build_report_pdf(result: PipelineResult) -> bytes:
@@ -144,33 +149,64 @@ def _is_separator_row(value: str) -> bool:
 
 
 def _register_report_font(content: str) -> str:
+    # ReportLab's registry is process-global, including across Streamlit sessions.
+    with _FONT_LOCK:
+        return _select_report_font(content)
+
+
+def _select_report_font(content: str) -> str:
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.cidfonts import UnicodeCIDFont
-    from reportlab.pdfbase.ttfonts import TTFont
+    from reportlab.pdfbase.ttfonts import TTFont, TTFError
 
-    contains_cjk = bool(re.search(r"[\u3400-\u9fff]", content))
+    cjk_chars = set(re.findall(r"[\u3000-\u30ff\u3400-\u9fff\uac00-\ud7af\uf900-\ufaff]", content))
+    contains_cjk = bool(cjk_chars)
     cjk_candidates = [
         (Path("C:/Windows/Fonts/msyh.ttc"), Path("C:/Windows/Fonts/msyhbd.ttc")),
         (Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"), Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc")),
         (Path("/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf"), Path("/usr/share/fonts/opentype/noto/NotoSansCJKsc-Bold.otf")),
+        (Path("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"), Path("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc")),
     ]
     latin_candidates = [
         (Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"), Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")),
         (Path("C:/Windows/Fonts/arial.ttf"), Path("C:/Windows/Fonts/arialbd.ttf")),
     ]
-    candidates = [*cjk_candidates, *latin_candidates] if contains_cjk else [*latin_candidates, *cjk_candidates]
+    # Never substitute a Latin-only font for Chinese just because it loads.
+    candidates = cjk_candidates if contains_cjk else [*latin_candidates, *cjk_candidates]
     for regular, bold in candidates:
         if not regular.is_file():
             continue
-        font_name = "AdaptiveReport"
-        bold_name = "AdaptiveReportBold"
-        if font_name not in pdfmetrics.getRegisteredFontNames():
-            pdfmetrics.registerFont(TTFont(font_name, str(regular), subfontIndex=0))
-            pdfmetrics.registerFont(TTFont(bold_name, str(bold if bold.is_file() else regular), subfontIndex=0))
-            pdfmetrics.registerFontFamily(font_name, normal=font_name, bold=bold_name, italic=font_name, boldItalic=bold_name)
+        font_name = "AdaptiveReport_" + sha256(str(regular).encode()).hexdigest()[:16]
+        bold_name = font_name + "Bold"
+        registered = pdfmetrics.getRegisteredFontNames()
+        try:
+            regular_font = (pdfmetrics.getFont(font_name) if font_name in registered
+                            else TTFont(font_name, str(regular), subfontIndex=0))
+        except (TTFError, OSError):
+            # TTC/OTF extensions do not imply TrueType outlines: Noto CJK
+            # packages commonly contain CFF/PostScript faces unsupported here.
+            continue
+        if any(not regular_font.face.charToGlyph.get(ord(char)) for char in cjk_chars):
+            continue
+        try:
+            bold_font = (pdfmetrics.getFont(bold_name) if bold_name in registered
+                         else TTFont(bold_name, str(bold), subfontIndex=0))
+            if any(not bold_font.face.charToGlyph.get(ord(char)) for char in cjk_chars):
+                bold_font = regular_font
+        except (TTFError, OSError):
+            bold_font = regular_font
+        # Publish only a complete usable family; a bad bold face cannot leave a
+        # half-registered family that breaks later sessions.
+        pdfmetrics.registerFont(regular_font)
+        pdfmetrics.registerFont(bold_font)
+        pdfmetrics.registerFontFamily(font_name, normal=font_name, bold=bold_font.fontName,
+                                      italic=font_name, boldItalic=bold_font.fontName)
         return font_name
     if contains_cjk:
-        font_name = "STSong-Light"
+        # Last-resort standard CID fonts preserve CJK text but are not embedded.
+        font_name = ("HYSMyeongJo-Medium" if re.search(r"[\uac00-\ud7af]", content)
+                     else "HeiseiMin-W3" if re.search(r"[\u3040-\u30ff]", content)
+                     else "STSong-Light")
         if font_name not in pdfmetrics.getRegisteredFontNames():
             pdfmetrics.registerFont(UnicodeCIDFont(font_name))
             pdfmetrics.registerFontFamily(font_name, normal=font_name, bold=font_name, italic=font_name, boldItalic=font_name)

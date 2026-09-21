@@ -2,7 +2,7 @@
 
 from adaptive_document_agent.agent.orchestrator import DocumentOrchestrator
 from adaptive_document_agent.document_model import DocumentIndex
-from adaptive_document_agent.services.export import export_csv, export_markdown, export_pdf, export_pptx_with_report
+from adaptive_document_agent.services.export import export_pptx_with_report
 from adaptive_document_agent.services.llm import LLMGateway
 from adaptive_document_agent.services.llm.routing import create_llm_client
 from adaptive_document_agent.utils.hashing import sha256_bytes
@@ -10,6 +10,7 @@ from adaptive_document_agent.utils.hashing import sha256_bytes
 from . import analysis, data, overview, quality, sources, technical
 from .charts import chart_rows, render_chart
 from .deployment import cache_for_session, is_public_deployment
+from .exports import render_report_downloads
 from .sidebar import render_sidebar
 
 
@@ -198,12 +199,7 @@ def run_app() -> None:
             )
         else:
             st.button("Download presentation (.pptx)", disabled=True, use_container_width=True, help="Export blocked by Critical QA")
-    with col2:
-        st.download_button("Download Markdown", export_markdown(result), "analysis_report.md", "text/markdown", use_container_width=True)
-    with col3:
-        st.download_button("Download report (.pdf)", export_pdf(result), "analysis_report.pdf", "application/pdf", use_container_width=True)
-    with col4:
-        st.download_button("Download CSV", export_csv(result), "extracted_observations.csv", "text/csv", use_container_width=True)
+    render_report_downloads(st, result, (col2, col3, col4))
 
     if qa_error:
         from adaptive_document_agent.services.export_diagnostics import export_diagnostics
