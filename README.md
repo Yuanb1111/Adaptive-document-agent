@@ -272,6 +272,9 @@ The current validation stack includes:
 - clause-level claim validation and targeted wording repair;
 - company identity reconciliation and source-only company overview construction;
 - chart/slide topic alignment based on positive semantic evidence;
+- source-based amount/percentage column roles (never inferred from column position), with re-evaluation of stale roles and critical checks for unsupported monetary percentages or percentage magnitudes above 1,000;
+- enriched single-metric analysis pages with a large editable chart, start/end KPIs, absolute change, eligible CAGR/percentage change, period changes, extrema, and source pages; rates require comparable periods and compatible units, while percentage metrics use percentage-point changes;
+- final checks for sparse analysis content, chart-title/data mismatch, and repeated slide narratives/evidence;
 - cross-slide checks for contradictory summaries, placeholders, float artifacts, working-capital wording, and inconsistent detail;
 - layout QA for cramped multi-chart slides, unreadable scatter charts, long titles, zero-crossing labels, KPI spacing, and legend/unit collisions;
 - a final PowerPoint preflight and a hard export blocker for unresolved critical contradictions.

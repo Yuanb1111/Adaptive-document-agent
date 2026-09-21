@@ -8,6 +8,7 @@ from adaptive_document_agent.utils.ids import stable_id
 
 from .borderless_table_extractor import BorderlessTableExtractor
 from .normalizer import infer_unit_defaults
+from .column_roles import percentage_column
 
 
 class TableExtractor:
@@ -227,7 +228,7 @@ class TableExtractor:
             is_nonsensical_pct = bool(re.search(r"(?i)%\s*(?:of\s*)?(?:rmb|usd|cny|hkd|eur|\$|£|€)", h_clean))
             
             # Explicit percentage header
-            if ("%" in h_clean or "percent" in h_clean or "share" in h_clean or "margin" in h_clean) and not is_nonsensical_pct:
+            if percentage_column(h_clean, [r[idx] for r in data_rows if idx < len(r)]) and not is_nonsensical_pct:
                 col_types[idx] = "percentage"
                 col_currs[idx] = None
                 col_scales[idx] = 1.0
@@ -250,8 +251,7 @@ class TableExtractor:
             else:
                 # Inspect values across data rows for this column
                 nums = [self._clean(r[idx]) for r in data_rows if idx < len(r) and r[idx]]
-                pct_vals = sum(1 for v in nums if v and ("%" in v or "pct" in v.casefold()))
-                if nums and pct_vals / len(nums) >= 0.5:
+                if percentage_column("", nums):
                     col_types[idx] = "percentage"
                     col_currs[idx] = None
                     col_scales[idx] = 1.0

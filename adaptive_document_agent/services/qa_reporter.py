@@ -338,6 +338,12 @@ def run_comprehensive_qa(result: PipelineResult, auto_repair: bool = True) -> QA
         total_slides=len(result.presentation_plan.slides) if result.presentation_plan else 0,
     )
 
+    if auto_repair:
+        from .single_metric_slides import enrich_single_metric_slides
+        for slide_id in enrich_single_metric_slides(result):
+            report.info.append(QAItem(code="single_metric_enriched", severity="INFO", slide_id=slide_id,
+                message="Enriched comparable single-metric evidence with a hero chart and deterministic period statistics."))
+
     # 1. Resolve company identity contradictions
     identity_fixes = sanitize_company_identity_contradictions(result)
     report.info.extend(identity_fixes)
@@ -568,6 +574,12 @@ def run_comprehensive_qa(result: PipelineResult, auto_repair: bool = True) -> QA
             else:
                 report.info.append(issue)
 
+    from adaptive_document_agent.validation.presentation_data_qa import validate_presentation_data
+    for issue in validate_presentation_data(result):
+        if issue.severity == "CRITICAL":
+            report.critical_errors.append(issue)
+        else:
+            report.warnings.append(issue)
     report.is_export_blocked = report.has_critical_errors
     return report
 

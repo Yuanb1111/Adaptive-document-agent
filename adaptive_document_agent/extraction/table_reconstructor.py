@@ -3,7 +3,8 @@ from copy import deepcopy
 from typing import Any
 
 from adaptive_document_agent.extraction.numeric_parser import parse_number
-from adaptive_document_agent.models.table import ExtractedTable, TableRow
+from adaptive_document_agent.models.table import ExtractedTable
+from .column_roles import percentage_column
 
 _YEAR_OR_PERIOD_PATTERN = re.compile(
     r"\b(?:19|20)\d{2}\b"
@@ -143,7 +144,8 @@ class TableReconstructor:
 
             combined_txt = " ".join(tokens).casefold()
 
-            is_pct = any(kw in combined_txt for kw in _SUB_ROLE_PERCENTAGE_KEYWORDS)
+            col_data_cells = [dr[c] for dr in data_rows if c < len(dr)]
+            is_pct = percentage_column(combined_txt, col_data_cells)
             is_ratio = any(kw in combined_txt for kw in _SUB_ROLE_RATIO_KEYWORDS)
             is_days = any(kw in combined_txt for kw in _SUB_ROLE_DAYS_KEYWORDS)
             is_count = any(kw in combined_txt for kw in _SUB_ROLE_COUNT_KEYWORDS)
@@ -175,21 +177,7 @@ class TableReconstructor:
                 col_scales[c] = default_scale
                 sub_labels[c] = "Amount"
             else:
-                col_data_cells = [dr[c] for dr in data_rows if c < len(dr) and dr[c]]
-                pct_cell_count = sum(1 for cell in col_data_cells if "%" in cell or "pct" in cell.casefold())
-                if col_data_cells and (pct_cell_count / len(col_data_cells)) >= 0.4:
-                    col_types[c] = "percentage"
-                    col_currs[c] = None
-                    col_scales[c] = 1.0
-                    sub_labels[c] = "%"
-                elif c > 1 and col_types[c - 1] == "amount" and (
-                    c + 1 == width or (c + 1 < width and any(kw in " ".join(hr[c + 1] or "" for hr in header_rows).casefold() for kw in _SUB_ROLE_AMOUNT_KEYWORDS))
-                ):
-                    col_types[c] = "percentage"
-                    col_currs[c] = None
-                    col_scales[c] = 1.0
-                    sub_labels[c] = "%"
-                elif default_unit == "currency" or default_currency:
+                if default_unit == "currency" or default_currency:
                     col_types[c] = "amount"
                     col_currs[c] = default_currency
                     col_scales[c] = default_scale
@@ -224,11 +212,14 @@ class TableReconstructor:
         repaired.headers = self._fill_header_blanks(repaired.headers)
         repaired.rows = [row for row in repaired.rows if any(cell for cell in row.cells)]
 
-        if repaired.raw_cells and (
+        raw_has_header = bool(repaired.raw_cells) and not any(
+            _is_data_number(cell) for cell in repaired.raw_cells[0][1:]
+        )
+        if raw_has_header and (
             not any(repaired.column_periods)
             or None in repaired.column_periods[1:]
             or not repaired.column_types
-            or any(t == "unknown" for t in repaired.column_types[1:])
+            or any(t in {"unknown", "percentage"} for t in repaired.column_types[1:])
         ):
             headers, periods, data_rows, col_types, col_currs, col_scales = self.reconstruct_multi_tier_headers(
                 repaired.raw_cells,
@@ -239,24 +230,22 @@ class TableReconstructor:
                 existing_periods=repaired.column_periods,
             )
             if any(periods):
+                if any(old == "percentage" and new != "percentage" for old, new in zip(repaired.column_types, col_types)):
+                    repaired.warnings.append("Re-evaluated percentage column roles against original headers and cells.")
                 repaired.headers = headers
                 repaired.column_periods = periods
                 repaired.column_types = col_types
                 repaired.column_currencies = col_currs
                 repaired.column_scales = col_scales
-                if len(data_rows) < len(repaired.rows):
-                    repaired.rows = [
-                        TableRow(
-                            cells=row,
-                            page=table.page,
-                            column_periods=periods,
-                        )
-                        for row in data_rows
-                    ]
-                else:
-                    for row in repaired.rows:
-                        if not any(row.column_periods) and any(periods):
-                            row.column_periods = periods
+                # raw_cells may describe only the first page of a combined
+                # table. Never replace evidence-bearing continuation rows with
+                # that first-page grid when re-evaluating column roles.
+                for header_row in repaired.raw_cells[:len(repaired.raw_cells) - len(data_rows)]:
+                    if repaired.rows and repaired.rows[0].cells == header_row:
+                        repaired.rows.pop(0)
+                for row in repaired.rows:
+                    if not any(row.column_periods) and any(periods):
+                        row.column_periods = periods
         return repaired
 
     def combine_continuations(self, tables: list[ExtractedTable]) -> list[ExtractedTable]:

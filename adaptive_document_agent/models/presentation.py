@@ -30,6 +30,7 @@ PresentationLayout = Literal[
     "two_chart_comparison",
     "combo_chart",
     "table_plus_kpis",
+    "single_metric_hero",
 ]
 
 PresentationSlideRole = Literal["overview", "deep_dive", "drivers", "watch_items", "risk", "methodology", "source_data"]

@@ -283,6 +283,25 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
                 if chart_type:
                     chart = chart.model_copy(update={"chart_type": chart_type})
                 charts.append(chart)
+            # A coherent single metric deserves a full analytical page even
+            # when the planner supplied only observation IDs and a table layout.
+            from .single_metric_analysis import single_metric_analysis
+            from .single_metric_renderer import add_single_metric_slide
+            linked = {o.id: o for o in _planned_observations(slide_plan, index)}
+            for chart in charts:
+                linked.update({oid: index.get(oid) for oid in chart.observation_ids if index.get(oid)})
+            single = single_metric_analysis(list(linked.values())) if len(charts) <= 1 else None
+            if single and not any(_is_positive_topic_mismatch(o, slide_plan) for o in single.observations):
+                hero = charts[0] if charts else ChartPlan(
+                    id=f"hero_{slide_plan.id}", title=display_metric_name(single.observations[0]),
+                    chart_type="line", question=slide_plan.message,
+                    observation_ids=[o.id for o in single.observations],
+                    source_pages=sorted({e.page for o in single.observations for e in o.evidence}),
+                )
+                add_single_metric_slide(presentation, hero, single, title=slide_plan.title, narrative=slide_plan.message)
+                rendered_charts.append(hero)
+                ordinal += 1
+                continue
             if charts:
                 if len(charts) == 1 and slide_plan.layout != "chart_with_data":
                     charts = [

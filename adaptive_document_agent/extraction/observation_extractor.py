@@ -20,6 +20,7 @@ from adaptive_document_agent.models.table import ExtractedTable
 from adaptive_document_agent.utils.ids import stable_id
 
 from .numeric_parser import parse_number
+from .column_roles import explicit_percentage, intrinsic_percentage
 
 _PERIOD = re.compile(r"(?i)^(?:FY\s*)?(?:19|20)\d{2}$|^Q[1-4]\s*(?:19|20)?\d{2}$")
 _GENERIC_LABELS = {"total", "current", "deferred", "other", "net", "subtotal", "amount", "value"}
@@ -46,6 +47,11 @@ class ObservationExtractor:
         return observations
 
     def _table_observations(self, table: ExtractedTable) -> list[Observation]:
+        # Rebuild stale/inferred percentage roles from the source grid before
+        # synthetic '%' headers can contaminate metric names and semantic typing.
+        if table.raw_cells and "percentage" in table.column_types:
+            from .table_reconstructor import TableReconstructor
+            table = TableReconstructor().reconstruct(table)
         if len(table.headers) < 2 or not table.rows:
             return []
         output: list[Observation] = []
@@ -86,12 +92,7 @@ class ObservationExtractor:
                 if (any(table.column_periods) or any(row.column_periods)) and not period and not self._meaningful_header(header):
                     continue
 
-                col_type = table.column_types[column] if column < len(table.column_types) else "unknown"
-                is_pct_col = (
-                    col_type == "percentage"
-                    or "%" in header
-                    or any(kw in header.casefold() for kw in ("percent", "percentage", "share", "margin", "占比", "份额", "比例", "毛利率"))
-                )
+                is_pct_col = explicit_percentage(header) or explicit_percentage(row.cells[column])
                 dimensions: dict[str, str] = {}
                 cat_dims: dict[str, str] = {}
 
@@ -184,10 +185,15 @@ class ObservationExtractor:
         anomaly_notes: list[str] = []
 
         # Multiples are intrinsic and never monetary currency or percentage
-        is_explicit_pct = is_margin_metric(metric) or any(
+        is_explicit_pct = intrinsic_percentage(metric) or explicit_percentage(raw) or explicit_percentage(column_label) or any(
             k in metric.casefold() for k in ("margin", "% of", "share of", "as %", "growth rate", "cagr", "proportion", "毛利率", "净利率", "利润率", "占比", "比例", "增长率")
         )
         is_monetary_item = is_financial_statement_metric(metric) and not is_explicit_pct
+        column_scale = (
+            table.column_scales[column]
+            if column is not None and column < len(table.column_scales) and col_type != "percentage"
+            else None
+        )
 
         if is_multiple_metric(metric) or col_type == "ratio" or unit == "multiple":
             unit, currency, scale = "multiple", None, 1.0
@@ -195,7 +201,7 @@ class ObservationExtractor:
             semantic_type = "multiple"
             unit_family = "multiple"
             display_unit = "x"
-        elif not is_monetary_item and (is_margin_metric(metric) or col_type == "percentage" or ("%" in header_lower and not is_nonsensical_pct_header) or (dimensions and dimensions.get("column_role") == "percentage")):
+        elif is_explicit_pct:
             unit, currency, scale = "percent", None, 1.0
             value = number.value
             semantic_type = "margin" if (is_margin_metric(metric) or "margin" in metric.casefold() or "利润率" in metric) else "ratio_share"
@@ -213,7 +219,7 @@ class ObservationExtractor:
         elif col_type == "amount" or is_monetary_item:
             unit = "currency"
             currency = (table.column_currencies[column] if column is not None and column < len(table.column_currencies) and table.column_currencies[column] else None) or table.default_currency
-            scale = (table.column_scales[column] if column is not None and column < len(table.column_scales) and table.column_scales[column] else None) or table.default_unit_scale or 1.0
+            scale = column_scale or table.default_unit_scale or 1.0
             value = number.value * scale if (number.value is not None and scale != 1.0) else number.value
             semantic_type = "monetary_amount"
             unit_family = "currency"
@@ -260,7 +266,7 @@ class ObservationExtractor:
             elif is_fin or unit == "currency" or table.default_unit == "currency" or table.default_currency:
                 unit = "currency"
                 currency = currency or (table.column_currencies[column] if column is not None and column < len(table.column_currencies) and table.column_currencies[column] else None) or table.default_currency
-                scale = (table.column_scales[column] if column is not None and column < len(table.column_scales) and table.column_scales[column] else None) or table.default_unit_scale or 1.0
+                scale = column_scale or table.default_unit_scale or 1.0
                 value = number.value * scale if (number.value is not None and scale != 1.0) else number.value
                 semantic_type = "monetary_amount"
                 unit_family = "currency"
@@ -281,7 +287,7 @@ class ObservationExtractor:
             page=table.rows[row_index].page,
             text=raw,
             table_id=table.table_id,
-            row_label=metric if period else table.rows[row_index].cells[0],
+            row_label=table.rows[row_index].cells[0],
             column_label=column_label,
             extraction_method="digital_table",
             confidence=confidence,
@@ -293,7 +299,7 @@ class ObservationExtractor:
         period_sem = classify_period(period, is_balance_sheet=is_bs)
         pres_label = sanitize_metric_label(metric)
         disp_val = ""
-        effective_raw_unit = number.raw_unit or table.default_raw_unit
+        effective_raw_unit = (number.raw_unit or "%") if unit_family == "percentage" else (number.raw_unit or table.default_raw_unit)
         if value is not None:
             semantic_obj = classify_metric(metric, value=value, raw_unit=effective_raw_unit, unit=unit)
             disp_val = format_metric_display_value(

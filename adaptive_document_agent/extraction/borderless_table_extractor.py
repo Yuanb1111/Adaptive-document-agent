@@ -8,6 +8,7 @@ from adaptive_document_agent.models.table import ExtractedTable, TableRow
 from adaptive_document_agent.utils.ids import stable_id
 
 from .normalizer import infer_unit_defaults
+from .column_roles import explicit_percentage
 
 _VALUE = re.compile(r"(?<![A-Za-z0-9])(?:\(?[+-]?(?:\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)\)?%?|[—–])")
 _YEAR = re.compile(r"\b(?:19|20)\d{2}\b")
@@ -55,7 +56,7 @@ class BorderlessTableExtractor:
             col_scales: list[float | None] = [None]
             for h in headers:
                 h_cf = h.casefold()
-                if "%" in h_cf or any(kw in h_cf for kw in ("percent", "share", "margin", "占比", "份额")):
+                if explicit_percentage(h):
                     col_types.append("percentage")
                     col_currs.append(None)
                     col_scales.append(1.0)
