@@ -524,6 +524,18 @@ def format_metric_display_value(
         return f"{clean}x"
     if semantic.is_percentage:
         clean = str(raw_val).rstrip("%").strip()
+        # Protect monetary metrics from being formatted as percentage (e.g. Revenue = 10,350,986%)
+        if (
+            num_val is not None
+            and is_financial_statement_metric(semantic.clean_name)
+            and (abs(num_val) > 100 or "%" not in str(raw_val))
+            and not any(k in semantic.clean_name.casefold() for k in ("margin", "%", "share of", "as %", "growth", "cagr", "rate", "proportion", "利润率", "占比"))
+        ):
+            norm_unit = normalize_raw_unit(raw_unit, default_currency=currency or "RMB")
+            if compact:
+                return format_compact_currency(num_val, raw_unit=raw_unit, currency=currency, is_base_value=True)
+            unit_label = norm_unit or currency or "currency"
+            return f"{clean}  {unit_label}".strip()
         if semantic.is_expense_ratio and clean.startswith("-"):
             clean = clean.lstrip("-").strip()
         return f"{clean}%"

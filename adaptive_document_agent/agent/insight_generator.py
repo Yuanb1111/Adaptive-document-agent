@@ -39,10 +39,23 @@ class InsightGenerator:
     @staticmethod
     def _deterministic(result: AnalysisResult) -> Insight:
         from adaptive_document_agent.services.language_qa import clean_metric_label
+        from adaptive_document_agent.services.movement_formatter import analyze_trajectory
 
         metric_name = clean_metric_label(result.title)
         res_str = str(result.result) if result.result is not None else "reported levels"
         movement = f"{metric_name} stood at {res_str}"
+        if isinstance(result.result, list) and len(result.result) >= 3:
+            series_rows = [row for row in result.result if isinstance(row, dict) and row.get("value") is not None]
+            if len(series_rows) >= 3:
+                try:
+                    values = [float(row["value"]) for row in series_rows]
+                    periods = [str(row.get("period") or row.get("label") or "") for row in series_rows]
+                    trajectory = analyze_trajectory(values, periods)
+                    description = str(trajectory.get("description") or "").strip()
+                    if description:
+                        movement = f"{metric_name} {description[0].lower()}{description[1:]}"
+                except (TypeError, ValueError):
+                    pass
         driver = f"Management did not disclose specific operational drivers in the reported period; key sensitivity is {metric_name.lower()} trajectory."
         implication = "Requires ongoing tracking against baseline performance and liquidity requirements."
         watch_item = f"Subsequent period reporting on {metric_name.lower()}."
@@ -63,4 +76,3 @@ class InsightGenerator:
             implication=implication,
             watch_item=watch_item,
         )
-

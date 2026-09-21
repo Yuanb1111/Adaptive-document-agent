@@ -115,21 +115,39 @@ def sanitize_company_identity_contradictions(result: PipelineResult) -> list[QAI
         return result_text
 
     if is_resolved:
+        name_pages = company.field_source_pages.get("name", []) if hasattr(company, "field_source_pages") and company.field_source_pages else company.source_pages
+        analysis_ranges = getattr(result.profile, "analysis_page_ranges", []) if hasattr(result, "profile") and result.profile else []
+        is_outside_range = False
+        if analysis_ranges and name_pages:
+            is_outside_range = all(
+                not any(start <= p <= end for start, end in analysis_ranges)
+                for p in name_pages
+            )
+
         # Sanitize profile data_quality_notes
         if hasattr(result, "profile") and result.profile:
             cleaned_notes = []
             for note in result.profile.data_quality_notes:
                 if _contains_unnamed(note):
-                    cleaned = _clean_text(note)
-                    if cleaned:
+                    if is_outside_range:
+                        pages_str = ", ".join(f"p. {p}" for p in sorted(set(name_pages))[:3]) if name_pages else "introductory disclosures"
+                        cleaned = f"Company identity ({company_name}) verified from {pages_str} outside the financial analysis range; core financial tables refer to the issuer as 'the Company' or 'the Group'."
+                    else:
+                        cleaned = _clean_text(note)
+                    if cleaned and cleaned not in cleaned_notes:
                         cleaned_notes.append(cleaned)
                     fixes.append(QAItem(
                         code="company_identity_reconciled",
                         severity="INFO",
-                        message="Removed 'unnamed issuer' contradiction from profile data quality notes.",
+                        message="Reconciled company identity with profile data quality notes.",
                     ))
                 else:
                     cleaned_notes.append(note)
+            if is_outside_range and not any(company_name in n for n in cleaned_notes):
+                pages_str = ", ".join(f"p. {p}" for p in sorted(set(name_pages))[:3]) if name_pages else "introductory disclosures"
+                cleaned_notes.append(
+                    f"Company identity ({company_name}) verified from {pages_str} outside the financial analysis range; core financial tables refer to the issuer as 'the Company' or 'the Group'."
+                )
             result.profile.data_quality_notes = cleaned_notes
 
         # Sanitize validation_warnings

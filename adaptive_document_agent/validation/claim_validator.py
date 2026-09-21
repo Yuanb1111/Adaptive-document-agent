@@ -49,6 +49,8 @@ class MetricSemanticFamily(str, Enum):
     EXPENSE = "EXPENSE"
     BALANCE_SHEET = "BALANCE_SHEET"
     RATIO = "RATIO"
+    DAYS = "DAYS"
+    MULTIPLE = "MULTIPLE"
     GENERIC = "GENERIC"
 
 
@@ -320,13 +322,48 @@ def classify_metric_semantic_family(
     if has_expense_ratio_head and has_ratio_qualifier:
         return MetricSemanticFamily.EXPENSE
 
-    # 2. RATIO (margins, percentages, multipliers)
+    # 1c. DAYS (Turnover days, DSO, DIO, DPO)
+    days_indicators = (
+        "turnover days",
+        "days sales outstanding",
+        "dso",
+        "days inventory outstanding",
+        "dio",
+        "days payable outstanding",
+        "dpo",
+        "周转天数",
+        "应收账款周转天数",
+        "存货周转天数",
+        "应付账款周转天数",
+    )
+    if any(p in name_normalized for p in days_indicators) or re.search(r"\b(?:turnover\s+)?days\b", name_normalized):
+        return MetricSemanticFamily.DAYS
+
+    # 1d. MULTIPLE (Current ratio, Quick ratio, multiples)
+    multiple_indicators = (
+        "current ratio",
+        "quick ratio",
+        "cash ratio",
+        "gearing ratio (multiple)",
+        "net debt to ebitda",
+        "debt to equity ratio (multiple)",
+        "asset turnover",
+        "inventory turnover ratio",
+        "receivables turnover ratio",
+        "multiple",
+        "times",
+        "流动比率",
+        "速动比率",
+        "现金比率",
+    )
+    if any(p in name_normalized for p in multiple_indicators) and not any(k in name_normalized for k in ("%", "share", "margin", "cost of")):
+        return MetricSemanticFamily.MULTIPLE
+
+    # 2. RATIO (margins, percentages)
     ratio_indicators = (
         "margin",
         "% of",
         "percentage",
-        "multiple",
-        "turnover days",
         "cagr",
         "bps",
         "毛利率",

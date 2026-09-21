@@ -160,12 +160,30 @@ def _clean_text_fragment(val: str) -> str:
     if s.count(")") > s.count("("):
         s = re.sub(r"^[^(]*\)\s*", "", s)
     # Strip hanging ellipsis and trailing punctuation
-    s = re.sub(r"\.{2,}$", "", s).strip(" ,;:-")
+    s = re.sub(r"\.{2,}$", "", s).strip(" ,;:-–—")
     if s.endswith(".") and not re.search(r"(?i)\b(?:Ltd|Inc|Corp|Co|Pte)\.$", s):
         s = s.rstrip(".")
+    # Strip dangling trailing conjunctions/prepositions/connectors
+    dangling_suffix_pattern = re.compile(
+        r"(?i)\s+(?:to|of|and|with|from|in|for|by|as|at|or|the|a|an|including|such\s+as|as\s+well\s+as)$"
+    )
+    for _ in range(3):
+        prev = s
+        s = dangling_suffix_pattern.sub("", s).strip(" ,;:-–—")
+        if s.endswith(".") and not re.search(r"(?i)\b(?:Ltd|Inc|Corp|Co|Pte)\.$", s):
+            s = s.rstrip(".")
+        if s == prev:
+            break
     # Normalize multiple whitespaces
     s = re.sub(r"\s+", " ", s).strip()
     return s
+
+
+def _has_broken_prefix(value: str) -> bool:
+    """Detect common extraction fragments such as ``d excerpts`` or ``ing services``."""
+    # Keep this case-sensitive and conservative: ordinary sentence starts such
+    # as "An international ..." and "No material ..." are valid prose.
+    return bool(re.match(r"^(?:[a-z]|ing|ed|tion|ment|ly|al|ic)\s+[a-z]{3,}", value))
 
 
 def validate_company_name(name: str) -> str:
@@ -180,7 +198,7 @@ def validate_company_name(name: str) -> str:
         if pat.search(s):
             return ""
     # Reject leading single-letter broken fragment like "d excerpts" or "s company"
-    if re.match(r"^[a-z]\s+[a-z]{3,}", s, re.IGNORECASE):
+    if _has_broken_prefix(s):
         return ""
     # Reject hanging prefix conjunctions
     s = re.sub(r"(?i)^(?:and|or|of|the|in|to|with|for|by|including)\s+", "", s).strip()
@@ -205,7 +223,7 @@ def validate_product(product: str) -> str:
         if pat.search(s):
             return ""
     # Reject leading single-letter broken word or truncated prefix like "d excerpts", "s products", "ing solutions", "ed services"
-    if re.match(r"^(?:[a-z]{1,2}|ing|ed|tion|ment|ly|al|ic)\s+[a-z]{3,}", s, re.IGNORECASE):
+    if _has_broken_prefix(s):
         return ""
     # Strip hanging prefix conjunctions/verbs like "and ", "or ", "including ", "provides "
     s = re.sub(r"(?i)^(?:and|or|of|the|in|to|with|for|by|including|consisting\s+of|provides?|operates?|develops?|delivers?)\s+", "", s).strip(" ,;:-")
@@ -234,7 +252,7 @@ def validate_industry(industry: str) -> str:
     for pat in _NAVIGATION_ARTIFACT_PATTERNS:
         if pat.search(s):
             return ""
-    if re.match(r"^[a-z]\s+[a-z]{3,}", s, re.IGNORECASE):
+    if _has_broken_prefix(s):
         return ""
     return s.title() if not s.isupper() else s
 
@@ -249,7 +267,7 @@ def validate_business_model(bm: str) -> str:
     for pat in _NAVIGATION_ARTIFACT_PATTERNS:
         if pat.search(s):
             return ""
-    if re.match(r"^[a-z]\s+[a-z]{3,}", s, re.IGNORECASE):
+    if _has_broken_prefix(s):
         return ""
     # Strip leading phrases like "business model is ", "operates as a "
     s = re.sub(r"(?i)^(?:the\s+)?(?:business\s+model\s+(?:is|consists\s+of)?|operates\s+(?:as\s+an?|through\s+an?))\s*", "", s).strip()
@@ -270,7 +288,7 @@ def validate_geography(geo: str) -> str:
     for pat in _NAVIGATION_ARTIFACT_PATTERNS:
         if pat.search(s):
             return ""
-    if re.match(r"^[a-z]\s+[a-z]{3,}", s, re.IGNORECASE):
+    if _has_broken_prefix(s):
         return ""
     return s.title() if not s.isupper() else s
 
@@ -285,7 +303,7 @@ def validate_market_position(pos: str) -> str:
     for pat in _NAVIGATION_ARTIFACT_PATTERNS:
         if pat.search(s):
             return ""
-    if re.match(r"^[a-z]\s+[a-z]{3,}", s, re.IGNORECASE):
+    if _has_broken_prefix(s):
         return ""
     # Must express a ranking, share, or leadership claim
     if not re.search(r"(?i)\b(?:rank|ranked|top\s+\d+|leading|largest|#\d+|no\.?\s*\d+|market\s+share|\d+(?:\.\d+)?%)\b", s):
@@ -346,13 +364,25 @@ def validate_offering_type(offering: str) -> str:
 
 def validate_track_record_period(period: str) -> str:
     """Validate track record period text."""
+    raw = (period or "").strip()
+    # Reject incomplete periods ending in dangling conjunctions/prepositions/hyphens
+    if re.search(r"(?i)(?:\b(?:to|from|through|and)|[–—-])\s*[.,;:]*$", raw):
+        return ""
     s = _clean_text_fragment(period)
     if not s or len(s) < 4 or len(s) > 60:
         return ""
     if s.casefold() in _GENERIC_PLACEHOLDERS:
         return ""
+    # Reject incomplete ranges ending in dangling words
+    if re.search(r"(?i)\b(?:to|from|through|and|–|-)$", s):
+        return ""
     # Must contain year pattern or period descriptor
     if not re.search(r"(?i)\b(?:20\d{2}|19\d{2}|FY\s*\d{2,4}|three\s+years|period)\b", s):
+        return ""
+    # Open-ended range markers are not complete track-record periods.
+    has_range_marker = bool(re.search(r"(?i)\b(?:from|to|through)\b|[–—-]", s))
+    years = re.findall(r"(?i)\b(?:FY\s*)?(?:19|20)\d{2}\b", s)
+    if has_range_marker and len(years) < 2:
         return ""
     return s
 

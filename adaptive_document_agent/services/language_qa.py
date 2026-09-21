@@ -255,13 +255,17 @@ def polish_slide_title(title: str) -> str:
     t = re.sub(r"(?i)[,\s]+(?:with|in|of|and)\s+trajectory\b", "", t).strip()
     t = re.sub(r"(?i)\s+and\s+trajectory\b", "", t).strip()
 
-    # Remove trailing Trajectory if title already contains analytical verbs or is a descriptive clause (> 3 words)
     trend_verbs = (
         "widened", "narrowed", "increased", "decreased", "grew", "contracted",
         "turned", "swung", "rose", "fell", "held", "became", "expanded",
         "surged", "dropped", "declined", "rebounded", "recovered", "rising", "falling",
     )
-    if any(w in t.casefold() for w in trend_verbs) or len(t.split()) > 3:
+
+    # Replace mechanical suffix "Trajectory" -> "Overview" (e.g. "Revenue Trajectory" -> "Revenue Overview")
+    if not any(w in t.casefold() for w in trend_verbs):
+        if re.search(r"(?i)\btrajectory$", t):
+            t = re.sub(r"(?i)\btrajectory$", "Overview", t).strip()
+    else:
         t = re.sub(r"(?i)\s+trajectory\b", "", t).strip()
 
     # Strip any dangling prepositions/conjunctions left at the end of the title

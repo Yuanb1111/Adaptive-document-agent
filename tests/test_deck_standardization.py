@@ -288,7 +288,7 @@ def test_tesla_style_wide_appendix_financial_table() -> None:
         for shape in slide.shapes
         if shape.has_text_frame
     )
-    assert "Source: pp." in slide_text
+    assert "Source: Document disclosures (p." in slide_text
     assert "* Unaudited" in slide_text
     assert "Complete reported dataset available in accompanying CSV export." in slide_text
 

@@ -184,13 +184,18 @@ class ObservationExtractor:
         anomaly_notes: list[str] = []
 
         # Multiples are intrinsic and never monetary currency or percentage
+        is_explicit_pct = is_margin_metric(metric) or any(
+            k in metric.casefold() for k in ("margin", "% of", "share of", "as %", "growth rate", "cagr", "proportion", "毛利率", "净利率", "利润率", "占比", "比例", "增长率")
+        )
+        is_monetary_item = is_financial_statement_metric(metric) and not is_explicit_pct
+
         if is_multiple_metric(metric) or col_type == "ratio" or unit == "multiple":
             unit, currency, scale = "multiple", None, 1.0
             value = number.value
             semantic_type = "multiple"
             unit_family = "multiple"
             display_unit = "x"
-        elif is_margin_metric(metric) or col_type == "percentage" or ("%" in header_lower and not is_nonsensical_pct_header) or (dimensions and dimensions.get("column_role") == "percentage"):
+        elif not is_monetary_item and (is_margin_metric(metric) or col_type == "percentage" or ("%" in header_lower and not is_nonsensical_pct_header) or (dimensions and dimensions.get("column_role") == "percentage")):
             unit, currency, scale = "percent", None, 1.0
             value = number.value
             semantic_type = "margin" if (is_margin_metric(metric) or "margin" in metric.casefold() or "利润率" in metric) else "ratio_share"
@@ -205,7 +210,7 @@ class ObservationExtractor:
             semantic_type = "days"
             unit_family = "days"
             display_unit = "days"
-        elif col_type == "amount":
+        elif col_type == "amount" or is_monetary_item:
             unit = "currency"
             currency = (table.column_currencies[column] if column is not None and column < len(table.column_currencies) and table.column_currencies[column] else None) or table.default_currency
             scale = (table.column_scales[column] if column is not None and column < len(table.column_scales) and table.column_scales[column] else None) or table.default_unit_scale or 1.0
@@ -213,7 +218,7 @@ class ObservationExtractor:
             semantic_type = "monetary_amount"
             unit_family = "currency"
             display_unit = number.raw_unit or table.default_raw_unit or currency or "currency"
-            if "%" in raw:
+            if "%" in raw and not is_monetary_item:
                 validation_status = "suspicious_alignment"
                 anomaly_notes.append(f"Amount column contains explicit '%' in raw cell: '{raw}'")
         elif col_type == "count" and not is_financial_statement_metric(metric):
@@ -231,7 +236,7 @@ class ObservationExtractor:
                 unit=unit or table.default_unit,
             )
             is_fin = is_financial_statement_metric(metric) or semantic.is_currency
-            if semantic.is_percentage or (("%" in header_lower or "percent" in header_lower) and not is_nonsensical_pct_header):
+            if not is_monetary_item and (semantic.is_percentage or (("%" in header_lower or "percent" in header_lower) and not is_nonsensical_pct_header)):
                 unit, currency, scale = "percent", None, 1.0
                 value = number.value
                 semantic_type = semantic.semantic_type if semantic.is_percentage else ("margin" if "margin" in metric.casefold() or "利润率" in metric else "ratio_share")

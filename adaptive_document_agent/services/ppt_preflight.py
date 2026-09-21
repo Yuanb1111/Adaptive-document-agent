@@ -51,8 +51,12 @@ class PresentationPreflight:
             self._check_chart_quality(idx, slide)
             self._check_banned_phrases(idx, slide)
             self._check_raw_unit_tokens(idx, slide)
-            self._check_collisions(idx, slide)
-            self._check_semantic_units(idx, slide)
+            self._check_layout_overflow_and_overlap(idx, slide)
+            self._check_unit_consistency(idx, slide)
+            self._check_impossible_percentages(idx, slide)
+            self._check_title_data_alignment(idx, slide)
+            self._check_truncated_fields(idx, slide)
+            self._check_empty_slides(idx, slide)
             self._check_template_completeness(idx, slide)
             self._check_duplicate_card_titles(idx, slide)
             self._check_slide_title_quality(idx, slide)
@@ -291,6 +295,274 @@ class PresentationPreflight:
                     for p in shape.text_frame.paragraphs:
                         if match.group(0) in p.text:
                             p.text = p.text.replace(f"{match.group(2)} pp", f"{match.group(2)}x")
+
+                # Days metrics mistakenly formatted with pp (e.g. +0.9 pp)
+                for match in re.finditer(r"(?i)\b(turnover\s+days|inventory\s+days|receivables\s+days|payables\s+days|cash\s+conversion\s+cycle|days)[^0-9\n]*([+\-]?[0-9]+(?:\.[0-9]+)?)\s*pp\b", text):
+                    self.issues.append(
+                        PreflightIssue(
+                            idx,
+                            "invalid_days_change",
+                            f"Days metric change formatted with pp: '{match.group(0)}'",
+                            severity="warning",
+                        )
+                    )
+                    for p in shape.text_frame.paragraphs:
+                        if match.group(0) in p.text:
+                            p.text = p.text.replace(f"{match.group(2)} pp", f"{match.group(2)} days")
+
+                # Days metrics mistakenly formatted with % (e.g. 30.5%)
+                for match in re.finditer(r"(?i)\b(turnover\s+days|inventory\s+days|receivables\s+days|payables\s+days)\s*[:=]?\s*([0-9]+(?:\.[0-9]+)?)\s*%", text):
+                    self.issues.append(
+                        PreflightIssue(
+                            idx,
+                            "invalid_days_unit",
+                            f"Days metric formatted with percentage: '{match.group(0)}'",
+                            severity="warning",
+                        )
+                    )
+                    new_val = f"{match.group(1)}: {match.group(2)} days"
+                    for p in shape.text_frame.paragraphs:
+                        if match.group(0) in p.text:
+                            p.text = p.text.replace(match.group(0), new_val)
+
+    def _check_unit_consistency(self, idx: int, slide: Any) -> None:
+        """Check and repair unit-family mismatches in client-facing text."""
+        self._check_semantic_units(idx, slide)
+
+    def _check_impossible_percentages(self, idx: int, slide: Any) -> None:
+        monetary_terms = r"(?:revenue|sales|turnover(?! days)|gross profit|net profit|operating profit|ebitda|operating cash flow|total assets|total liabilities|total equity|cash and cash equivalents|cost of sales|capex)"
+        pattern = re.compile(rf"(?i)\b({monetary_terms})\s*[:=]?\s*([0-9,]{{3,}}(?:\.[0-9]+)?)\s*%")
+        extreme_pattern = re.compile(r"(?<![\w.])([0-9][0-9,]*(?:\.[0-9]+)?)\s*%")
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                text = shape.text
+                monetary_spans = [match.span() for match in pattern.finditer(text)]
+                for match in pattern.finditer(text):
+                    orig = match.group(0)
+                    fixed = f"{match.group(1)}: {match.group(2)}"
+                    self.issues.append(
+                        PreflightIssue(
+                            idx,
+                            "impossible_percentage",
+                            f"Monetary metric formatted as percentage: '{orig}'",
+                            severity="error",
+                        )
+                    )
+                    for p in shape.text_frame.paragraphs:
+                        if orig in p.text:
+                            p.text = p.text.replace(orig, fixed)
+                for match in extreme_pattern.finditer(text):
+                    if any(match.start() < end and match.end() > start for start, end in monetary_spans):
+                        continue
+                    try:
+                        value = float(match.group(1).replace(",", ""))
+                    except ValueError:
+                        continue
+                    if value > 1000:
+                        self.issues.append(
+                            PreflightIssue(
+                                idx,
+                                "impossible_percentage",
+                                f"Percentage value exceeds 1,000%: '{match.group(0)}'",
+                                severity="error",
+                            )
+                        )
+            elif shape.has_table:
+                for row in shape.table.rows:
+                    for cell in row.cells:
+                        if pattern.search(cell.text):
+                            for match in pattern.finditer(cell.text):
+                                orig = match.group(0)
+                                fixed = f"{match.group(1)}: {match.group(2)}"
+                                self.issues.append(
+                                    PreflightIssue(
+                                        idx,
+                                        "impossible_percentage",
+                                        f"Monetary metric in table cell formatted as percentage: '{orig}'",
+                                        severity="error",
+                                    )
+                                )
+                                for p in cell.text_frame.paragraphs:
+                                    if orig in p.text:
+                                        p.text = p.text.replace(orig, fixed)
+                        for match in extreme_pattern.finditer(cell.text):
+                            try:
+                                value = float(match.group(1).replace(",", ""))
+                            except ValueError:
+                                continue
+                            if value > 1000:
+                                self.issues.append(
+                                    PreflightIssue(
+                                        idx,
+                                        "impossible_percentage",
+                                        f"Percentage value in table exceeds 1,000%: '{match.group(0)}'",
+                                        severity="error",
+                                    )
+                                )
+
+    def _check_truncated_fields(self, idx: int, slide: Any) -> None:
+        dangling_pattern = re.compile(r"(?i)\b(?:to|of|and|with|from|in|for|by|as|at|or|including|such\s+as)\s*$")
+        broken_prefix_pattern = re.compile(r"^(?:[a-z]|ing|ed|tion|ment|ly|al|ic)\s+[a-z]{3,}")
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                for p in shape.text_frame.paragraphs:
+                    t = p.text.strip().rstrip(".,;:-–—")
+                    if broken_prefix_pattern.search(t):
+                        self.issues.append(
+                            PreflightIssue(
+                                idx,
+                                "truncated_text_fragment",
+                                f"Text fragment appears to begin with a broken word: '{p.text}'",
+                                severity="error",
+                            )
+                        )
+                    if dangling_pattern.search(t):
+                        orig = p.text
+                        clean = dangling_pattern.sub("", t).strip(" .,;:-–—")
+                        self.issues.append(
+                            PreflightIssue(
+                                idx,
+                                "truncated_text_fragment",
+                                f"Text fragment ending in dangling connector: '{orig}'",
+                                severity="warning",
+                            )
+                        )
+                        p.text = clean
+
+    def _check_empty_slide(self, idx: int, slide: Any) -> None:
+        text_content: list[str] = []
+        has_visual = False
+        for shape in slide.shapes:
+            if getattr(shape, "has_chart", False) or getattr(shape, "has_table", False):
+                has_visual = True
+            if shape.has_text_frame and shape.text.strip():
+                text_content.append(shape.text.strip())
+        joined = " ".join(text_content).strip()
+        is_cover = idx == 0
+        is_closing = "thank you" in joined.casefold()
+        if not is_cover and not is_closing and not has_visual and len(joined) < 20:
+            self.issues.append(
+                PreflightIssue(
+                    idx,
+                    "empty_slide",
+                    f"Slide {idx + 1} has insufficient substantive content ({len(joined)} text characters and no table/chart)",
+                    severity="error",
+                )
+            )
+
+    def _check_empty_slides(self, idx: int, slide: Any) -> None:
+        """Named entry point matching the preflight specification."""
+        self._check_empty_slide(idx, slide)
+
+    def _check_content_overflow(self, idx: int, slide: Any) -> None:
+        slide_h = 7.5
+        slide_w = 13.333
+        for shape in slide.shapes:
+            try:
+                top = shape.top.inches if hasattr(shape, "top") else 0
+                height = shape.height.inches if hasattr(shape, "height") else 0
+                left = shape.left.inches if hasattr(shape, "left") else 0
+                width = shape.width.inches if hasattr(shape, "width") else 0
+                if top + height > slide_h + 0.15:
+                    self.issues.append(
+                        PreflightIssue(
+                            idx,
+                            "vertical_overflow",
+                            f"Shape '{shape.name}' overflows bottom edge (bottom={top + height:.2f}in > {slide_h}in)",
+                            severity="warning",
+                        )
+                    )
+                if left + width > slide_w + 0.15:
+                    self.issues.append(
+                        PreflightIssue(
+                            idx,
+                            "horizontal_overflow",
+                            f"Shape '{shape.name}' overflows right edge (right={left + width:.2f}in > {slide_w}in)",
+                            severity="warning",
+                        )
+                    )
+            except Exception:
+                pass
+
+    def _check_layout_overflow_and_overlap(self, idx: int, slide: Any) -> None:
+        """Check page bounds, header/footer encroachment, and visual-block overlap."""
+        self._check_collisions(idx, slide)
+        self._check_content_overflow(idx, slide)
+
+        visual_shapes = [
+            shape
+            for shape in slide.shapes
+            if getattr(shape, "has_chart", False) or getattr(shape, "has_table", False)
+        ]
+        for left_index, first in enumerate(visual_shapes):
+            for second in visual_shapes[left_index + 1 :]:
+                try:
+                    left = max(first.left, second.left)
+                    top = max(first.top, second.top)
+                    right = min(first.left + first.width, second.left + second.width)
+                    bottom = min(first.top + first.height, second.top + second.height)
+                    if right <= left or bottom <= top:
+                        continue
+                    overlap_area = (right - left) * (bottom - top)
+                    smaller_area = min(first.width * first.height, second.width * second.height)
+                    if smaller_area and overlap_area / smaller_area >= 0.03:
+                        self.issues.append(
+                            PreflightIssue(
+                                idx,
+                                "visual_block_overlap",
+                                f"Visual blocks '{first.name}' and '{second.name}' overlap materially",
+                                severity="error",
+                            )
+                        )
+                except Exception:
+                    continue
+
+    def _check_title_data_alignment(self, idx: int, slide: Any) -> None:
+        """Flag directional titles that contradict a single linked chart series."""
+        positive_words = re.compile(r"(?i)\b(?:grew|rose|increased|expanded|improved|rebounded)\b")
+        negative_words = re.compile(r"(?i)\b(?:fell|decreased|declined|contracted|dropped|weakened)\b")
+
+        slide_title = ""
+        try:
+            if slide.shapes.title and slide.shapes.title.has_text_frame:
+                slide_title = slide.shapes.title.text.strip()
+        except Exception:
+            pass
+
+        for shape in slide.shapes:
+            if not getattr(shape, "has_chart", False):
+                continue
+            chart = shape.chart
+            chart_title = ""
+            try:
+                if chart.has_title:
+                    chart_title = chart.chart_title.text_frame.text.strip()
+            except Exception:
+                pass
+            title = chart_title or slide_title
+            if not title or not (positive_words.search(title) or negative_words.search(title)):
+                continue
+            try:
+                series = list(chart.series)
+                if len(series) != 1:
+                    continue
+                values = [float(value) for value in series[0].values if value is not None]
+            except Exception:
+                continue
+            if len(values) < 2:
+                continue
+            delta = values[-1] - values[0]
+            tolerance = max(abs(values[0]), abs(values[-1]), 1.0) * 1e-9
+            contradicts = (positive_words.search(title) and delta < -tolerance) or (negative_words.search(title) and delta > tolerance)
+            if contradicts:
+                self.issues.append(
+                    PreflightIssue(
+                        idx,
+                        "title_data_misalignment",
+                        f"Directional title '{title}' conflicts with chart endpoints ({values[0]:g} to {values[-1]:g})",
+                        severity="error",
+                    )
+                )
 
     def _check_template_completeness(self, idx: int, slide: Any) -> None:
         for shape in slide.shapes:

@@ -54,17 +54,17 @@ LOCAL_DESKTOP_TEMPLATE_PATH = Path(r"C:\Users\yuanb\Desktop\FOURIER Light Versio
 DEFAULT_TEMPLATE_PATH = str(BUNDLED_TEMPLATE_PATH if BUNDLED_TEMPLATE_PATH.exists() else LOCAL_DESKTOP_TEMPLATE_PATH)
 
 # Fourier Light Theme Palette (theme1.xml)
-FOURIER_PURPLE = "7A24FD"        # Primary accent 1
+FOURIER_PURPLE = "5B21B6"        # Institutional highlight / accent
 FOURIER_LIGHT_PURPLE = "AB74FF"  # Accent 2
 FOURIER_TECH_BLUE = "0086D1"     # Accent 3
 FOURIER_AMBER = "F4B923"         # Accent 4
 FOURIER_DEEP_BLUE = "2E3CED"     # Accent 5
 FOURIER_CYAN = "20ECF1"          # Accent 6
 
-FOURIER_DARK = "1A1A1A"          # Main text
-FOURIER_MUTED = "575757"         # Subtitle, metadata, secondary text
-FOURIER_BG_CARD = "F8F9FA"       # Card / panel background
-FOURIER_BORDER = "E7E6E6"        # Subtle border / rule
+FOURIER_DARK = "111827"          # Hero metrics and main text
+FOURIER_MUTED = "6B7280"         # Subtitle, metadata, secondary text
+FOURIER_BG_CARD = "F9FAFB"       # Card / panel background
+FOURIER_BORDER = "E5E7EB"        # Subtle border / rule
 WHITE = "FFFFFF"
 
 # Aliases for backwards compatibility with tests / helpers
@@ -90,6 +90,14 @@ CHART_PALETTE = (
     FOURIER_LIGHT_PURPLE,
     FOURIER_DEEP_BLUE,
 )
+
+
+def _source_footer(pages: list[int] | set[int] | tuple[int, ...]) -> str:
+    """Return the standardized client-facing source provenance footer."""
+    normalized = sorted({int(page) for page in pages if int(page) > 0})
+    if not normalized:
+        return "Source: Document disclosures (page references not available)"
+    return f"Source: Document disclosures (p. {', '.join(map(str, normalized))})"
 
 
 def _resolve_template_path(template_path: str | Path | None = None) -> Path:
@@ -647,7 +655,7 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
         *(page for fact in company.key_facts for page in fact.source_pages),
     })
     if pages:
-        _text(slide, f"Source pages  {', '.join(map(str, pages))}", 0.45, 6.55, 11.70, 0.25, size=9.5, color=FOURIER_MUTED)
+        _text(slide, _source_footer(pages), 0.45, 6.55, 11.70, 0.25, size=9.5, color=FOURIER_MUTED)
 
 
 def _is_calc_artifact(text: str) -> bool:
@@ -878,7 +886,7 @@ def _render_data_comparison_table(
             cell.text_frame.paragraphs[0].alignment = PP_ALIGN.RIGHT
 
     if all_pages:
-        _text(slide, f"Source pages  {', '.join(map(str, sorted(all_pages)))}", 0.85, 6.25, 10.90, 0.25, size=9.5, color=FOURIER_MUTED)
+        _text(slide, _source_footer(all_pages), 0.85, 6.25, 10.90, 0.25, size=9.5, color=FOURIER_MUTED)
 
 
 def _add_planned_text_slide(presentation: Any, result: PipelineResult, slide_plan: PresentationSlide) -> None:
@@ -927,7 +935,7 @@ def _add_numbered_messages(
             narrative_left, narrative_width = 1.30, 10.65
         _text(slide, _summary_text(sanitized_narrative, 240), narrative_left, y + 0.12, narrative_width, card_height - 0.20, size=13, color=FOURIER_DARK)
     if source_pages:
-        _text(slide, f"Source pages  {', '.join(map(str, source_pages))}", 0.45, 6.22, 11.70, 0.25, size=9.5, color=FOURIER_MUTED, align="right")
+        _text(slide, _source_footer(source_pages), 0.45, 6.22, 11.70, 0.25, size=9.5, color=FOURIER_MUTED, align="right")
 
 
 def _add_contents(presentation: Any, result: PipelineResult, groups: list[list[ChartPlan]]) -> None:
@@ -1073,9 +1081,9 @@ def _add_document_overview(presentation: Any, result: PipelineResult) -> None:
     section_text = "\n\n".join(f"{index:02d}  {_summary_text(section, 80)}" for index, section in enumerate(sections, start=1))
     _text(slide, section_text or "The analysis follows the document's discovered structure.", 8.40, content_top + 0.62, 3.50, content_h - 0.90, size=12.5, color=FOURIER_DARK)
 
-    pages = ", ".join(map(str, sorted(set(result.profile.document_summary_pages))))
+    pages = sorted(set(result.profile.document_summary_pages))
     if pages:
-        _text(slide, f"Overview source pages  {pages}", 0.45, 6.22, 11.70, 0.25, size=9.5, color=FOURIER_MUTED)
+        _text(slide, _source_footer(pages), 0.45, 6.22, 11.70, 0.25, size=9.5, color=FOURIER_MUTED)
 
 
 def _add_chart_slide(
@@ -1108,7 +1116,7 @@ def _add_chart_slide(
     scale, scale_label = _display_scale(values, max_abs)
     movement = _change_summary(values, scale)
     unit = _unit_label(values, scale_label)
-    pages = ", ".join(map(str, plan.source_pages)) or "not available"
+    pages = plan.source_pages
 
     if movement:
         _text(slide, movement[0], 0.70, content_top + 0.65, 3.05, 0.58, size=21, color=FOURIER_PURPLE, bold=True)
@@ -1119,7 +1127,7 @@ def _add_chart_slide(
 
     _text(slide, "REPORTED UNIT", 0.70, content_top + 2.95, 3.05, 0.24, size=9.5, color=FOURIER_MUTED, bold=True)
     _text(slide, unit, 0.70, content_top + 3.20, 3.05, 0.45, size=12, color=FOURIER_DARK, bold=True)
-    _text(slide, f"Source pages  {pages}", 0.70, content_top + content_h - 0.45, 3.05, 0.35, size=9.5, color=FOURIER_MUTED)
+    _text(slide, _source_footer(pages), 0.70, content_top + content_h - 0.45, 3.05, 0.35, size=9.5, color=FOURIER_MUTED)
 
     # Right card: Chart (no background gridlines)
     _panel(slide, 4.20, content_top, 7.95, content_h, fill=WHITE)
@@ -1878,7 +1886,7 @@ def _add_evidence_table_slides(
 
         has_unaudited = any("*" in h for h in formatted_headers[1:])
         star_note = " | * Unaudited" if has_unaudited else ""
-        pages_str = f"Source: pp. {', '.join(map(str, sorted(slide_pages)))}" if slide_pages else "Source: Prospectus disclosures"
+        pages_str = _source_footer(slide_pages)
         footnote = f"{pages_str}{star_note} | Complete reported dataset available in accompanying CSV export."
         _text(slide, footnote, 0.45, 6.22, 11.70, 0.25, size=9.0, color=FOURIER_MUTED)
 
@@ -2184,6 +2192,7 @@ def _change_summary(observations: list[Observation], scale: float) -> tuple[str,
         return None
 
     start, end = float(first.value or 0), float(last.value or 0)
+    ordered_vals = [float(it.value or 0) for it in ordered]
 
     # Check metric semantic using shared FinancialMovementFormatter
     semantic = classify_metric(first.metric_original, value=start, raw_unit=first.raw_unit, unit=first.unit)
@@ -2196,16 +2205,36 @@ def _change_summary(observations: list[Observation], scale: float) -> tuple[str,
         scale=scale,
         unit=first.unit,
         unit_family=first.unit_family,
+        values=ordered_vals,
     )
 
     p_first = format_canonical_period(first)
     p_last = format_canonical_period(last)
-    if semantic.is_multiple:
+    if semantic.unit_family == "days" or first.unit == "days":
+        detail = f"{start:.1f} days in {p_first} to {end:.1f} days in {p_last}"
+    elif semantic.is_multiple:
         detail = f"{start:.2f}x in {p_first} to {end:.2f}x in {p_last}"
     elif semantic.is_percentage:
         detail = f"{start:.1f}% in {p_first} to {end:.1f}% in {p_last}"
     else:
         detail = f"{_format_scaled(start, scale)} in {p_first} to {_format_scaled(end, scale)} in {p_last}"
+
+    if len(ordered) >= 3:
+        traj = FinancialMovementFormatter.analyze_trajectory(ordered_vals, [format_canonical_period(it) for it in ordered])
+        if traj.get("pattern") in ("rose_then_fell_sharply", "rose_then_moderated"):
+            peak_idx = ordered_vals.index(max(ordered_vals))
+            p_peak = format_canonical_period(ordered[peak_idx])
+            v_peak = max(ordered_vals)
+            peak_str = f"{v_peak:.1f} days" if (semantic.unit_family == "days" or first.unit == "days") else (f"{v_peak:.1f}%" if semantic.is_percentage else (f"{v_peak:.2f}x" if semantic.is_multiple else _format_scaled(v_peak, scale)))
+            end_str = f"{end:.1f} days" if (semantic.unit_family == "days" or first.unit == "days") else (f"{end:.1f}%" if semantic.is_percentage else (f"{end:.2f}x" if semantic.is_multiple else _format_scaled(end, scale)))
+            detail = f"Peaked at {peak_str} in {p_peak} before falling to {end_str} in {p_last}"
+        elif traj.get("pattern") in ("fell_then_rebounded", "fell_then_partially_recovered"):
+            trough_idx = ordered_vals.index(min(ordered_vals))
+            p_trough = format_canonical_period(ordered[trough_idx])
+            v_trough = min(ordered_vals)
+            trough_str = f"{v_trough:.1f} days" if (semantic.unit_family == "days" or first.unit == "days") else (f"{v_trough:.1f}%" if semantic.is_percentage else (f"{v_trough:.2f}x" if semantic.is_multiple else _format_scaled(v_trough, scale)))
+            end_str = f"{end:.1f} days" if (semantic.unit_family == "days" or first.unit == "days") else (f"{end:.1f}%" if semantic.is_percentage else (f"{end:.2f}x" if semantic.is_multiple else _format_scaled(end, scale)))
+            detail = f"Dipped to {trough_str} in {p_trough} before recovering to {end_str} in {p_last}"
     return headline, detail
 
 
@@ -2419,6 +2448,7 @@ def _chart_findings(charts: list[ChartPlan], index: DocumentIndex) -> list[dict[
             last,
             currency=first.currency or "RMB",
             scale=scale,
+            observations=ordered,
         )
         output.append({
             "title": label,
