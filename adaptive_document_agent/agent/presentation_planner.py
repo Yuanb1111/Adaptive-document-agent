@@ -116,8 +116,12 @@ class PresentationPlanner:
         profile: DocumentProfile,
         observations: list[Observation],
     ) -> list[dict[str, object]]:
+        from adaptive_document_agent.services.company_discovery import CompanyProfileDiscovery
+
+        company_discovery_pages = CompanyProfileDiscovery.rank_profile_pages(document, profile, max_pages=6)
         preferred_pages = [
-            *range(1, min(document.page_count, 6) + 1),
+            *range(1, min(document.page_count, 4) + 1),
+            *company_discovery_pages,
             *profile.document_summary_pages,
             *(source.page for item in observations if item.confidence >= 0.8 for source in item.evidence),
         ]

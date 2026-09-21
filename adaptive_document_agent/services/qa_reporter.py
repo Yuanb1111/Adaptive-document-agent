@@ -71,10 +71,11 @@ def sanitize_company_identity_contradictions(result: PipelineResult) -> list[QAI
     if not plan or not plan.company:
         return fixes
 
+    from adaptive_document_agent.services.company_extractor import is_company_identity_resolved
+
     company = plan.company
-    # identity_state is the single canonical authority.  A plausible-looking
-    # string alone is not enough to promote an unevidenced identity.
-    is_resolved = company.identity_state == "RESOLVED" and bool(company.name) and "unnamed" not in company.name.casefold()
+    # Authoritative resolution test
+    is_resolved = is_company_identity_resolved(company)
     company_name = company.name or ""
 
     _UNNAMED_ISSUER_PHRASES = [
@@ -122,6 +123,11 @@ def sanitize_company_identity_contradictions(result: PipelineResult) -> list[QAI
                     cleaned = _clean_text(note)
                     if cleaned:
                         cleaned_notes.append(cleaned)
+                    fixes.append(QAItem(
+                        code="company_identity_reconciled",
+                        severity="INFO",
+                        message="Removed 'unnamed issuer' contradiction from profile data quality notes.",
+                    ))
                 else:
                     cleaned_notes.append(note)
             result.profile.data_quality_notes = cleaned_notes
@@ -196,6 +202,28 @@ def sanitize_company_identity_contradictions(result: PipelineResult) -> list[QAI
                     message=f"Removed issuer-name disclaimer from {slide.slide_type} slide subtitle.",
                     slide_id=slide.id,
                 ))
+    else:
+        if company.identity_state != "UNRESOLVED":
+            company.identity_state = "UNRESOLVED"
+            fixes.append(QAItem(
+                code="company_identity_marked_unresolved",
+                severity="INFO",
+                message="Marked company identity state as UNRESOLVED due to unevidenced or generic company name.",
+            ))
+        for slide in plan.slides:
+            if slide.slide_type == "company_overview" and slide.title.casefold() in {"company at a glance", "company overview"}:
+                slide.title = "Document at a Glance"
+                fixes.append(QAItem(
+                    code="company_overview_title_aligned",
+                    severity="INFO",
+                    message="Updated company overview slide title to 'Document at a Glance' for unresolved issuer.",
+                    slide_id=slide.id,
+                ))
+        # Ensure Data Quality reflects unresolved issuer if not already mentioned
+        if hasattr(result, "profile") and result.profile:
+            has_unnamed_note = any(_contains_unnamed(n) for n in result.profile.data_quality_notes)
+            if not has_unnamed_note:
+                result.profile.data_quality_notes.append("Issuer name is not stated in supplied source pages; document analysed as general corporate document.")
 
     return fixes
 
@@ -281,6 +309,10 @@ def check_evidence_completeness_for_title_claims(
 
 def run_comprehensive_qa(result: PipelineResult, auto_repair: bool = True) -> QAReport:
     """Execute complete QA audit across numerical, semantic, period, claim, and presentation layers."""
+    if auto_repair and result.presentation_plan and result.presentation_plan.company:
+        from adaptive_document_agent.services.company_extractor import extract_structured_company_fields
+        result.presentation_plan.company = extract_structured_company_fields(result.presentation_plan.company, result)
+
     report = QAReport(
         document_title=result.profile.overview_title or "Financial Document",
         total_extracted_facts=len(result.observations),

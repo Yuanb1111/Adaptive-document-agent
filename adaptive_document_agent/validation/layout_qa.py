@@ -101,11 +101,11 @@ def validate_presentation_layout(
     chart_lookup: dict[str, ChartPlan] = {c.id: c for c in result.charts}
 
     # 1. Company Overview structured extraction & paragraph overflow
+    from adaptive_document_agent.services.company_extractor import is_company_identity_resolved
+
     company = plan.company
     long_desc = len(company.one_line_description or "") > 280
-    unresolved_name = not company.name.strip() or company.name.strip().casefold() in {
-        "company overview", "document overview", "document at a glance", "company at a glance", "unnamed issuer"
-    }
+    unresolved_name = not is_company_identity_resolved(company)
     missing_fields = not company.industry or not company.products or not company.business_model
 
     if long_desc or unresolved_name or missing_fields:

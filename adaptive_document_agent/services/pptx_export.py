@@ -466,53 +466,23 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
     if plan is None:  # pragma: no cover - guarded by caller
         return
 
-    from adaptive_document_agent.services.company_extractor import extract_structured_company_fields
+    from adaptive_document_agent.services.company_extractor import (
+        extract_structured_company_fields,
+        is_company_identity_resolved,
+    )
 
     company = extract_structured_company_fields(plan.company, result)
     plan.company = company
 
-    has_company_identity = getattr(company, "identity_state", "") == "RESOLVED" or bool(
-        company.name.strip()
-        and company.name.strip().casefold()
-        not in {
-            "company overview",
-            "document overview",
-            "document at a glance",
-            "company at a glance",
-            "document",
-            "unnamed issuer",
-            "company not identified",
-        }
-    )
+    has_company_identity = is_company_identity_resolved(company)
 
     slide_title = slide_plan.title if has_company_identity else "Document at a Glance"
     slide = _base_slide(presentation, slide_title, company.document_type or result.profile.document_type)
     content_top, content_h = _content_zone(slide)
 
-    # Fixed structured snapshot layout: 2 columns x 2 rows inside standard container
     _panel(slide, 0.45, content_top, 11.70, content_h, fill=FOURIER_BG_CARD)
 
-    card_w = 5.65
-    gap_x = 0.20
-    col1_left = 0.55
-    col2_left = col1_left + card_w + gap_x  # 6.40
-    card_h = (content_h - 0.50) / 2
-    row1_top = content_top + 0.15
-    row2_top = row1_top + card_h + 0.15
-
-    # --- CARD 1 (Top-Left): Issuer Identity & Scope ---
-    _panel(slide, col1_left, row1_top, card_w, card_h, fill=WHITE)
-    _text(slide, "ISSUER PROFILE & IDENTITY", col1_left + 0.20, row1_top + 0.15, card_w - 0.40, 0.22, size=10.0, color=FOURIER_PURPLE, bold=True)
-    _rule(slide, col1_left + 0.20, row1_top + 0.40, card_w - 0.40, 0.01, FOURIER_BORDER)
-
-    name_display = company.name.strip() if has_company_identity else "Document Overview"
-    _text(slide, _summary_text(name_display, 42), col1_left + 0.20, row1_top + 0.48, card_w - 0.40, 0.32, size=15.0, color=FOURIER_DARK, bold=True)
-
-    y_id = row1_top + 0.82
-    if not has_company_identity:
-        _text(slide, "Issuer name not identified in supplied pages", col1_left + 0.20, y_id, card_w - 0.40, 0.22, size=9.5, color=FOURIER_PURPLE, bold=True)
-        y_id += 0.28
-
+    # 1. Gather bullets for Card 1 (Profile & Identity)
     id_bullets: list[str] = []
     if company.industry:
         id_bullets.append(f"Industry: {company.industry}")
@@ -522,79 +492,160 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
         id_bullets.append(f"Currency: {company.reporting_currency}")
     if company.track_record_period:
         id_bullets.append(f"Track Record: {company.track_record_period}")
-    if not id_bullets:
-        id_bullets.append("Document-grounded analysis of reported business operations.")
 
-    for b in id_bullets[:3]:
-        _text(slide, f"•  {_summary_text(b, 55)}", col1_left + 0.20, y_id, card_w - 0.40, 0.24, size=10.5, color=FOURIER_DARK)
-        y_id += 0.28
-
-    # --- CARD 2 (Top-Right): Business Focus & Model ---
-    _panel(slide, col2_left, row1_top, card_w, card_h, fill=WHITE)
-    _text(slide, "BUSINESS FOCUS & MODEL", col2_left + 0.20, row1_top + 0.15, card_w - 0.40, 0.22, size=10.0, color=FOURIER_PURPLE, bold=True)
-    _rule(slide, col2_left + 0.20, row1_top + 0.40, card_w - 0.40, 0.01, FOURIER_BORDER)
-
+    # 2. Gather bullets for Card 2 (Business Focus & Model)
     bm_bullets: list[str] = []
     if company.business_model:
         for part in re.split(r"[;\n]", company.business_model):
-            if part.strip():
-                bm_bullets.append(part.strip())
+            part_c = part.strip()
+            if part_c and part_c.casefold() not in {"none", "n/a", "unknown"}:
+                bm_bullets.append(part_c)
     if company.customer_types:
-        bm_bullets.append(f"Target Customers: {', '.join(company.customer_types[:3])}")
+        valid_custs = [c.strip() for c in company.customer_types if c.strip()]
+        if valid_custs:
+            bm_bullets.append(f"Target Customers: {', '.join(valid_custs[:3])}")
     if not bm_bullets and company.segments:
-        bm_bullets.extend(company.segments[:2])
-    if not bm_bullets:
-        bm_bullets.append("Core commercial activities and reported operating model.")
+        valid_segs = [s.strip() for s in company.segments if s.strip()]
+        if valid_segs:
+            bm_bullets.extend(valid_segs[:2])
 
-    y_bm = row1_top + 0.50
-    for b in bm_bullets[:4]:
-        _text(slide, f"•  {_summary_text(b, 56)}", col2_left + 0.20, y_bm, card_w - 0.40, 0.32, size=10.5, color=FOURIER_DARK)
-        y_bm += 0.36
-
-    # --- CARD 3 (Bottom-Left): Core Products & Offerings ---
-    _panel(slide, col1_left, row2_top, card_w, card_h, fill=WHITE)
-    _text(slide, "CORE PRODUCTS & OFFERINGS", col1_left + 0.20, row2_top + 0.15, card_w - 0.40, 0.22, size=10.0, color=FOURIER_PURPLE, bold=True)
-    _rule(slide, col1_left + 0.20, row2_top + 0.40, card_w - 0.40, 0.01, FOURIER_BORDER)
-
+    # 3. Gather bullets for Card 3 (Core Products & Offerings)
     prod_bullets: list[str] = []
     for p in company.products:
-        if p.strip():
+        if p.strip() and p.strip().casefold() not in {"none", "n/a", "unknown"}:
             prod_bullets.append(p.strip())
     if not prod_bullets and company.segments:
-        prod_bullets.extend(company.segments)
-    if not prod_bullets:
-        prod_bullets.append("Key product and service lines as disclosed in documentation.")
+        prod_bullets = [s.strip() for s in company.segments if s.strip()]
 
-    y_prod = row2_top + 0.50
-    for idx, p in enumerate(prod_bullets[:4], start=1):
-        _text(slide, f"{idx:02d}  {_summary_text(p, 54)}", col1_left + 0.20, y_prod, card_w - 0.40, 0.32, size=10.5, color=FOURIER_DARK, bold=True)
-        y_prod += 0.36
-
-    # --- CARD 4 (Bottom-Right): Markets, Position & Listing Facts ---
-    _panel(slide, col2_left, row2_top, card_w, card_h, fill=WHITE)
-    _text(slide, "MARKETS, POSITION & LISTING", col2_left + 0.20, row2_top + 0.15, card_w - 0.40, 0.22, size=10.0, color=FOURIER_PURPLE, bold=True)
-    _rule(slide, col2_left + 0.20, row2_top + 0.40, card_w - 0.40, 0.01, FOURIER_BORDER)
-
+    # 4. Gather bullets for Card 4 (Markets, Position & Listing)
     mkt_bullets: list[str] = []
     if company.geographies:
-        mkt_bullets.append(f"Geographic Markets: {', '.join(company.geographies[:3])}")
+        valid_geos = [g.strip() for g in company.geographies if g.strip()]
+        if valid_geos:
+            mkt_bullets.append(f"Geographic Markets: {', '.join(valid_geos[:3])}")
     if getattr(company, "market_position", ""):
-        mkt_bullets.append(f"Market Position: {company.market_position}")
+        mkt_bullets.append(f"Market Position: {company.market_position.strip()}")
     if company.listing_market:
-        mkt_bullets.append(f"Listing Exchange: {company.listing_market}")
+        mkt_bullets.append(f"Listing Exchange: {company.listing_market.strip()}")
     if getattr(company, "stock_code", ""):
-        mkt_bullets.append(f"Stock Code: {company.stock_code}")
+        mkt_bullets.append(f"Stock Code: {company.stock_code.strip()}")
     if getattr(company, "offering_type", ""):
-        mkt_bullets.append(f"Offering: {company.offering_type}")
-    if not mkt_bullets:
-        mkt_bullets.append("Multi-regional market footprint with commercial presence.")
+        mkt_bullets.append(f"Offering: {company.offering_type.strip()}")
 
-    y_mkt = row2_top + 0.50
-    for b in mkt_bullets[:4]:
-        _text(slide, f"•  {_summary_text(b, 56)}", col2_left + 0.20, y_mkt, card_w - 0.40, 0.32, size=10.5, color=FOURIER_DARK)
-        y_mkt += 0.36
+    # Determine supported cards to render (never invent missing information)
+    active_cards: list[str] = ["profile"]
+    if bm_bullets:
+        active_cards.append("business_model")
+    if prod_bullets:
+        active_cards.append("products")
+    if mkt_bullets:
+        active_cards.append("markets")
 
-    pages = sorted({*company.source_pages, *slide_plan.source_pages, *(page for fact in company.key_facts for page in fact.source_pages)})
+    def _draw_profile_card(c_left: float, c_top: float, c_w: float, c_h: float) -> None:
+        _panel(slide, c_left, c_top, c_w, c_h, fill=WHITE)
+        title_label = "ISSUER PROFILE & IDENTITY"
+        _text(slide, title_label, c_left + 0.20, c_top + 0.15, c_w - 0.40, 0.22, size=10.0, color=FOURIER_PURPLE, bold=True)
+        _rule(slide, c_left + 0.20, c_top + 0.40, c_w - 0.40, 0.01, FOURIER_BORDER)
+
+        name_display = company.name.strip() if has_company_identity else "Document Overview"
+        _text(slide, _summary_text(name_display, 42), c_left + 0.20, c_top + 0.48, c_w - 0.40, 0.32, size=15.0, color=FOURIER_DARK, bold=True)
+
+        y_id = c_top + 0.82
+        if not has_company_identity:
+            _text(slide, "Issuer name not identified in supplied pages", c_left + 0.20, y_id, c_w - 0.40, 0.22, size=9.5, color=FOURIER_PURPLE, bold=True)
+            y_id += 0.28
+
+        if id_bullets:
+            for b in id_bullets[:4]:
+                _text(slide, f"•  {_summary_text(b, 55 if c_w < 8.0 else 100)}", c_left + 0.20, y_id, c_w - 0.40, 0.24, size=10.5, color=FOURIER_DARK)
+                y_id += 0.28
+        else:
+            _text(slide, "Profile details not clearly disclosed in selected source pages.", c_left + 0.20, y_id, c_w - 0.40, 0.24, size=10.0, color=FOURIER_MUTED)
+
+    def _draw_bm_card(c_left: float, c_top: float, c_w: float, c_h: float) -> None:
+        _panel(slide, c_left, c_top, c_w, c_h, fill=WHITE)
+        _text(slide, "BUSINESS FOCUS & MODEL", c_left + 0.20, c_top + 0.15, c_w - 0.40, 0.22, size=10.0, color=FOURIER_PURPLE, bold=True)
+        _rule(slide, c_left + 0.20, c_top + 0.40, c_w - 0.40, 0.01, FOURIER_BORDER)
+        y_bm = c_top + 0.50
+        for b in bm_bullets[:4]:
+            _text(slide, f"•  {_summary_text(b, 56 if c_w < 8.0 else 110)}", c_left + 0.20, y_bm, c_w - 0.40, 0.32, size=10.5, color=FOURIER_DARK)
+            y_bm += 0.36
+
+    def _draw_prod_card(c_left: float, c_top: float, c_w: float, c_h: float) -> None:
+        _panel(slide, c_left, c_top, c_w, c_h, fill=WHITE)
+        _text(slide, "CORE PRODUCTS & OFFERINGS", c_left + 0.20, c_top + 0.15, c_w - 0.40, 0.22, size=10.0, color=FOURIER_PURPLE, bold=True)
+        _rule(slide, c_left + 0.20, c_top + 0.40, c_w - 0.40, 0.01, FOURIER_BORDER)
+        y_prod = c_top + 0.50
+        if c_w > 8.0 and len(prod_bullets) > 2:
+            half_w = (c_w - 0.60) / 2
+            for idx, p in enumerate(prod_bullets[:2], start=1):
+                _text(slide, f"{idx:02d}  {_summary_text(p, 54)}", c_left + 0.20, y_prod + (idx - 1) * 0.36, half_w, 0.32, size=10.5, color=FOURIER_DARK, bold=True)
+            for idx, p in enumerate(prod_bullets[2:4], start=3):
+                _text(slide, f"{idx:02d}  {_summary_text(p, 54)}", c_left + half_w + 0.40, y_prod + (idx - 3) * 0.36, half_w, 0.32, size=10.5, color=FOURIER_DARK, bold=True)
+        else:
+            for idx, p in enumerate(prod_bullets[:4], start=1):
+                _text(slide, f"{idx:02d}  {_summary_text(p, 54 if c_w < 8.0 else 110)}", c_left + 0.20, y_prod, c_w - 0.40, 0.32, size=10.5, color=FOURIER_DARK, bold=True)
+                y_prod += 0.36
+
+    def _draw_mkt_card(c_left: float, c_top: float, c_w: float, c_h: float) -> None:
+        _panel(slide, c_left, c_top, c_w, c_h, fill=WHITE)
+        _text(slide, "MARKETS, POSITION & LISTING", c_left + 0.20, c_top + 0.15, c_w - 0.40, 0.22, size=10.0, color=FOURIER_PURPLE, bold=True)
+        _rule(slide, c_left + 0.20, c_top + 0.40, c_w - 0.40, 0.01, FOURIER_BORDER)
+        y_mkt = c_top + 0.50
+        if c_w > 8.0 and len(mkt_bullets) > 2:
+            half_w = (c_w - 0.60) / 2
+            for idx, b in enumerate(mkt_bullets[:2]):
+                _text(slide, f"•  {_summary_text(b, 56)}", c_left + 0.20, y_mkt + idx * 0.36, half_w, 0.32, size=10.5, color=FOURIER_DARK)
+            for idx, b in enumerate(mkt_bullets[2:4]):
+                _text(slide, f"•  {_summary_text(b, 56)}", c_left + half_w + 0.40, y_mkt + idx * 0.36, half_w, 0.32, size=10.5, color=FOURIER_DARK)
+        else:
+            for b in mkt_bullets[:4]:
+                _text(slide, f"•  {_summary_text(b, 56 if c_w < 8.0 else 110)}", c_left + 0.20, y_mkt, c_w - 0.40, 0.32, size=10.5, color=FOURIER_DARK)
+                y_mkt += 0.36
+
+    draw_lookup = {
+        "profile": _draw_profile_card,
+        "business_model": _draw_bm_card,
+        "products": _draw_prod_card,
+        "markets": _draw_mkt_card,
+    }
+
+    card_w = 5.65
+    gap_x = 0.20
+    col1_left = 0.55
+    col2_left = col1_left + card_w + gap_x  # 6.40
+    card_h = (content_h - 0.50) / 2
+    row1_top = content_top + 0.15
+    row2_top = row1_top + card_h + 0.15
+
+    # Dynamic placement based on number of active supported cards
+    if len(active_cards) == 4:
+        # Full 2x2 grid
+        draw_lookup[active_cards[0]](col1_left, row1_top, card_w, card_h)
+        draw_lookup[active_cards[1]](col2_left, row1_top, card_w, card_h)
+        draw_lookup[active_cards[2]](col1_left, row2_top, card_w, card_h)
+        draw_lookup[active_cards[3]](col2_left, row2_top, card_w, card_h)
+    elif len(active_cards) == 3:
+        # 2 cards top, 1 full-width card bottom
+        draw_lookup[active_cards[0]](col1_left, row1_top, card_w, card_h)
+        draw_lookup[active_cards[1]](col2_left, row1_top, card_w, card_h)
+        draw_lookup[active_cards[2]](col1_left, row2_top, 11.50, card_h)
+    elif len(active_cards) == 2:
+        # 2 side-by-side full-height cards
+        full_h = content_h - 0.30
+        draw_lookup[active_cards[0]](col1_left, row1_top, card_w, full_h)
+        draw_lookup[active_cards[1]](col2_left, row1_top, card_w, full_h)
+    else:
+        # 1 full-width full-height card
+        full_h = content_h - 0.30
+        draw_lookup[active_cards[0]](col1_left, row1_top, 11.50, full_h)
+
+    pages = sorted({
+        *company.source_pages,
+        *slide_plan.source_pages,
+        *(p for p_list in getattr(company, "field_source_pages", {}).values() for p in p_list),
+        *(page for fact in company.key_facts for page in fact.source_pages),
+    })
     if pages:
         _text(slide, f"Source pages  {', '.join(map(str, pages))}", 0.45, 6.55, 11.70, 0.25, size=9.5, color=FOURIER_MUTED)
 
@@ -1537,13 +1588,9 @@ def _add_quality_slide(presentation: Any, result: PipelineResult, *, title: str 
         *(warning.message for warning in result.validation_warnings if warning.severity in {"error", "warning"}),
     ]))[:5]
 
-    # Clean wording: resolve company name issue if company is identified
-    company_name = result.presentation_plan.company.name if result.presentation_plan and result.presentation_plan.company else ""
-    is_company_resolved = bool(
-        company_name
-        and company_name != "Company overview"
-        and not any(p in company_name.casefold() for p in ("unnamed", "unidentified", "unknown"))
-    )
+    from adaptive_document_agent.services.company_extractor import is_company_identity_resolved
+
+    is_company_resolved = is_company_identity_resolved(result.presentation_plan.company) if result.presentation_plan else False
     unnamed_phrases = (
         "issuer/company name is not stated",
         "company name is not stated",

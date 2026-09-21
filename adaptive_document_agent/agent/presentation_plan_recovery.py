@@ -54,12 +54,16 @@ class PresentationPlanRecovery:
         if not charts:
             charts = usable[:10]
 
-        company_profile = CompanyProfile(
-            name=result.profile.overview_title or (result.profile.document_type if result.profile.document_type != "Document" else "Document Overview"),
+        from adaptive_document_agent.services.company_extractor import extract_structured_company_fields, is_company_identity_resolved
+
+        initial_company = CompanyProfile(
+            name=result.profile.overview_title or (result.profile.document_type if result.profile.document_type != "Document" else ""),
             one_line_description=result.profile.document_summary or result.profile.document_purpose,
             document_type=result.profile.document_type,
             source_pages=company_pages,
         )
+        company_profile = extract_structured_company_fields(initial_company, result)
+        has_identity = is_company_identity_resolved(company_profile)
 
         slides: list[PresentationSlide] = [
             PresentationSlide(
@@ -71,8 +75,8 @@ class PresentationPlanRecovery:
             PresentationSlide(
                 id="slide_company_overview",
                 slide_type="company_overview",
-                title="Company at a Glance" if result.profile.overview_title else "Document at a Glance",
-                source_pages=company_pages,
+                title="Company at a Glance" if has_identity else "Document at a Glance",
+                source_pages=company_profile.source_pages or company_pages,
             ),
             self._summary_slide(result),
         ]
@@ -284,7 +288,11 @@ class PresentationPlanRecovery:
 
     @staticmethod
     def _profile_pages(result: PipelineResult) -> list[int]:
-        pages = [page for page in result.profile.document_summary_pages if 1 <= page <= result.document.page_count]
+        from adaptive_document_agent.services.company_discovery import CompanyProfileDiscovery
+
+        pages = CompanyProfileDiscovery.rank_profile_pages(result.document, result.profile, max_pages=6)
+        if not pages:
+            pages = [page for page in result.profile.document_summary_pages if 1 <= page <= result.document.page_count]
         if not pages and result.document.page_count >= 1:
             pages = [1]
         return pages[:6]

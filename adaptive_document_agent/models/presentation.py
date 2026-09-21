@@ -68,6 +68,7 @@ class CompanyProfile(BaseModel):
     identity_state: Literal["UNRESOLVED", "PARTIALLY_RESOLVED", "RESOLVED"] = "UNRESOLVED"
     key_facts: list[CompanyFact] = Field(default_factory=list, max_length=8)
     source_pages: list[int] = Field(default_factory=list)
+    field_source_pages: dict[str, list[int]] = Field(default_factory=dict)
 
 
 class PresentationVisualBlock(BaseModel):
