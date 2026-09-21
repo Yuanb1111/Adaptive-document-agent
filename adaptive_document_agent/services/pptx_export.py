@@ -156,6 +156,18 @@ def build_presentation(result: PipelineResult, template_path: str | Path | None 
         presentation.part.drop_rel(rId)
         del presentation.slides._sldIdLst[presentation.slides._sldIdLst.index(sld_id)]
 
+    from .presentation_style import deck_color_map
+    color_keys = []
+    color_index = DocumentIndex(result.observations)
+    for chart in result.charts:
+        values = [color_index.get(oid) for oid in chart.observation_ids if color_index.get(oid)]
+        if chart.series_dimension or chart.chart_type == "doughnut":
+            dimension = chart.series_dimension or chart.x_dimension
+            color_keys.extend(str(({**o.dimensions, **o.category_dimensions}).get(dimension, display_metric_name(o))) for o in values)
+        else:
+            color_keys.extend(name for _, name, _ in _series_rows(chart, values))
+    presentation._ada_colors = deck_color_map(color_keys)
+
     if result.presentation_plan:
         PresentationPlanValidator().validate(result.presentation_plan, result)
         _build_planned_presentation(presentation, result)
@@ -170,6 +182,8 @@ def build_presentation(result: PipelineResult, template_path: str | Path | None 
     # Pre-export preflight check and sanitization
     preflight = PresentationPreflight(presentation)
     preflight.validate_and_sanitize()
+    from .slide_compositor import validate_composed_geometry
+    validate_composed_geometry(presentation)
 
     stream = io.BytesIO()
     presentation.save(stream)
@@ -222,7 +236,15 @@ def _build_legacy_presentation(presentation: Any, result: PipelineResult) -> Non
     if chart_groups:
         _add_section_divider(presentation, "Thematic analysis", "Connected measures, periods and source evidence")
     for ordinal, group in enumerate(chart_groups):
-        if len(group) == 1:
+        from .composition_data import COMPOSITION_TYPES
+        if any(c.chart_type in COMPOSITION_TYPES for c in group):
+            from .slide_compositor import render_composed_slide
+            for chart in group:
+                render_composed_slide(presentation, PresentationSlide(
+                    id=f"composition_{chart.id}", slide_type="analysis", title=chart.title,
+                    message=chart.question, chart_ids=[chart.id], layout="chart_plus_commentary",
+                    source_pages=chart.source_pages), [chart], result, index)
+        elif len(group) == 1:
             _add_chart_slide(presentation, group[0], index, ordinal=ordinal)
         else:
             _add_chart_cluster_slide(presentation, group, index)
@@ -292,6 +314,14 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
                 linked.update({oid: index.get(oid) for oid in chart.observation_ids if index.get(oid)})
             single = single_metric_analysis(list(linked.values())) if len(charts) <= 1 else None
             if single and not any(_is_positive_topic_mismatch(o, slide_plan) for o in single.observations):
+                explicit_composition = bool(slide_plan.bullets or slide_plan.insight_ids or any(
+                    b.role in {"kpi", "table", "commentary"} or b.insight_ids for b in slide_plan.visual_blocks))
+                if explicit_composition and charts:
+                    from .slide_compositor import render_composed_slide
+                    render_composed_slide(presentation, slide_plan, charts, result, index)
+                    rendered_charts.extend(charts)
+                    ordinal += 1
+                    continue
                 hero = charts[0] if charts else ChartPlan(
                     id=f"hero_{slide_plan.id}", title=display_metric_name(single.observations[0]),
                     chart_type="line", question=slide_plan.message,
@@ -303,76 +333,11 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
                 ordinal += 1
                 continue
             if charts:
-                if len(charts) == 1 and slide_plan.layout != "chart_with_data":
-                    charts = [
-                        charts[0].model_copy(
-                            update={
-                                "title": slide_plan.title,
-                                "question": slide_plan.message or charts[0].question,
-                                "source_pages": slide_plan.source_pages or charts[0].source_pages,
-                            }
-                        )
-                    ]
-                else:
-                    # Multi-chart cluster: preserve each chart's distinct metric title!
-                    charts = [
-                        item.model_copy(
-                            update={
-                                "question": slide_plan.message or item.question,
-                                "source_pages": slide_plan.source_pages or item.source_pages,
-                            }
-                        )
-                        for item in charts
-                    ]
+                from .slide_compositor import render_composed_slide
+                render_composed_slide(presentation, slide_plan, charts, result, index)
                 rendered_charts.extend(charts)
-                if len(charts) == 1 and slide_plan.layout in {"chart_plus_kpis", "chart_with_data", "table_plus_kpis"}:
-                    _add_chart_plus_kpis_slide(
-                        presentation,
-                        charts[0],
-                        index,
-                        title=slide_plan.title,
-                        subtitle=slide_plan.message,
-                        supporting_observations=_planned_observations(slide_plan, index),
-                    )
-                elif len(charts) == 1:
-                    _add_chart_slide(
-                        presentation,
-                        charts[0],
-                        index,
-                        ordinal=ordinal,
-                        title=slide_plan.title,
-                        subtitle=slide_plan.message,
-                    )
-                elif len(charts) == 3 and _is_cramped_cluster_render(charts, index):
-                    # Spacing is insufficient for 3 charts: split into two slides
-                    _add_chart_cluster_slide(
-                        presentation,
-                        charts[:2],
-                        index,
-                        title=slide_plan.title,
-                        subtitle=slide_plan.message,
-                        layout="two_up",
-                        supporting_observations=_planned_observations(slide_plan, index),
-                    )
-                    _add_chart_plus_kpis_slide(
-                        presentation,
-                        charts[2],
-                        index,
-                        title=f"{slide_plan.title} (Cont.)",
-                        subtitle=slide_plan.message,
-                        supporting_observations=_planned_observations(slide_plan, index),
-                    )
-                else:
-                    _add_chart_cluster_slide(
-                        presentation,
-                        charts,
-                        index,
-                        title=slide_plan.title,
-                        subtitle=slide_plan.message,
-                        layout=slide_plan.layout,
-                        supporting_observations=_planned_observations(slide_plan, index),
-                    )
                 ordinal += 1
+                continue
             else:
                 observations = _planned_observations(slide_plan, index)
                 if not observations:
@@ -423,14 +388,11 @@ def _planned_chart_requests(slide_plan: PresentationSlide) -> list[tuple[str, st
     requests: list[tuple[str, str | None]] = [(identifier, None) for identifier in slide_plan.chart_ids]
     for block in slide_plan.visual_blocks:
         requests.extend((identifier, block.chart_type) for identifier in block.chart_ids)
-    output: list[tuple[str, str | None]] = []
-    seen: set[str] = set()
+    output: dict[str, str | None] = {}
     for identifier, chart_type in requests:
-        if identifier in seen:
-            continue
-        seen.add(identifier)
-        output.append((identifier, chart_type))
-    return output[:3]
+        if identifier not in output or chart_type is not None:
+            output[identifier] = chart_type
+    return list(output.items())[:3]
 
 
 def _planned_observations(slide_plan: PresentationSlide, index: DocumentIndex) -> list[Observation]:
@@ -716,6 +678,13 @@ def _add_planned_summary(
     slide_plan: PresentationSlide,
     index: DocumentIndex,
 ) -> None:
+    if _planned_chart_requests(slide_plan):
+        from .slide_compositor import render_composed_slide
+        by_id = {c.id: c for c in _usable_charts(result)}
+        charts = [by_id[cid].model_copy(update={"chart_type": kind or by_id[cid].chart_type})
+                  for cid, kind in _planned_chart_requests(slide_plan) if cid in by_id]
+        render_composed_slide(presentation, slide_plan, charts, result, index)
+        return
     slide = _base_slide(presentation, slide_plan.title, slide_plan.message)
     insight_by_id = {item.id: item for item in result.insights}
     raw_findings = [
@@ -1362,7 +1331,12 @@ def _add_native_chart(
     bounds: tuple[float, float, float, float],
     *,
     compact: bool = False,
+    totals: list[Observation] | None = None,
 ) -> tuple[float, str]:
+    from .composition_data import COMPOSITION_TYPES
+    if plan.chart_type in COMPOSITION_TYPES:
+        from .composition_renderer import add_composition_chart
+        return add_composition_chart(slide, plan, values, bounds, totals=totals, compact=compact)
     from pptx.chart.data import CategoryChartData, XyChartData
     from pptx.enum.chart import (
         XL_CHART_TYPE,
@@ -1442,7 +1416,8 @@ def _add_native_chart(
         chart.legend.font.size = Pt(8.0 if (compact or chart_width < 5.5) else 9.5)
     chart.chart_style = 10
     for series_index, series in enumerate(chart.series):
-        color = CHART_PALETTE[series_index % len(CHART_PALETTE)]
+        from .presentation_style import semantic_color
+        color = getattr(slide, "_ada_colors", {}).get(series.name, semantic_color(series.name))
         try:
             series.format.fill.solid()
             series.format.fill.fore_color.rgb = _rgb(color)
@@ -1662,6 +1637,7 @@ THEME_ORDER = [
     "Cash Flow",
     "Non-IFRS / Adjusted Measures",
     "Financial Overview",
+    "Reported Measures",
 ]
 
 
@@ -1726,6 +1702,13 @@ def _add_evidence_table_slides(
     # theme -> metric_label -> {"periods": {period_str: val_str}, "pages": set()}
     metrics_by_theme: dict[str, dict[str, dict[str, Any]]] = {}
     all_periods_set: set[str] = set()
+    thematic_labels = {}
+    if result.presentation_plan and result.presentation_plan.themes:
+        from adaptive_document_agent.validation.narrative_plan_validator import expanded_observation_ids
+        chart_map = {c.id: c for c in result.charts}
+        for theme_plan in result.presentation_plan.themes:
+            for oid in expanded_observation_ids(theme_plan, chart_map):
+                thematic_labels.setdefault(oid, theme_plan.title)
 
     for item in observations:
         semantic = classify_metric(
@@ -1739,6 +1722,10 @@ def _add_evidence_table_slides(
             metric_name,
             item.parent_section or item.source_section or item.dimensions.get("section") or "",
         )
+        if item.id in thematic_labels:
+            theme = thematic_labels[item.id]
+        elif theme == "Financial Overview" and not item.currency and not is_financial_statement_metric(metric_name):
+            theme = "Reported Measures"
         unit_str = _appendix_display_unit(item, semantic)
         display_value = _appendix_display_value(item, semantic)
         is_item_bs = any(term in metric_name.casefold() for term in ("liabilit", "cash", "balance", "receiv", "payab", "inventor", "asset", "equity", "deficit"))
@@ -1763,12 +1750,18 @@ def _add_evidence_table_slides(
         "Cash Flow",
         "Non-IFRS / Adjusted Measures",
         "Financial Overview",
+        "Reported Measures",
     ]
     BS_THEMES = [
         "Liquidity",
         "Working Capital & Operations",
         "Capital Structure & Indebtedness",
     ]
+    if thematic_labels:
+        # LLM-selected topics drive the new plan's appendix too. Preserve legacy
+        # financial grouping only for cached plans without a theme contract.
+        FLOW_THEMES = list(metrics_by_theme)
+        BS_THEMES = []
 
     slide_specs: list[tuple[list[str], list[tuple[str, dict[str, dict[str, Any]]]], bool]] = []
     for theme_set, is_bs in [(FLOW_THEMES, False), (BS_THEMES, True)]:
@@ -1808,7 +1801,8 @@ def _add_evidence_table_slides(
 
     total_specs = len(slide_specs)
     for spec_index, (p_chunk, theme_entries, is_bs) in enumerate(slide_specs, start=1):
-        group_type_str = "Balance Sheet & Position" if is_bs else "Performance & Cash Flows"
+        generic_section = bool(thematic_labels) or all(t == "Reported Measures" for t, _ in theme_entries)
+        group_type_str = "Reported measures" if generic_section else "Balance Sheet & Position" if is_bs else "Performance & Cash Flows"
         slide_subtitle = subtitle or f"{group_type_str} across reported periods, with source provenance"
         if total_specs > 1:
             slide_subtitle += f" | Appendix {spec_index} of {total_specs}"
@@ -1829,7 +1823,7 @@ def _add_evidence_table_slides(
         if not active_p_chunk:
             active_p_chunk = p_chunk[:1] if p_chunk else ["Reported"]
 
-        formatted_headers = ["Financial Metric", "Unit"] + active_p_chunk
+        formatted_headers = ["Metric" if generic_section else "Financial Metric", "Unit"] + active_p_chunk
 
         table_rows: list[tuple[str, str, list[str], bool]] = []
         slide_pages: set[int] = set()
@@ -1958,6 +1952,8 @@ def _base_slide(presentation: Any, title: str, subtitle: str = "", *, background
         slide = presentation.slides.add_slide(presentation.slide_layouts[layout_idx])
     else:
         slide = presentation.slides.add_slide(presentation.slide_layouts[0])
+
+    slide._ada_colors = getattr(presentation, "_ada_colors", {})
 
     title_ph = None
     sub_ph = None
@@ -2420,11 +2416,18 @@ def _chart_group_title(plans: list[ChartPlan], index: DocumentIndex) -> str:
 
 
 def _usable_charts(result: PipelineResult) -> list[ChartPlan]:
+    from .composition_data import COMPOSITION_TYPES, composition_data
     index = DocumentIndex(result.observations)
     output: list[ChartPlan] = []
     for plan in result.charts:
         observations = [index.get(identifier) for identifier in plan.observation_ids]
         observations = [item for item in observations if item and is_meaningful_metric(item)]
+        if plan.chart_type in COMPOSITION_TYPES:
+            composition_data(plan, observations, [index.get(oid) for oid in plan.total_observation_ids if index.get(oid)])
+            # An unchanged composition is still a meaningful comparison. Its
+            # categories may live in category_dimensions, not legacy dimensions.
+            output.append(plan)
+            continue
         contexts = {
             (item.period, item.entity, tuple(sorted(item.dimensions.items())))
             for item in observations
@@ -2439,9 +2442,13 @@ def _usable_charts(result: PipelineResult) -> list[ChartPlan]:
 
 
 def _chart_findings(charts: list[ChartPlan], index: DocumentIndex) -> list[dict[str, object]]:
+    from .composition_data import COMPOSITION_TYPES
     output: list[dict[str, object]] = []
     seen: set[str] = set()
     for chart in charts:
+        if chart.chart_type in COMPOSITION_TYPES:
+            # A category matrix is not one unsegmented period series.
+            continue
         values = [index.get(identifier) for identifier in chart.observation_ids]
         values = [item for item in values if item and item.value is not None and is_meaningful_metric(item)]
         keys = {metric_key(item) for item in values}
@@ -2462,13 +2469,23 @@ def _chart_findings(charts: list[ChartPlan], index: DocumentIndex) -> list[dict[
         first, last = ordered[0], ordered[-1]
         scale, scale_label = _display_scale(ordered, max(abs(float(item.value or 0)) for item in ordered))
         label = sanitize_metric_label(display_metric_name(first))
-        narrative = FinancialMovementFormatter.format_movement_narrative(
-            first,
-            last,
-            currency=first.currency or "RMB",
-            scale=scale,
-            observations=ordered,
-        )
+        if not first.currency:
+            from .single_metric_analysis import single_metric_analysis
+            from .presentation_evidence import evidence_groups
+            if len(evidence_groups(values)) != 1:
+                continue
+            analysis = single_metric_analysis(values)
+            unit = "%" if analysis and analysis.is_percentage else "units" if first.unit == "count" else first.unit or ""
+            # No currency can be inferred from a missing currency field. This
+            # fallback states source levels rather than inventing a narrative.
+            narrative = f"{label}: {first.value:,.1f} {unit} in {first.period} and {last.value:,.1f} {unit} in {last.period}."
+            if analysis and analysis.turning_periods:
+                narrative += f" Peak: {analysis.peak.value:,.1f} {unit} in {analysis.peak.period}; low: {analysis.trough.value:,.1f} {unit} in {analysis.trough.period}."
+        else:
+            narrative = FinancialMovementFormatter.format_movement_narrative(
+                first, last, currency=first.currency, unit=first.unit, unit_family=first.unit_family,
+                scale=scale, observations=ordered,
+            )
         output.append({
             "title": label,
             "narrative": narrative,
@@ -2489,7 +2506,7 @@ def _finding_value(item: Observation, scale: float, scale_label: str) -> str:
 
 def _appendix_observations(result: PipelineResult, charts: list[ChartPlan]) -> list[Observation]:
     index = DocumentIndex(result.observations)
-    used_ids = [identifier for plan in charts for identifier in plan.observation_ids]
+    used_ids = [identifier for plan in charts for identifier in [*plan.observation_ids, *plan.total_observation_ids]]
     selected = [index.get(identifier) for identifier in used_ids]
     pool = [item for item in selected if item is not None and item.value is not None]
     if not pool or len(pool) < 8:

@@ -25,6 +25,8 @@ class Insight(BaseModel):
     metric: str | None = None
     movement: str | None = None
     driver: str | None = None
+    driver_quote: str | None = None
+    driver_source_page: int | None = None
     implication: str | None = None
     watch_item: str | None = None
 

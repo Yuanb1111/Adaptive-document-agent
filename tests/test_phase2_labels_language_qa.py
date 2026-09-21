@@ -81,7 +81,7 @@ def test_language_qa_fixes_ocr_and_prompt_leaks() -> None:
 
 
 def test_structured_analytical_depth() -> None:
-    """Insights must embody the 5-step analytical depth: Metric, Movement, Driver, Implication, Watch Item."""
+    """Keep supported metric/movement without fabricating the optional depth fields."""
     ev = SourceEvidence(page=12, text="Operating margin contracted 1.2 pp", extraction_method="digital_table", confidence=0.9)
     result = AnalysisResult(
         task_id="task_op_margin",
@@ -98,7 +98,8 @@ def test_structured_analytical_depth() -> None:
 
     assert insight.metric == "Operating Margin"
     assert insight.movement is not None and "14.2%" in insight.movement
-    assert insight.driver is not None and "Management did not disclose specific operational drivers" in insight.driver
-    assert insight.implication is not None
-    assert insight.watch_item is not None
-    assert "Watch item:" in insight.narrative
+    assert insight.driver is None
+    assert insight.implication is None
+    assert insight.watch_item is None
+    assert "Management did not disclose" not in insight.narrative
+    assert "liquidity" not in insight.narrative

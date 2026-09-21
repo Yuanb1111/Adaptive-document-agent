@@ -51,8 +51,27 @@ def export_pptx(
     template_path: str | Path | None = None,
     *,
     force: bool = False,
+    renderer=None,
+    visual_cache: dict | None = None,
 ) -> bytes:
+    return export_pptx_with_report(result, template_path, force=force, renderer=renderer, visual_cache=visual_cache).payload
+
+
+def export_pptx_with_report(
+    result: PipelineResult,
+    template_path: str | Path | None = None,
+    *,
+    force: bool = False,
+    renderer=None,
+    visual_cache: dict | None = None,
+):
+    """Financial QA, native generation, then strict local rendered validation.
+
+    ``force`` retains its legacy financial-QA meaning; it never bypasses visual
+    verification. The raw builder is internal, not a verified export API.
+    """
     from .qa_reporter import CriticalQAError, run_comprehensive_qa
+    from .presentation_visual_qa import verify_presentation
 
     # Automatic QA repair loop:
     # Presentation Plan -> Claim Validation -> Repair contradictory wording -> Revalidate -> Export only if valid.
@@ -61,7 +80,8 @@ def export_pptx(
         reasons = "\n - ".join(e.message for e in qa.critical_errors)
         raise CriticalQAError(f"PowerPoint export blocked due to critical QA errors:\n - {reasons}")
 
-    return build_presentation(result, template_path=template_path)
+    return verify_presentation(build_presentation(result, template_path=template_path),
+                               renderer=renderer, cache=visual_cache)
 
 
 def export_pdf(result: PipelineResult) -> bytes:

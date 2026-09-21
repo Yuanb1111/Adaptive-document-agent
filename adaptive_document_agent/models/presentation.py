@@ -35,7 +35,7 @@ PresentationLayout = Literal[
 
 PresentationSlideRole = Literal["overview", "deep_dive", "drivers", "watch_items", "risk", "methodology", "source_data"]
 
-PresentationBlockRole = Literal["hero", "supporting", "kpi", "table"]
+PresentationBlockRole = Literal["hero", "supporting", "kpi", "table", "commentary"]
 
 
 class CompanyFact(BaseModel):
@@ -100,6 +100,25 @@ class PresentationSlide(BaseModel):
     insight_ids: list[str] = Field(default_factory=list, max_length=6)
     visual_blocks: list[PresentationVisualBlock] = Field(default_factory=list, max_length=4)
     source_pages: list[int] = Field(default_factory=list)
+    theme_id: str = ""
+    analytical_question: str = ""
+    selection_reason: str = ""
+    comparison_mode: Literal["context", "parallel", "like_for_like"] = "context"
+    calculation_ids: list[str] = Field(default_factory=list, max_length=12)
+
+
+class PresentationTheme(BaseModel):
+    """Model-selected analytical question and its explicit evidence boundary."""
+
+    id: str
+    title: str
+    question: str
+    rationale: str
+    chart_ids: list[str] = Field(default_factory=list, max_length=12)
+    observation_ids: list[str] = Field(default_factory=list, max_length=180)
+    insight_ids: list[str] = Field(default_factory=list, max_length=12)
+    caveats: list[str] = Field(default_factory=list, max_length=5)
+    source_pages: list[int] = Field(default_factory=list)
 
 
 class PresentationPlan(BaseModel):
@@ -108,4 +127,6 @@ class PresentationPlan(BaseModel):
     title: str
     report_type: str = "Document analysis"
     company: CompanyProfile = Field(default_factory=CompanyProfile)
+    # Empty remains supported for cached plans created before theme planning.
+    themes: list[PresentationTheme] = Field(default_factory=list, max_length=12)
     slides: list[PresentationSlide] = Field(default_factory=list, max_length=24)

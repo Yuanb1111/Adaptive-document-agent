@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import io
+import pytest
+
+pytestmark = pytest.mark.usefixtures("local_render_stub")
 import re
 from pptx import Presentation
 from pptx.enum.chart import XL_TICK_LABEL_POSITION

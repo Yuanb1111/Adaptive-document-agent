@@ -1,6 +1,9 @@
 """Unit tests for presentation refinements, metric semantics, period formatting, and preflight."""
 
 import io
+import pytest
+
+pytestmark = pytest.mark.usefixtures("local_render_stub")
 from pptx import Presentation
 from pptx.util import Inches
 
@@ -725,5 +728,4 @@ def test_expense_ratio_decrease_not_contradiction_of_gross_margin() -> None:
     trend = determine_trend_state("Cost of sales / revenue", 65.0, 60.0)
     # A 65 → 60 decrease in EXPENSE metric must be DECREASED (not contradicting gross margin improvement)
     assert trend == TrendState.DECREASED, f"Expected DECREASED, got {trend}"
-
 

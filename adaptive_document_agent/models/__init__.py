@@ -17,6 +17,7 @@ from .presentation import (
     PresentationSlideRole,
     PresentationSlideType,
     PresentationVisualBlock,
+    PresentationTheme,
 )
 from .report import Insight, PipelineResult, ReportPlan, ReportSection
 from .table import ExtractedTable, TableRow
@@ -50,6 +51,7 @@ __all__ = [
     "PresentationSlideRole",
     "PresentationSlideType",
     "PresentationVisualBlock",
+    "PresentationTheme",
     "ReportPlan",
     "ReportSection",
     "SourceEvidence",

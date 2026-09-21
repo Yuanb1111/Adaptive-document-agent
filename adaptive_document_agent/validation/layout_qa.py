@@ -64,6 +64,13 @@ def _is_cramped_multi_chart_slide(slide: PresentationSlide, chart_lookup: dict[s
     chart_ids = list(dict.fromkeys(chart_ids))
     if len(chart_ids) < 3:
         return False
+    if slide.layout == "hero_plus_supporting" and (
+        slide.bullets or slide.insight_ids or slide.observation_ids
+        or any(b.observation_ids or b.insight_ids for b in slide.visual_blocks)
+    ):
+        # Two vertically stacked companion charts cannot also share a bottom
+        # evidence band at a readable size in the supported widescreen template.
+        return True
 
     # In a 3-chart layout, panel width is ~3.73 in. If any chart has multi-series legend
     # or long title, it is cramped.
@@ -72,7 +79,11 @@ def _is_cramped_multi_chart_slide(slide: PresentationSlide, chart_lookup: dict[s
         if not chart:
             continue
         obs = [index.get(oid) for oid in chart.observation_ids if index.get(oid)]
-        series_names = {item.dimensions.get("series") or item.dimensions.get("breakdown") or item.entity for item in obs if item}
+        series_names = {
+            ({**item.dimensions, **item.category_dimensions}).get(chart.series_dimension)
+            or item.dimensions.get("series") or item.dimensions.get("breakdown") or item.entity
+            for item in obs if item
+        }
         series_names.discard(None)
         if len(series_names) > 1:
             return True
@@ -172,6 +183,14 @@ def validate_presentation_layout(
 
         if _is_cramped_multi_chart_slide(slide, chart_lookup, index):
             if auto_repair:
+                if slide.theme_id:
+                    # A theme's evidence/calculation contract belongs to the
+                    # planned analytical page. Paginate physical output without
+                    # rewriting that contract into incomplete narrative claims.
+                    repaired_slides.append(slide)
+                    issues.append(QAItem(code="themed_layout_pagination", severity="INFO", slide_id=slide.id,
+                        message="The compositor will paginate the crowded chart page while preserving its complete thematic evidence contract."))
+                    continue
                 chart_ids = list(slide.chart_ids)
                 for block in slide.visual_blocks:
                     chart_ids.extend(block.chart_ids)
@@ -187,9 +206,10 @@ def validate_presentation_layout(
                 slide1 = slide.model_copy(
                     update={
                         "chart_ids": c1,
-                        "visual_blocks": [b for b in slide.visual_blocks if any(cid in c1 for cid in b.chart_ids)][:2],
-                        "observation_ids": slide1_obs,
-                        "source_pages": slide1_pages or slide.source_pages,
+                        "visual_blocks": [b.model_copy(update={"chart_ids": [cid for cid in b.chart_ids if cid in c1]})
+                                          for b in slide.visual_blocks if not b.chart_ids or any(cid in c1 for cid in b.chart_ids)],
+                        "observation_ids": list(dict.fromkeys([*slide1_obs, *slide.observation_ids])),
+                        "source_pages": sorted(set(slide1_pages) | set(slide.source_pages)),
                         "layout": "two_up",
                     }
                 )
@@ -198,7 +218,10 @@ def validate_presentation_layout(
                         "id": f"{slide.id}_part2",
                         "title": f"{slide.title} (Cont.)",
                         "chart_ids": c2,
-                        "visual_blocks": [b for b in slide.visual_blocks if any(cid in c2 for cid in b.chart_ids)][:1],
+                        "visual_blocks": [b.model_copy(update={"chart_ids": [cid for cid in b.chart_ids if cid in c2]})
+                                          for b in slide.visual_blocks if any(cid in c2 for cid in b.chart_ids)],
+                        "bullets": [],
+                        "insight_ids": [],
                         "observation_ids": slide2_obs,
                         "source_pages": slide2_pages or slide.source_pages,
                         "layout": "chart_plus_kpis",
@@ -238,14 +261,14 @@ def validate_presentation_layout(
             continue
         title = slide.title.strip()
         has_raw_prefix = bool(RAW_TABLE_TITLE_PATTERN.search(title))
-        is_overly_long = len(title) > 60 and not any(
-            w in title.casefold() for w in ("trajectory", "trend", "movement", "growth", "performance", "increased", "decreased")
-        )
-        if has_raw_prefix or is_overly_long:
+        # Length is a layout constraint, not evidence that a valid sentence is
+        # raw table text. The compositor wraps complete titles and rejects copy
+        # beyond readable capacity instead of silently cutting off its claim.
+        if has_raw_prefix:
             if auto_repair:
                 from adaptive_document_agent.services.language_qa import polish_slide_title
 
-                clean_t = sanitize_metric_for_title(title, max_length=50)
+                clean_t = sanitize_metric_for_title(title, max_length=max(50, len(title)))
                 clean_t = polish_slide_title(clean_t if len(clean_t.split()) >= 2 else f"{clean_t} Overview")
                 slide.title = clean_t
                 issues.append(

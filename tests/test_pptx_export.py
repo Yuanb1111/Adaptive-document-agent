@@ -5,6 +5,8 @@ from pathlib import Path
 import zipfile
 
 import pytest
+
+pytestmark = pytest.mark.usefixtures("local_render_stub")
 from pptx import Presentation
 from pptx.enum.chart import XL_CHART_TYPE
 

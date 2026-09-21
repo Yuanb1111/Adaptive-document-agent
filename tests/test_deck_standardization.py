@@ -4,6 +4,8 @@ import io
 from pptx import Presentation
 import pytest
 
+pytestmark = pytest.mark.usefixtures("local_render_stub")
+
 from adaptive_document_agent.document_model.metric_semantic_classifier import (
     classify_metric,
     format_metric_change,

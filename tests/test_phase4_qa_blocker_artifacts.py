@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 import pytest
 
+pytestmark = pytest.mark.usefixtures("local_render_stub")
+
 from adaptive_document_agent.models import (
     ChartPlan,
     CompanyFact,

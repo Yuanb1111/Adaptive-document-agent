@@ -31,9 +31,12 @@ def chart_rows(plan: ChartPlan, index: DocumentIndex) -> list[dict[str, Any]]:
 
     rows = []
     for item in sorted(values, key=lambda observation: period_sort_key(observation.period)):
-        label = item.dimensions.get(plan.x_dimension) if plan.x_dimension else None
+        dimensions = {**item.dimensions, **item.category_dimensions}
+        label = dimensions.get(plan.x_dimension) if plan.x_dimension else None
         label = label or item.period or next(iter(item.dimensions.values()), item.entity or item.metric_original)
         series = item.period if plan.x_dimension and item.period else item.entity
+        if plan.series_dimension:
+            series = dimensions.get(plan.series_dimension)
         rows.append(
             {
                 "Label": str(label),
@@ -63,6 +66,34 @@ def render_chart(
     selected = chart_type or plan.chart_type
     if selected not in (plan.available_chart_types or [plan.chart_type]):
         raise ValueError(f"Chart type '{selected}' is not compatible with this analysis.")
+    from adaptive_document_agent.services.composition_data import COMPOSITION_TYPES, composition_data
+    if selected in COMPOSITION_TYPES:
+        from adaptive_document_agent.services.presentation_style import deck_color_map
+        values = [index.get(oid) for oid in plan.observation_ids if index.get(oid)]
+        totals = [index.get(oid) for oid in plan.total_observation_ids if index.get(oid)]
+        matrix = composition_data(plan.model_copy(update={"chart_type": selected}), values, totals)
+        colors = deck_color_map(matrix.categories)
+        enabled = plan.show_data_labels if show_data_labels is None else show_data_labels
+        if selected == "doughnut":
+            figure = go.Figure(go.Pie(labels=matrix.categories, values=[r[0] for r in matrix.values], hole=0.62,
+                marker_colors=["#" + colors[c] for c in matrix.categories], sort=False,
+                textinfo="label+percent" if enabled else "none"))
+        else:
+            sums = [sum(row[i] for row in matrix.values) for i in range(len(matrix.periods))]
+            figure = go.Figure()
+            for category, row in zip(matrix.categories, matrix.values):
+                y = [100 * v / sums[i] for i, v in enumerate(row)] if selected == "stacked_percent" else row
+                figure.add_bar(name=category, x=matrix.periods, y=y, marker_color="#" + colors[category],
+                    text=[f"{v:.1f}%" if selected == "stacked_percent" else f"{v:g}" for v in y] if enabled else None,
+                    textposition="inside", customdata=row,
+                    hovertemplate="%{x}<br>%{y}<br>Source value: %{customdata}<extra>%{fullData.name}</extra>")
+            figure.update_layout(barmode="stack", yaxis_title="Share (%)" if selected == "stacked_percent" else plan.y_axis_title)
+            if selected == "stacked_percent":
+                figure.update_yaxes(range=[0, 100], ticksuffix="%")
+        figure.update_layout(title=plan.title, font_family="Arial")
+        figure.add_annotation(text="Source pages: " + ", ".join(map(str, matrix.source_pages)),
+            xref="paper", yref="paper", x=0, y=-0.2, showarrow=False)
+        return figure
     rows = chart_rows(plan, index)
     labels_enabled = plan.show_data_labels if show_data_labels is None else show_data_labels
     if not rows:

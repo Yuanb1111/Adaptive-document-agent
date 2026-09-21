@@ -33,6 +33,11 @@ class PresentationPlanRepairer:
 
     def repair(self, plan: PresentationPlan, result: PipelineResult) -> PresentationPlan:
         """Prune unsupported claims, align citations, and validate the resulting plan."""
+        # New thematic contracts cannot safely be rebuilt by the legacy repairer's
+        # title/topic guesses. Keep valid plans intact, otherwise fail explicitly
+        # so the caller can use its labelled evidence-only fallback.
+        if plan.themes or any(s.theme_id or s.calculation_ids for s in plan.slides):
+            return PresentationPlanValidator().validate(plan, result)
         from adaptive_document_agent.document_model import DocumentIndex, display_metric_name, sanitize_metric_for_title
         from adaptive_document_agent.services.pptx_export import _chart_group_title, _group_chart_plans, _usable_charts
 

@@ -2,7 +2,7 @@
 
 from adaptive_document_agent.agent.orchestrator import DocumentOrchestrator
 from adaptive_document_agent.document_model import DocumentIndex
-from adaptive_document_agent.services.export import export_csv, export_markdown, export_pdf, export_pptx
+from adaptive_document_agent.services.export import export_csv, export_markdown, export_pdf, export_pptx_with_report
 from adaptive_document_agent.services.llm import LLMGateway
 from adaptive_document_agent.services.llm.routing import create_llm_client
 from adaptive_document_agent.utils.hashing import sha256_bytes
@@ -163,8 +163,15 @@ def run_app() -> None:
 
     pptx_bytes: bytes | None = None
     qa_error: CriticalQAError | None = None
+    visual_report = None
+    from adaptive_document_agent.services.presentation_visual_qa import VisualQAError
     try:
-        pptx_bytes = export_pptx(result)
+        verified = export_pptx_with_report(result, visual_cache=st.session_state.setdefault("ppt_visual_cache", {}))
+        pptx_bytes = verified.payload
+        visual_report = verified.report
+    except VisualQAError as exc:
+        qa_error = exc
+        visual_report = exc.report
     except CriticalQAError as exc:
         qa_error = exc
     except Exception as exc:
@@ -193,9 +200,10 @@ def run_app() -> None:
     if qa_error:
         st.error("⚠️ **PowerPoint Export Blocked by Critical QA Audit**")
         st.markdown(
-            "The presentation export was blocked because critical financial or factual contradictions "
-            "were detected that could not be automatically resolved. Review the issues below:"
+            "The presentation did not pass the financial or rendered-layout export gate. "
+            "No verified PowerPoint file is available. Review the reason below:"
         )
+        st.error(str(qa_error))
         qa = run_comprehensive_qa(result)
         for err in qa.critical_errors:
             st.error(f"🔴 **[{err.code}]**: {err.message}")
@@ -208,3 +216,13 @@ def run_app() -> None:
                 "qa_report.json",
                 "application/json",
             )
+
+    if visual_report:
+        import json
+        with st.expander("PowerPoint rendered validation report", expanded=visual_report.status == "failed"):
+            st.caption(f"Status: {visual_report.status}; render passes: {visual_report.attempts}; cache reused: {visual_report.cache_hit}")
+            for limitation in visual_report.coverage:
+                st.caption(limitation)
+            st.json(visual_report.to_dict())
+            st.download_button("Download visual QA report", json.dumps(visual_report.to_dict(), indent=2),
+                               "ppt_visual_qa.json", "application/json")

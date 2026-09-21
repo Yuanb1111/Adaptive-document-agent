@@ -18,11 +18,17 @@ class PresentationPlanner:
         self.gateway = gateway
 
     def plan(self, result: PipelineResult) -> PresentationPlan:
+        from adaptive_document_agent.services.presentation_evidence import build_evidence_catalog, observation_record
+        catalog = build_evidence_catalog(result)
+        catalog_ids = {o["id"] for o in catalog["observations"]}
+        chart_ids = {oid for c in result.charts for oid in [*c.observation_ids, *c.total_observation_ids]}
         payload = {
             "document_profile": result.profile.model_dump(mode="json"),
             "document_page_count": result.document.page_count,
             "page_excerpts": self._page_excerpts(result.document, result.profile, result.observations),
-            "observations": self._observation_catalog(result.observations, result.charts),
+            "observations": catalog.pop("observations"),
+            "evidence_catalog": catalog,
+            "chart_observations": [observation_record(o) for o in result.observations if o.id in chart_ids - catalog_ids],
             "insights": [
                 {
                     **item.model_dump(mode="json", exclude={"evidence"}),

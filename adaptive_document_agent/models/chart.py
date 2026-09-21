@@ -5,7 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
-ChartType = Literal["line", "bar", "horizontal_bar", "area", "pie", "scatter", "table"]
+ChartType = Literal["line", "bar", "horizontal_bar", "area", "pie", "scatter", "table", "stacked_bar", "stacked_percent", "doughnut"]
 
 
 class ChartPlan(BaseModel):
@@ -20,6 +20,10 @@ class ChartPlan(BaseModel):
     x_metric: str | None = None
     y_metric: str | None = None
     x_dimension: str | None = None
+    series_dimension: str | None = None
+    # A part-to-whole chart needs a known denominator. Monetary compositions
+    # must reference retained totals; reported percentage shares must sum to 100.
+    total_observation_ids: list[str] = Field(default_factory=list)
     x_axis_title: str = "Category or period"
     y_axis_title: str = "Value"
     show_data_labels: bool = True

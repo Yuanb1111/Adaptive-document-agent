@@ -24,6 +24,8 @@ from pptx import Presentation
 from pptx.enum.chart import XL_TICK_LABEL_POSITION
 import pytest
 
+pytestmark = pytest.mark.usefixtures("local_render_stub")
+
 from adaptive_document_agent.document_model.metric_semantic_classifier import (
     classify_metric,
     format_metric_change,

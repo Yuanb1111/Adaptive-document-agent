@@ -3,6 +3,8 @@
 import io
 
 import pytest
+
+pytestmark = pytest.mark.usefixtures("local_render_stub")
 from pptx import Presentation
 
 from adaptive_document_agent.models import (

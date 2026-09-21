@@ -21,7 +21,11 @@ class InsightGenerator:
         valid = [result for result in results if result.result is not None and result.evidence]
         if not self.gateway:
             return [self._deterministic(result) for result in valid]
-        payload = "\n".join(result.model_dump_json(exclude={"evidence": {"__all__": {"text"}}}) for result in valid)
+        # Retain bounded source text so a claimed driver can actually be grounded.
+        import json
+        payload = json.dumps([{**r.model_dump(mode="json", exclude={"evidence"}),
+            "evidence": [{**e.model_dump(mode="json"), "text": (e.text or "")[:1200]} for e in r.evidence[:4]]}
+            for r in valid], ensure_ascii=False)
         generated = self.gateway.generate_structured(
             [
                 {"role": "system", "content": load_prompt("insight_generation.txt")},
@@ -31,10 +35,20 @@ class InsightGenerator:
             stage="insight",
         ).insights
         evidence_by_task = {result.task_id: result.evidence for result in valid}
+        accepted = []
+        by_task = {r.task_id: r for r in valid}
         for insight in generated:
-            if not insight.evidence:
-                insight.evidence = [source for identifier in insight.result_ids for source in evidence_by_task.get(identifier, [])]
-        return [insight for insight in generated if insight.evidence]
+            if not insight.result_ids or any(rid not in evidence_by_task for rid in insight.result_ids):
+                continue
+            insight.evidence = [source for identifier in insight.result_ids for source in evidence_by_task[identifier]]
+            if insight.driver:
+                quote = " ".join((insight.driver_quote or "").split())
+                if not quote or not any(e.page == insight.driver_source_page and quote in " ".join((e.text or "").split()) for e in insight.evidence):
+                    # Do not leave an unsupported driver embedded in its narrative.
+                    accepted.extend(self._deterministic(by_task[rid]) for rid in insight.result_ids)
+                    continue
+            accepted.append(insight)
+        return list({i.id: i for i in accepted if i.evidence}.values()) or [self._deterministic(r) for r in valid]
 
     @staticmethod
     def _deterministic(result: AnalysisResult) -> Insight:
@@ -56,10 +70,7 @@ class InsightGenerator:
                         movement = f"{metric_name} {description[0].lower()}{description[1:]}"
                 except (TypeError, ValueError):
                     pass
-        driver = f"Management did not disclose specific operational drivers in the reported period; key sensitivity is {metric_name.lower()} trajectory."
-        implication = "Requires ongoing tracking against baseline performance and liquidity requirements."
-        watch_item = f"Subsequent period reporting on {metric_name.lower()}."
-        narrative = f"{movement}. {driver} {implication} Watch item: {watch_item}"
+        narrative = f"{movement}."
 
         return Insight(
             id=stable_id("insight", result.task_id),
@@ -72,7 +83,4 @@ class InsightGenerator:
             result_ids=[result.task_id],
             metric=metric_name,
             movement=movement,
-            driver=driver,
-            implication=implication,
-            watch_item=watch_item,
         )

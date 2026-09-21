@@ -17,6 +17,8 @@ def enrich_single_metric_slides(result: PipelineResult) -> list[str]:
     for slide in result.presentation_plan.slides:
         if slide.slide_type != "analysis":
             continue
+        if slide.bullets or slide.insight_ids or any(b.role in {"kpi", "table", "commentary"} or b.insight_ids for b in slide.visual_blocks):
+            continue
         chart_ids = list(dict.fromkeys(slide.chart_ids + [cid for b in slide.visual_blocks for cid in b.chart_ids]))
         if len(chart_ids) > 1 or any(cid not in charts for cid in chart_ids):
             continue

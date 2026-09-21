@@ -13,6 +13,10 @@ class PresentationPlanValidator:
 
     def validate(self, plan: PresentationPlan, result: PipelineResult) -> PresentationPlan:
         errors: list[str] = []
+        from adaptive_document_agent.services.presentation_evidence import calculation_catalog
+        from .narrative_plan_validator import validate_narrative_plan
+        calculations = calculation_catalog(result.observations) if any(s.calculation_ids for s in plan.slides) else {}
+        errors.extend(validate_narrative_plan(plan, result, calculations))
         slide_ids = [slide.id for slide in plan.slides]
         if len(slide_ids) != len(set(slide_ids)):
             errors.append("slide IDs must be unique")
@@ -211,7 +215,13 @@ class PresentationPlanValidator:
                 errors.append(f"slide {slide.id} must provide a concise section_title")
             if len(chart_ids) > 3:
                 errors.append(f"slide {slide.id} may contain at most three charts")
+            for cid in chart_ids:
+                overrides = {b.chart_type for b in slide.visual_blocks if cid in b.chart_ids and b.chart_type}
+                if len(overrides) > 1:
+                    errors.append(f"slide {slide.id} gives conflicting chart types for {cid}")
             for block in slide.visual_blocks:
+                if block.role in {"kpi", "table", "commentary"} and block.chart_ids:
+                    errors.append(f"slide {slide.id}: {block.role} blocks cannot contain charts")
                 if block.chart_type:
                     if block.chart_type == "table":
                         errors.append(
@@ -238,11 +248,22 @@ class PresentationPlanValidator:
                 item = chart_by_id.get(identifier)
                 if item:
                     referenced_pages.update(item.source_pages)
-                    referenced_observation_ids.update(item.observation_ids)
-                    for observation_id in item.observation_ids:
+                    referenced_observation_ids.update([*item.observation_ids, *item.total_observation_ids])
+                    for observation_id in [*item.observation_ids, *item.total_observation_ids]:
                         observation = observation_by_id.get(observation_id)
                         if observation:
                             referenced_pages.update(source.page for source in observation.evidence)
+                        else:
+                            errors.append(f"chart {identifier} references unknown observation {observation_id}")
+                    from adaptive_document_agent.services.composition_data import COMPOSITION_TYPES, composition_data
+                    types = {item.chart_type, *(b.chart_type for b in slide.visual_blocks if identifier in b.chart_ids and b.chart_type)}
+                    for chart_type in types & COMPOSITION_TYPES:
+                        try:
+                            composition_data(item.model_copy(update={"chart_type": chart_type}),
+                                [observation_by_id[o] for o in item.observation_ids if o in observation_by_id],
+                                [observation_by_id[o] for o in item.total_observation_ids if o in observation_by_id])
+                        except ValueError as exc:
+                            errors.append(f"chart {identifier}: {exc}")
             if (
                 slide.slide_type != "company_overview"
                 and referenced_pages
@@ -267,7 +288,12 @@ class PresentationPlanValidator:
                     if item:
                         allowed_text_parts.extend((item.title, item.narrative))
                 allowed_numbers = self._numbers(" ".join(allowed_text_parts))
-                claimed_numbers = self._numbers(" ".join((slide.title, slide.message, *slide.bullets)))
+                for cid in slide.calculation_ids:
+                    if cid in calculations:
+                        calc = calculations[cid]
+                        allowed_numbers.update(self._numbers(str(calc["value"]) + " " + calc["display"]))
+                block_titles = [re.sub(r"(?i)^(?:block|chart|panel)\s+\d+$", "", b.title.strip()) for b in slide.visual_blocks]
+                claimed_numbers = self._numbers(" ".join((slide.title, slide.message, slide.analytical_question, slide.selection_reason, *slide.bullets, *block_titles)))
                 unsupported_numbers = claimed_numbers - allowed_numbers
                 if unsupported_numbers:
                     errors.append(f"slide {slide.id} contains unsupported numeric claims: {sorted(unsupported_numbers)}")

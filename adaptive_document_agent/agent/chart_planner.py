@@ -234,6 +234,16 @@ class ChartPlanner:
             if len(output) >= maximum:
                 break
 
+        # Reported categorical matrices offer composition views only when their
+        # complete denominator and compatible periods can be established.
+        if len(output) < maximum:
+            from adaptive_document_agent.services.composition_candidates import reported_composition_charts
+            for chart in reported_composition_charts(index, maximum=maximum - len(output)):
+                if tuple(sorted(chart.observation_ids)) not in seen_series:
+                    output.append(chart)
+                    seen_series.add(tuple(sorted(chart.observation_ids)))
+                    seen_metrics.update(metric_key(index.get(oid)) for oid in chart.observation_ids)
+
         # Fill remaining slots with generic-scored reported series
         if len(output) < maximum:
             output.extend(
@@ -509,6 +519,15 @@ class ChartPlanner:
             choices: list[ChartType] = ["bar", "horizontal_bar", "table"]
             if ChartPlanner._is_complete_share(observations):
                 choices.insert(0, "pie")
+                from adaptive_document_agent.services.composition_data import composition_data
+                proposed = ChartPlan(id="eligibility", title=task.title, question=task.reason, chart_type="doughnut",
+                    observation_ids=[o.id for o in observations],
+                    x_dimension=task.required_dimensions[0] if task.required_dimensions else None)
+                try:
+                    composition_data(proposed, observations)
+                    choices.insert(1, "doughnut")
+                except ValueError:
+                    pass
             return choices
         return ["line", "bar", "area", "table"]
 
