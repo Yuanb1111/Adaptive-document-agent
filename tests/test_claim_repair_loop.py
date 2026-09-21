@@ -24,6 +24,7 @@ from adaptive_document_agent.validation.claim_validator import (
     TrendState,
     are_observations_compatible,
     determine_trend_state,
+    extract_metric_aliases,
     is_signed_gain_loss_metric,
     repair_presentation_plan,
     repair_slide_claims,
@@ -1249,20 +1250,62 @@ def test_disposal_loss_to_gain_does_not_create_critical_qa_error() -> None:
         id="slide_disposal",
         slide_type="analysis",
         title="Disposal result",
+        section_title="Other gains and losses",
         message=f"{label} swung from loss to gain from FY2023 to FY2024.",
         observation_ids=["disposal_2023", "disposal_2024"],
+        source_pages=[8],
+    )
+    plan = PresentationPlan(
+        title="Signed metric regression",
+        slides=[
+            PresentationSlide(id="cover", slide_type="cover", title="Signed metric regression"),
+            PresentationSlide(id="overview", slide_type="company_overview", title="Document overview"),
+            PresentationSlide(id="summary", slide_type="executive_summary", title="Executive Summary"),
+            slide,
+            PresentationSlide(id="quality", slide_type="data_quality", title="Data quality and methodology"),
+            PresentationSlide(id="appendix", slide_type="appendix", title="Source data"),
+        ],
     )
     result = PipelineResult(
         document=_sample_doc(),
         profile=DocumentProfile(document_purpose="signed metric regression"),
         observations=obs,
-        presentation_plan=PresentationPlan(title="Deck", slides=[slide]),
+        presentation_plan=plan,
     )
 
     qa = run_comprehensive_qa(result, auto_repair=True)
 
     assert qa.critical_errors == []
     assert not qa.is_export_blocked
+    assert export_pptx(result).startswith(b"PK")
+
+
+def test_signed_gain_loss_aliases_are_scoped_to_the_actual_metric_context() -> None:
+    disposal_aliases = {
+        alias.casefold()
+        for alias in extract_metric_aliases(
+            "(loss)/gain on disposal of property, plant and equipment (net)",
+            "gain_loss_on_disposal",
+        )
+    }
+    assert "loss/gain on disposal of property, plant and equipment net" in disposal_aliases
+    assert not any("foreign exchange" in alias or alias.startswith("fx ") for alias in disposal_aliases)
+    assert not any("fair value" in alias for alias in disposal_aliases)
+
+    fx_aliases = {
+        alias.casefold()
+        for alias in extract_metric_aliases(
+            "Net foreign exchange gain/(loss)",
+            "foreign_exchange_gain_loss",
+        )
+    }
+    assert "fx gain/loss" in fx_aliases
+
+    fair_value_aliases = {
+        alias.casefold()
+        for alias in extract_metric_aliases("Fair value gain/(loss)")
+    }
+    assert "fair value gain/loss" in fair_value_aliases
 
 
 def test_qa_reports_one_ambiguous_contradiction_per_slide_metric_transition() -> None:

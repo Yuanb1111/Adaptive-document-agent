@@ -1307,20 +1307,27 @@ def extract_metric_aliases(
         aliases.update(["operating loss", "operating losses", "营业亏损"])
 
     if is_signed_gain_loss_metric(metric_name, canonical_name):
-        aliases.update([
-            "net foreign exchange gain/(loss)",
-            "net foreign exchange gain/loss",
-            "foreign exchange gain/(loss)",
-            "foreign exchange gain/loss",
-            "fx gain/(loss)",
-            "fx gain/loss",
-            "foreign exchange gain",
-            "foreign exchange loss",
-            "fx gain",
-            "fx loss",
-            "fair value gain/(loss)",
-            "fair value gain/loss",
-        ])
+        signed_context = re.sub(r"[_\-]+", " ", combined)
+        if "foreign exchange" in signed_context or re.search(r"\bfx\b", signed_context):
+            aliases.update([
+                "net foreign exchange gain/(loss)",
+                "net foreign exchange gain/loss",
+                "foreign exchange gain/(loss)",
+                "foreign exchange gain/loss",
+                "fx gain/(loss)",
+                "fx gain/loss",
+                "foreign exchange gain",
+                "foreign exchange loss",
+                "fx gain",
+                "fx loss",
+            ])
+        if "fair value" in signed_context:
+            aliases.update([
+                "fair value gain/(loss)",
+                "fair value gain/loss",
+                "fair value gain",
+                "fair value loss",
+            ])
 
     if any(k in combined for k in ("net current liabilities", "net current liability")):
         aliases.update(["net current liabilities", "net current liability", "流动负债净额"])
