@@ -1,0 +1,6 @@
+libreoffice-impress
+libreoffice-calc
+fonts-liberation
+fonts-crosextra-carlito
+fonts-noto-cjk
+libseccomp2

@@ -21,7 +21,7 @@ from pptx import Presentation
 from .presentation_rendering import RenderingError, check_render_input, configured_renderer
 from .qa_reporter import CriticalQAError
 
-POLICY_VERSION = "visual-qa-v1"
+POLICY_VERSION = "visual-qa-v2"
 NS = {"p": "http://schemas.openxmlformats.org/presentationml/2006/main",
       "a": "http://schemas.openxmlformats.org/drawingml/2006/main"}
 
@@ -166,6 +166,8 @@ def inspect_pages(payload: bytes, pages) -> list[VisualIssue]:
             sid = str(e["id"])
             if x < -2 or y < -2 or x+w > width+2 or y+h > height+2:
                 issues.append(VisualIssue(number, "OUT_OF_BOUNDS", "critical", (sid,), "Content extends beyond the actual slide canvas."))
+            if e.get("renderedTextPresent") is False:
+                issues.append(VisualIssue(number, "MISSING_RENDER_TEXT", "critical", (sid,), "Slide text is missing or clipped in the corresponding rendered PDF region."))
             if e.get("kind") in {"chart", "table"} and w*h > 10000 and x >= 0 and y >= 0 and x+w <= width and y+h <= height:
                 region = pixels.crop((round(x/width*pixels.width), round(y/height*pixels.height),
                                       round((x+w)/width*pixels.width), round((y+h)/height*pixels.height)))
@@ -263,6 +265,8 @@ def verify_presentation(payload: bytes, *, renderer=None, max_repairs: int = 2, 
         check_render_input(payload)
         renderer = renderer or configured_renderer()
         report.renderer = renderer.identity
+        if getattr(renderer, "coverage", None):
+            report.coverage = tuple(renderer.coverage)
         original_facts = package_digest(payload, exclude_positions=True)
         cache_key = (POLICY_VERSION, renderer.identity, max_repairs, package_digest(payload))
         if cache is not None and cache_key in cache:

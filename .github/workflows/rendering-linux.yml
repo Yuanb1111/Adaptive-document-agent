@@ -1,0 +1,22 @@
+name: Linux PowerPoint rendering
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  libreoffice:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install production renderer dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y $(tr '\n' ' ' < packages.txt)
+          python -m pip install -r requirements-dev.txt
+      - name: Full suite with real server-local rendering and offline isolation
+        env:
+          PPTX_QA_LIBREOFFICE_INTEGRATION: '1'
+        run: python -m pytest -ra

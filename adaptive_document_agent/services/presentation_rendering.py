@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import time
 import zipfile
 
@@ -126,9 +127,20 @@ class ArtifactRenderer:
             raise RenderingError("Local renderer did not produce a complete page set.") from exc
 
 
-def configured_renderer() -> ArtifactRenderer:
+def configured_renderer():
+    backend = os.environ.get("PPTX_QA_BACKEND", "auto").strip().lower()
+    if backend not in {"auto", "artifact", "libreoffice"}:
+        raise RenderingError("PPTX_QA_BACKEND must be auto, artifact, or libreoffice.")
     node = os.environ.get("PPTX_QA_NODE", "")
     module = os.environ.get("PPTX_QA_ARTIFACT_MODULE", "")
-    if not node or not module:
-        raise RenderingError("Verified PowerPoint export requires a local renderer. Configure PPTX_QA_NODE and PPTX_QA_ARTIFACT_MODULE; no cloud fallback is used.")
-    return ArtifactRenderer(node, module)
+    if backend == "artifact" or (backend == "auto" and (node or module)):
+        # An explicit but invalid administrator configuration is an error, not
+        # permission to silently switch rendering engines.
+        if not node or not module:
+            raise RenderingError("Configure both PPTX_QA_NODE and PPTX_QA_ARTIFACT_MODULE for Artifact rendering; no cloud fallback is used.")
+        return ArtifactRenderer(node, module)
+    executable = os.environ.get("PPTX_QA_LIBREOFFICE", "") or shutil.which("libreoffice") or shutil.which("soffice")
+    if executable:
+        from .libreoffice_rendering import LibreOfficeRenderer
+        return LibreOfficeRenderer(executable)
+    raise RenderingError("Verified PowerPoint export requires a server-local renderer. On Streamlit Cloud deploy the repository packages.txt (LibreOffice and fonts), then reboot the app. Alternatively configure PPTX_QA_NODE and PPTX_QA_ARTIFACT_MODULE; no cloud fallback is used.")

@@ -159,6 +159,9 @@ def test_bad_renderer_output_never_passes(failure, code):
 
 
 def test_unavailable_renderer_blocks_no_cloud_fallback(monkeypatch):
+    monkeypatch.setenv("PPTX_QA_BACKEND", "auto")
+    monkeypatch.delenv("PPTX_QA_LIBREOFFICE", raising=False)
+    monkeypatch.setattr("adaptive_document_agent.services.presentation_rendering.shutil.which", lambda _: None)
     monkeypatch.delenv("PPTX_QA_NODE", raising=False)
     monkeypatch.delenv("PPTX_QA_ARTIFACT_MODULE", raising=False)
     with pytest.raises(qa.VisualQAError, match="no cloud fallback") as exc:
@@ -316,6 +319,7 @@ def test_financial_critical_blocks_before_render_and_force_does_not_skip_visual(
     from tests.test_pptx_export import _result
     monkeypatch.delenv("PPTX_QA_NODE", raising=False)
     monkeypatch.delenv("PPTX_QA_ARTIFACT_MODULE", raising=False)
+    monkeypatch.setenv("PPTX_QA_BACKEND", "artifact")
     with pytest.raises(qa.VisualQAError):
         export_pptx(_result(), force=True)
 

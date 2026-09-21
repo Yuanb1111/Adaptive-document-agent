@@ -78,10 +78,14 @@ def export_pptx_with_report(
     qa = run_comprehensive_qa(result, auto_repair=True)
     if not force and qa.has_critical_errors:
         reasons = "\n - ".join(e.message for e in qa.critical_errors)
-        raise CriticalQAError(f"PowerPoint export blocked due to critical QA errors:\n - {reasons}")
+        raise CriticalQAError(f"PowerPoint export blocked due to critical QA errors:\n - {reasons}", financial_report=qa)
 
-    return verify_presentation(build_presentation(result, template_path=template_path),
-                               renderer=renderer, cache=visual_cache)
+    try:
+        return verify_presentation(build_presentation(result, template_path=template_path),
+                                   renderer=renderer, cache=visual_cache)
+    except CriticalQAError as exc:
+        exc.financial_report = qa
+        raise
 
 
 def export_pdf(result: PipelineResult) -> bytes:

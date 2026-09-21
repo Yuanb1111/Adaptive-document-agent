@@ -27,6 +27,13 @@ def run_app() -> None:
     )
     public_deployment = is_public_deployment()
     settings = render_sidebar(st, public_deployment=public_deployment)
+    from adaptive_document_agent.services.export_readiness import check_export_readiness
+    readiness = check_export_readiness(st.session_state.setdefault("ppt_readiness_cache", {}))
+    if readiness["ready"]:
+        st.caption(f"PowerPoint export environment ready: {readiness['backend']}")
+    else:
+        st.warning("PowerPoint export environment is not ready. " + readiness["message"])
+        st.caption("Analysis and other formats remain available. Fix the renderer before expecting a verified PowerPoint download.")
     cache = cache_for_session(st.session_state, public_deployment=public_deployment)
     analysis_focus = st.text_area(
         "Analysis focus (optional)",
@@ -160,7 +167,7 @@ def run_app() -> None:
     with tab_technical:
         technical.render(st, result)
     st.subheader("Exports & Deliverables")
-    from adaptive_document_agent.services.qa_reporter import CriticalQAError, run_comprehensive_qa
+    from adaptive_document_agent.services.qa_reporter import CriticalQAError
 
     pptx_bytes: bytes | None = None
     qa_error: CriticalQAError | None = None
@@ -176,7 +183,7 @@ def run_app() -> None:
     except CriticalQAError as exc:
         qa_error = exc
     except Exception as exc:
-        qa_error = CriticalQAError(f"Unexpected export error: {exc}")
+        qa_error = CriticalQAError(f"PowerPoint generation failed ({type(exc).__name__}). No verified file was produced.")
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -199,21 +206,23 @@ def run_app() -> None:
         st.download_button("Download CSV", export_csv(result), "extracted_observations.csv", "text/csv", use_container_width=True)
 
     if qa_error:
-        st.error("⚠️ **PowerPoint Export Blocked by Critical QA Audit**")
+        from adaptive_document_agent.services.export_diagnostics import export_diagnostics
+        import json
+        qa = export_diagnostics(result, qa_error, visual_report)
+        stage = qa["export_error"]["stage"]
+        st.error(f"PowerPoint export blocked — {stage}")
         st.markdown(
             "The presentation did not pass the financial or rendered-layout export gate. "
             "No verified PowerPoint file is available. Review the reason below:"
         )
-        st.error(str(qa_error))
-        qa = run_comprehensive_qa(result)
-        for err in qa.critical_errors:
-            st.error(f"🔴 **[{err.code}]**: {err.message}")
+        for err in qa["critical_errors"]:
+            st.error(f"[{err['code']}]: {err['message']}")
 
         with st.expander("🔍 View Detailed QA Audit Report & Artifacts", expanded=False):
-            st.json(qa.model_dump())
+            st.json(qa)
             st.download_button(
-                "Download QA Audit Report (qa_report.json)",
-                qa.model_dump_json(indent=2),
+                "Download complete export diagnostic report (qa_report.json)",
+                json.dumps(qa, indent=2),
                 "qa_report.json",
                 "application/json",
             )

@@ -37,7 +37,9 @@ from adaptive_document_agent.validation.claim_validator import (
 
 class CriticalQAError(ValueError):
     """Raised when critical QA errors block PowerPoint presentation export."""
-    pass
+    def __init__(self, message: str, *, financial_report=None):
+        super().__init__(message)
+        self.financial_report = financial_report
 
 
 class QAItem(BaseModel):
