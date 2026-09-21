@@ -8,7 +8,8 @@ pytest-cache-files-*/
 .ruff_cache/
 .coverage
 htmlcov/
-.streamlit/
+.streamlit/*
+!.streamlit/config.toml
 .adaptive_document_cache/
 dist/
 build/

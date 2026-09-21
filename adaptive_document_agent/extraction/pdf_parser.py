@@ -39,9 +39,9 @@ class PDFParser:
         safe_name = f"{document_id}.pdf"
 
         try:
-            import pymupdf as fitz
+            import pymupdf
 
-            pdf = fitz.open(stream=data, filetype="pdf")
+            pdf = pymupdf.open(stream=data, filetype="pdf")
         except Exception as exc:
             raise PDFValidationError("The uploaded file is not a readable PDF.") from exc
 

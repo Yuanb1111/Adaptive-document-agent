@@ -27,6 +27,14 @@ def run_app() -> None:
         "run deterministic calculations, validate results, and preserve page-level evidence."
     )
     public_deployment = is_public_deployment()
+    if public_deployment:
+        if st.get_option("server.fileWatcherType") == "none":
+            st.caption("Source reload: disabled (restart required for code updates)")
+        else:
+            st.warning(
+                "Source reload is enabled. For stable production imports, set "
+                "server.fileWatcherType to 'none' and reboot the app."
+            )
     settings = render_sidebar(st, public_deployment=public_deployment)
     from adaptive_document_agent.services.export_readiness import check_export_readiness
     readiness = check_export_readiness(st.session_state.setdefault("ppt_readiness_cache", {}))

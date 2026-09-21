@@ -1,4 +1,4 @@
-import fitz
+import pymupdf
 import pytest
 
 from adaptive_document_agent.agent.executor import AnalysisExecutor
@@ -10,7 +10,7 @@ from adaptive_document_agent.services.llm import LLMGateway, LLMSettings, MockLL
 
 
 def synthetic_time_series_pdf() -> bytes:
-    document = fitz.open()
+    document = pymupdf.open()
     page = document.new_page()
     page.insert_text((72, 72), "Revenue 2023 = 100\nRevenue 2024 = 120\nRevenue 2025 = 150")
     value = document.tobytes()

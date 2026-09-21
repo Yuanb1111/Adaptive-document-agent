@@ -1,13 +1,13 @@
 """PDF validation and page-level parsing tests."""
 
-import fitz
+import pymupdf
 import pytest
 
 from adaptive_document_agent.extraction.pdf_parser import PDFParser, PDFValidationError
 
 
 def make_pdf(text: str = "Revenue 2025 was 1250.") -> bytes:
-    document = fitz.open()
+    document = pymupdf.open()
     page = document.new_page()
     page.insert_text((72, 72), text)
     data = document.tobytes()
@@ -30,13 +30,12 @@ def test_invalid_pdf_fails_safely(value: bytes) -> None:
 
 
 def test_image_only_page_is_marked_for_ocr() -> None:
-    document = fitz.open()
+    document = pymupdf.open()
     page = document.new_page()
-    pixmap = fitz.Pixmap(fitz.csRGB, (0, 0, 100, 100), 0)
+    pixmap = pymupdf.Pixmap(pymupdf.csRGB, (0, 0, 100, 100), 0)
     pixmap.clear_with(255)
     page.insert_image((0, 0, 100, 100), pixmap=pixmap)
     parsed = PDFParser().parse(document.tobytes())
     document.close()
     assert parsed.pages[0].requires_ocr is True
     assert "OCR is required" in parsed.pages[0].warnings[0]
-

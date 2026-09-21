@@ -1,0 +1,5 @@
+# Production uses process restarts for code updates, never live module eviction.
+# Run from the repository root. Local development can override on the CLI.
+[server]
+fileWatcherType = "none"
+runOnSave = false

@@ -9,7 +9,7 @@ import io
 import re
 import unicodedata
 
-import fitz
+import pymupdf
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 
@@ -39,7 +39,7 @@ def _shape_elements(shapes, pdf_page, *, sx, sy, inherited=False):
                    "bbox": [x, y, w, h], "text": text, "boundsSource": "ooxml"}
         if text.strip() and x >= 0 and y >= 0 and x+w <= pdf_page.rect.width*4/3+2 and y+h <= pdf_page.rect.height*4/3+2:
             # PDF coordinates are points; the common QA layout uses 96dpi px.
-            region = fitz.Rect(x*.75-2, y*.75-2, (x+w)*.75+2, (y+h)*.75+2)
+            region = pymupdf.Rect(x*.75-2, y*.75-2, (x+w)*.75+2, (y+h)*.75+2)
             rendered_text = pdf_page.get_textbox(region)
             # Check each paragraph separately: PDF reading order can interleave
             # parallel columns even when their individual text is complete.
@@ -55,7 +55,7 @@ def pdf_rendered_pages(payload: bytes, pdf_path) -> list[RenderedPage]:
     pages = []
     total_bytes = 0
     try:
-        with fitz.open(pdf_path) as pdf:
+        with pymupdf.open(pdf_path) as pdf:
             if len(pdf) != len(deck.slides) or not 1 <= len(pdf) <= 150:
                 raise RenderingError("LibreOffice omitted or added slides during PDF rendering.")
             for slide, page in zip(deck.slides, pdf):
@@ -73,7 +73,7 @@ def pdf_rendered_pages(payload: bytes, pdf_path) -> list[RenderedPage]:
                 for scope, native in (("layout", slide.slide_layout), ("master", slide.slide_layout.slide_master)):
                     layout["inheritedLayers"].append({"scope": scope,
                         "elements": _shape_elements(native.shapes, page, sx=sx, sy=sy, inherited=True)})
-                png = page.get_pixmap(matrix=fitz.Matrix(4/3, 4/3), alpha=False).tobytes("png")
+                png = page.get_pixmap(matrix=pymupdf.Matrix(4/3, 4/3), alpha=False).tobytes("png")
                 total_bytes += len(png)
                 if total_bytes > 300_000_000:
                     raise RenderingError("Rendered output exceeds the 300 MB validation limit.")

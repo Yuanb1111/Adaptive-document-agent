@@ -6,7 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-import fitz
+import pymupdf
 import pytest
 from pptx import Presentation
 from pptx.util import Inches
@@ -111,13 +111,13 @@ def test_generation_error_is_not_misreported_as_passed():
 
 def make_pdf(tmp_path, *, include_text=True, pages=1):
     path = tmp_path / "render.pdf"
-    with fitz.open() as pdf:
+    with pymupdf.open() as pdf:
         for _ in range(pages):
             page = pdf.new_page(width=720, height=432)
             if include_text:
                 page.insert_text((72, 88), "Revenue 10,350,986 CNY", fontsize=12)
             else:
-                page.draw_rect(fitz.Rect(10, 10, 40, 40), fill=(0, 0, 0))
+                page.draw_rect(pymupdf.Rect(10, 10, 40, 40), fill=(0, 0, 0))
         pdf.save(path)
     return path
 

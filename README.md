@@ -326,6 +326,24 @@ Do not store a provider key in the hosted app's secrets. Public mode:
 - disables Local Only and local providers;
 - allocates a separate temporary extraction cache per Streamlit session and removes it on a best-effort basis when the session object is released.
 
+The committed `.streamlit/config.toml` disables source-file watching and save-triggered
+reruns. Streamlit's development watcher can evict process-wide Python modules while
+another session is importing them, producing changing `KeyError` module names during
+deployment. Production code updates therefore require a **process restart**, not just
+a browser refresh or script rerun. Reboot the app after a deployment and confirm
+**Source reload: disabled (restart required for code updates)** on the homepage.
+The caption checks the effective runtime setting; an environment/CLI override that
+re-enables watching produces a warning. Existing sessions and in-memory exports are
+lost on reboot, so download completed work first. Widget reruns still work normally.
+For local development only, opt in with
+`python -m streamlit run app.py --server.fileWatcherType=auto`.
+Only this non-secret config file is tracked; `.streamlit/secrets.toml` stays ignored.
+
+Startup regressions cover the actual loaded config, disabled watcher registration,
+concurrent cold imports in fresh processes, and Streamlit session/rerun rendering.
+These tests do not simulate Community Cloud's deployment controller; verify the
+runtime caption and renderer readiness online after restarting.
+
 ## Testing
 
 The suite uses generated PDFs and `MockLLMClient`; normal test runs require no provider credentials.
