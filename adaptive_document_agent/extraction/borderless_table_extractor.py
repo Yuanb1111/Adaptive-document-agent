@@ -127,13 +127,20 @@ class BorderlessTableExtractor:
         matches = list(_VALUE.finditer(line))
         if len(matches) < 2:
             return None
+        # Numeric substrings do not make a tabular row. Dates in wrapped prose
+        # (e.g. 'March 31, 2025 had been settled.') used to be appended to the
+        # preceding table and reported as unresolved sparse financial data.
+        # Require discrete cells and a completed numeric tail; keep lightweight
+        # punctuation/footnote markers, but never silently discard prose.
+        if any(not re.fullmatch(r"\s+", line[left.end():right.start()])
+               for left, right in zip(matches, matches[1:])):
+            return None
+        if not re.fullmatch(r"(?:\s|[*,.;†‡]|\([a-z]\))*", line[matches[-1].end():], re.I):
+            return None
         label = re.sub(r"(?:\s*\.\s*){2,}", " ", line[: matches[0].start()]).strip(" .:")
         if len(re.findall(r"[A-Za-z]", label)) < 2 or len(label) > 110:
             return None
         if BorderlessTableExtractor._period_from_line(line):
-            return None
-        between = line[matches[0].end() : matches[-1].start()]
-        if "..." not in line and re.search(r"[A-Za-z]{2,}", between):
             return None
         values = [match.group(0) for match in matches]
         label_years = set(_YEAR.findall(label))

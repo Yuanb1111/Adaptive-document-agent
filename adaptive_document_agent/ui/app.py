@@ -41,7 +41,7 @@ def run_app() -> None:
     scope_key = sha256_bytes(
         "|".join(
             (
-                "table-alignment-v8",
+                "table-alignment-v9",
                 sha256_bytes(raw_pdf),
                 analysis_focus.strip(),
                 settings.provider.value,
