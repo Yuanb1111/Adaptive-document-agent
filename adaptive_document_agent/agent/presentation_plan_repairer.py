@@ -20,6 +20,7 @@ from adaptive_document_agent.models import (
     PresentationSlide,
     PresentationVisualBlock,
 )
+from adaptive_document_agent.services.language_qa import polish_slide_title
 from adaptive_document_agent.utils.ids import stable_id
 from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
 
@@ -100,7 +101,6 @@ class PresentationPlanRepairer:
                 source_pages = sorted(set(slide.source_pages) & valid_pages)
 
             title = slide.title.strip() or self._default_title(slide.slide_type, ordinal)
-            from adaptive_document_agent.services.language_qa import polish_slide_title
 
             if slide.slide_type == "analysis":
                 title = re.sub(r"(?i)^(?:add|less|plus|minus)\s*[:\-\u2013\u2014]\s*", "", title)

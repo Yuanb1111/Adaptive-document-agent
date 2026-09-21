@@ -393,6 +393,48 @@ def test_presentation_plan_repairer_preserves_usable_charts_when_ai_slides_have_
     assert "chart-1" in total_charts
 
 
+def test_presentation_plan_repairer_backfills_empty_plan() -> None:
+    result = _result()
+    plan = PresentationPlan(title="Empty AI Plan", slides=[])
+
+    repaired = PresentationPlanRepairer().repair(plan, result)
+
+    assert PresentationPlanValidator().validate(repaired, result) is repaired
+    assert [slide.slide_type for slide in repaired.slides[:3]] == [
+        "cover",
+        "company_overview",
+        "executive_summary",
+    ]
+    analysis_slides = [slide for slide in repaired.slides if slide.slide_type == "analysis"]
+    assert analysis_slides
+    assert any("chart-1" in slide.chart_ids for slide in analysis_slides)
+
+
+def test_presentation_plan_repairer_backfills_after_all_ai_slides_are_filtered() -> None:
+    result = _result()
+    plan = PresentationPlan(
+        title="Filtered AI Plan",
+        slides=[
+            PresentationSlide(
+                id="unsupported_analysis",
+                slide_type="analysis",
+                title="Hallucinated Analysis",
+                chart_ids=["missing-chart"],
+                observation_ids=["missing-observation"],
+                insight_ids=["missing-insight"],
+            )
+        ],
+    )
+
+    repaired = PresentationPlanRepairer().repair(plan, result)
+
+    assert PresentationPlanValidator().validate(repaired, result) is repaired
+    assert all(slide.id != "unsupported_analysis" for slide in repaired.slides)
+    analysis_slides = [slide for slide in repaired.slides if slide.slide_type == "analysis"]
+    assert analysis_slides
+    assert any("chart-1" in slide.chart_ids for slide in analysis_slides)
+
+
 def test_validator_rejects_plan_without_analysis_slide_when_charts_exist() -> None:
     result = _result()
     plan = PresentationPlan(
@@ -567,4 +609,3 @@ def test_appendix_limited_to_one_page_when_no_charts_in_body() -> None:
     # Appendix must be limited to <= 1 page of representative evidence
     assert len(appendix_slides) <= 1
     assert any(w.code == "no_body_charts" for w in res.validation_warnings)
-
