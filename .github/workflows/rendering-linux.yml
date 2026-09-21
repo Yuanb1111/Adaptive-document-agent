@@ -23,3 +23,5 @@ jobs:
         env:
           PPTX_QA_LIBREOFFICE_INTEGRATION: '1'
         run: python -m pytest -ra
+      - name: Synthetic latency comparison with real LibreOffice
+        run: python -m scripts.benchmark_performance --real-renderer

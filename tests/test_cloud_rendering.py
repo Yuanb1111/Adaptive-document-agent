@@ -198,6 +198,10 @@ def test_real_linux_renderer_network_policy_and_native_chart_export(tmp_path, mo
     assert "OOXML" in " ".join(verified.report.coverage)
     # Exercise the actual application template, not just a blank smoke deck.
     from adaptive_document_agent.services.export import export_pptx_with_report
-    generated = export_pptx_with_report(_result(), renderer=renderer)
+    result, build_cache, visual_cache = _result(), {}, {}
+    generated = export_pptx_with_report(result, renderer=renderer, build_cache=build_cache, visual_cache=visual_cache)
     assert generated.report.status in {"passed", "passed_with_warnings"}
     assert generated.report.facts_preserved
+    repeated = export_pptx_with_report(result, renderer=renderer, build_cache=build_cache, visual_cache=visual_cache)
+    assert repeated.payload == generated.payload
+    assert repeated.build_cache_hit and repeated.report.cache_hit

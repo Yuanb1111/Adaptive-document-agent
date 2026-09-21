@@ -1,6 +1,7 @@
 """Privacy-enforcing, structured-output-aware LLM gateway."""
 
 import json
+from threading import Lock
 from typing import Any, TypeVar
 
 from pydantic import BaseModel
@@ -18,8 +19,16 @@ class LLMGateway:
         self.client = client
         self.settings = settings
         self.usage: list[dict[str, object]] = []
+        self._usage_lock = Lock()
         if settings.privacy_mode == PrivacyMode.LOCAL_ONLY and not settings.is_local:
             raise PrivacyViolationError("Local Only mode forbids cloud LLM providers.")
+
+    @property
+    def discovery_workers(self) -> int:
+        """Bound independent cloud requests; don't overload loopback models."""
+        if self.settings.is_local or not self.client.supports_concurrent_requests:
+            return 1
+        return self.settings.discovery_workers
 
     def generate_text(self, messages: list[dict[str, Any]], *, stage: str, max_tokens: int | None = None) -> str:
         response = self.client.generate_text(
@@ -84,4 +93,5 @@ class LLMGateway:
 
     def _record(self, response: LLMResponse) -> None:
         if response.usage:
-            self.usage.append(response.usage.model_dump())
+            with self._usage_lock:
+                self.usage.append(response.usage.model_dump())

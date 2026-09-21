@@ -32,6 +32,7 @@ class LLMSettings(BaseModel):
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     privacy_mode: PrivacyMode = PrivacyMode.AUTO
     stage_models: dict[str, str] = Field(default_factory=dict)
+    discovery_workers: int = Field(default=3, ge=1, le=4)
 
     @field_validator("base_url")
     @classmethod
@@ -74,6 +75,7 @@ class LLMSettings(BaseModel):
             temperature=float(os.getenv("LLM_TEMPERATURE", "0")),
             privacy_mode=PrivacyMode(privacy_raw),
             stage_models=stage_models,
+            discovery_workers=int(os.getenv("LLM_DISCOVERY_WORKERS", "3")),
         )
 
     def model_for(self, stage: str) -> str:

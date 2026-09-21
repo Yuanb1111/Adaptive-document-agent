@@ -16,6 +16,8 @@ from .usage import LLMUsage
 
 
 class LiteLLMProvider(LLMClient):
+    supports_concurrent_requests = True
+
     _OPTIONAL_GENERATION_PARAMS = {
         "frequency_penalty",
         "logprobs",

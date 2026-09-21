@@ -65,7 +65,7 @@ class DocumentOrchestrator:
 
         notify("Understanding document")
         with record_timing(timings, "document_discovery"):
-            profile = DocumentDiscovery(self.gateway).discover(
+            profile = DocumentDiscovery(self.gateway, cache=self.cache).discover(
                 document,
                 analysis_focus=analysis_focus,
                 progress=notify,
@@ -127,21 +127,15 @@ class DocumentOrchestrator:
         with record_timing(timings, "analysis_planning"):
             plan = AnalysisPlanner().plan(scores, index)
 
-        notify("Extracting required data")
+        notify("Reusing extracted evidence for selected analyses")
         with record_timing(timings, "targeted_extraction"):
-            required_metrics = {metric for task in plan for metric in task.required_metrics}
-            targeted = extractor.extract(document, required_metrics=required_metrics, page_ranges=profile.analysis_page_ranges) if required_metrics else []
-            if targeted:
-                for observation in targeted:
-                    mapping = mapping_by_name.get(observation.metric_original)
-                    if mapping and mapping.confidence >= 0.7:
-                        observation.metric_canonical = mapping.canonical_name
-                observations = self._merge_observations(observations, targeted)
-                observations = FinancialNormalizer.normalize_observations(
-                    observations,
-                    default_currency=getattr(profile, "currency", "RMB") or "RMB",
-                )
-                index = DocumentModelBuilder().build(observations)
+            # The broad extraction above already visits every table/text row in
+            # the confirmed scope. extract(required_metrics=...) only filters
+            # that same output, then _merge_observations discards its duplicate
+            # IDs. Reuse the enriched index; missing inputs remain validator errors.
+            # A genuine sparse-evidence recovery below still re-extracts after
+            # reconstructing new tables, so no new source evidence is skipped.
+            pass
 
         notify("Running deterministic calculations")
         with record_timing(timings, "execution"):

@@ -2,6 +2,8 @@
 
 import csv
 import io
+import hashlib
+from time import perf_counter
 
 from pathlib import Path
 
@@ -53,8 +55,9 @@ def export_pptx(
     force: bool = False,
     renderer=None,
     visual_cache: dict | None = None,
+    build_cache: dict | None = None,
 ) -> bytes:
-    return export_pptx_with_report(result, template_path, force=force, renderer=renderer, visual_cache=visual_cache).payload
+    return export_pptx_with_report(result, template_path, force=force, renderer=renderer, visual_cache=visual_cache, build_cache=build_cache).payload
 
 
 def export_pptx_with_report(
@@ -64,6 +67,7 @@ def export_pptx_with_report(
     force: bool = False,
     renderer=None,
     visual_cache: dict | None = None,
+    build_cache: dict | None = None,
 ):
     """Financial QA, native generation, then strict local rendered validation.
 
@@ -75,17 +79,50 @@ def export_pptx_with_report(
 
     # Automatic QA repair loop:
     # Presentation Plan -> Claim Validation -> Repair contradictory wording -> Revalidate -> Export only if valid.
+    started = perf_counter()
     qa = run_comprehensive_qa(result, auto_repair=True)
+    qa_finished = perf_counter()
     if not force and qa.has_critical_errors:
         reasons = "\n - ".join(e.message for e in qa.critical_errors)
         raise CriticalQAError(f"PowerPoint export blocked due to critical QA errors:\n - {reasons}", financial_report=qa)
 
     try:
-        return verify_presentation(build_presentation(result, template_path=template_path),
-                                   renderer=renderer, cache=visual_cache)
+        # Cache only native generation. Financial QA above ALWAYS runs; rendered
+        # QA below still checks its own content + renderer + policy fingerprint.
+        template_digest = None
+        cache_key = None
+        if build_cache is not None:
+            from .pptx_export import _resolve_template_path
+            template_digest = hashlib.sha256(_resolve_template_path(template_path).read_bytes()).hexdigest()
+            cache_key = _build_cache_key(result, template_digest)
+        payload = build_cache.get(cache_key) if build_cache is not None else None
+        build_cache_hit = isinstance(payload, bytes)
+        if not build_cache_hit:
+            payload = build_presentation(result, template_path=template_path)
+        build_finished = perf_counter()
+        verified = verify_presentation(payload, renderer=renderer, cache=visual_cache)
+        if build_cache is not None:
+            build_cache.clear()
+            # QA/build may have repaired the plan in-place. Key the final state.
+            build_cache[_build_cache_key(result, template_digest)] = payload
+        verified.build_cache_hit = build_cache_hit
+        verified.timings_ms = {
+            "financial_qa": round((qa_finished - started) * 1000),
+            "ppt_build": round((build_finished - qa_finished) * 1000),
+            "rendered_qa": round((perf_counter() - build_finished) * 1000),
+            "ppt_export_total": round((perf_counter() - started) * 1000),
+        }
+        return verified
     except CriticalQAError as exc:
         exc.financial_report = qa
         raise
+
+
+def _build_cache_key(result: PipelineResult, template_digest: str) -> tuple[str, str, str]:
+    # Bump the version when generation rules change. All facts, source evidence,
+    # narrative, charts, warnings and plan fields participate in invalidation.
+    content = result.model_dump_json(exclude={"llm_usage", "timings_ms"}).encode()
+    return ("ppt-build-v1", template_digest, hashlib.sha256(content).hexdigest())
 
 
 def export_pdf(result: PipelineResult) -> bytes:

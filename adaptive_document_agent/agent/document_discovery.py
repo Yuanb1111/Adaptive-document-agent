@@ -1,13 +1,17 @@
 """Hierarchical document discovery through the provider-independent gateway."""
 
 import re
+import json
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from pydantic import BaseModel, Field
 
 from adaptive_document_agent.models import AnalysisPageRange, DocumentProfile, ParsedDocument
 from adaptive_document_agent.services.llm import LLMGateway
 from adaptive_document_agent.utils.chunking import DocumentChunk, semantic_chunks
+from adaptive_document_agent.utils.caching import DiskCache
+from adaptive_document_agent.utils.hashing import sha256_bytes
 
 from .prompting import load_prompt, untrusted_document_message
 
@@ -31,9 +35,10 @@ class DocumentRoute(BaseModel):
 
 
 class DocumentDiscovery:
-    def __init__(self, gateway: LLMGateway | None = None, *, target_tokens: int = 6_000) -> None:
+    def __init__(self, gateway: LLMGateway | None = None, *, target_tokens: int = 6_000, cache: DiskCache | None = None) -> None:
         self.gateway = gateway
         self.target_tokens = target_tokens
+        self.cache = cache
 
     def discover(
         self,
@@ -55,10 +60,7 @@ class DocumentDiscovery:
         routed_ranges = routed_ranges or []
         if routed_ranges:
             chunks = self._select_chunks(chunks, routed_ranges)
-        discoveries: list[ChunkDiscovery] = []
-        for index, chunk in enumerate(chunks, start=1):
-            notify(f"Understanding selected pages {chunk.start_page}-{chunk.end_page} ({index}/{len(chunks)})")
-            discoveries.append(self._discover_chunk(chunk))
+        discoveries = self._discover_chunks(chunks, notify)
         compact = "\n".join(
             f"Pages {chunk.start_page}-{chunk.end_page}: {discovery.model_dump_json()}"
             for chunk, discovery in zip(chunks, discoveries, strict=True)
@@ -94,6 +96,32 @@ class DocumentDiscovery:
             if item.title not in profile.important_sections:
                 profile.important_sections.append(item.title)
         return profile
+
+    def _discover_chunks(self, chunks: list[DocumentChunk], notify: Callable[[str], None]) -> list[ChunkDiscovery]:
+        workers = min(getattr(self.gateway, "discovery_workers", 1), len(chunks))
+        if workers <= 1:
+            discoveries = []
+            for index, chunk in enumerate(chunks, 1):
+                notify(f"Understanding selected pages {chunk.start_page}-{chunk.end_page} ({index}/{len(chunks)})")
+                discoveries.append(self._discover_chunk(chunk))
+            return discoveries
+        # Results are merged in source order, never completion order. Progress
+        # callbacks (including Streamlit) run only on the calling/UI thread.
+        discoveries_by_index: dict[int, ChunkDiscovery] = {}
+        notify(f"Understanding selected sections with {workers} concurrent requests")
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="discovery") as pool:
+            futures = {pool.submit(self._discover_chunk, chunk): index for index, chunk in enumerate(chunks)}
+            try:
+                for future in as_completed(futures):
+                    index = futures[future]
+                    discoveries_by_index[index] = future.result()
+                    chunk = chunks[index]
+                    notify(f"Understood selected pages {chunk.start_page}-{chunk.end_page} ({len(discoveries_by_index)}/{len(chunks)})")
+            except Exception:
+                for future in futures:
+                    future.cancel()
+                raise  # Never merge an incomplete/failed discovery as success.
+        return [discoveries_by_index[index] for index in range(len(chunks))]
 
     def route(self, document: ParsedDocument, analysis_focus: str | None = None) -> list[AnalysisPageRange]:
         """Select a bounded scope that can be reviewed before deep analysis."""
@@ -151,14 +179,37 @@ class DocumentDiscovery:
         return [chunks[min(int(index * step), len(chunks) - 1)] for index in range(maximum)]
 
     def _discover_chunk(self, chunk: DocumentChunk) -> ChunkDiscovery:
-        return self.gateway.generate_structured(  # type: ignore[union-attr]
+        prompt = load_prompt("document_discovery.txt")
+        cache_key = None
+        if self.cache is not None and self.gateway is not None:
+            settings = self.gateway.settings
+            identity = {
+                "version": "chunk-discovery-v1",
+                "prompt": prompt,
+                "schema": ChunkDiscovery.model_json_schema(),
+                "chunk": chunk.model_dump(mode="json"),
+                "provider": settings.provider.value,
+                "model": settings.model_for("discovery"),
+                "endpoint": settings.base_url,
+                "privacy_mode": settings.privacy_mode.value,
+                "temperature": settings.temperature,
+            }
+            # Only the hash is used as a filename. No API keys are persisted.
+            cache_key = "chunk-discovery-" + sha256_bytes(json.dumps(identity, sort_keys=True).encode())
+            cached = self.cache.get_model(cache_key, ChunkDiscovery)
+            if cached is not None:
+                return cached
+        discovery = self.gateway.generate_structured(  # type: ignore[union-attr]
             [
-                {"role": "system", "content": load_prompt("document_discovery.txt")},
+                {"role": "system", "content": prompt},
                 untrusted_document_message(chunk.text),
             ],
             ChunkDiscovery,
             stage="discovery",
         )
+        if cache_key is not None:
+            self.cache.set_model(cache_key, discovery)
+        return discovery
 
     def _deterministic_profile(self, document: ParsedDocument, chunks: list[DocumentChunk]) -> DocumentProfile:
         text = "\n".join(page.text for page in document.pages)

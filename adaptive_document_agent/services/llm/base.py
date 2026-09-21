@@ -18,6 +18,9 @@ class LLMResponse(BaseModel):
 
 
 class LLMClient(ABC):
+    # Stateful/custom adapters remain serial unless they explicitly opt in.
+    supports_concurrent_requests: bool = False
+
     @abstractmethod
     def generate_text(
         self,
@@ -48,4 +51,3 @@ class LLMClient(ABC):
     @abstractmethod
     def capabilities(self) -> ModelCapabilities:
         """Return the model's declared capabilities."""
-

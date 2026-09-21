@@ -62,6 +62,7 @@ def render_sidebar(st, *, public_deployment: bool | None = None) -> LLMSettings:
             base_url=base_url or None,
             api_key=api_key,
             privacy_mode=privacy,
+            discovery_workers=defaults.discovery_workers,
         )
         if settings.is_local:
             st.success("🖥 Local model")

@@ -175,9 +175,19 @@ def run_app() -> None:
     visual_report = None
     from adaptive_document_agent.services.presentation_visual_qa import VisualQAError
     try:
-        verified = export_pptx_with_report(result, visual_cache=st.session_state.setdefault("ppt_visual_cache", {}))
+        with st.spinner("Building and verifying PowerPoint…"):
+            verified = export_pptx_with_report(
+                result, visual_cache=st.session_state.setdefault("ppt_visual_cache", {}),
+                build_cache=st.session_state.setdefault("ppt_build_cache", {}),
+            )
         pptx_bytes = verified.payload
         visual_report = verified.report
+        st.caption(
+            f"PowerPoint export: {verified.timings_ms['ppt_export_total'] / 1000:.1f}s; "
+            f"build reused: {verified.build_cache_hit}; rendered QA reused: {visual_report.cache_hit}"
+        )
+        with st.expander("PowerPoint export timing (ms)"):
+            st.json(verified.timings_ms)
     except VisualQAError as exc:
         qa_error = exc
         visual_report = exc.report
@@ -199,7 +209,7 @@ def run_app() -> None:
             )
         else:
             st.button("Download presentation (.pptx)", disabled=True, use_container_width=True, help="Export blocked by Critical QA")
-    render_report_downloads(st, result, (col2, col3, col4))
+    render_report_downloads(st, result, (col2, col3, col4), pdf_cache=st.session_state.setdefault("pdf_export_cache", {}))
 
     if qa_error:
         from adaptive_document_agent.services.export_diagnostics import export_diagnostics

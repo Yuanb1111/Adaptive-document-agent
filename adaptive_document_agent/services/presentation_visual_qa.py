@@ -71,6 +71,8 @@ class VisualQAError(CriticalQAError):
 class VerifiedPresentation:
     payload: bytes
     report: VisualQAReport
+    timings_ms: dict[str, int] = field(default_factory=dict)
+    build_cache_hit: bool = False
 
 
 def package_digest(payload: bytes, *, exclude_positions=False) -> str:
