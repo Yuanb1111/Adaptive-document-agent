@@ -506,7 +506,7 @@ class FinancialMovementFormatter:
                 return f"{value:.2f}x"
             if is_percentage:
                 return f"{value:.1f}%"
-            return cls._format_currency_value(abs(value), currency=currency, scale=effective_scale, unit=unit)
+            return cls._format_currency_value(value, currency=currency, scale=effective_scale, unit=unit)
 
         if values and len(values) >= 3:
             traj = cls.analyze_trajectory(values, periods)
@@ -567,8 +567,8 @@ class FinancialMovementFormatter:
             verb = "increased" if diff >= 0 else "decreased"
             return f"{clean_name} {verb} by {abs(diff):.1f} pp (from {s_val:.1f}% in {period_first} to {e_val:.1f}% in {period_last})."
 
-        start_str = cls._format_currency_value(abs(s_val), currency=currency, scale=effective_scale, unit=unit)
-        end_str = cls._format_currency_value(abs(e_val), currency=currency, scale=effective_scale, unit=unit)
+        start_str = cls._format_currency_value(s_val, currency=currency, scale=effective_scale, unit=unit)
+        end_str = cls._format_currency_value(e_val, currency=currency, scale=effective_scale, unit=unit)
 
         # For currency amounts, include percent change when informative
         pct_clause = ""

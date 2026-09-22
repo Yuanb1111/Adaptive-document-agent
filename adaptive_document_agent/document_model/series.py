@@ -338,6 +338,13 @@ def paired_observations(
         if _has_conflict(left_values) or _has_conflict(right_values):
             continue
         pairs.append((max(left_values, key=lambda item: item.confidence), max(right_values, key=lambda item: item.confidence)))
+    # Matching each pair is insufficient: pooling annual and interim pairs
+    # creates a spurious sample. Do not cherry-pick a convenient subset.
+    if pairs:
+        from adaptive_document_agent.validation.claim_validator import are_observations_compatible
+        for left, right in pairs[1:]:
+            if not are_observations_compatible(pairs[0][0], left)[0] or not are_observations_compatible(pairs[0][1], right)[0]:
+                return []
     return pairs
 
 

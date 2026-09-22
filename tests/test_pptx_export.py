@@ -335,7 +335,7 @@ def test_pptx_appendix_paginates_all_chart_observations_and_cleans_units() -> No
         for slide in deck.slides
         if any(shape.has_text_frame and "Key data appendix" in shape.text for shape in slide.shapes)
     ]
-    assert len(appendix_slides) == 2
+    assert len(appendix_slides) == 4  # No more than six readable period columns.
     appendix_values = [
         cell.text
         for slide in appendix_slides

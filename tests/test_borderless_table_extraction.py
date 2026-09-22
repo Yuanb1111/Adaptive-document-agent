@@ -169,7 +169,10 @@ def test_single_row_borderless_table_is_kept_when_period_headers_support_it() ->
     tables = BorderlessTableExtractor().extract(SingleRowPage(), 1)
     assert len(tables) == 1
     assert tables[0].rows[0].cells[0] == "Trade payables turnover days"
-    assert tables[0].column_periods[1:] == ["FY2021", "FY2022", "FY2023", "FY2024"]
+    # This text-only fixture contains both annual and interim headings, but no
+    # coordinates locating their boundary. Keep the row, never invent all-FY.
+    assert tables[0].column_periods[1:] == [None] * 4
+    assert any("ambiguous" in warning for warning in tables[0].warnings)
 
 
 def test_vertical_period_groups_preserve_row_specific_periods() -> None:

@@ -62,6 +62,10 @@ Do not repeat executive-summary bullets on the risks slide. A risk statement sho
 Use no more than five bullets.
 
 Editorial review before returning the plan:
+- Review the available evidence catalog before selecting charts. Do not let chart-list order determine the story. Where relevant retained evidence includes levels, ratios, component mixes and comparable recent periods, assess their analytical value together. Explain material scope gaps in data_quality without claiming the full source lacks data. Never force a document-specific topic checklist.
+- Select three to five main summary findings when the evidence supports them. Keep extraction counts, chart counts and processing statistics in the appendix. Each detailed analytical page should add evidence or explanation beyond the summary.
+- Chart headings must describe the series actually plotted, not the broader source section. Do not promise an unplotted companion metric. Reject source-header fragments such as 'ended June 30' as topic titles and omit tool prerequisites such as 'five paired observations exist'.
+- Preserve the sign of reported net cash movements in every numeric endpoint. Explicit inflow/outflow wording can express a magnitude, but an unsigned number must never silently replace a negative cash balance or net flow. Never pool annual and interim observations into one correlation sample.
 - Reuse the reference design's visual grammar: a clear takeaway heading, distinct chart headings, generous common margins, and short grounded explanations adjacent to or below the evidence. Select layouts by evidence shape.
 - The summary should explain findings, not repeat metric names, tool output, or calculations with no period basis. A risk page must explain uncertainty; omit it if it would merely repeat a metric title.
 - Review consecutive single-chart pages for a meaningful shared question. Group them only if that relationship is supported. When a single-chart page is the right choice, explain why companion evidence would not improve it in selection_reason. There is no required proportion of multi-chart pages.

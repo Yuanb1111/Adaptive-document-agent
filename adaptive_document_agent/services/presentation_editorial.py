@@ -63,8 +63,10 @@ def review_presentation(plan: PresentationPlan | None, result: PipelineResult) -
         title = re.sub(r"\s+(trend|overview|analysis|trajectory)$", "", _normal(slide.title))
         if title in topic_titles or _normal(slide.title) in topic_titles:
             findings.append(EditorialFinding("presentation_topic_title", "The title only names the metric. State the supported finding or analytical question without adding unsupported numbers.", slide.id))
-        if re.search(r"evidence.backed comparison|retained reported values|selected observations|supplied observations", slide.message, re.I):
+        if re.search(r"evidence.backed comparison|retained reported values|selected observations|supplied observations|paired observations exist|has observations for multiple periods", slide.message, re.I):
             findings.append(EditorialFinding("presentation_boilerplate", "Replace the generic subtitle with the actual scope, caveat or finding supported by this page.", slide.id))
+        if re.match(r"(?i)^(?:ended\s+|(?:three|six|nine|twelve)\s+months?\s*$|as\s+(?:of|at)\s+)", slide.title.strip()):
+            findings.append(EditorialFinding("presentation_header_fragment", "The title appears to be a source period-header fragment. Name the actual analytical subject shown in the selected evidence.", slide.id))
     # Detect an assembly-line symptom; request a semantic review, never merge
     # based on title tokens, chart count or shared source pages.
     if len(analysis) >= 4 and len(single_pages) / len(analysis) >= .75:

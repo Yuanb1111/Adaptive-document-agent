@@ -13,6 +13,11 @@ COMPOSITION_TYPES = {"stacked_bar", "stacked_percent", "doughnut"}
 _META = {"table_context", "section", "period_basis", "column_role"}
 
 
+def is_aggregate_category(label: str) -> bool:
+    """Explicit aggregate labels, including qualified totals, are not parts."""
+    return bool(re.match(r"^(?:(?:grand\s+total|sub[ -]?total|total|aggregate)(?:\b|[:：])|(?:合计|总计|小计))", label.strip(), re.I)) or label.strip().casefold() == "all"
+
+
 @dataclass(frozen=True)
 class CompositionData:
     periods: list[str]
@@ -77,9 +82,9 @@ def composition_data(plan: ChartPlan, observations: list[Observation], totals: l
     is_pct = unit == "percentage"
     if is_pct and classify_metric(first.metric_original).semantic_type in {"margin", "growth_rate"}:
         raise ValueError("Independent margins or growth rates are not additive composition shares.")
-    if any(c.strip().casefold() in {"total", "grand total", "subtotal", "all", "合计", "总计"} for c in categories):
+    if any(is_aggregate_category(c) for c in categories):
         raise ValueError("Aggregate totals cannot be plotted as components alongside their parts.")
-    if plan.chart_type in {"stacked_percent", "doughnut"}:
+    if plan.chart_type in {"stacked_percent", "doughnut"} or plan.total_observation_ids:
         if is_pct:
             if any(not isclose(s, 100, abs_tol=0.5) for s in sums):
                 raise ValueError("Reported percentage shares do not reconcile to 100% within rounding tolerance.")

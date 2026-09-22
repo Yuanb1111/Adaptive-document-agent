@@ -153,7 +153,7 @@ def test_negative_chart_rendering_end_to_end() -> None:
 # ---------------------------------------------------------------------------
 
 def test_key_findings_multi_slide_pagination() -> None:
-    """When more than 5 findings exist, _add_findings_slide must paginate across slides with fixed card height."""
+    """Retain findings at readable size, with at most three complete items per page."""
     from adaptive_document_agent.document_model import DocumentIndex
     from adaptive_document_agent.services.pptx_export import _add_findings_slide
 
@@ -179,9 +179,9 @@ def test_key_findings_multi_slide_pagination() -> None:
 
     _add_findings_slide(prs, dummy_result, charts, index)
 
-    # 8 findings / 5 per slide = 2 slides added!
+    # Eight complete findings use three pages, not truncated five-card pages.
     added_slides = len(prs.slides) - initial_slide_count
-    assert added_slides == 2, f"Expected 2 slides for 8 findings, got {added_slides}"
+    assert added_slides == 3, f"Expected 3 slides for 8 findings, got {added_slides}"
 
     slide_1 = prs.slides[initial_slide_count]
     slide_2 = prs.slides[initial_slide_count + 1]
@@ -189,5 +189,7 @@ def test_key_findings_multi_slide_pagination() -> None:
     # Verify slide titles indicate pagination
     s1_text = " ".join(s.text for s in slide_1.shapes if s.has_text_frame)
     s2_text = " ".join(s.text for s in slide_2.shapes if s.has_text_frame)
-    assert "Key findings (1/2)" in s1_text
-    assert "Key findings (2/2)" in s2_text
+    assert "Key findings (1/3)" in s1_text
+    assert "Key findings (2/3)" in s2_text
+    all_text = " ".join(s.text for slide in list(prs.slides)[initial_slide_count:] for s in slide.shapes if s.has_text_frame)
+    assert all(f"Metric {i}" in all_text for i in range(1, 9))

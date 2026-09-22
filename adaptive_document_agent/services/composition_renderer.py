@@ -5,7 +5,7 @@ from pptx.enum.chart import XL_CHART_TYPE, XL_DATA_LABEL_POSITION, XL_LEGEND_POS
 from pptx.util import Inches, Pt
 
 from .composition_data import composition_data
-from .presentation_style import FONT, semantic_color
+from .presentation_style import FONT, semantic_color, PALETTE
 
 
 def add_composition_chart(slide, plan, observations, bounds, *, totals=None, compact=False):
@@ -36,7 +36,12 @@ def add_composition_chart(slide, plan, observations, bounds, *, totals=None, com
     chart.legend.font.name = FONT
     chart.legend.font.size = Pt(10 if compact else 11)
     chart.chart_style = 10
-    colors = getattr(slide, "_ada_colors", {})
+    colors = dict(getattr(slide, "_ada_colors", {}))
+    used_colors = set()
+    for name in matrix.categories:
+        preferred = colors.get(name, semantic_color(name))
+        colors[name] = next((c for c in (preferred, *PALETTE) if c not in used_colors), preferred)
+        used_colors.add(colors[name])
     if doughnut:
         chart.plots[0].hole_size = 62
         for point, name in zip(chart.series[0].points, matrix.categories):
@@ -58,8 +63,12 @@ def add_composition_chart(slide, plan, observations, bounds, *, totals=None, com
             axis.tick_labels.font.size = Pt(10 if compact else 11)
             axis.has_major_gridlines = False
     plot = chart.plots[0]
-    plot.has_data_labels = plan.show_data_labels
-    if plan.show_data_labels:
+    # Thin slices cannot hold legible labels. Exact values remain in the native
+    # workbook and evidence appendix; do not squeeze overlapping text into them.
+    column_totals = [sum(row[i] for row in matrix.values) for i in range(len(matrix.periods))]
+    labels_fit = all(v / column_totals[i] >= .06 for row in matrix.values for i, v in enumerate(row))
+    plot.has_data_labels = plan.show_data_labels and labels_fit
+    if plot.has_data_labels:
         labels = plot.data_labels
         labels.font.name = FONT
         labels.font.size = Pt(10 if compact else 11)

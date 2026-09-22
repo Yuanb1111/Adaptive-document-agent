@@ -245,6 +245,9 @@ class PresentationPreflight:
             content_min_top = max(content_min_top, title_ph.top.inches + title_ph.height.inches + 0.06)
 
         for shape in slide.shapes:
+            if (shape.name == "decoration:title_rule" and shape.height.inches <= .05
+                    and not (shape.has_text_frame and shape.text.strip())):
+                continue  # Owned underline belongs inside the heading zone.
             if getattr(shape, "is_placeholder", False):
                 try:
                     if shape.placeholder_format.idx in (14, 15, 16):

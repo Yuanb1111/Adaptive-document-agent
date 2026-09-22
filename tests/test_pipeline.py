@@ -48,7 +48,7 @@ def test_monetary_share_pipeline_skips_old_table_cache_and_reuses_new_cache(monk
 
         def get_model(self, key, model):
             self.requested.append(key)
-            assert not key.startswith("tables-v9-"), "Old inferred percentage roles must not be reused"
+            assert not key.startswith(("tables-v9-", "tables-v10-")), "Old inferred roles and mixed periods must not be reused"
             value = self.values.get(key)
             return value.model_copy(deep=True) if value is not None else None
 
@@ -76,7 +76,7 @@ def test_monetary_share_pipeline_skips_old_table_cache_and_reuses_new_cache(monk
         assert [o.value for o in observations] == [100000, 125000]
         assert all(o.unit_family == "currency" and o.unit_scale == 1000 for o in observations)
     assert len(calls) == 1
-    assert any(key.startswith("tables-v10-") for key in cache.values)
+    assert any(key.startswith("tables-v11-") for key in cache.values)
 
 
 def test_targeted_observations_extend_instead_of_replace_fact_base() -> None:

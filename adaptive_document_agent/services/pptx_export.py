@@ -97,7 +97,16 @@ def _source_footer(pages: list[int] | set[int] | tuple[int, ...]) -> str:
     normalized = sorted({int(page) for page in pages if int(page) > 0})
     if not normalized:
         return "Source: Document disclosures (page references not available)"
-    return f"Source: Document disclosures (p. {', '.join(map(str, normalized))})"
+    ranges = []
+    start = end = normalized[0]
+    for page in normalized[1:]:
+        if page == end + 1:
+            end = page
+        else:
+            ranges.append(str(start) if start == end else f"{start}-{end}")
+            start = end = page
+    ranges.append(str(start) if start == end else f"{start}-{end}")
+    return f"Source: Document disclosures (p. {', '.join(ranges)})"
 
 
 def _resolve_template_path(template_path: str | Path | None = None) -> Path:
@@ -229,7 +238,7 @@ def _build_legacy_presentation(presentation: Any, result: PipelineResult) -> Non
     """Render older cached results that predate the AI presentation plan."""
     index = DocumentIndex(result.observations)
     usable_charts = _usable_charts(result)
-    presentation_charts = usable_charts[:10]
+    presentation_charts = usable_charts
     chart_groups = _group_chart_plans(presentation_charts, index)
 
     # Standard order: 1. Cover, 2. Contents, 3. Overview, 4. Analysis at a glance, 5. Findings
@@ -237,27 +246,33 @@ def _build_legacy_presentation(presentation: Any, result: PipelineResult) -> Non
     _add_contents(presentation, result, chart_groups)
     if result.profile.document_summary.strip():
         _add_document_overview(presentation, result)
-    _add_evidence_overview(presentation, result)
     _add_findings_slide(presentation, result, presentation_charts, index)
     if chart_groups:
         _add_section_divider(presentation, "Thematic analysis", "Connected measures, periods and source evidence")
+    from .slide_compositor import render_composed_slide
     for ordinal, group in enumerate(chart_groups):
-        from .composition_data import COMPOSITION_TYPES
-        if any(c.chart_type in COMPOSITION_TYPES for c in group):
-            from .slide_compositor import render_composed_slide
-            for chart in group:
-                render_composed_slide(presentation, PresentationSlide(
-                    id=f"composition_{chart.id}", slide_type="analysis", title=chart.title,
-                    message=chart.question, chart_ids=[chart.id], layout="chart_plus_commentary",
-                    source_pages=chart.source_pages), [chart], result, index)
-        elif len(group) == 1:
-            _add_chart_slide(presentation, group[0], index, ordinal=ordinal)
-        else:
-            _add_chart_cluster_slide(presentation, group, index)
+        safe_charts = []
+        for chart in group:
+            values = [index.get(oid) for oid in chart.observation_ids if index.get(oid)]
+            safe_charts.append(chart.model_copy(update={"title": _presentation_chart_title(chart.title, values)}))
+        findings = _chart_findings(group, index)
+        title = safe_charts[0].title if len(safe_charts) == 1 else " / ".join(c.title for c in safe_charts)
+        # A long multi-chart heading needs separate pages, not a clipped label.
+        groups_to_render = [[c] for c in safe_charts] if len(title) > 110 else [safe_charts]
+        for part, selected in enumerate(groups_to_render):
+            selected_findings = findings if len(groups_to_render) == 1 else _chart_findings(selected, index)
+            render_composed_slide(presentation, PresentationSlide(
+                id=f"fallback_{ordinal}_{part}", slide_type="analysis",
+                title=selected[0].title if len(selected) == 1 else title,
+                chart_ids=[c.id for c in selected],
+                bullets=[str(f["narrative"]) for f in selected_findings],
+                layout="chart_plus_commentary" if len(selected) == 1 else "two_up",
+                source_pages=sorted({p for c in selected for p in c.source_pages})), selected, result, index)
     if not usable_charts:
         _add_no_chart_slide(presentation, result)
     _add_quality_slide(presentation, result)
     _add_section_divider(presentation, "Evidence appendix", "The retained values behind the charts")
+    _add_evidence_overview(presentation, result)
     _add_evidence_table_slides(presentation, result, presentation_charts)
 
 
@@ -443,7 +458,7 @@ def _add_planned_contents(presentation: Any, planned_slides: list[PresentationSl
 
     # Balanced 2-column grid layout preventing overflow
     total_count = len(entries)
-    items_per_col = max(5, (total_count + 1) // 2)
+    items_per_col = max(1, (total_count + 1) // 2)
     card_h = min(0.68, (4.60 - (items_per_col - 1) * 0.12) / items_per_col)
     gap_y = 0.12
     top_start = 1.50
@@ -700,7 +715,6 @@ def _add_planned_summary(
                   for cid, kind in _planned_chart_requests(slide_plan) if cid in by_id]
         render_composed_slide(presentation, slide_plan, charts, result, index)
         return
-    slide = _base_slide(presentation, slide_plan.title, slide_plan.message)
     insight_by_id = {item.id: item for item in result.insights}
     raw_findings = [
         (insight_by_id[identifier].title, insight_by_id[identifier].narrative)
@@ -729,7 +743,10 @@ def _add_planned_summary(
             if not _is_calc_artifact(str(item["title"])) and not _is_calc_artifact(str(item["narrative"]))
         ]
     from .presentation_editorial import distinct_findings
-    _add_numbered_messages(slide, distinct_findings(findings)[:5], source_pages=slide_plan.source_pages)
+    body = "\n\n".join(f"{i:02d}  {label}\n{narrative}" if label else f"{i:02d}  {narrative}"
+                         for i, (label, narrative) in enumerate(distinct_findings(findings), 1))
+    _add_text_pages(presentation, slide_plan.title, body or slide_plan.message or "No validated findings were produced.",
+                    slide_plan.source_pages, subtitle=slide_plan.message)
 
 
 from adaptive_document_agent.document_model.topic_matcher import (
@@ -894,7 +911,6 @@ def _render_data_comparison_table(
 
 
 def _add_planned_text_slide(presentation: Any, result: PipelineResult, slide_plan: PresentationSlide) -> None:
-    slide = _base_slide(presentation, slide_plan.title, slide_plan.message)
     insight_by_id = {item.id: item for item in result.insights}
     messages = [("", item) for item in slide_plan.bullets]
     if not messages:
@@ -907,7 +923,10 @@ def _add_planned_text_slide(presentation: Any, result: PipelineResult, slide_pla
         messages = [("Evidence note", "The retained evidence supports this topic, but no additional narrative was supplied.")]
 
     is_risk_or_watch = slide_plan.slide_type == "risks" or "watch" in slide_plan.title.casefold()
-    _add_numbered_messages(slide, messages[:5], source_pages=slide_plan.source_pages, is_interpretation=is_risk_or_watch)
+    body = "\n\n".join(f"{label}\n{narrative}" if label else narrative for label, narrative in messages)
+    if is_risk_or_watch:
+        body = "Analytical interpretation based on reported movements\n\n" + body
+    _add_text_pages(presentation, slide_plan.title, body, slide_plan.source_pages, subtitle=slide_plan.message)
 
 
 def _add_numbered_messages(
@@ -947,7 +966,6 @@ def _add_contents(presentation: Any, result: PipelineResult, groups: list[list[C
     sections: list[tuple[str, str]] = []
     if result.profile.document_summary.strip():
         sections.append(("01", "Document overview"))
-    sections.append((f"{len(sections) + 1:02d}", "Analysis at a glance"))
     sections.append((f"{len(sections) + 1:02d}", "Key findings"))
     if groups:
         sections.append((f"{len(sections) + 1:02d}", "Thematic analysis"))
@@ -955,7 +973,7 @@ def _add_contents(presentation: Any, result: PipelineResult, groups: list[list[C
     sections.append((f"{len(sections) + 1:02d}", "Evidence appendix"))
 
     total_count = len(sections)
-    items_per_col = max(5, (total_count + 1) // 2)
+    items_per_col = max(1, (total_count + 1) // 2)
     card_h = min(0.68, (4.60 - (items_per_col - 1) * 0.12) / items_per_col)
     gap_y = 0.12
     top_start = 1.50
@@ -999,16 +1017,21 @@ def _add_cover(
         return
     slide = presentation.slides.add_slide(presentation.slide_layouts[0])
     cover_title = title or result.report_plan.title or result.profile.overview_title or "Adaptive Document Analysis"
-    clean_title = _summary_text(cover_title, 72)
-    clean_purpose = _summary_text(
-        purpose or result.profile.document_purpose or result.profile.document_summary or "Intelligence derived from reported statements",
-        180,
-    )
+    from .language_qa import clean_presentation_text
+    from .slide_compositor import _lines
+    clean_title = clean_presentation_text(cover_title)
+    clean_purpose = clean_presentation_text(purpose or result.profile.document_purpose or result.profile.document_summary or "Intelligence derived from reported statements")
 
     # Dynamic font scaling to prevent title overlap (max 2 lines)
     is_long_title = len(clean_title) > 36
     title_font_size = 28 if is_long_title else 36
-    subtitle_top = 3.10 if is_long_title else 2.80
+    title_h = max(.85, len(_lines(clean_title, 6.65, title_font_size)) * title_font_size / 72 * 1.22 + .15)
+    if title_h > 3.1:
+        raise ValueError("Cover title exceeds readable capacity; shorten the presentation title.")
+    subtitle_top = max(2.80, 1.35 + title_h + .28)
+    purpose_h = max(.95, len(_lines(clean_purpose, 6.65, 14)) * .25 + .12)
+    if subtitle_top + purpose_h > 6.15:
+        raise ValueError("Cover subtitle exceeds readable capacity; move detail to the document overview.")
 
     ph16 = None
     ph15 = None
@@ -1019,7 +1042,7 @@ def _add_cover(
             ph.left = Inches(0.30)
             ph.top = Inches(1.35)
             ph.width = Inches(6.85)
-            ph.height = Inches(1.35 if is_long_title else 0.85)
+            ph.height = Inches(title_h)
             ph.text_frame.word_wrap = True
             if ph.text_frame.paragraphs:
                 ph.text_frame.paragraphs[0].font.size = Pt(title_font_size)
@@ -1029,7 +1052,7 @@ def _add_cover(
             ph.left = Inches(0.30)
             ph.top = Inches(subtitle_top)
             ph.width = Inches(6.85)
-            ph.height = Inches(0.95)
+            ph.height = Inches(purpose_h)
             ph.text_frame.word_wrap = True
             if ph.text_frame.paragraphs:
                 ph.text_frame.paragraphs[0].font.size = Pt(14)
@@ -1051,7 +1074,7 @@ def _add_evidence_overview(presentation: Any, result: PipelineResult) -> None:
     }
     source_pages = {source.page for item in result.observations for source in item.evidence}
     values = [
-        (str(len(result.observations)), "retained facts"),
+        (str(len(result.observations)), "reported values"),
         (str(len(metrics)), "distinct metrics"),
         (str(len(result.charts)), "validated charts"),
         (str(len(source_pages)), "evidence pages"),
@@ -1076,23 +1099,50 @@ def _add_evidence_overview(presentation: Any, result: PipelineResult) -> None:
 
 
 def _add_document_overview(presentation: Any, result: PipelineResult) -> None:
-    title = _summary_text(result.profile.overview_title.strip() or "Document overview", 60)
-    slide = _base_slide(presentation, title, result.profile.document_type)
-    content_top, content_h = _content_zone(slide)
+    sections = [item for item in result.profile.important_sections if item.strip()]
+    body = result.profile.document_summary
+    if sections:
+        body += "\n\nTopics covered\n" + "\n".join(sections)
+    _add_text_pages(presentation, result.profile.overview_title.strip() or "Document overview",
+                    body, result.profile.document_summary_pages, subtitle=result.profile.document_type)
 
-    _panel(slide, 0.45, content_top, 7.50, content_h, fill=FOURIER_BG_CARD)
-    _text(slide, _summary_text(result.profile.document_summary, 650), 0.70, content_top + 0.20, 7.00, content_h - 0.45, size=14, color=FOURIER_DARK)
 
-    _panel(slide, 8.15, content_top, 4.00, content_h, fill=FOURIER_BG_CARD)
-    _text(slide, "TOPICS COVERED", 8.40, content_top + 0.20, 3.50, 0.26, size=10.5, color=FOURIER_PURPLE, bold=True)
-    _rule(slide, 8.40, content_top + 0.50, 3.50, 0.01, FOURIER_BORDER)
-    sections = [item for item in result.profile.important_sections if item.strip()][:5]
-    section_text = "\n\n".join(f"{index:02d}  {_summary_text(section, 80)}" for index, section in enumerate(sections, start=1))
-    _text(slide, section_text or "The analysis follows the document's discovered structure.", 8.40, content_top + 0.62, 3.50, content_h - 0.90, size=12.5, color=FOURIER_DARK)
-
-    pages = sorted(set(result.profile.document_summary_pages))
-    if pages:
-        _text(slide, _source_footer(pages), 0.45, 6.22, 11.70, 0.25, size=9.5, color=FOURIER_MUTED)
+def _add_text_pages(presentation: Any, title: str, body: str, pages, *, subtitle: str = "") -> None:
+    """Retain complete narrative at readable size, continuing when necessary."""
+    import textwrap
+    from .slide_compositor import _base
+    remaining = body
+    part = 0
+    while remaining:
+        slide, top = _base(presentation, title + (" (continued)" if part else ""), subtitle if not part else "")
+        width = presentation.slide_width.inches - 1.5
+        height = presentation.slide_height.inches - 1.15 - top
+        average = .56 + .44 * sum(ord(c) > 255 for c in remaining) / max(len(remaining), 1)
+        capacity = max(6, int(width * 72 / (16 * average)))
+        wrapper = textwrap.TextWrapper(width=capacity, expand_tabs=False, replace_whitespace=False,
+                                       drop_whitespace=False, break_on_hyphens=False)
+        lines = []
+        for paragraph in remaining.splitlines(keepends=True):
+            text = paragraph.rstrip("\r\n")
+            wrapped = wrapper.wrap(text) or [""]
+            wrapped[-1] += paragraph[len(text):]
+            lines.extend(wrapped)
+        count = max(1, int(height * 72 / 22) - 1)
+        shown = "".join(lines[:count])
+        tail = "".join(lines[count:])
+        if tail:
+            # Prefer whole sentences without dropping any overflow text.
+            boundaries = [m.end() for m in re.finditer(r"\n\s*\n|[.!?。！？](?:\s+|$)", shown)]
+            boundary = next((end for end in reversed(boundaries) if end >= len(shown) * .5), None)
+            if boundary:
+                tail = shown[boundary:] + tail
+                shown = shown[:boundary]
+        body_shape = _text(slide, shown, .75, top, width, height, size=16, color=FOURIER_DARK)
+        body_shape.name = "narrative:body"
+        _text(slide, _source_footer(pages), .55, presentation.slide_height.inches - .82,
+              presentation.slide_width.inches - 1.1, .2, size=9, color=FOURIER_MUTED)
+        remaining = tail
+        part += 1
 
 
 def _add_chart_slide(
@@ -1543,8 +1593,8 @@ def _add_findings_slide(
     charts: list[ChartPlan],
     index: DocumentIndex,
 ) -> None:
-    findings = _chart_findings(charts, index)
-    seen_titles = {str(item["title"]).casefold() for item in findings}
+    findings = []
+    seen_titles = set()
     model_findings = [
         {
             "title": finding.title,
@@ -1553,9 +1603,7 @@ def _add_findings_slide(
         }
         for finding in sorted(result.insights, key=lambda item: (item.importance, item.confidence), reverse=True)
     ]
-    for finding in model_findings:
-        if len(findings) >= 10:
-            break
+    for finding in [*model_findings, *_chart_findings(charts, index)]:
         candidate_title = str(finding["title"]).casefold()
         if any(
             candidate_title == existing
@@ -1574,33 +1622,17 @@ def _add_findings_slide(
         _text(slide, "No validated analytical findings were produced.", 0.9, 3.2, 10.8, 0.8, size=20, color=FOURIER_MUTED, align="center")
         return
 
-    # Maximum 5 findings per slide to guarantee fixed internal padding and prevent overflow
-    max_per_slide = 5
+    # Prioritize model-selected insights. Paginate complete sentences instead of
+    # clipping each finding into a fixed 120-character card.
+    max_per_slide = 3
     chunks = [findings[i : i + max_per_slide] for i in range(0, len(findings), max_per_slide)]
     total_chunks = len(chunks)
 
-    global_number = 1
     for chunk_idx, chunk in enumerate(chunks):
         title_str = "Key findings" if total_chunks == 1 else f"Key findings ({chunk_idx + 1}/{total_chunks})"
-        slide = _base_slide(presentation, title_str, "Evidence-backed conclusions from the analysis")
-        content_top, content_h = _content_zone(slide)
-
-        card_h = 0.72
-        gap = 0.12
-        top = content_top
-
-        for local_idx, finding in enumerate(chunk):
-            y = top + local_idx * (card_h + gap)
-            _panel(slide, 0.45, y, 11.70, card_h, fill=FOURIER_BG_CARD)
-            _text(slide, f"{global_number:02d}", 0.65, y + 0.16, 0.55, 0.35, size=14, color=FOURIER_PURPLE, bold=True)
-            title_text = _sanitize_investor_narrative(str(finding["title"]))
-            narrative_text = _sanitize_investor_narrative(str(finding["narrative"]))
-            _text(slide, _summary_text(title_text, 45), 1.30, y + 0.10, 3.80, card_h - 0.20, size=12.5, color=FOURIER_DARK, bold=True)
-            pages = list(finding.get("pages", []))
-            source = f"Pages {', '.join(map(str, pages))}" if pages else "Calculated"
-            _text(slide, _summary_text(narrative_text, 120), 5.25, y + 0.10, 5.10, card_h - 0.20, size=11.5, color=FOURIER_DARK)
-            _text(slide, source, 10.45, y + 0.16, 1.55, 0.30, size=8.5, color=FOURIER_MUTED, align="right")
-            global_number += 1
+        body = "\n\n".join(f"{chunk_idx * max_per_slide + i + 1:02d}  {f['title']}\n{f['narrative']}" for i, f in enumerate(chunk))
+        pages = sorted({p for f in chunk for p in f.get("pages", [])})
+        _add_text_pages(presentation, title_str, body, pages)
 
 
 def _add_quality_slide(presentation: Any, result: PipelineResult, *, title: str = "Limits that affect interpretation") -> None:
@@ -1795,12 +1827,18 @@ def _add_evidence_table_slides(
         )
         if not group_periods:
             continue
-        p_chunks = [group_periods[i:i + 10] for i in range(0, len(group_periods), 10)] if len(group_periods) > 10 else [group_periods]
+        period_groups: dict[str, list[str]] = {}
+        for period in group_periods:
+            period_groups.setdefault(extract_period_basis(period), []).append(period)
+        p_chunks = [periods[i:i + 6] for periods in period_groups.values() for i in range(0, len(periods), 6)]
         for p_chunk in p_chunks:
             current_bundle: list[tuple[str, dict[str, dict[str, Any]]]] = []
             current_rows = 0
             for theme in active_themes:
-                theme_metrics = metrics_by_theme[theme]
+                theme_metrics = {name: entry for name, entry in metrics_by_theme[theme].items()
+                                 if any(p in entry["periods"] for p in p_chunk)}
+                if not theme_metrics:
+                    continue
                 needed_rows = 1 + len(theme_metrics)
                 if current_rows > 0 and current_rows + needed_rows > 10:
                     slide_specs.append((p_chunk, current_bundle, is_bs))
@@ -1823,7 +1861,8 @@ def _add_evidence_table_slides(
     total_specs = len(slide_specs)
     for spec_index, (p_chunk, theme_entries, is_bs) in enumerate(slide_specs, start=1):
         generic_section = bool(thematic_labels) or all(t == "Reported Measures" for t, _ in theme_entries)
-        group_type_str = "Reported measures" if generic_section else "Balance Sheet & Position" if is_bs else "Performance & Cash Flows"
+        basis = extract_period_basis(p_chunk[0]) if p_chunk else "generic"
+        group_type_str = "Point-in-time measures" if basis == "point_in_time" else "Annual measures" if basis == "FY" else "Interim measures" if basis != "generic" else "Reported measures"
         slide_subtitle = subtitle or f"{group_type_str} across reported periods, with source provenance"
         if total_specs > 1:
             slide_subtitle += f" | Appendix {spec_index} of {total_specs}"
@@ -2174,9 +2213,11 @@ def _presentation_chart_title(title: str, observations: list[Observation]) -> st
     series_names = {display_metric_name(item) for item in observations}
     if len(series_names) == 1:
         single = next(iter(series_names))
-        if single.casefold() not in title.casefold():
-            return _summary_text(f"{title} - {single}", 78)
-    return _summary_text(title, 78)
+        # A source section or task question may mention an unplotted metric.
+        # A single-series fallback names only the evidence actually displayed.
+        return single
+    names = " / ".join(sorted(series_names, key=str.casefold))
+    return names if names and len(names) <= 110 else "Reported measures"
 
 
 def _chart_group_title(plans: list[ChartPlan], index: DocumentIndex) -> str:
@@ -2488,6 +2529,11 @@ def _chart_findings(charts: list[ChartPlan], index: DocumentIndex) -> list[dict[
         if len(ordered) < 2:
             continue
         first, last = ordered[0], ordered[-1]
+        from adaptive_document_agent.validation.claim_validator import are_observations_compatible
+        if any(not are_observations_compatible(first, item)[0] for item in ordered[1:]):
+            # The chart can show source periods in parallel, but cannot claim
+            # a like-for-like movement across annual and interim durations.
+            continue
         scale, scale_label = _display_scale(ordered, max(abs(float(item.value or 0)) for item in ordered))
         label = sanitize_metric_label(display_metric_name(first))
         if not first.currency:

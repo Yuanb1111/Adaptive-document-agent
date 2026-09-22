@@ -10,6 +10,7 @@ from adaptive_document_agent.utils.ids import stable_id
 from .normalizer import infer_unit_defaults
 from .column_roles import explicit_percentage
 from .borderless_layout import source_lines, column_anchors, align_sparse_values, geometric_headers
+from .period_header_geometry import geometric_periods
 
 _VALUE = re.compile(r"(?<![A-Za-z0-9])(?:\(?[+-]?(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)\)?[%％]?|[—–]|-(?!\S))")
 _YEAR = re.compile(r"\b(?:19|20)\d{2}\b")
@@ -53,6 +54,10 @@ class BorderlessTableExtractor:
             if not years and not has_dot_leaders:
                 continue
             periods = self._expand_periods(years, maximum_values, lines, year_index)
+            if year_index is not None:
+                resolved = geometric_periods(sources[max(0, year_index-4):year_index], sources[year_index], maximum_values)
+                if resolved:
+                    periods = resolved
             headers = self._headers(lines, year_index, group[0].line_index, maximum_values)
             anchors = column_anchors([list(r.boxes) for r in group if len(r.values) == maximum_values], maximum_values)
             header_sources = sources[year_index+1:group[0].line_index] if year_index is not None else []
@@ -105,7 +110,7 @@ class BorderlessTableExtractor:
                     rows=[TableRow(cells=cells, page=page_number, column_periods=row_periods,
                                    alignment_status="ambiguous" if ambiguous else "resolved") for cells, row_periods, ambiguous in row_specs],
                     raw_cells=raw_rows,
-                    raw_header_lines=[s.text for s in header_sources],
+                    raw_header_lines=[s.text for s in sources[max(0, year_index-4):group[0].line_index]] if year_index is not None else [],
                     confidence=0.68 if years else 0.55,
                     default_unit=unit,
                     default_raw_unit=raw_unit,
@@ -113,6 +118,7 @@ class BorderlessTableExtractor:
                     default_currency=currency,
                     context_label=context_label,
                     warnings=["Recovered from aligned text because no bordered table structure was detected."] +
+                             (["Period header scope is ambiguous; raw header evidence retained without assigning durations."] if years and any(p is None for p in periods) else []) +
                              (["Sparse rows have ambiguous column alignment; raw cells retained but not interpreted."] if has_ambiguous_rows else []),
                 )
             )
@@ -207,12 +213,14 @@ class BorderlessTableExtractor:
                 f"{year}-{base_date}" if index < date_split else f"{year}-{later_dates[index - date_split]}"
                 for index, year in enumerate(years)
             ]
-        elif re.search(r"year\s*ended", context):
+        elif re.search(r"year\s*ended", context) and not re.search(r"(three|six|nine|twelve)\s*months?", context):
             labels = [f"FY{year}" for year in years]
-        elif month_match := re.search(r"(three|six|nine|twelve)\s*months?\s*ended", context):
+        elif not re.search(r"year\s*ended", context) and (month_match := re.search(r"(three|six|nine|twelve)\s*months?\s*ended", context)):
             month_label = {"three": "3M", "six": "6M", "nine": "9M", "twelve": "12M"}[month_match.group(1)]
             labels = [f"{month_label}{year}" for year in years]
         repeats = width // len(labels)
+        if duplicate_at is None and re.search(r"year\s*ended", context) and re.search(r"(three|six|nine|twelve)\s*months?", context):
+            return [None] * width  # Geometry, not word order, must resolve the split.
         return [label for label in labels for _ in range(repeats)]
 
     @staticmethod
@@ -353,7 +361,7 @@ class BorderlessTableExtractor:
             lowered = candidate.casefold()
             if not candidate or len(candidate) > 100 or candidate.endswith("."):
                 continue
-            if re.search(r"year\s*ended|months?\s*ended|as\s*of", lowered):
+            if re.search(r"year\s*ended|months?\s*ended|as\s*(?:of|at)|^ended\b|^(?:three|six|nine|twelve)\s+months?$", lowered):
                 continue
             if sum(bool(re.search(r"\d", m.group())) for m in _VALUE.finditer(candidate)) >= 2:
                 continue

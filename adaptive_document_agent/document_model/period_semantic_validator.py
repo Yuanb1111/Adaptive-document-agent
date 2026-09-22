@@ -152,7 +152,7 @@ def format_observation_period(
     # Determine is_balance_sheet if not explicitly supplied
     if is_balance_sheet is None:
         is_balance_sheet = period_type in ("balance_sheet_date", "point_in_time")
-        if not is_balance_sheet:
+        if not is_balance_sheet and period_type == "generic":
             metric_str = (
                 f"{getattr(obs, 'metric_canonical', '') or ''} "
                 f"{getattr(obs, 'metric_original', '') or ''}"

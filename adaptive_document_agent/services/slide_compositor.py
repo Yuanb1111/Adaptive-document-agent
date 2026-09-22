@@ -188,6 +188,7 @@ def _base(presentation, title, message):
                 p.font.color.rgb = _rgb(MUTED)
     title_bottom = max((s.top.inches + s.height.inches for s in slide.placeholders if s.placeholder_format.idx in (14, 15)), default=1.0)
     _rule(slide, .55, title_bottom + .07, 1.35, .035, PURPLE)
+    slide.shapes[-1].name = "decoration:title_rule"
     slide._ada_colors = getattr(presentation, "_ada_colors", {})
     return slide, _content_zone(slide)[0]
 
