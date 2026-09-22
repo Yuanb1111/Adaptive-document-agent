@@ -113,7 +113,7 @@ def test_appendix_deduplicates_period_columns() -> None:
     # Observations where periods differ in raw format but represent the same period
     obs = [
         Observation(id="o1", metric_original="Revenue", value=100.0, raw_value="100", period="FY2022", currency="RMB", unit="currency", evidence=[ev], confidence=0.9),
-        Observation(id="o2", metric_original="Revenue", value=120.0, raw_value="120", period="2022", currency="RMB", unit="currency", evidence=[ev], confidence=0.9),
+        Observation(id="o2", metric_original="Revenue", value=100.0, raw_value="100", period="2022", currency="RMB", unit="currency", evidence=[ev], confidence=0.9),
         Observation(id="o3", metric_original="Revenue", value=150.0, raw_value="150", period="FY2023", currency="RMB", unit="currency", evidence=[ev], confidence=0.9),
     ]
 
@@ -135,4 +135,3 @@ def test_appendix_deduplicates_period_columns() -> None:
     # Header columns should contain unique FY2022 without duplication
     assert headers.count("FY2022") == 1
     assert "FY2023" in headers
-

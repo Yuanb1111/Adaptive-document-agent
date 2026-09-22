@@ -5,7 +5,7 @@ from hashlib import sha256
 from typing import Any
 
 from adaptive_document_agent.models import PipelineResult
-from adaptive_document_agent.services.export import export_csv, export_markdown, export_pdf
+from adaptive_document_agent.services.export import export_csv, export_json, export_markdown, export_pdf
 
 
 def render_report_downloads(st: Any, result: PipelineResult, columns: tuple[Any, ...], *, pdf_cache: dict | None = None) -> None:
@@ -13,9 +13,12 @@ def render_report_downloads(st: Any, result: PipelineResult, columns: tuple[Any,
         ("Markdown", "Download Markdown", export_markdown, "analysis_report.md", "text/markdown"),
         ("PDF", "Download report (.pdf)", export_pdf, "analysis_report.pdf", "application/pdf"),
         ("CSV", "Download CSV", export_csv, "extracted_observations.csv", "text/csv"),
+        ("JSON", "Download analysis data (.json)", export_json, "analysis_data.json", "application/json"),
     )
-    for column, (kind, label, exporter, filename, mime) in zip(columns, formats):
+    for column, (kind, label, exporter, filename, mime) in zip((*columns, columns[-1]), formats):
         with column:
+            if kind == "JSON":
+                st.caption("Complete analysis and source evidence; may contain document content.")
             pdf_key = None
             if kind == "PDF" and pdf_cache is not None:
                 # PDF uses only Markdown and report title. One session-owned

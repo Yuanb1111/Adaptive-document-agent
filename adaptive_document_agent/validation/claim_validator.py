@@ -203,8 +203,19 @@ def partition_compatible_series(
     return series_list
 
 
-def are_observations_compatible(obs1: Observation, obs2: Observation) -> tuple[bool, str]:
+def are_observations_compatible(obs1: Observation, obs2: Observation, *, varying_dimension: str | None = None,
+                                allow_sample_dimensions: bool = False) -> tuple[bool, str]:
     """Verify that two observations can be safely compared for directional changes."""
+    from adaptive_document_agent.document_model.series import source_context_key
+    if source_context_key(obs1) != source_context_key(obs2):
+        return False, "Source context mismatch; same labels do not establish the same measure"
+    metadata = {"table_context", "section", "period_basis", "column_role", "reporting_basis", "basis", "restatement", "restated", "ifrs_status"}
+    if varying_dimension:
+        metadata.add(varying_dimension)
+    dims1 = {k: v for k, v in {**obs1.dimensions, **obs1.category_dimensions}.items() if k not in metadata}
+    dims2 = {k: v for k, v in {**obs2.dimensions, **obs2.category_dimensions}.items() if k not in metadata}
+    if dims1 != dims2 and not allow_sample_dimensions:
+        return False, "Category dimensions mismatch"
     # 1. Canonical metric
     m1 = (obs1.metric_canonical or obs1.metric_original).strip().casefold()
     m2 = (obs2.metric_canonical or obs2.metric_original).strip().casefold()

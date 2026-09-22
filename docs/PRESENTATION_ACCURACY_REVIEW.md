@@ -12,3 +12,14 @@ This change addresses generator defects found during an exported-deck review. It
 Regression tests use synthetic documents and observations. A separate local, read-only check against PDF pages 328, 331 and 333 confirmed snapshot dates and the two 6M2024 turnover observations. Source PDFs and diagnostic renders are not repository fixtures.
 
 The changes do not certify that every model-generated deck matches a reference presentation. Content selection still depends on the evidence catalog and validated model plan. The latest full cloud model run was not replayed as part of the offline tests, and some older specialized layout helpers still use bounded text fields.
+
+## Follow-up: normalized units, source context and runtime cache identity
+
+- Currency movement formatters no longer guess billions from small numbers. Numeric inputs use an explicit scale multiplier; observation inputs are already normalized and ignore chart display scales. Missing observation currency is not replaced with RMB.
+- Comparable-series identity retains source section and table context. Same-label measures in different contexts cannot form one trend. Correlation samples may vary in their sample dimensions, but dimensions must match within each pair and period/unit/context checks still apply across samples.
+- An explicitly named group total closes the source hierarchy. Subsequent numeric rows remain independent until another source heading. Subtotals do not close the parent. No issuer names, values or page numbers drive this rule.
+- Appendix rows retain category, currency and source identity; conflicting values for the same identity and displayed period cannot overwrite one another. Composition checks now also run on fallback exports without a presentation plan.
+- Extraction, session result, native PPT build and rendered QA caches incorporate `2026-09-22-unit-context-v12`. The UI displays the loaded pipeline contract and QA JSON retains it. Code on disk still needs a process restart when source watching is disabled; the marker is not a claim of a Git commit or deployment verification.
+- Restored `Download analysis data (.json)` beside CSV, with an explicit document-content notice and independent export failure handling.
+
+Read-only local extraction against source pages 313, 328, 331 and 333 verified separate cost/inventory series, independent net assets, component sums matching both reported totals, and a bill-receivable narrative starting at RMB 21k and ending at the June 2024 snapshot. No cloud model, deployment, source PDF rewrite or external upload was used. Automated tests cover synthetic equivalents; a complete new cloud-generated presentation remains to be verified after deployment.

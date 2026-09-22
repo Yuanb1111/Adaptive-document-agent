@@ -17,6 +17,7 @@ from lxml import etree
 import numpy as np
 from PIL import Image
 from pptx import Presentation
+from adaptive_document_agent.utils.pipeline_version import PIPELINE_VERSION
 
 from .presentation_rendering import RenderingError, check_render_input, configured_renderer
 from .qa_reporter import CriticalQAError
@@ -37,6 +38,7 @@ class VisualIssue:
 
 @dataclass
 class VisualQAReport:
+    pipeline_version: str = PIPELINE_VERSION
     status: str = "failed"
     renderer: str = "unavailable"
     policy: str = POLICY_VERSION
@@ -270,7 +272,7 @@ def verify_presentation(payload: bytes, *, renderer=None, max_repairs: int = 2, 
         if getattr(renderer, "coverage", None):
             report.coverage = tuple(renderer.coverage)
         original_facts = package_digest(payload, exclude_positions=True)
-        cache_key = (POLICY_VERSION, renderer.identity, max_repairs, package_digest(payload))
+        cache_key = (PIPELINE_VERSION, POLICY_VERSION, renderer.identity, max_repairs, package_digest(payload))
         if cache is not None and cache_key in cache:
             from copy import deepcopy
             hit = deepcopy(cache[cache_key])

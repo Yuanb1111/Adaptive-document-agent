@@ -1754,6 +1754,10 @@ def _add_evidence_table_slides(
     # Extract clean periods and metrics grouped by theme
     # theme -> metric_label -> {"periods": {period_str: val_str}, "pages": set()}
     metrics_by_theme: dict[str, dict[str, dict[str, Any]]] = {}
+    from adaptive_document_agent.document_model.series import metric_identity_key, source_context_key
+    name_contexts: dict[str, set[tuple[str, str]]] = {}
+    for item in observations:
+        name_contexts.setdefault(display_metric_name(item), set()).add(source_context_key(item))
     all_periods_set: set[str] = set()
     thematic_labels = {}
     if result.presentation_plan and result.presentation_plan.themes:
@@ -1771,6 +1775,15 @@ def _add_evidence_table_slides(
             unit=item.unit,
         )
         metric_name = sanitize_metric_label(semantic.clean_name)
+        categories = item.category_dimensions or {
+            k: v for k, v in item.dimensions.items()
+            if k not in {"table_context", "section", "period_basis", "column_role", "reporting_basis", "basis", "restatement", "restated", "ifrs_status"}
+        }
+        if categories:
+            metric_name += " — " + ", ".join(str(v) for _, v in sorted(categories.items()))
+        if len(name_contexts.get(display_metric_name(item), ())) > 1:
+            context = item.dimensions.get("table_context") or item.source_section or "Unspecified context"
+            metric_name += f" ({context})"
         theme = _classify_financial_theme(
             metric_name,
             item.parent_section or item.source_section or item.dimensions.get("section") or "",
@@ -1786,10 +1799,15 @@ def _add_evidence_table_slides(
         all_periods_set.add(period_key)
 
         theme_dict = metrics_by_theme.setdefault(theme, {})
-        metric_entry = theme_dict.setdefault(metric_name, {"unit": unit_str, "periods": {}, "pages": set()})
+        metric_entry = theme_dict.setdefault(metric_identity_key(item), {"label": metric_name, "unit": unit_str, "periods": {}, "values": {}, "pages": set()})
 
+        if period_key in metric_entry["values"] and item.value is not None and metric_entry["values"][period_key] is not None:
+            from math import isclose
+            if not isclose(float(item.value), float(metric_entry["values"][period_key]), rel_tol=1e-9, abs_tol=1e-9):
+                raise ValueError(f"Conflicting appendix values for {metric_name} in {period_key}; cannot overwrite evidence.")
         if period_key not in metric_entry["periods"] or display_value != "—":
             metric_entry["periods"][period_key] = display_value
+            metric_entry["values"][period_key] = item.value
         for ev in item.evidence:
             if getattr(ev, "page", None):
                 metric_entry["pages"].add(ev.page)
@@ -1892,7 +1910,7 @@ def _add_evidence_table_slides(
             table_rows.append((theme, "", ["" for _ in active_p_chunk], True))
             for m_name, m_data in metrics_dict.items():
                 row_vals = [m_data["periods"].get(p, "—") for p in active_p_chunk]
-                table_rows.append((m_name, m_data.get("unit", ""), row_vals, False))
+                table_rows.append((m_data["label"], m_data.get("unit", ""), row_vals, False))
                 slide_pages.update(m_data["pages"])
 
         table_top = content_top
@@ -2239,6 +2257,9 @@ def _chart_group_title(plans: list[ChartPlan], index: DocumentIndex) -> str:
 
 
 def _change_summary(observations: list[Observation], scale: float) -> tuple[str, str] | None:
+    from adaptive_document_agent.document_model.series import metric_identity_key
+    if len({metric_identity_key(item) for item in observations}) != 1:
+        return None
     series_names = {metric_key(item) for item in observations}
     if len(series_names) != 1:
         return None
@@ -2278,8 +2299,8 @@ def _change_summary(observations: list[Observation], scale: float) -> tuple[str,
         start,
         end,
         canonical_name=first.metric_canonical,
-        currency=first.currency or "RMB",
-        scale=scale,
+        currency=first.currency or "",
+        scale=1.0 if first.currency else scale,
         unit=first.unit,
         unit_family=first.unit_family,
         values=ordered_vals,
@@ -2515,6 +2536,9 @@ def _chart_findings(charts: list[ChartPlan], index: DocumentIndex) -> list[dict[
         values = [item for item in values if item and item.value is not None and is_meaningful_metric(item)]
         keys = {metric_key(item) for item in values}
         if len(keys) != 1 or not values:
+            continue
+        from adaptive_document_agent.document_model.series import metric_identity_key
+        if len({metric_identity_key(item) for item in values}) != 1:
             continue
         key = next(iter(keys))
         if key in seen:

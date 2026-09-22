@@ -41,21 +41,13 @@ class FinancialMovementFormatter:
             return f"{diff_scaled:,.1f}"
 
         curr = currency
-        # If the metric is scaled in billions or base magnitude is >= 1 billion:
-        if parent_magnitude >= 1_000_000_000 or (0.01 <= parent_magnitude < 100 and scale >= 1_000_000_000):
-            if diff_abs >= 10_000_000:
-                in_bn = diff_abs / 1_000_000_000.0
+        # Numeric callers explicitly supply an input multiplier. Never infer
+        # millions/billions from the magnitude of a number.
+        effective_diff = diff_abs * scale
+        if parent_magnitude * scale >= 1_000_000_000:
+            if effective_diff >= 10_000_000:
+                in_bn = effective_diff / 1_000_000_000.0
                 return f"{curr}{in_bn:.2f}bn" if in_bn < 10 else f"{curr}{in_bn:.1f}bn"
-            elif diff_abs < 100:
-                return f"{curr}{diff_abs:.2f}bn" if diff_abs < 10 else f"{curr}{diff_abs:.1f}bn"
-        elif 0.01 <= parent_magnitude < 10 and 0.01 <= diff_abs < 10:
-            # Scaled billions passed directly (e.g. -1.57 -> -0.83, diff = 0.74; -4.47 -> -6.62, diff = 2.15)
-            return f"{curr}{diff_abs:.2f}bn" if diff_abs < 10 else f"{curr}{diff_abs:.1f}bn"
-        elif 10 <= parent_magnitude < 1000 and 1 <= diff_abs < 1000 and scale == 1.0 and not currency:
-            # Small unscaled numbers without currency (e.g. -200 -> -150, diff = 50.0)
-            return f"{diff_abs:,.1f}"
-
-        effective_diff = diff_abs * scale if (scale and scale > 1.0 and parent_magnitude < 100_000) else diff_abs
         formatted = format_compact_currency(effective_diff, currency=currency, is_base_value=True)
         return re.sub(r"^(RMB|USD|HKD|CNY|EUR)\s+", r"\1", formatted)
 
@@ -83,7 +75,9 @@ class FinancialMovementFormatter:
         unit: str | None,
     ) -> str:
         effective_scale = cls._scale_from_unit(unit, scale)
-        effective_value = value * effective_scale if effective_scale > 1.0 and abs(value) < 100_000 else value
+        effective_value = value * effective_scale
+        if not currency:
+            return f"{effective_value:,.1f}"
         return format_compact_currency(effective_value, currency=currency, is_base_value=True)
 
     @classmethod
@@ -196,7 +190,7 @@ class FinancialMovementFormatter:
         include_metric_name: bool = True,
         values: list[float] | None = None,
     ) -> str:
-        """Generate standardized institutional movement text for a metric between two values."""
+        """Format changes; currency scale is an explicit input multiplier, default base units."""
         clean_name = shorten_metric_title(metric_name)
         lower_name = f"{canonical_name or ''} {clean_name}".casefold()
         family = classify_metric_semantic_family(clean_name, canonical_name=canonical_name)
@@ -467,7 +461,11 @@ class FinancialMovementFormatter:
         periods: list[str] | None = None,
         observations: list[Any] | None = None,
     ) -> str:
-        """Generate complete analytical narrative sentence with canonical period labels for Key Findings."""
+        """Narrate normalized observations, or numeric inputs with an explicit unit multiplier.
+
+        Observation inputs always use base values; scale/unit arguments describe
+        numeric inputs only and cannot override retained observation units.
+        """
         if isinstance(first_obs, str):
             metric_name = first_obs
             canonical_name = None
@@ -482,6 +480,11 @@ class FinancialMovementFormatter:
             e_val = float(getattr(last_obs, "value", 0) or 0)
             period_first = format_observation_period(first_obs) or getattr(first_obs, "period", "")
             period_last = format_observation_period(last_obs) or getattr(last_obs, "period", "")
+            # Observation.value is already normalized. A caller's chart display
+            # scale or a retained raw unit must never multiply it a second time.
+            scale = 1.0
+            currency = getattr(first_obs, "currency", None) or ""
+            unit = "currency" if currency else getattr(first_obs, "unit", None)
 
         clean_name = shorten_metric_title(metric_name)
         if values is None and observations:

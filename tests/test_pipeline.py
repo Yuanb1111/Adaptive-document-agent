@@ -76,7 +76,8 @@ def test_monetary_share_pipeline_skips_old_table_cache_and_reuses_new_cache(monk
         assert [o.value for o in observations] == [100000, 125000]
         assert all(o.unit_family == "currency" and o.unit_scale == 1000 for o in observations)
     assert len(calls) == 1
-    assert any(key.startswith("tables-v11-") for key in cache.values)
+    from adaptive_document_agent.utils.pipeline_version import PIPELINE_VERSION
+    assert any(key.startswith(f"tables-{PIPELINE_VERSION}-") for key in cache.values)
 
 
 def test_targeted_observations_extend_instead_of_replace_fact_base() -> None:

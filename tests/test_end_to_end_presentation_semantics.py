@@ -64,7 +64,7 @@ def test_movement_net_current_liabilities_widened() -> None:
 
 def test_movement_loss_narrowed() -> None:
     """Loss -1.57 -> -0.83 must say 'Loss narrowed by RMB0.74bn'."""
-    res_scaled = FinancialMovementFormatter.format_movement("Loss for the year", -1.57, -0.83)
+    res_scaled = FinancialMovementFormatter.format_movement("Loss for the year", -1.57, -0.83, scale=1_000_000_000)
     assert "loss narrowed" in res_scaled.casefold()
     assert "0.74bn" in res_scaled.casefold()
 

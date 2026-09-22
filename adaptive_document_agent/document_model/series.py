@@ -66,22 +66,30 @@ def metric_label(observation: Observation) -> str:
     return canonical
 
 
+def source_context_key(observation: Observation) -> tuple[str, str]:
+    """Retained context is identity evidence, not noise for same-label measures."""
+    return tuple(" ".join(str(value or "").split()).casefold() for value in (
+        observation.source_section or observation.dimensions.get("section"),
+        observation.dimensions.get("table_context"),
+    ))
+
+
 def metric_identity_key(observation: Observation) -> tuple[object, ...]:
     """Identity used to group observations into a single coherent financial series."""
     name = metric_label(observation).casefold()
     u_family = getattr(observation, "unit_family", None) or observation.unit or "generic"
     core_dims = tuple(sorted(observation.category_dimensions.items())) if observation.category_dimensions else tuple(sorted((k, v) for k, v in observation.dimensions.items() if k not in {"table_context", "section", "period_basis"}))
-    section = (observation.source_section or "").casefold()
+    section = source_context_key(observation)
 
     # If the metric label is generic (like "Others", "Corporate", "Miscellaneous"),
     # it is strictly contextual to its source table and parent section!
     if is_generic_metric_label(name):
         tbl = observation.effective_table_id or observation.source_table or ""
-        return (name, section, tbl, core_dims, u_family, observation.entity)
+        return (name, section, tbl, core_dims, u_family, observation.entity, observation.currency, observation.ifrs_status)
 
     # Non-generic metrics can merge across multi-page tables IF they share same core dimensions,
     # section (if present), and unit family.
-    return (name, section, core_dims, u_family, observation.entity)
+    return (name, section, core_dims, u_family, observation.entity, observation.currency, observation.ifrs_status)
 
 
 def metric_key(observation: Observation) -> str:
@@ -154,7 +162,7 @@ def is_meaningful_metric(observation: Observation) -> bool:
 
 def context_key(observation: Observation) -> tuple[object, ...]:
     """Identity used to align observations without assuming a document type."""
-    return observation.period, observation.entity, tuple(sorted(observation.dimensions.items()))
+    return observation.period, observation.entity, tuple(sorted({**observation.dimensions, **observation.category_dimensions}.items())), source_context_key(observation)
 
 
 def conflicting_groups(observations: Iterable[Observation]) -> list[list[Observation]]:
@@ -232,7 +240,7 @@ def canonical_series_partition_key(obs: Observation) -> tuple[object, ...]:
         )
     entity = (obs.entity or "").strip().casefold()
 
-    return (m_name, ifrs, is_pct, u_fam, curr, p_basis, rep_basis, restatement, core_dims, entity)
+    return (m_name, ifrs, is_pct, u_fam, curr, p_basis, rep_basis, restatement, core_dims, entity, source_context_key(obs))
 
 
 def group_comparable_series(
@@ -343,7 +351,9 @@ def paired_observations(
     if pairs:
         from adaptive_document_agent.validation.claim_validator import are_observations_compatible
         for left, right in pairs[1:]:
-            if not are_observations_compatible(pairs[0][0], left)[0] or not are_observations_compatible(pairs[0][1], right)[0]:
+            # Paired samples may represent different regions/respondents/indexes;
+            # their dimensions already match within each pair above.
+            if not are_observations_compatible(pairs[0][0], left, allow_sample_dimensions=True)[0] or not are_observations_compatible(pairs[0][1], right, allow_sample_dimensions=True)[0]:
                 return []
     return pairs
 

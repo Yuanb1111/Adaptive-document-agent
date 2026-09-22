@@ -126,7 +126,8 @@ def _build_cache_key(result: PipelineResult, template_digest: str, artwork: byte
     # Bump the version when generation rules change. All facts, source evidence,
     # narrative, charts, warnings and plan fields participate in invalidation.
     content = result.model_dump_json(exclude={"llm_usage", "timings_ms"}).encode()
-    return ("ppt-build-v2", template_digest, hashlib.sha256(content + b"\0" + (artwork or b"")).hexdigest())
+    from adaptive_document_agent.utils.pipeline_version import PIPELINE_VERSION
+    return (f"ppt-build-v3:{PIPELINE_VERSION}", template_digest, hashlib.sha256(content + b"\0" + (artwork or b"")).hexdigest())
 
 
 def export_pdf(result: PipelineResult) -> bytes:

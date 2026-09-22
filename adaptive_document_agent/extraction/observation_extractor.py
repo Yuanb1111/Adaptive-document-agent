@@ -160,6 +160,15 @@ class ObservationExtractor:
                 )
                 if item:
                     output.append(item)
+            # An explicitly named group total closes that group. Subsequent
+            # rows are independent until another source heading opens a group.
+            # A subtotal does not close the parent: more components may follow.
+            if current_section:
+                total_for = re.sub(r"(?i)^(?:grand\s+)?total\s+", "", clean_label).strip().casefold()
+                if clean_label.casefold() in {"total", "grand total", "合计", "总计"} or (
+                    total_for != clean_label.casefold() and total_for == current_section.casefold()
+                ):
+                    current_section = None
         return output
 
     def _make(

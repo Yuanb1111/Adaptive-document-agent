@@ -51,7 +51,7 @@ def composition_data(plan: ChartPlan, observations: list[Observation], totals: l
                 or obs.anomaly_notes or obs.row_operator != "additive"):
             raise ValueError("Composition contains missing, negative, ungrounded or invalid values.")
         if (metric_key(obs) != metric_key(first) or units.get(obs.unit or "", obs.unit or "") != unit
-                or obs.currency != first.currency or not are_observations_compatible(first, obs)[0]):
+                or obs.currency != first.currency or not are_observations_compatible(first, obs, varying_dimension=dimension)[0]):
             raise ValueError("Composition mixes metrics, units, currencies or reporting periods.")
         dims = {**obs.dimensions, **obs.category_dimensions}
         category = dims.get(dimension)
@@ -104,7 +104,7 @@ def composition_data(plan: ChartPlan, observations: list[Observation], totals: l
                 if (total.id in plan.observation_ids or total.value is None or not isfinite(total.value)
                         or not total.evidence or total.validation_status not in {"valid", "partially_valid"}
                         or total.anomaly_notes or total.unit != first.unit or total.currency != first.currency
-                        or scope not in contexts or total_name != component_name or not are_observations_compatible(first, comparable_total)[0]
+                        or scope not in contexts or total_name != component_name or not are_observations_compatible(first, comparable_total, varying_dimension=dimension)[0]
                         or not isclose(sums[periods.index(total.period)], total.value, rel_tol=0.005, abs_tol=1e-9)):
                     raise ValueError("Composition does not reconcile to its compatible evidenced total.")
     return CompositionData(periods, categories, matrix, is_pct,

@@ -6,6 +6,7 @@ from adaptive_document_agent.services.export import export_pptx_with_report
 from adaptive_document_agent.services.llm import LLMGateway
 from adaptive_document_agent.services.llm.routing import create_llm_client
 from adaptive_document_agent.utils.hashing import sha256_bytes
+from adaptive_document_agent.utils.pipeline_version import PIPELINE_VERSION
 
 from . import analysis, data, overview, quality, sources, technical
 from .charts import chart_rows, render_chart
@@ -22,6 +23,7 @@ def run_app() -> None:
 
     st.set_page_config(page_title="Adaptive Document Intelligence Agent", page_icon="📄", layout="wide")
     st.title("Adaptive Document Intelligence Agent")
+    st.caption(f"Running pipeline: {PIPELINE_VERSION}")
     st.markdown(
         "Upload a PDF and the Agent will understand the document, discover useful data, "
         "run deterministic calculations, validate results, and preserve page-level evidence."
@@ -57,7 +59,7 @@ def run_app() -> None:
     scope_key = sha256_bytes(
         "|".join(
             (
-                "table-alignment-v11",
+                PIPELINE_VERSION,
                 sha256_bytes(raw_pdf),
                 analysis_focus.strip(),
                 settings.provider.value,

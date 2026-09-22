@@ -37,6 +37,28 @@ def validate_presentation_data(result: PipelineResult):
                 message=f"Metric '{obs.metric_original}' has implausible percentage {obs.value:g}%. Re-evaluate the source column role and alignment before export.",
             ))
 
+    # This gate also covers legacy/fallback exports without an LLM slide plan.
+    from adaptive_document_agent.document_model.series import metric_key, metric_identity_key, source_context_key
+    from adaptive_document_agent.services.composition_data import COMPOSITION_TYPES, composition_data
+    observation_map = {o.id: o for o in result.observations}
+    for chart in result.charts:
+        values = [observation_map[oid] for oid in chart.observation_ids if oid in observation_map]
+        if chart.chart_type in COMPOSITION_TYPES:
+            try:
+                composition_data(chart, values, [observation_map[oid] for oid in chart.total_observation_ids if oid in observation_map])
+            except ValueError as exc:
+                issues.append(QAItem(code="invalid_composition_chart", severity="CRITICAL", related_ids=[chart.id], message=str(exc)))
+        elif chart.chart_type in {"line", "area", "bar"}:
+            identities = {}
+            contexts = {}
+            for value in values:
+                identities.setdefault(metric_key(value), set()).add(metric_identity_key(value))
+                contexts.setdefault(metric_key(value), set()).add(source_context_key(value))
+            mixed_identity = not (chart.series_dimension or chart.x_dimension) and any(len(keys) > 1 for keys in identities.values())
+            if mixed_identity or any(len(keys) > 1 for keys in contexts.values()):
+                issues.append(QAItem(code="mixed_metric_context", severity="CRITICAL", related_ids=[chart.id],
+                    message=f"Chart '{chart.title}' mixes same-label measures with different source contexts or categories."))
+
     if not result.presentation_plan:
         return issues
     if result.presentation_plan.themes or any(s.theme_id or s.calculation_ids for s in result.presentation_plan.slides):
