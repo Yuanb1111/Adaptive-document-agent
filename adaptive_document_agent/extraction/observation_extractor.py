@@ -189,9 +189,11 @@ class ObservationExtractor:
         validation_status = "valid"
         anomaly_notes: list[str] = []
 
-        # Multiples are intrinsic and never monetary currency or percentage
+        # Bare "share of" wording is not percentage evidence: a monetary
+        # allocation may use that wording too. Use intrinsic ratio semantics
+        # or explicit source units instead; never discard its currency/scale.
         is_explicit_pct = intrinsic_percentage(metric) or explicit_percentage(raw) or explicit_percentage(column_label) or any(
-            k in metric.casefold() for k in ("margin", "% of", "share of", "as %", "growth rate", "cagr", "proportion", "毛利率", "净利率", "利润率", "占比", "比例", "增长率")
+            k in metric.casefold() for k in ("margin", "% of", "as %", "growth rate", "cagr", "proportion", "毛利率", "净利率", "利润率", "占比", "比例", "增长率")
         )
         is_monetary_item = is_financial_statement_metric(metric) and not is_explicit_pct
         column_scale = (

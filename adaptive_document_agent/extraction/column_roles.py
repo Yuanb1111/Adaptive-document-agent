@@ -5,7 +5,7 @@ Position and numeric magnitude alone never establish a percentage unit.
 
 import re
 
-from adaptive_document_agent.document_model.metric_semantic_classifier import classify_metric
+from adaptive_document_agent.document_model.metric_semantic_classifier import classify_metric, is_financial_statement_metric
 
 
 def explicit_percentage(text: str | None) -> bool:
@@ -13,11 +13,15 @@ def explicit_percentage(text: str | None) -> bool:
     text = (text or "").casefold()
     if re.search(r"%\s*(?:of\s*)?(?:rmb|usd|cny|hkd|eur|\$|£|€)", text):
         return False
-    return bool(re.search(
+    marked = bool(re.search(
         r"[%％]|\b(?:percent(?:age)?|pct|margin|proportion)\b"
-        r"|\bshare(?:\s+of\b|\s*$)|\b(?:tax|growth|interest)\s+rate\b"
+        r"|\b(?:tax|growth|interest)\s+rate\b"
         r"|占比|份额|比例|毛利率|利润率", text
     ))
+    # A share header can identify a ratio, but monetary allocations also use
+    # "share of". The wording alone cannot override monetary source units.
+    share_header = bool(re.search(r"\bshare(?:\s+of\b|\s*$)", text))
+    return marked or (share_header and not is_financial_statement_metric(text))
 
 
 def intrinsic_percentage(metric: str) -> bool:

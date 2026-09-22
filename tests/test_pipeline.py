@@ -37,6 +37,48 @@ def test_scope_preview_selects_complete_small_document_without_deep_analysis() -
     assert [(item.start_page, item.end_page) for item in preview.page_ranges] == [(1, 1)]
 
 
+def test_monetary_share_pipeline_skips_old_table_cache_and_reuses_new_cache(monkeypatch):
+    from adaptive_document_agent.agent import orchestrator
+    from adaptive_document_agent.models.table import ExtractedTable, TableRow
+
+    class MemoryCache:
+        def __init__(self):
+            self.values = {}
+            self.requested = []
+
+        def get_model(self, key, model):
+            self.requested.append(key)
+            assert not key.startswith("tables-v9-"), "Old inferred percentage roles must not be reused"
+            value = self.values.get(key)
+            return value.model_copy(deep=True) if value is not None else None
+
+        def set_model(self, key, value):
+            self.values[key] = value.model_copy(deep=True)
+
+    calls = []
+
+    def extract_tables(self, raw, *, page_numbers=None):
+        calls.append(page_numbers)
+        return {1: [ExtractedTable(
+            table_id="share_amount", page=1, headers=["Metric", "2023", "2024"],
+            column_periods=[None, "2023", "2024"], column_types=["label", "amount", "amount"],
+            default_unit="currency", default_currency="USD", default_raw_unit="USD '000",
+            default_unit_scale=1000,
+            rows=[TableRow(cells=["Share of profit of an associate", "100", "125"], page=1)],
+        )]}
+
+    monkeypatch.setattr(orchestrator.TableExtractor, "extract", extract_tables)
+    cache = MemoryCache()
+    raw = synthetic_time_series_pdf()
+    for _ in range(2):
+        result = DocumentOrchestrator(cache=cache).analyse_pdf(raw)
+        observations = [o for o in result.observations if o.metric_original == "Share of profit of an associate"]
+        assert [o.value for o in observations] == [100000, 125000]
+        assert all(o.unit_family == "currency" and o.unit_scale == 1000 for o in observations)
+    assert len(calls) == 1
+    assert any(key.startswith("tables-v10-") for key in cache.values)
+
+
 def test_targeted_observations_extend_instead_of_replace_fact_base() -> None:
     broad = [Observation(id="broad", metric_original="Revenue", value=100, raw_value="100", confidence=0.9)]
     targeted = [
