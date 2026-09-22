@@ -145,3 +145,39 @@ def geometric_headers(lines: list[SourceLine], anchors, fallback: list[str]) -> 
             label = f"% {label}" if label.casefold().startswith("of ") else f"% of {label}" if label else "%"
         output.append(label or ("Amount" if units[i] == "amount" else "%" if units[i] == "percentage" else fallback[i]))
     return output
+
+
+def geometric_audit_statuses(lines: list[SourceLine], year_line: SourceLine, width: int) -> list[str]:
+    """Bind explicit assurance labels to year-column geometry, never to dates.
+
+    Unmarked columns remain unknown: an adjacent unaudited label does not
+    establish either assurance status for them. Amount/percentage subcolumns
+    inherit only the status of their geometrically identified year group.
+    """
+    years = list(re.finditer(r"\b(?:19|20)\d{2}\b", year_line.text))
+    boxes = [year_line.bounds(m.start(), m.end()) for m in years]
+    result = ["unknown"] * width
+    if not years or width % len(years) or not all(boxes):
+        return result
+    centers = [(b[0] + b[1]) / 2 for b in boxes]
+    if len(centers) < 2:
+        return result
+    gap = min(b - a for a, b in zip(centers, centers[1:]))
+    if gap <= 0:
+        return result
+    repeat = width // len(years)
+    statuses = [set() for _ in years]
+    for line in lines:
+        for match in re.finditer(r"\b(?:unaudited|audited)\b", line.text, re.I):
+            bounds = line.bounds(match.start(), match.end())
+            if not bounds:
+                continue
+            center = sum(bounds) / 2
+            near = [i for i, x in enumerate(centers) if abs(x - center) < gap * .4]
+            if len(near) == 1:
+                statuses[near[0]].add(match.group().lower())
+    for index, labels in enumerate(statuses):
+        if len(labels) == 1:
+            start = index * repeat
+            result[start:start + repeat] = [next(iter(labels))] * repeat
+    return result

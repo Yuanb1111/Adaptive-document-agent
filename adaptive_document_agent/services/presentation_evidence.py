@@ -18,6 +18,11 @@ from .single_metric_analysis import single_metric_analysis
 _META = {"table_context", "section", "column_role", "period_basis"}
 
 
+def _subject_scope(o: Observation) -> tuple:
+    dims = tuple(sorted((k, v) for k, v in {**o.dimensions, **o.category_dimensions}.items() if k not in _META))
+    return metric_key(o), o.unit, o.currency, o.entity, dims, o.ifrs_status
+
+
 def evidence_groups(observations: list[Observation]) -> list[list[Observation]]:
     """Keep metric scopes separate, including currencies, categories and basis.
 
@@ -25,9 +30,7 @@ Do not deduplicate cells here: conflicts must remain visible to validators.
 """
     groups = defaultdict(list)
     for o in observations:
-        dims = tuple(sorted((k, v) for k, v in {**o.dimensions, **o.category_dimensions}.items() if k not in _META))
-        key = (metric_key(o), o.unit, o.currency, o.entity, dims, o.ifrs_status,
-               o.period_basis, o.period_type, classify_period(o.period).period_type)
+        key = (*_subject_scope(o), o.period_basis, o.period_type, classify_period(o.period).period_type)
         groups[key].append(o)
     return [sorted(group, key=lambda o: (period_sort_key(o.period), o.id)) for _, group in sorted(groups.items(), key=lambda kv: str(kv[0]))]
 
@@ -77,6 +80,7 @@ def observation_record(o: Observation) -> dict:
             "unit": o.unit, "raw_unit": o.raw_unit, "currency": o.currency, "period": o.period,
             "entity": o.entity, "dimensions": {**o.dimensions, **o.category_dimensions},
             "ifrs_status": o.ifrs_status, "period_basis": o.period_basis,
+            "audited_status": o.audited_status, "parent_section": o.parent_section,
             "validation_status": o.validation_status, "confidence": o.confidence,
             "source_pages": sorted({e.page for e in o.evidence})}
 
@@ -114,13 +118,22 @@ their own bounded catalogue even when a series is outside the retrieval budget.
         key = metric_key(group[0])
         (rest if key in seen else first).append(group)
         seen.add(key)
-    selected, count = [], 0
-    for group in [*first, *rest]:
+    # Retrieve the separate period bases of already-selected subjects before a
+    # long inventory of unrelated metrics consumes the entire budget. These
+    # remain distinct series; retrieval never licenses an FY/interim comparison.
+    chart_subjects = {_subject_scope(o) for o in result.observations if o.id in chart_ids}
+    companions = [g for g in ranked if _subject_scope(g[0]) in chart_subjects]
+    selected, count, selected_groups = [], 0, set()
+    for group in [*companions, *first, *rest]:
+        group_key = tuple(o.id for o in group)
+        if group_key in selected_groups:
+            continue
         if len(selected) >= max_series:
             break
         if len(group) + count > max_observations:
             continue
         selected.append(group)
+        selected_groups.add(group_key)
         count += len(group)
 
     all_calculations = calculation_catalog(result.observations)
@@ -147,13 +160,14 @@ their own bounded catalogue even when a series is outside the retrieval budget.
         for other in bundles:
             if other["id"] == bundle["id"] or other["metric"] == bundle["metric"]:
                 continue
-            if other["entity"] != bundle["entity"] or other["ifrs_status"] != bundle["ifrs_status"]:
+            if other["entity"] != bundle["entity"]:
                 continue
             periods = sorted(set(bundle["periods"]) & set(other["periods"]) - {None})
             sections = sorted(set(bundle["source_sections"]) & set(other["source_sections"]))
             if not periods:
                 continue
             peers.append({"series_id": other["id"], "shared_periods": periods,
+                          "same_definition_basis": other["ifrs_status"] == bundle["ifrs_status"],
                           "shared_sections": sections, "same_unit": other["unit"] == bundle["unit"] and other["currency"] == bundle["currency"],
                           "entity_confirmed": bool(bundle["entity"]),
                           "warning": "Structural retrieval hint only; justify relevance and verify scope before comparing."})
@@ -175,7 +189,7 @@ their own bounded catalogue even when a series is outside the retrieval budget.
                 start = max(0, position - 220) if position >= 0 else 0
                 existing = snippets_by_page.get(e.page)
                 if existing is None or (position >= 0 and not existing[0]):
-                    snippets_by_page[e.page] = (position >= 0, {"page": e.page, "text": text[start:start+1000],
+                    snippets_by_page[e.page] = (position >= 0, {"page": e.page, "text": text[start:start+2400],
                                                "anchor_observation_id": o.id})
     snippets = [s for _, s in snippets_by_page.values()]
     selected_ids = {o.id for g in selected for o in g} | chart_ids
@@ -183,5 +197,5 @@ their own bounded catalogue even when a series is outside the retrieval budget.
     return {"series": bundles, "source_snippets": snippets,
             "observations": [observation_record(o) for g in selected for o in g],
             "calculations": calculations[:240], "omitted_series_count": len(groups) - len(selected),
-            "total_series_count": len(groups), "retrieval_limits": {"series": max_series, "observations": max_observations},
+            "total_series_count": len(groups), "retrieval_limits": {"series": max_series, "observations": max_observations, "source_pages": 12, "characters_per_source_page": 2400},
             "coverage_note": "This is a bounded evidence catalogue, not proof that omitted topics are absent from the document."}

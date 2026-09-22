@@ -77,7 +77,7 @@ def format_period_label(
     if m := re.search(r"\b(20\d{2})[-/.](0[1-9]|1[0-2])[-/.](0[1-9]|[12]\d|3[01])\b", p):
         year, month, day = int(m.group(1)), int(m.group(2)), int(m.group(3))
         mon_str = MONTH_ABBR.get(month, f"{month:02d}")
-        star = "*" if (is_unaudited or (is_balance_sheet and month != 12) or "*" in p) else ""
+        star = "*" if (is_unaudited or "*" in p) else ""
         return f"{day} {mon_str} {year}{star}"
 
     # 2. Text Date: "30 April 2025" or "April 30, 2025" or "February 28, 2026"
@@ -88,7 +88,7 @@ def format_period_label(
         if mon_key in MONTH_MAP:
             month = MONTH_MAP[mon_key]
             mon_str = MONTH_ABBR[month]
-            star = "*" if (is_unaudited or (is_balance_sheet and month != 12) or "*" in p) else ""
+            star = "*" if (is_unaudited or "*" in p) else ""
             return f"{day} {mon_str} {year}{star}"
 
     if m := re.search(r"(?i)\b([A-Za-z]+)\s+([0-3]?\d)[,\s]+(20\d{2})\b", p):
@@ -98,14 +98,14 @@ def format_period_label(
         if mon_key in MONTH_MAP:
             month = MONTH_MAP[mon_key]
             mon_str = MONTH_ABBR[month]
-            star = "*" if (is_unaudited or (is_balance_sheet and month != 12) or "*" in p) else ""
+            star = "*" if (is_unaudited or "*" in p) else ""
             return f"{day} {mon_str} {year}{star}"
 
     # 3. CJK Date: "2025年4月30日" or "2026年2月28日"
     if m := re.search(r"(20\d{2})年([0-1]?\d)月([0-3]?\d)日?", p):
         year, month, day = int(m.group(1)), int(m.group(2)), int(m.group(3))
         mon_str = MONTH_ABBR.get(month, f"{month:02d}")
-        star = "*" if (is_unaudited or (is_balance_sheet and month != 12) or "*" in p) else ""
+        star = "*" if (is_unaudited or "*" in p) else ""
         return f"{day} {mon_str} {year}{star}"
 
     # 4. Interim month flow: 4M2024 / 4M2025 / 6M2025 / 9M2025
@@ -116,8 +116,10 @@ def format_period_label(
             months = int(prefix[:-1])
             mon_str = MONTH_ABBR.get(months, "Interim")
             last_day = 30 if months in (4, 6, 9, 11) else (28 if months == 2 else 31)
-            return f"{last_day} {mon_str} 20{year_suffix}*"
-        return f"{prefix}20{year_suffix}"
+            star = "*" if is_unaudited or "*" in p else ""
+            return f"{last_day} {mon_str} 20{year_suffix}{star}"
+        star = "*" if is_unaudited or "*" in p else ""
+        return f"{prefix}20{year_suffix}{star}"
 
     # 5. Explicit FY or year
     if m := re.match(r"(?i)^(?:FY\s*)?(20\d{2})$", p):
@@ -141,7 +143,7 @@ def format_observation_period(
     Priority order:
     1. Use obs.as_of_date (ISO date) if present — most precise.
     2. Derive is_balance_sheet from obs.period_type if not explicitly provided.
-    3. Append '*' when obs.audited_status == 'unaudited' or period is interim.
+    3. Append '*' only when explicit source assurance says unaudited.
     4. Fall back to format_period_label(obs.period, is_balance_sheet=...).
     """
     period: str | None = getattr(obs, "period", None)

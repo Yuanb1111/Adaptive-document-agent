@@ -57,9 +57,9 @@ def test_metric_semantic_classifier() -> None:
 
 
 def test_period_semantic_validator() -> None:
-    assert format_period_label("2025-04-30", is_balance_sheet=True) == "30 Apr 2025*"
-    assert format_period_label("As of April 30, 2025", is_balance_sheet=True) == "30 Apr 2025*"
-    assert format_period_label("4M2025", is_balance_sheet=True) == "30 Apr 2025*"
+    assert format_period_label("2025-04-30", is_balance_sheet=True) == "30 Apr 2025"
+    assert format_period_label("As of April 30, 2025", is_balance_sheet=True) == "30 Apr 2025"
+    assert format_period_label("4M2025", is_balance_sheet=True) == "30 Apr 2025"
     assert is_interim_date("2025-04-30") is True
 
     assert format_period_label("4M2025", is_balance_sheet=False) == "4M2025"
@@ -728,4 +728,3 @@ def test_expense_ratio_decrease_not_contradiction_of_gross_margin() -> None:
     trend = determine_trend_state("Cost of sales / revenue", 65.0, 60.0)
     # A 65 → 60 decrease in EXPENSE metric must be DECREASED (not contradicting gross margin improvement)
     assert trend == TrendState.DECREASED, f"Expected DECREASED, got {trend}"
-

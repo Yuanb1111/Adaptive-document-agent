@@ -73,7 +73,9 @@ class ObservationExtractor:
             label = self._row_label(row.cells[0])
             numeric_columns = [column for column, raw in enumerate(row.cells[1:], start=1) if raw and parse_number(raw)]
             if label and not numeric_columns:
-                current_section = label.rstrip(":")
+                # Operators are not semantic parent metrics. Keep their raw
+                # source row without prefixing all subsequent results with Add.
+                current_section = None if re.fullmatch(r"(?i)(?:add|less|adjustments?|加|减|调整)[:：]?", label.strip()) else label.rstrip(":")
                 continue
             if not label:
                 continue
@@ -360,7 +362,9 @@ class ObservationExtractor:
             period_type=period_sem.period_type,
             period_basis=extract_period_basis(period),
             as_of_date=period_sem.as_of_date or (period_sem.clean_label if (is_bs or period_sem.period_type == "balance_sheet_date") else None),
-            audited_status="unaudited" if period_sem.is_unaudited else "audited",
+            audited_status=(table.column_audit_statuses[column]
+                            if column is not None and column < len(table.column_audit_statuses)
+                            else "unaudited" if period_sem.is_unaudited else "unknown"),
             ifrs_status="ADJUSTED" if any(k in f"{metric}".casefold() for k in ("adjusted", "non-ifrs", "non-gaap", "经调整", "非国际财务报告准则")) else "IFRS",
             fact_type="reported_fact",
             validation_status=validation_status,
@@ -438,7 +442,7 @@ class ObservationExtractor:
                         normalized_value=number.value,
                         normalized_unit=unit_val,
                         period_type=period_sem.period_type,
-                        audited_status="unaudited" if period_sem.is_unaudited else "audited",
+                        audited_status="unaudited" if period_sem.is_unaudited else "unknown",
                     )
                 )
         output.extend(self._extract_vertical_text_series(page, text))
@@ -609,7 +613,7 @@ class ObservationExtractor:
                             normalized_value=value,
                             normalized_unit=unit_val,
                             period_type=period_sem.period_type,
-                            audited_status="unaudited" if period_sem.is_unaudited else "audited",
+                            audited_status="unaudited" if period_sem.is_unaudited else "unknown",
                         )
                     )
                 i = j

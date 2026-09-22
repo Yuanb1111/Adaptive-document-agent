@@ -282,6 +282,12 @@ class TableReconstructor:
         right_periods = [period for period in right.column_periods if period]
         if left_periods and right_periods and left_periods != right_periods:
             return False
+        left_assurance = left.column_audit_statuses or ["unknown"] * len(left.headers)
+        right_assurance = right.column_audit_statuses or ["unknown"] * len(right.headers)
+        if left_assurance != right_assurance:
+            # Do not lend one page's column qualifications to different rows
+            # on a continuation page that has no matching assurance evidence.
+            return False
         normalize = lambda value: "".join(character.lower() for character in value if character.isalnum())
         if left.context_label and right.context_label and normalize(left.context_label) != normalize(right.context_label):
             return False

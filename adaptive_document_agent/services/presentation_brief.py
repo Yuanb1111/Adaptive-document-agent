@@ -1,4 +1,4 @@
-"""Bounded opening slides. Full source copy stays in notes, not continuation pages.
+"""Readable opening slides, with source-supported profile pagination.
 
 Semantic priority comes from discovery/insights. These helpers only enforce
 readable capacity and remove exact repetitions; they never rewrite a claim.
@@ -105,6 +105,39 @@ def render_brief(presentation: Any, title: str, items: list[BriefItem], *,
     full_copy = "\n\n".join(f"{item.title}\n{item.text}\n{_source_footer(item.pages)}" for item in items)
     slide.notes_slide.notes_text_frame.text = "\n\n".join(s for s in (notes, full_copy) if s)
     return slide
+
+
+def render_profile(presentation: Any, title: str, items: list[BriefItem], *, notes: str = "") -> list:
+    """Paginate supported profile facts instead of silently hiding them in notes."""
+    width = presentation.slide_width.inches - 1.3
+    expanded = []
+    for item in items:
+        if not item.text.strip() or is_technical_copy(item.text):
+            continue
+        if _item_height(item, width) <= 2.4 and fits_brief(item, width, 2.8):
+            expanded.append(item)
+        else:
+            parts = re.split(r"(?<=[.!?。！？])\s+", item.text)
+            for part in parts:
+                piece = BriefItem(item.title, part, item.pages)
+                if _item_height(piece, width) > 2.4 or not fits_brief(piece, width, 2.8):
+                    raise ValueError("Company profile fact exceeds readable capacity; shorten its wording without dropping source qualifications.")
+                expanded.append(piece)
+    from .slide_compositor import _lines
+    # Account for the longer continuation title on every profile page.
+    top = max(1.45, .52 + .38 * len(_lines(title + " (continued)", width, 24)) + .15)
+    capacity = presentation.slide_height.inches - 1.28 - top
+    pages, group, used = [], [], 0.0
+    for item in expanded:
+        needed = _item_height(item, width)
+        if group and used + needed + .12 * len(group) > capacity:
+            pages.append(render_brief(presentation, title + (" (continued)" if pages else ""), group, notes=notes, max_items=len(group)))
+            group, used = [], 0.0
+        group.append(item)
+        used += needed
+    if group:
+        pages.append(render_brief(presentation, title + (" (continued)" if pages else ""), group, notes=notes, max_items=len(group)))
+    return pages or [render_brief(presentation, title, [], notes=notes)]
 
 
 def render_summary(presentation: Any, title: str, items: list[BriefItem], *, notes: str = "") -> Any:

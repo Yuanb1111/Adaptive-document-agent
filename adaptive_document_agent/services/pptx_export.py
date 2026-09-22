@@ -363,7 +363,7 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
                 rendered_charts.append(hero)
                 ordinal += 1
                 continue
-            if charts:
+            if charts or any(b.role in {"kpi", "table"} and b.observation_ids for b in slide_plan.visual_blocks):
                 from .slide_compositor import render_composed_slide
                 render_composed_slide(presentation, slide_plan, charts, result, index)
                 rendered_charts.extend(charts)
@@ -504,7 +504,7 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
                        | {p for fact in company.key_facts for p in fact.source_pages})
         add_picture_profile(presentation, company, slide_title, pages, presentation._ada_artwork)
         return
-    from .presentation_brief import BriefItem, overview_items, render_brief
+    from .presentation_brief import BriefItem, overview_items, render_profile
     groups = [
         (company.name if has_company_identity else "Document overview",
          [("Industry", company.industry, "industry"),
@@ -540,7 +540,12 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
     # Full fields and source context remain available without clipping the
     # visible labels or constructing large, mostly empty cards.
     notes = company.model_dump_json(indent=2) + "\n\n" + result.profile.document_summary
-    render_brief(presentation, "Company at a Glance" if has_company_identity else "Document at a Glance",
+    visible_copy = " ".join(item.text for item in items).casefold()
+    for fact in company.key_facts:
+        if fact.value.strip() and fact.source_pages and fact.value.casefold() not in visible_copy:
+            items.append(BriefItem(fact.label, fact.value, fact.source_pages))
+            visible_copy += " " + fact.value.casefold()
+    render_profile(presentation, "Company at a Glance" if has_company_identity else "Document at a Glance",
                  items, notes=notes)
 
 
@@ -1018,25 +1023,16 @@ def _add_document_overview(presentation: Any, result: PipelineResult) -> None:
 
 def _add_text_pages(presentation: Any, title: str, body: str, pages, *, subtitle: str = "") -> None:
     """Retain complete narrative at readable size, continuing when necessary."""
-    import textwrap
     from .slide_compositor import _base
+    from .text_capacity import wrap_copy
     remaining = body
     part = 0
     while remaining:
         slide, top = _base(presentation, title + (" (continued)" if part else ""), subtitle if not part else "")
         width = presentation.slide_width.inches - 1.5
         height = presentation.slide_height.inches - 1.15 - top
-        average = .56 + .44 * sum(ord(c) > 255 for c in remaining) / max(len(remaining), 1)
-        capacity = max(6, int(width * 72 / (16 * average)))
-        wrapper = textwrap.TextWrapper(width=capacity, expand_tabs=False, replace_whitespace=False,
-                                       drop_whitespace=False, break_on_hyphens=False)
-        lines = []
-        for paragraph in remaining.splitlines(keepends=True):
-            text = paragraph.rstrip("\r\n")
-            wrapped = wrapper.wrap(text) or [""]
-            wrapped[-1] += paragraph[len(text):]
-            lines.extend(wrapped)
-        count = max(1, int(height * 72 / 22) - 1)
+        lines = wrap_copy(remaining, width, 18)
+        count = max(1, int(height * 72 / 24) - 1)
         shown = "".join(lines[:count])
         tail = "".join(lines[count:])
         if tail:
@@ -1046,7 +1042,7 @@ def _add_text_pages(presentation: Any, title: str, body: str, pages, *, subtitle
             if boundary:
                 tail = shown[boundary:] + tail
                 shown = shown[:boundary]
-        body_shape = _text(slide, shown, .75, top, width, height, size=16, color=FOURIER_DARK)
+        body_shape = _text(slide, shown, .75, top, width, height, size=18, color=FOURIER_DARK)
         body_shape.name = "narrative:body"
         _text(slide, _source_footer(pages), .55, presentation.slide_height.inches - .82,
               presentation.slide_width.inches - 1.1, .2, size=9, color=FOURIER_MUTED)
@@ -1585,16 +1581,22 @@ def _add_quality_slide(presentation: Any, result: PipelineResult, *, title: str 
         "unidentified issuer",
     )
     messages = []
+    validation_messages = {w.message for w in result.validation_warnings}
     for msg in raw_messages:
-        if any(phrase in msg.casefold() for phrase in unnamed_phrases):
+        if msg not in validation_messages and re.search(r"(?i)\b(?:un)?audited\b", msg):
+            messages.append("Audit qualifications apply to specific source columns. Interim periods and non-year-end dates do not, by themselves, establish audit status; consult the cited source tables.")
+        elif any(phrase in msg.casefold() for phrase in unnamed_phrases) or re.search(r"(?i)(?:company|issuer)(?:\s+legal)?\s+name\s+is\s+not\s+(?:stated|provided|disclosed)", msg):
             if is_company_resolved:
                 messages.append(
-                    "The company is identified in introductory/source pages, while many pages within the Financial Information section refer only to the Company or Group."
+                    "Company identity is established from introductory/source pages; the selected analysis excerpt may refer to the issuer without repeating its legal name."
                 )
             else:
                 messages.append(msg)
         else:
             messages.append(msg)
+
+    slide.notes_slide.notes_text_frame.text = "Original source/discovery notes (not independently verified):\n" + "\n".join(raw_messages)
+    messages = list(dict.fromkeys(messages))
 
     if not messages:
         messages = ["No material data-quality warning was retained for this analysis."]

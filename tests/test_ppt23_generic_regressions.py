@@ -176,10 +176,10 @@ def test_period_semantics_interim_and_balance_sheet():
     assert format_period_label("截至2021年6月30日止六个月") == "6M2021"
 
     # Point-in-time balance sheet dates
-    assert format_period_label("as at 31 Aug 2021", is_balance_sheet=True) == "31 Aug 2021*"
-    assert format_period_label("as of 31 August 2021", is_balance_sheet=True) == "31 Aug 2021*"
+    assert format_period_label("as at 31 Aug 2021", is_balance_sheet=True) == "31 Aug 2021"
+    assert format_period_label("as of 31 August 2021", is_balance_sheet=True) == "31 Aug 2021"
     assert format_period_label("at 31 August 2021*", is_balance_sheet=True) == "31 Aug 2021*"
-    assert format_period_label("30 April 2025", is_balance_sheet=True) == "30 Apr 2025*"
+    assert format_period_label("30 April 2025", is_balance_sheet=True) == "30 Apr 2025"
     assert format_period_label("as at 31 Aug 2021", is_balance_sheet=False) == "31 Aug 2021"
 
     # Annual fiscal years remain FY
@@ -194,7 +194,7 @@ def test_period_semantics_interim_and_balance_sheet():
     assert extract_period_basis("as at 31 Aug 2021") == "point_in_time"
     assert classify_period("six months ended 30 Jun 2021").period_type == "interim_flow"
     assert classify_period("six months ended 30 Jun 2021").as_of_date is None
-    assert BorderlessTableExtractor._period_from_line("As at 31 August 2021") == "31 Aug 2021*"
+    assert BorderlessTableExtractor._period_from_line("As at 31 August 2021") == "31 Aug 2021"
 
 
 # ---------------------------------------------------------------------------

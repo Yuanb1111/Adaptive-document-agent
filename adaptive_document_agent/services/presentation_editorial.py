@@ -48,6 +48,28 @@ def review_presentation(plan: PresentationPlan | None, result: PipelineResult) -
     if plan.planning_origin == "fallback" or any(i.code == "presentation_plan_fallback" for i in result.validation_warnings):
         findings.append(EditorialFinding("presentation_degraded", "Evidence-only fallback: the analytical presentation plan could not be retained. Review the planning diagnostic before using this deck as a final report."))
     analysis = [s for s in plan.slides if s.slide_type == "analysis"]
+    # This is a review request, not an instruction to merge incompatible bases
+    # or force an industry checklist into the narrative.
+    if analysis and not plan.coverage_notes:
+        chart_map = {c.id: c for c in result.charts}
+        selected = {oid for s in analysis for oid in s.observation_ids}
+        selected.update(oid for s in analysis for b in s.visual_blocks for oid in b.observation_ids)
+        selected.update(oid for s in analysis for cid in [*s.chart_ids, *(c for b in s.visual_blocks for c in b.chart_ids)]
+                        if cid in chart_map for oid in chart_map[cid].observation_ids)
+        from adaptive_document_agent.document_model import metric_key, period_sort_key
+        def scope(o):
+            dims = {**o.dimensions, **o.category_dimensions}
+            return (metric_key(o), o.entity, o.unit, o.currency, o.ifrs_status,
+                    tuple(sorted((k, str(v)) for k, v in dims.items()
+                                 if k not in {"table_context", "section", "column_role", "period_basis"})))
+        selected_scopes = {scope(o) for o in result.observations if o.id in selected}
+        for key in sorted(selected_scopes, key=str):
+            candidates = [o for o in result.observations if scope(o) == key and o.value is not None
+                          and o.period and o.evidence and o.validation_status == "valid"]
+            used = [o for o in candidates if o.id in selected]
+            if used and candidates and max(period_sort_key(o.period) for o in candidates) > max(period_sort_key(o.period) for o in used):
+                findings.append(EditorialFinding("presentation_recent_evidence_omitted",
+                    f"More recent evidence exists for '{candidates[0].metric_original}'. Assess its comparable-period context separately; include it when material or explain exclusion in coverage_notes."))
     if analysis and not plan.themes:
         findings.append(EditorialFinding("presentation_missing_themes", "Analysis pages have no explicit theme plan. Organise the available evidence around distinct analytical questions."))
     topic_titles = set()

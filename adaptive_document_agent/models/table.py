@@ -24,6 +24,7 @@ class ExtractedTable(BaseModel):
     column_types: list[str] = Field(default_factory=list)  # amount, percentage, ratio, days, count, unknown
     column_currencies: list[str | None] = Field(default_factory=list)
     column_scales: list[float | None] = Field(default_factory=list)
+    column_audit_statuses: list[Literal["audited", "unaudited", "unknown"]] = Field(default_factory=list)
     table_title: str | None = None
     unit_header: str | None = None
     section_path: list[str] = Field(default_factory=list)

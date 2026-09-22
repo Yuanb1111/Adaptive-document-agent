@@ -195,9 +195,11 @@ def test_company_overview_unresolved_name_snapshot_layout():
 
     assert "Document overview" in slide_text
     assert "Business and products" in slide_text
-    assert "Markets and listing" in slide_text
-    bodies = [shape for shape in company_slide.shapes if shape.name == "brief:body"]
-    assert len(bodies) == 3
+    profile_slides = [s for s in prs.slides if any(sh.has_text_frame and sh.text.startswith("Document at a Glance") for sh in s.shapes)]
+    all_profile_text = " ".join(sh.text for sl in profile_slides for sh in sl.shapes if sh.has_text_frame)
+    assert "Markets and listing" in all_profile_text
+    bodies = [shape for sl in profile_slides for shape in sl.shapes if shape.name == "brief:body"]
+    assert len(bodies) >= 3
     assert all(p.font.size.pt == 18 for s in bodies for p in s.text_frame.paragraphs)
     assert company_slide.notes_slide.notes_text_frame.text
     assert "ISSUER PROFILE & IDENTITY" not in slide_text

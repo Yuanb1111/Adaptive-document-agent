@@ -187,15 +187,16 @@ def test_point_in_time_balance_sheet_period() -> None:
     sem = classify_period("2026-02-28", is_balance_sheet=True)
     assert sem.period_type == "balance_sheet_date"
     assert sem.as_of_date == "2026-02-28"
-    assert sem.clean_label == "28 Feb 2026*"
+    assert sem.clean_label == "28 Feb 2026"
     assert "FY2026" not in sem.clean_label
-    assert format_period_label("2026-02-28", is_balance_sheet=True) == "28 Feb 2026*"
+    assert format_period_label("2026-02-28", is_balance_sheet=True) == "28 Feb 2026"
+    assert format_period_label("2026-02-28", is_balance_sheet=True, is_unaudited=True) == "28 Feb 2026*"
 
     # Explicit CJK date
     sem_cjk = classify_period("2026年2月28日", is_balance_sheet=True)
     assert sem_cjk.period_type == "balance_sheet_date"
     assert sem_cjk.as_of_date == "2026-02-28"
-    assert sem_cjk.clean_label == "28 Feb 2026*"
+    assert sem_cjk.clean_label == "28 Feb 2026"
 
 
 def test_chartability_scoring() -> None:

@@ -156,7 +156,7 @@ class PresentationPlanner:
                 break
         page_by_number = {page.page_number: page for page in document.pages}
         return [
-            {"page": page_number, "text": page_by_number[page_number].text[:1_600]}
+            {"page": page_number, "text": page_by_number[page_number].text[:3_200 if page_number in company_discovery_pages else 1_600]}
             for page_number in selected
             if page_number in page_by_number and page_by_number[page_number].text.strip()
         ]

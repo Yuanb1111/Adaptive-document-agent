@@ -70,27 +70,6 @@ _NAVIGATION_ARTIFACT_PATTERNS = [
     re.compile(r"(?i)^(?:financial\s+information|directors\s+and\s+senior\s+management|definitions|glossary\s+of\s+technical\s+terms|summary\s+of\s+financial\s+data|risk\s+factors)$"),
 ]
 
-_COMMON_INDUSTRIES = [
-    "Biotechnology",
-    "Pharmaceuticals",
-    "Healthcare",
-    "Automotive & Electric Vehicles",
-    "Semiconductors & Hardware",
-    "Software & Cloud Services",
-    "Artificial Intelligence",
-    "Consumer Electronics",
-    "E-Commerce & Retail",
-    "Renewable Energy & Cleantech",
-    "Financial Services & Fintech",
-    "Industrial Automation",
-    "Telecommunications",
-    "Real Estate & Property Management",
-    "Logistics & Supply Chain",
-    "Media & Entertainment",
-    "Consumer Goods & Food",
-    "Materials & Chemicals",
-]
-
 _COMMON_MARKETS = [
     "Mainland China",
     "Hong Kong",
@@ -404,6 +383,8 @@ def validate_headquarters(hq: str) -> str:
         return ""
     if re.match(r"(?i)^(?:[a-z]\s+[a-z]{3,}|(?:ed|in|located\s+in)\s+)", s):
         return ""
+    if re.search(r"(?i)\b(?:no|number|floor|building|suite|unit)\.?$", s):
+        return ""  # Incomplete address/header, not a supported location.
     return s.title()
 
 
@@ -526,13 +507,8 @@ def extract_structured_company_fields(
                     industry = cand
                     field_source_pages.setdefault("industry", []).append(p_num)
                     break
-            for ind in _COMMON_INDUSTRIES:
-                if re.search(rf"(?i)\b{re.escape(ind)}\b", p_text):
-                    industry = ind
-                    field_source_pages.setdefault("industry", []).append(p_num)
-                    break
-            if industry:
-                break
+            # A customer sector or competitor mention does not establish the
+            # issuer's industry. Leave semantic classification to the planner.
 
     # -------------------------------------------------------------------------
     # 3. Core Products / Services
@@ -736,7 +712,7 @@ def extract_structured_company_fields(
     headquarters = validate_headquarters(company.headquarters)
     if not headquarters:
         hq_regex = re.compile(
-            r"(?i)\b(?:headquarters?|headquartered|head\s+office|registered\s+office|principal\s+place\s+of\s+business)\b\s*(?::|is\s+in|in|located\s+in)?\s*([A-Za-z ,.-]{3,45}?)(?:\.\s|\.$|;\s*|\n|$)"
+            r"(?i)\b(?:headquarters?|headquartered|head\s+office|registered\s+office|principal\s+place\s+of\s+business)\b\s*(?::|is\s+in|in|located\s+in)\s*([A-Za-z ,.-]{3,60}?)(?:\.\s|\.$|;\s*|\n|$)"
         )
         for p_num, p_text in discovered_sources:
             hq_match = hq_regex.search(p_text)

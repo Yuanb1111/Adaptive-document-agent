@@ -9,7 +9,7 @@ from adaptive_document_agent.utils.ids import stable_id
 
 from .normalizer import infer_unit_defaults
 from .column_roles import explicit_percentage
-from .borderless_layout import source_lines, column_anchors, align_sparse_values, geometric_headers, is_wrapped_label
+from .borderless_layout import source_lines, column_anchors, align_sparse_values, geometric_headers, is_wrapped_label, geometric_audit_statuses
 from .period_header_geometry import geometric_periods
 
 _VALUE = re.compile(r"(?<![A-Za-z0-9])(?:\(?[+-]?(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)\)?[%％]?|[—–]|-(?!\S))")
@@ -62,6 +62,8 @@ class BorderlessTableExtractor:
             anchors = column_anchors([list(r.boxes) for r in group if len(r.values) == maximum_values], maximum_values)
             header_sources = sources[year_index+1:group[0].line_index] if year_index is not None else []
             headers = geometric_headers(header_sources, anchors, headers)
+            audit_statuses = (geometric_audit_statuses(header_sources, sources[year_index], maximum_values)
+                              if year_index is not None else ["unknown"] * maximum_values)
             alignments = {r.line_index: align_sparse_values(r.values, r.boxes, anchors, maximum_values)
                           for r in group if len(r.values) < maximum_values}
             row_specs = self._rows_with_sections(group, lines, maximum_values, alignments=alignments, header_index=year_index, sources=sources)
@@ -107,6 +109,7 @@ class BorderlessTableExtractor:
                     column_types=col_types,
                     column_currencies=col_currs,
                     column_scales=col_scales,
+                    column_audit_statuses=["unknown", *audit_statuses],
                     rows=[TableRow(cells=cells, page=page_number, column_periods=row_periods,
                                    alignment_status="ambiguous" if ambiguous else "resolved") for cells, row_periods, ambiguous in row_specs],
                     raw_cells=raw_rows,

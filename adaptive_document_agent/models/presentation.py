@@ -131,6 +131,7 @@ class PresentationPlan(BaseModel):
     planning_origin: Literal["model", "repaired", "fallback", "legacy"] = "legacy"
     editorial_status: Literal["unreviewed", "ready", "needs_review", "degraded"] = "unreviewed"
     editorial_notes: list[str] = Field(default_factory=list)
+    coverage_notes: list[str] = Field(default_factory=list, max_length=12)
     # Empty remains supported for cached plans created before theme planning.
     themes: list[PresentationTheme] = Field(default_factory=list, max_length=12)
     slides: list[PresentationSlide] = Field(default_factory=list, max_length=24)

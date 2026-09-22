@@ -186,7 +186,9 @@ def test_standard_deck_order_and_thank_you_slide() -> None:
     assert slide_titles[0] == "Institutional Financial Assessment"
     assert slide_titles[1] == "Contents"
     assert slide_titles[2] == "Company at a Glance"
-    assert slide_titles[3] == "Executive Summary"
+    summary_index = slide_titles.index("Executive Summary")
+    assert summary_index >= 3
+    assert all(t == "Company at a Glance (continued)" for t in slide_titles[3:summary_index])
 
     contents_slide = deck.slides[1]
     contents_text = " ".join(s.text for s in contents_slide.shapes if s.has_text_frame)

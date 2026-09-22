@@ -1925,8 +1925,12 @@ class ClaimValidator:
                                        for m in re.finditer(r"\b" + re.escape(alias) + r"\b", clause, re.IGNORECASE)]
                         local_start = max((end for start, end in label_spans if end <= direction_start), default=0)
                         local_end = min((start for start, end in label_spans if start >= direction_end), default=len(clause))
+                        local_copy = clause[local_start:local_end]
+                        continuous = re.search(r"(?i)\b(?:steadily|continuously|consistently|monotonically|at each (?:subsequent )?(?:reported )?(?:date|period)|every (?:reported )?(?:year|period))\b", local_copy)
+                        through_end = re.search(r"(?i)\b(?:declined|decreased|fell|rose|increased|grew)\s+through\s+(?:the\s+)?(?:latest|last|final)\b", local_copy)
+                        qualified = re.search(r"(?i)\b(?:overall|net|rebound|recovery|recovered|except|however|but)\b", local_copy)
                         if (info.get("non_monotonic", {}).get("is_non_monotonic")
-                                and re.search(r"(?i)\b(?:steadily|continuously|consistently|monotonically|at each subsequent (?:reported )?(?:date|period)|every (?:year|period))\b", clause[local_start:local_end])):
+                                and (continuous or (through_end and not qualified))):
                             issues.append(ValidationIssue(code="non_monotonic_claim", severity="error", stage="presentation",
                                 related_ids=[o.id for o in info["sorted_obs"]],
                                 message=f"Slide {slide.id} {comp_type}: '{m_name}' changes direction within the selected series; a continuous movement claim requires scoped evidence or a model revision."))
