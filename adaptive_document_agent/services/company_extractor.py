@@ -786,7 +786,8 @@ def extract_structured_company_fields(
     if not all_cited_pages:
         all_cited_pages = set(p_num for p_num, _ in discovered_sources)
 
-    company_pages = sorted(all_cited_pages)[:8]
+    # Limit visible citations at rendering time, never discard field provenance.
+    company_pages = sorted(all_cited_pages)
 
     # Preserve existing valid key facts
     facts = list(company.key_facts)

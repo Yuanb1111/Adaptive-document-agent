@@ -56,11 +56,13 @@ class PresentationPlanRecovery:
 
         from adaptive_document_agent.services.company_extractor import extract_structured_company_fields, is_company_identity_resolved
 
+        description, description_pages = self._summary_description(result)
         initial_company = CompanyProfile(
             name=result.profile.overview_title or (result.profile.document_type if result.profile.document_type != "Document" else ""),
-            one_line_description=result.profile.document_summary or result.profile.document_purpose,
+            one_line_description=description,
             document_type=result.profile.document_type,
             source_pages=company_pages,
+            field_source_pages={"one_line_description": description_pages} if description else {},
         )
         company_profile = extract_structured_company_fields(initial_company, result)
         has_identity = is_company_identity_resolved(company_profile)
@@ -187,6 +189,30 @@ class PresentationPlanRecovery:
             result,
         )
         return stamp_editorial_review(recovered, result, origin="fallback")
+
+    @staticmethod
+    def _summary_description(result: PipelineResult) -> tuple[str, list[int]]:
+        """Reuse the model's summary only with its own retained provenance.
+
+        Profile discovery pages and summary pages serve different purposes.
+        Never borrow an identity page to certify an unrelated summary. The raw
+        summary stays in DocumentProfile even when unsuitable for this field.
+        """
+        pages = sorted(set(result.profile.document_summary_pages)
+                       & set(range(1, result.document.page_count + 1)))
+        if not pages:
+            return "", []
+        description = result.profile.document_summary.strip()
+        # Citation metadata is already represented by description_pages. Strip
+        # only the explicit PDF citation, never parenthetical analytical claims.
+        description = re.sub(
+            r"(?i)\s*\(PDF\s+pp?\.\s*\d+(?:\s*[-–—,]\s*\d+)*\)",
+            "", description,
+        ).strip()
+        allowed = PresentationPlanValidator._allowed_company_numbers(set(pages), result)
+        if PresentationPlanValidator._numbers(description) - allowed:
+            return "", []
+        return description, pages
 
     @staticmethod
     def _is_calc_artifact(text: str) -> bool:

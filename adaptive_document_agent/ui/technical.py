@@ -38,6 +38,7 @@ def _extract_presentation_errors(message: str) -> list[str]:
 
 
 def render(st, result: PipelineResult) -> None:
+    st.caption(f"Result pipeline version: {result.pipeline_version or 'unknown (older export)'}")
     presentation_failure = next(
         (issue for issue in result.validation_warnings if issue.code == "presentation_plan_failed"),
         None,
@@ -62,6 +63,12 @@ def render(st, result: PipelineResult) -> None:
         else:
             st.success("Presentation plan passed the automated evidence and editorial checks.")
         st.caption(f"Planning origin: {result.presentation_plan.planning_origin}")
+
+    for issue in result.validation_warnings:
+        if issue.code == "presentation_plan_fallback_failed":
+            st.error(issue.message)
+    if result.presentation_plan is None:
+        st.warning("No validated presentation plan is available. PowerPoint uses the legacy draft layout.")
 
     st.subheader("Document Profile")
     st.json(result.profile.model_dump(mode="json"))

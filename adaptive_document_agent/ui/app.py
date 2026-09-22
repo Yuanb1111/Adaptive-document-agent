@@ -181,7 +181,10 @@ def run_app() -> None:
     from adaptive_document_agent.services.presentation_editorial import review_presentation
     editorial = review_presentation(result.presentation_plan, result)
     degraded = any(item.code in {"presentation_degraded", "presentation_legacy"} for item in editorial)
-    if degraded:
+    legacy = result.presentation_plan is None
+    if legacy:
+        st.warning("PowerPoint uses the legacy export because no validated presentation plan is available. The modern analytical layout was not applied. Treat this file as a draft.")
+    elif degraded:
         st.warning("PowerPoint is an evidence-only fallback, not a completed analytical presentation. The file may pass data and layout checks while its narrative still needs review.")
     elif editorial:
         st.warning("PowerPoint needs editorial review. Data and layout checks do not confirm analytical or design quality.")
@@ -190,7 +193,7 @@ def run_app() -> None:
             for item in editorial:
                 st.write(f"{item.slide_id + ': ' if item.slide_id else ''}{item.message}")
             for issue in result.validation_warnings:
-                if issue.code == "presentation_plan_failed":
+                if issue.code in {"presentation_plan_failed", "presentation_plan_fallback_failed"}:
                     st.write(issue.message)
     from adaptive_document_agent.services.qa_reporter import CriticalQAError
 
@@ -240,7 +243,7 @@ def run_app() -> None:
     with col1:
         if pptx_bytes:
             st.download_button(
-                "Download evidence-only draft (.pptx)" if degraded else "Download presentation (.pptx)",
+                "Download legacy draft (.pptx)" if legacy else "Download evidence-only draft (.pptx)" if degraded else "Download presentation (.pptx)",
                 pptx_bytes,
                 "analysis_presentation.pptx",
                 "application/vnd.openxmlformats-officedocument.presentationml.presentation",

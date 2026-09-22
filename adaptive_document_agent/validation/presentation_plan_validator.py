@@ -63,6 +63,7 @@ class PresentationPlanValidator:
 
         company_pages = {*plan.company.source_pages}
         company_pages.update(page for fact in plan.company.key_facts for page in fact.source_pages)
+        company_pages.update(page for pages in plan.company.field_source_pages.values() for page in pages)
         if company_pages - valid_pages:
             errors.append("company profile contains source pages outside the document")
         company_has_content = any(
@@ -107,8 +108,17 @@ class PresentationPlanValidator:
         ]
         for field_label, field_val in company_fields_to_check:
             if field_val.strip():
+                field_key = next((key for prefix, key in (("product ", "products"),
+                                  ("segment ", "segments"), ("geography ", "geographies"))
+                                  if field_label.startswith(prefix)), field_label)
+                field_pages = plan.company.field_source_pages.get(field_key)
+                allowed = allowed_company_numbers
+                if field_pages is not None:
+                    if not field_pages:
+                        errors.append(f"company profile field '{field_label}' must cite source pages")
+                    allowed = self._allowed_company_numbers(set(field_pages) & valid_pages, result)
                 claimed = self._numbers(field_val)
-                unsupported = claimed - allowed_company_numbers
+                unsupported = claimed - allowed
                 if unsupported:
                     errors.append(f"company profile field '{field_label}' contains unsupported numeric claims: {sorted(unsupported)}")
 
@@ -320,11 +330,16 @@ class PresentationPlanValidator:
 
     @staticmethod
     def _numbers(value: str) -> set[str]:
+        # Separate explicit currency/fiscal prefixes before tokenising. Otherwise
+        # RMB286.7m used to be read as just '7' after the decimal point.
+        currency = r"(?:RMB|CNY|CNH|USD|HKD|SGD|GBP|EUR|JPY|AUD|CAD|CHF)"
+        value = re.sub(rf"(?i)\b{currency}\s*['\u2019]000(?:s)?\b", " ", value)
+        value = re.sub(rf"(?i)\b({currency}|FY)(?=[+-]?\d)", r"\1 ", value)
         grouped_or_decimal = re.compile(
-            r"(?<![A-Za-z0-9_])[+-]?(?:"
+            r"(?<![A-Za-z0-9_.,])[+-]?(?:"
             r"\d{1,3}(?:[, '\u00a0\u202f\u2019]\d{3})+(?:\.\d+)?"
             r"|\d+(?:[.,]\d+)?"
-            r")%?"
+            r")(?:\s*%)?"
         )
         return {
             PresentationPlanValidator._normalize_number(match)
@@ -335,7 +350,7 @@ class PresentationPlanValidator:
     def _normalize_number(value: str) -> str:
         clean = value.replace("\u00a0", " ").replace("\u202f", " ").replace("\u2019", "'").lstrip("+")
         suffix = "%" if clean.endswith("%") else ""
-        clean = clean.removesuffix("%")
+        clean = clean.removesuffix("%").rstrip()
         if re.fullmatch(r"-?\d{1,3}(?:[, ' ]\d{3})+(?:\.\d+)?", clean):
             clean = re.sub(r"[, ' ]", "", clean)
         elif clean.count(",") == 1 and "." not in clean:
@@ -359,7 +374,7 @@ class PresentationPlanValidator:
                 text_parts.append(page_by_num[p])
         for obs in result.observations:
             obs_pages = {source.page for source in obs.evidence}
-            if not pages or (obs_pages & pages):
+            if obs_pages & pages:
                 for val in (obs.value, obs.raw_value, obs.period, obs.entity):
                     if val is not None:
                         text_parts.append(str(val))
@@ -367,7 +382,7 @@ class PresentationPlanValidator:
                     text_parts.extend(str(v) for v in obs.dimensions.values())
         for insight in result.insights:
             insight_pages = {source.page for source in insight.evidence}
-            if not pages or (insight_pages & pages):
+            if insight_pages & pages:
                 text_parts.append(insight.title)
                 text_parts.append(insight.narrative)
         return cls._numbers(" ".join(text_parts))

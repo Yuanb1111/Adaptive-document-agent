@@ -43,6 +43,8 @@ class ReportPlan(BaseModel):
 
 
 class PipelineResult(BaseModel):
+    # Unknown for older saved results; never stamp the current version on load.
+    pipeline_version: str | None = None
     document: ParsedDocument
     profile: DocumentProfile
     observations: list[Observation] = Field(default_factory=list)

@@ -369,7 +369,9 @@ class DocumentOrchestrator:
                         )
 
         notify("Complete")
+        from adaptive_document_agent.utils.pipeline_version import PIPELINE_VERSION
         return PipelineResult(
+            pipeline_version=PIPELINE_VERSION,
             document=document,
             profile=profile,
             observations=index.observations,

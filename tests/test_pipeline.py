@@ -20,6 +20,8 @@ def synthetic_time_series_pdf() -> bytes:
 
 def test_complete_mock_free_pipeline_uses_python_for_calculations() -> None:
     result = DocumentOrchestrator().analyse_pdf(synthetic_time_series_pdf())
+    from adaptive_document_agent.utils.pipeline_version import PIPELINE_VERSION
+    assert result.pipeline_version == PIPELINE_VERSION
     assert result.document.page_count == 1
     assert len(result.observations) == 3
     assert any(task.analysis_type == "percentage_change" for task in result.analysis_plan)
