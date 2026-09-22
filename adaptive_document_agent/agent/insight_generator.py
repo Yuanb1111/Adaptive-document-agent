@@ -2,7 +2,7 @@
 
 from pydantic import BaseModel, Field
 
-from adaptive_document_agent.models import AnalysisResult, Insight
+from adaptive_document_agent.models import AnalysisResult, Insight, Observation
 from adaptive_document_agent.services.llm import LLMGateway
 from adaptive_document_agent.utils.ids import stable_id
 
@@ -17,13 +17,21 @@ class InsightGenerator:
     def __init__(self, gateway: LLMGateway | None = None) -> None:
         self.gateway = gateway
 
-    def generate(self, results: list[AnalysisResult]) -> list[Insight]:
+    def generate(self, results: list[AnalysisResult], observations: list[Observation] | None = None) -> list[Insight]:
         valid = [result for result in results if result.result is not None and result.evidence]
         if not self.gateway:
             return [self._deterministic(result) for result in valid]
         # Retain bounded source text so a claimed driver can actually be grounded.
         import json
+        by_id = {o.id: o for o in observations or []}
         payload = json.dumps([{**r.model_dump(mode="json", exclude={"evidence"}),
+            # Explicit units and periods prevent prose from describing unlabelled
+            # tool dictionaries or mixing base currency with source thousands.
+            "input_observations": [by_id[oid].model_dump(mode="json", include={
+                "id", "metric_original", "metric_canonical", "value", "raw_value", "unit",
+                "unit_family", "raw_unit", "unit_scale", "currency", "period", "period_type",
+                "entity", "dimensions", "category_dimensions"})
+                for oid in r.input_observation_ids if oid in by_id],
             "evidence": [{**e.model_dump(mode="json"), "text": (e.text or "")[:1200]} for e in r.evidence[:4]]}
             for r in valid], ensure_ascii=False)
         generated = self.gateway.generate_structured(

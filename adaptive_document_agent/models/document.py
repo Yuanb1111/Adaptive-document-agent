@@ -11,6 +11,7 @@ class DocumentProfile(BaseModel):
     overview_title: str = "Document overview"
     document_summary: str = ""
     document_summary_pages: list[int] = Field(default_factory=list)
+    overview_points: list[str] = Field(default_factory=list)
     language: str | None = None
     important_sections: list[str] = Field(default_factory=list)
     detected_time_periods: list[str] = Field(default_factory=list)

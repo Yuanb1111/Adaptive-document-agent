@@ -23,3 +23,25 @@ The changes do not certify that every model-generated deck matches a reference p
 - Restored `Download analysis data (.json)` beside CSV, with an explicit document-content notice and independent export failure handling.
 
 Read-only local extraction against source pages 313, 328, 331 and 333 verified separate cost/inventory series, independent net assets, component sums matching both reported totals, and a bill-receivable narrative starting at RMB 21k and ending at the June 2024 snapshot. No cloud model, deployment, source PDF rewrite or external upload was used. Automated tests cover synthetic equivalents; a complete new cloud-generated presentation remains to be verified after deployment.
+## Opening-slide editorial revision (2026-09-22, v13)
+
+- Replaces legacy overview/section-inventory continuation pages with one opening
+  brief. Discovery supplies up to three short, source-grounded `overview_points`;
+  cached profiles use clearly labelled, complete-sentence excerpts.
+- Replaces repeated findings continuations with one readable summary. Semantic
+  priority still comes from model insights. Linked, compatible observations can
+  provide deterministic movement copy when the original is a calculation dump.
+  Unlinked or incompatible inputs are never guessed from a title.
+- Full overview, section inventory and findings remain in speaker notes and in
+  the existing JSON/report. Complete selected caveats stay attached to claims.
+  The chart analysis pages and financial validation gates are unchanged.
+- Insight requests now include actual normalized input observations with their
+  raw units, scales, currencies and periods. The prompt distinguishes normalized
+  values from source-scaled values and prohibits diagnostic prose.
+- Opening brief capacity uses actual text length (including CJK), fixed readable
+  font sizes and dynamic row heights. No mid-sentence clipping or continued pages.
+- Pipeline version is `2026-09-22-editorial-brief-v13`, invalidating prior session
+  and export caches after deployment/restart.
+- Verification: full regression suite and local rendering of opening-page replay.
+  Replay is a layout test, not a fresh cloud model analysis or proof of future
+  model editorial quality. The next deployed run still needs content review.

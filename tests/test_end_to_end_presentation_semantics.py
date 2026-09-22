@@ -152,8 +152,8 @@ def test_negative_chart_rendering_end_to_end() -> None:
 # 4. Key Findings Pagination Layout Tests
 # ---------------------------------------------------------------------------
 
-def test_key_findings_multi_slide_pagination() -> None:
-    """Retain findings at readable size, with at most three complete items per page."""
+def test_key_findings_brief_keeps_full_detail_in_notes() -> None:
+    """One summary page; remaining findings stay in notes and analysis pages."""
     from adaptive_document_agent.document_model import DocumentIndex
     from adaptive_document_agent.services.pptx_export import _add_findings_slide
 
@@ -179,17 +179,13 @@ def test_key_findings_multi_slide_pagination() -> None:
 
     _add_findings_slide(prs, dummy_result, charts, index)
 
-    # Eight complete findings use three pages, not truncated five-card pages.
+    # Eight findings no longer produce repetitive front-matter continuations.
     added_slides = len(prs.slides) - initial_slide_count
-    assert added_slides == 3, f"Expected 3 slides for 8 findings, got {added_slides}"
+    assert added_slides == 1
 
     slide_1 = prs.slides[initial_slide_count]
-    slide_2 = prs.slides[initial_slide_count + 1]
-
-    # Verify slide titles indicate pagination
     s1_text = " ".join(s.text for s in slide_1.shapes if s.has_text_frame)
-    s2_text = " ".join(s.text for s in slide_2.shapes if s.has_text_frame)
-    assert "Key findings (1/3)" in s1_text
-    assert "Key findings (2/3)" in s2_text
-    all_text = " ".join(s.text for slide in list(prs.slides)[initial_slide_count:] for s in slide.shapes if s.has_text_frame)
-    assert all(f"Metric {i}" in all_text for i in range(1, 9))
+    assert "Key findings" in s1_text
+    assert "continued" not in s1_text
+    assert len([s for s in slide_1.shapes if s.name == "brief:body"]) == 3
+    assert all(f"Metric {i}" in slide_1.notes_slide.notes_text_frame.text for i in range(1, 9))

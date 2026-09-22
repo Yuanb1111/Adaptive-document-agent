@@ -670,6 +670,9 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
 
 
 def _is_calc_artifact(text: str) -> bool:
+    from .presentation_brief import is_technical_copy
+    if is_technical_copy(text):
+        return True
     t = text.casefold()
     return any(
         term in t
@@ -736,17 +739,26 @@ def _add_planned_summary(
             findings = bullet_findings
         else:
             findings = [*bullet_findings, *findings[: 5 - len(bullet_findings)]]
+    fallback_pages: set[int] = set()
     if not findings:
+        fallback_findings = _chart_findings(_usable_charts(result), index)
         findings = [
             (str(item["title"]), str(item["narrative"]))
-            for item in _chart_findings(_usable_charts(result), index)
+            for item in fallback_findings
             if not _is_calc_artifact(str(item["title"])) and not _is_calc_artifact(str(item["narrative"]))
         ]
+        fallback_pages = {p for item in fallback_findings for p in item.get("pages", [])}
     from .presentation_editorial import distinct_findings
-    body = "\n\n".join(f"{i:02d}  {label}\n{narrative}" if label else f"{i:02d}  {narrative}"
-                         for i, (label, narrative) in enumerate(distinct_findings(findings), 1))
-    _add_text_pages(presentation, slide_plan.title, body or slide_plan.message or "No validated findings were produced.",
-                    slide_plan.source_pages, subtitle=slide_plan.message)
+    from .presentation_brief import BriefItem, render_brief
+    # The summary is a short entry point. Explicit KPI/chart plans above remain
+    # authoritative; full prose and caveats are retained in the speaker notes.
+    pages = sorted(set(slide_plan.source_pages) | fallback_pages | {
+        e.page for identifier in slide_plan.insight_ids if identifier in insight_by_id
+        for e in insight_by_id[identifier].evidence})
+    notes = "\n\n".join(f"{t}\n{n}" for t, n in raw_findings)
+    notes += "\n\n" + "\n".join(slide_plan.bullets)
+    items = [BriefItem(label, narrative, pages) for label, narrative in distinct_findings(findings)]
+    render_brief(presentation, slide_plan.title, items, notes=notes)
 
 
 from adaptive_document_agent.document_model.topic_matcher import (
@@ -1099,12 +1111,10 @@ def _add_evidence_overview(presentation: Any, result: PipelineResult) -> None:
 
 
 def _add_document_overview(presentation: Any, result: PipelineResult) -> None:
-    sections = [item for item in result.profile.important_sections if item.strip()]
-    body = result.profile.document_summary
-    if sections:
-        body += "\n\nTopics covered\n" + "\n".join(sections)
-    _add_text_pages(presentation, result.profile.overview_title.strip() or "Document overview",
-                    body, result.profile.document_summary_pages, subtitle=result.profile.document_type)
+    from .presentation_brief import overview_items, render_brief
+    items, notes = overview_items(result.profile)
+    render_brief(presentation, result.profile.overview_title.strip() or "Document overview",
+                 items, notes=notes, excerpt=not bool(result.profile.overview_points))
 
 
 def _add_text_pages(presentation: Any, title: str, body: str, pages, *, subtitle: str = "") -> None:
@@ -1593,17 +1603,35 @@ def _add_findings_slide(
     charts: list[ChartPlan],
     index: DocumentIndex,
 ) -> None:
+    from .presentation_brief import BriefItem, render_brief
+
     findings = []
     seen_titles = set()
-    model_findings = [
-        {
-            "title": finding.title,
-            "narrative": finding.narrative,
-            "pages": sorted({source.page for source in finding.evidence}),
-        }
-        for finding in sorted(result.insights, key=lambda item: (item.importance, item.confidence), reverse=True)
-    ]
-    for finding in [*model_findings, *_chart_findings(charts, index)]:
+    seen_inputs = set()
+    by_task = {r.task_id: r for r in result.analysis_results}
+    model_findings = []
+    for insight in sorted(result.insights, key=lambda item: (item.importance, item.confidence), reverse=True):
+        ids = {oid for rid in insight.result_ids if rid in by_task for oid in by_task[rid].input_observation_ids}
+        if ids and frozenset(ids) in seen_inputs:
+            continue
+        if _is_calc_artifact(insight.narrative) or _is_calc_artifact(insight.title):
+            # Reuse the existing evidence/units/period gates. No title matching
+            # or invented units: only the insight's actual input IDs qualify.
+            candidates = _chart_findings([ChartPlan(id="brief-" + insight.id,
+                title=insight.title, question="", chart_type="line", observation_ids=sorted(ids))], index) if ids else []
+            if not candidates:
+                continue
+            finding = candidates[0]
+        else:
+            if not insight.evidence:
+                continue
+            finding = {"title": insight.title, "narrative": insight.narrative,
+                       "pages": sorted({source.page for source in insight.evidence})}
+        model_findings.append(finding)
+        if ids:
+            seen_inputs.add(frozenset(ids))
+    extra_charts = [c for c in charts if frozenset(c.observation_ids) not in seen_inputs]
+    for finding in [*model_findings, *_chart_findings(extra_charts, index)]:
         candidate_title = str(finding["title"]).casefold()
         if any(
             candidate_title == existing
@@ -1615,24 +1643,10 @@ def _add_findings_slide(
         findings.append(finding)
         seen_titles.add(str(finding["title"]).casefold())
 
-    if not findings:
-        slide = _base_slide(presentation, "Key findings", "Evidence-backed conclusions from the analysis")
-        content_top, content_h = _content_zone(slide)
-        _panel(slide, 0.45, content_top, 11.70, content_h, fill=FOURIER_BG_CARD)
-        _text(slide, "No validated analytical findings were produced.", 0.9, 3.2, 10.8, 0.8, size=20, color=FOURIER_MUTED, align="center")
-        return
-
-    # Prioritize model-selected insights. Paginate complete sentences instead of
-    # clipping each finding into a fixed 120-character card.
-    max_per_slide = 3
-    chunks = [findings[i : i + max_per_slide] for i in range(0, len(findings), max_per_slide)]
-    total_chunks = len(chunks)
-
-    for chunk_idx, chunk in enumerate(chunks):
-        title_str = "Key findings" if total_chunks == 1 else f"Key findings ({chunk_idx + 1}/{total_chunks})"
-        body = "\n\n".join(f"{chunk_idx * max_per_slide + i + 1:02d}  {f['title']}\n{f['narrative']}" for i, f in enumerate(chunk))
-        pages = sorted({p for f in chunk for p in f.get("pages", [])})
-        _add_text_pages(presentation, title_str, body, pages)
+    notes = "\n\n".join(f"{i.title}\n{i.narrative}\n{_source_footer([e.page for e in i.evidence])}"
+                        for i in result.insights)
+    render_brief(presentation, "Key findings", [BriefItem(str(f["title"]), str(f["narrative"]),
+                 list(f.get("pages", []))) for f in findings], notes=notes)
 
 
 def _add_quality_slide(presentation: Any, result: PipelineResult, *, title: str = "Limits that affect interpretation") -> None:

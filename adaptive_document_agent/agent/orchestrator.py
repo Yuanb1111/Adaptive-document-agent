@@ -170,7 +170,7 @@ class DocumentOrchestrator:
 
         notify("Generating insights and dynamic report")
         with record_timing(timings, "reporting"):
-            insights = InsightGenerator(self.gateway).generate(results)
+            insights = InsightGenerator(self.gateway).generate(results, observations)
             report_plan = DynamicReportPlanner(self.gateway).plan(profile, insights)
             charts = ChartPlanner().plan(
                 plan,
