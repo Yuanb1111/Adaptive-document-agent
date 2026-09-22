@@ -137,7 +137,7 @@ def _resolve_template_path(template_path: str | Path | None = None) -> Path:
     )
 
 
-def build_presentation(result: PipelineResult, template_path: str | Path | None = None) -> bytes:
+def build_presentation(result: PipelineResult, template_path: str | Path | None = None, *, artwork: bytes | None = None) -> bytes:
     """Return an editable, presentation-ready PowerPoint based on the FOURIER Light Version Template."""
     try:
         from pptx import Presentation
@@ -145,11 +145,17 @@ def build_presentation(result: PipelineResult, template_path: str | Path | None 
         raise RuntimeError("PowerPoint export requires python-pptx.") from exc
 
     resolved_path = _resolve_template_path(template_path)
+    from .presentation_artwork import validate_artwork
+    artwork = validate_artwork(artwork)
     try:
         presentation = Presentation(str(resolved_path))
     except Exception as exc:
         raise ValueError(f"Failed to load PowerPoint template at '{resolved_path}': {exc}") from exc
 
+    presentation._ada_artwork = artwork
+    if resolved_path.resolve() == BUNDLED_TEMPLATE_PATH.resolve():
+        from .presentation_style import compact_template_branding
+        compact_template_branding(presentation)
     # Remove template sample slides while retaining master and layouts
     for sld_id in list(presentation.slides._sldIdLst):
         rId = sld_id.rId
@@ -313,7 +319,9 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
             for chart in charts:
                 linked.update({oid: index.get(oid) for oid in chart.observation_ids if index.get(oid)})
             single = single_metric_analysis(list(linked.values())) if len(charts) <= 1 else None
-            if single and not any(_is_positive_topic_mismatch(o, slide_plan) for o in single.observations):
+            legacy_overview = plan.planning_origin == "legacy" and slide_plan.layout == "data_overview"
+            use_hero = not slide_plan.theme_id and (slide_plan.layout in {"auto", "single", "single_metric_hero"} or legacy_overview)
+            if single and use_hero and not any(_is_positive_topic_mismatch(o, slide_plan) for o in single.observations):
                 explicit_composition = bool(slide_plan.bullets or slide_plan.insight_ids or any(
                     b.role in {"kpi", "table", "commentary"} or b.insight_ids for b in slide_plan.visual_blocks))
                 if explicit_composition and charts:
@@ -466,6 +474,13 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
     has_company_identity = is_company_identity_resolved(company)
 
     slide_title = slide_plan.title if has_company_identity else "Document at a Glance"
+    if getattr(presentation, "_ada_artwork", None):
+        from .presentation_artwork import add_picture_profile
+        pages = sorted(set(company.source_pages) | set(slide_plan.source_pages)
+                       | {p for values in company.field_source_pages.values() for p in values}
+                       | {p for fact in company.key_facts for p in fact.source_pages})
+        add_picture_profile(presentation, company, slide_title, pages, presentation._ada_artwork)
+        return
     slide = _base_slide(presentation, slide_title, company.document_type or result.profile.document_type)
     content_top, content_h = _content_zone(slide)
 
@@ -678,7 +693,7 @@ def _add_planned_summary(
     slide_plan: PresentationSlide,
     index: DocumentIndex,
 ) -> None:
-    if _planned_chart_requests(slide_plan):
+    if _planned_chart_requests(slide_plan) or any(b.role in {"kpi", "table"} and b.observation_ids for b in slide_plan.visual_blocks):
         from .slide_compositor import render_composed_slide
         by_id = {c.id: c for c in _usable_charts(result)}
         charts = [by_id[cid].model_copy(update={"chart_type": kind or by_id[cid].chart_type})
@@ -713,7 +728,8 @@ def _add_planned_summary(
             for item in _chart_findings(_usable_charts(result), index)
             if not _is_calc_artifact(str(item["title"])) and not _is_calc_artifact(str(item["narrative"]))
         ]
-    _add_numbered_messages(slide, findings[:5], source_pages=slide_plan.source_pages)
+    from .presentation_editorial import distinct_findings
+    _add_numbered_messages(slide, distinct_findings(findings)[:5], source_pages=slide_plan.source_pages)
 
 
 from adaptive_document_agent.document_model.topic_matcher import (
@@ -976,6 +992,11 @@ def _add_cover(
 ) -> None:
     from pptx.util import Inches, Pt
 
+    if getattr(presentation, "_ada_artwork", None):
+        from .presentation_artwork import add_picture_cover
+        add_picture_cover(presentation, title or result.report_plan.title or result.profile.overview_title,
+                          purpose or result.profile.document_purpose, presentation._ada_artwork)
+        return
     slide = presentation.slides.add_slide(presentation.slide_layouts[0])
     cover_title = title or result.report_plan.title or result.profile.overview_title or "Adaptive Document Analysis"
     clean_title = _summary_text(cover_title, 72)

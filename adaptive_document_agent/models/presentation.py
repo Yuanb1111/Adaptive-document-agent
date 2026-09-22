@@ -31,6 +31,7 @@ PresentationLayout = Literal[
     "combo_chart",
     "table_plus_kpis",
     "single_metric_hero",
+    "kpi_band",
 ]
 
 PresentationSlideRole = Literal["overview", "deep_dive", "drivers", "watch_items", "risk", "methodology", "source_data"]
@@ -127,6 +128,9 @@ class PresentationPlan(BaseModel):
     title: str
     report_type: str = "Document analysis"
     company: CompanyProfile = Field(default_factory=CompanyProfile)
+    planning_origin: Literal["model", "repaired", "fallback", "legacy"] = "legacy"
+    editorial_status: Literal["unreviewed", "ready", "needs_review", "degraded"] = "unreviewed"
+    editorial_notes: list[str] = Field(default_factory=list)
     # Empty remains supported for cached plans created before theme planning.
     themes: list[PresentationTheme] = Field(default_factory=list, max_length=12)
     slides: list[PresentationSlide] = Field(default_factory=list, max_length=24)

@@ -56,8 +56,9 @@ def export_pptx(
     renderer=None,
     visual_cache: dict | None = None,
     build_cache: dict | None = None,
+    artwork: bytes | None = None,
 ) -> bytes:
-    return export_pptx_with_report(result, template_path, force=force, renderer=renderer, visual_cache=visual_cache, build_cache=build_cache).payload
+    return export_pptx_with_report(result, template_path, force=force, renderer=renderer, visual_cache=visual_cache, build_cache=build_cache, artwork=artwork).payload
 
 
 def export_pptx_with_report(
@@ -68,6 +69,7 @@ def export_pptx_with_report(
     renderer=None,
     visual_cache: dict | None = None,
     build_cache: dict | None = None,
+    artwork: bytes | None = None,
 ):
     """Financial QA, native generation, then strict local rendered validation.
 
@@ -76,6 +78,8 @@ def export_pptx_with_report(
     """
     from .qa_reporter import CriticalQAError, run_comprehensive_qa
     from .presentation_visual_qa import verify_presentation
+    from .presentation_artwork import validate_artwork
+    artwork = validate_artwork(artwork)
 
     # Automatic QA repair loop:
     # Presentation Plan -> Claim Validation -> Repair contradictory wording -> Revalidate -> Export only if valid.
@@ -94,17 +98,17 @@ def export_pptx_with_report(
         if build_cache is not None:
             from .pptx_export import _resolve_template_path
             template_digest = hashlib.sha256(_resolve_template_path(template_path).read_bytes()).hexdigest()
-            cache_key = _build_cache_key(result, template_digest)
+            cache_key = _build_cache_key(result, template_digest, artwork)
         payload = build_cache.get(cache_key) if build_cache is not None else None
         build_cache_hit = isinstance(payload, bytes)
         if not build_cache_hit:
-            payload = build_presentation(result, template_path=template_path)
+            payload = build_presentation(result, template_path=template_path, **({"artwork": artwork} if artwork else {}))
         build_finished = perf_counter()
         verified = verify_presentation(payload, renderer=renderer, cache=visual_cache)
         if build_cache is not None:
             build_cache.clear()
             # QA/build may have repaired the plan in-place. Key the final state.
-            build_cache[_build_cache_key(result, template_digest)] = payload
+            build_cache[_build_cache_key(result, template_digest, artwork)] = payload
         verified.build_cache_hit = build_cache_hit
         verified.timings_ms = {
             "financial_qa": round((qa_finished - started) * 1000),
@@ -118,11 +122,11 @@ def export_pptx_with_report(
         raise
 
 
-def _build_cache_key(result: PipelineResult, template_digest: str) -> tuple[str, str, str]:
+def _build_cache_key(result: PipelineResult, template_digest: str, artwork: bytes | None = None) -> tuple[str, str, str]:
     # Bump the version when generation rules change. All facts, source evidence,
     # narrative, charts, warnings and plan fields participate in invalidation.
     content = result.model_dump_json(exclude={"llm_usage", "timings_ms"}).encode()
-    return ("ppt-build-v1", template_digest, hashlib.sha256(content).hexdigest())
+    return ("ppt-build-v2", template_digest, hashlib.sha256(content + b"\0" + (artwork or b"")).hexdigest())
 
 
 def export_pdf(result: PipelineResult) -> bytes:

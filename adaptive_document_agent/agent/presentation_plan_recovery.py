@@ -176,7 +176,8 @@ class PresentationPlanRecovery:
             ]
         )
 
-        return PresentationPlanValidator().validate(
+        from adaptive_document_agent.services.presentation_editorial import stamp_editorial_review
+        recovered = PresentationPlanValidator().validate(
             PresentationPlan(
                 title=result.report_plan.title,
                 report_type="Evidence-bound document analysis",
@@ -185,6 +186,7 @@ class PresentationPlanRecovery:
             ),
             result,
         )
+        return stamp_editorial_review(recovered, result, origin="fallback")
 
     @staticmethod
     def _is_calc_artifact(text: str) -> bool:

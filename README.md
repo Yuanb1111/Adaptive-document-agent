@@ -386,6 +386,35 @@ Coverage includes PDF validation and routing, OCR detection, bordered and border
 
 1. Deploy a revision containing `packages.txt` beside the root `app.py`. Community Cloud installs these operating-system dependencies during its build; `pip install` alone is insufficient. See [Streamlit's dependency documentation](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/app-dependencies).
 2. Leave `PPTX_QA_BACKEND` unset/`auto`, or set it to `libreoffice`. Remove desktop-only `PPTX_QA_NODE`/`PPTX_QA_ARTIFACT_MODULE` secrets if using `auto`. `PPTX_QA_LIBREOFFICE` is optional; normal Linux installations are detected on PATH.
+
+### Presentation narrative and design quality
+
+Presentation planning now reviews metric-only headings, generic subtitles,
+repeated findings, missing themes and repetitive single-chart composition.
+The configured `LLMGateway` receives at most one additional editorial/semantic
+repair request. Python never merges unrelated metrics to satisfy a chart or page
+quota. If a safe plan still has quality findings, it remains available with a
+review warning. Evidence-only recovery is labelled as a draft beside the download,
+and its planning failure is visible in the same section. Data and rendered-layout
+validation remain independent requirements and are not an aesthetic certification.
+
+The `kpi_band` layout places selected exact values above one to three charts and
+a grounded takeaway below them. Explicit themed layouts preserve the selected
+chart type and no longer become automatic single-metric KPI pages. Older cached
+single-metric plans retain their compatibility behavior.
+
+The optional presentation artwork upload accepts a static PNG/JPEG (under 8 MB,
+100 pixels minimum dimension, at most 16 megapixels) for the cover and overview.
+The image remains an illustration, preserves its aspect ratio, and never enters
+LLM requests or the document evidence model. Choose artwork appropriate to the
+uploaded document. No photograph is fabricated or copied from another issuer.
+Changing or removing the artwork invalidates the native export cache.
+
+For a local visual regression preview with synthetic, clearly labelled data,
+install development dependencies and configure the normal local renderer, then run
+`python -m scripts.preview_presentation_layouts --output .tmp_ppt_review/preview --layout kpi_band`.
+The output directory must be new. `--artwork /absolute/path/image.png` is optional.
+Preview data must never be presented as an analysis of an uploaded document.
 3. Reboot the app after deployment and confirm **PowerPoint export environment ready: LibreOfficeRenderer** before spending time on a document. The startup check renders a synthetic chart page, contains no uploaded data, and caches success per session/runtime. A warning does not disable analysis or other export formats, but clearly states that verified PPT export is unavailable.
 4. For failures, download **complete export diagnostic report (qa_report.json)**. Its top-level `is_export_blocked` includes actual build/render failures, alongside separate `financial_qa`, `visual_qa` and `export_error` sections. Reporting never re-runs automatic repair on the live result. The dedicated `ppt_visual_qa.json` is also available for visual failures.
 

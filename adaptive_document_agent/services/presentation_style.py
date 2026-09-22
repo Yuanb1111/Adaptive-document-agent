@@ -29,3 +29,23 @@ def deck_color_map(keys: list[str]) -> dict[str, str]:
         output[key] = color
         used.add(color)
     return output
+
+
+def compact_template_branding(presentation) -> None:
+    """Scale the bundled template's horizontal header logos like the reference.
+
+    Only header pictures with the logo's geometry are touched. Image bytes,
+    footer artwork, large cover artwork, and user-supplied templates stay intact.
+    """
+    from pptx.util import Inches
+    for layout in presentation.slide_layouts:
+        for shape in layout.shapes:
+            if not hasattr(shape, "image") or not shape.height:
+                continue
+            ratio = shape.width / shape.height
+            if (shape.left > presentation.slide_width * .70 and shape.top < Inches(.8)
+                    and shape.height < Inches(.5) and 5 < ratio < 12):
+                shape.width = Inches(1.05)
+                shape.height = Inches(1.05 / ratio)
+                shape.left = presentation.slide_width - Inches(1.60)
+                shape.top = Inches(.23)

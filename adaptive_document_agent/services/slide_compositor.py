@@ -42,6 +42,31 @@ def compose_geometry(width: float, height: float, top: float, chart_count: int, 
     footer = Rect(left, height - 0.82, total, 0.20)
     support = commentary = None
     chart_bottom = bottom
+    if chart_count == 0:
+        if has_support and layout == "kpi_band":
+            support = Rect(left, top, total, 1.02)
+            commentary = Rect(left, top + 1.02 + GUTTER, total, bottom - top - 1.02 - GUTTER) if has_commentary else None
+        elif has_support and has_commentary:
+            support = Rect(left, top, total * .40, bottom - top)
+            commentary = Rect(left + total * .40 + GUTTER, top, total * .60 - GUTTER, bottom - top)
+        elif has_support:
+            support = Rect(left, top, total, bottom - top)
+        elif has_commentary:
+            commentary = Rect(left, top, total, bottom - top)
+        return CompositionGeometry([], support, commentary, footer)
+    if layout == "kpi_band" and has_support:
+        support = Rect(left, top, total, 1.02)
+        top += 1.02 + GUTTER
+        if has_commentary:
+            commentary = Rect(left, bottom - .72, total, .72)
+            chart_bottom = commentary.y - GUTTER
+        cw = (total - GUTTER * (chart_count - 1)) / chart_count
+        charts = [Rect(left + i * (cw + GUTTER), top, cw, chart_bottom - top) for i in range(chart_count)]
+        if any(r.h < 1.8 or r.w < 2.4 for r in charts):
+            # Preserve content with the established overflow/continuation path.
+            return compose_geometry(width, height, support.y, chart_count,
+                layout="two_up", has_support=has_support, has_commentary=has_commentary)
+        return CompositionGeometry(charts, support, commentary, footer)
     side = chart_count == 1 and (has_support or has_commentary)
     if side:
         cw = (total - GUTTER) * 0.64
@@ -102,14 +127,31 @@ def _put_text(slide, text: str, rect: Rect, *, size=12, bold=False, color=DARK):
 
 def _put_commentary(slide, text: str, rect: Rect) -> str:
     capacity = max(1, int(rect.h * 72 / 16) - 1)
-    lines = _lines(text, rect.w, 12)
-    _put_text(slide, "\n".join(lines[:capacity]), rect)
+    # Partition the original string, preserving paragraphs and even long IDs.
+    # Inserted line breaks would split phrases; joining wrapped words would
+    # erase paragraph boundaries and could corrupt identifiers at a page break.
+    width = rect.w - .18
+    non_latin = sum(ord(c) > 255 for c in text)
+    average = .56 + .44 * non_latin / max(len(text), 1)
+    chars = max(6, int(width * 72 / (12 * average)))
+    wrapper = textwrap.TextWrapper(width=chars, expand_tabs=False,
+        replace_whitespace=False, drop_whitespace=False, break_on_hyphens=False)
+    lines = []
+    for paragraph in text.splitlines(keepends=True):
+        body = paragraph.rstrip("\r\n")
+        parts = wrapper.wrap(body) or [""]
+        parts[-1] += paragraph[len(body):]
+        lines.extend(parts)
+    from .pptx_export import _rule
+    _rule(slide, rect.x, rect.y + .03, .035, min(rect.h - .06, .62), PURPLE)
+    _put_text(slide, "".join(lines[:capacity]),
+              Rect(rect.x + .18, rect.y, rect.w - .18, rect.h))
     # Reflow on the next page, whose text column can be wider than this slot.
-    return " ".join(lines[capacity:])
+    return "".join(lines[capacity:])
 
 
 def _base(presentation, title, message):
-    from .pptx_export import _base_slide, _content_zone
+    from .pptx_export import _base_slide, _content_zone, _rule, _rgb
     from pptx.util import Inches, Pt
     slide = _base_slide(presentation, title, message)
     # Preserve complete planned copy. The legacy helper intentionally truncates
@@ -117,21 +159,35 @@ def _base(presentation, title, message):
     for ph in slide.placeholders:
         idx = ph.placeholder_format.idx
         if idx in (14, 15) and ph.has_text_frame:
-            lines = _lines(title, ph.width.inches - 0.15, 20)
+            ph.left = Inches(.55)
+            ph.top = Inches(.52)
+            ph.width = Inches(presentation.slide_width.inches - 1.1)
+            ph.text_frame.margin_left = ph.text_frame.margin_right = Inches(.02)
+            ph.text_frame.margin_top = ph.text_frame.margin_bottom = Inches(.01)
+            lines = _lines(title, ph.width.inches - 0.15, 24)
             if len(lines) > 3:
                 raise ValueError("Presentation title exceeds readable capacity; shorten the planned title.")
             ph.text = title
-            ph.height = Inches(max(0.48, len(lines) * 0.32))
+            ph.height = Inches(max(0.45, len(lines) * 0.38))
             for p in ph.text_frame.paragraphs:
-                p.font.size = Pt(20)
+                p.font.size = Pt(24)
+                p.font.bold = True
+                p.font.color.rgb = _rgb(DARK)
         if idx == 16 and ph.has_text_frame:
             title_bottom = max((s.top.inches + s.height.inches for s in slide.placeholders if s.placeholder_format.idx in (14, 15)), default=1.0)
             ph.text = message
-            ph.top = Inches(title_bottom + 0.06)
+            ph.left = Inches(.55)
+            ph.top = Inches(title_bottom + 0.20)
+            ph.width = Inches(presentation.slide_width.inches - 1.1)
             lines = _lines(message, ph.width.inches - 0.15, 11)
             if len(lines) > 3:
                 raise ValueError("Presentation subtitle exceeds readable capacity; move supporting details to commentary.")
             ph.height = Inches(max(0.24, len(lines) * 0.19))
+            for p in ph.text_frame.paragraphs:
+                p.font.size = Pt(11)
+                p.font.color.rgb = _rgb(MUTED)
+    title_bottom = max((s.top.inches + s.height.inches for s in slide.placeholders if s.placeholder_format.idx in (14, 15)), default=1.0)
+    _rule(slide, .55, title_bottom + .07, 1.35, .035, PURPLE)
     slide._ada_colors = getattr(presentation, "_ada_colors", {})
     return slide, _content_zone(slide)[0]
 
@@ -247,13 +303,17 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
             name = display_metric_name(o)
             semantic = classify_metric(name, unit=o.unit, raw_unit=o.raw_unit, value=o.value)
             value = format_metric_display_value(o.raw_value, o.value, semantic, raw_unit=_display_source_unit(o), currency=o.currency, compact=True)
-            if len(_lines(name, w, 11)) > 2 or len(_lines(value, w, 20)) > 1:
+            if len(_lines(name, w - .14, 11)) > 2 or len(_lines(value, w - .14, 20)) > 1:
                 return items[i:]  # Preserve long-label facts on a continuation table.
-            _put_text(owner, name, Rect(x, y, w, 0.35), size=11, color=MUTED)
-            shape = _put_text(owner, value, Rect(x, y + 0.37, w, 0.34), size=20, bold=True, color=PURPLE)
+            from .pptx_export import _rule
+            from .presentation_style import semantic_color
+            accent = getattr(presentation, "_ada_colors", {}).get(name, semantic_color(name))
+            _rule(owner, x, y, .035, .88, accent)
+            _put_text(owner, name, Rect(x + .14, y, w - .14, 0.35), size=11, color=MUTED)
+            shape = _put_text(owner, value, Rect(x + .14, y + 0.37, w - .14, 0.34), size=20, bold=True, color=accent)
             if shape is not None:
                 shape.name = f"kpi:{o.id}"
-            _put_text(owner, o.period or "", Rect(x, y + 0.74, w, 0.18), size=FOOTNOTE_PT, color=MUTED)
+            _put_text(owner, o.period or "", Rect(x + .14, y + 0.74, w - .14, 0.18), size=FOOTNOTE_PT, color=MUTED)
         return items[capacity:]
 
     table_ids = {oid for b in slide_plan.visual_blocks if b.role == "table" for oid in b.observation_ids}

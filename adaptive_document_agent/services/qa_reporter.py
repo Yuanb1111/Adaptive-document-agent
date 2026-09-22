@@ -551,6 +551,10 @@ def run_comprehensive_qa(result: PipelineResult, auto_repair: bool = True) -> QA
                             )
 
     # 6. PPT layout QA (scatter readability, cramped multi-chart splitting, long paragraph overflow)
+    from .presentation_editorial import review_presentation
+    for item in review_presentation(result.presentation_plan, result):
+        report.warnings.append(QAItem(code=item.code, severity="WARNING", message=item.message, slide_id=item.slide_id))
+
     if result.presentation_plan:
         from adaptive_document_agent.validation.layout_qa import validate_presentation_layout
 

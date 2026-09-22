@@ -17,6 +17,10 @@ def enrich_single_metric_slides(result: PipelineResult) -> list[str]:
     for slide in result.presentation_plan.slides:
         if slide.slide_type != "analysis":
             continue
+        # Explicit composition and theme decisions belong to the planner.
+        legacy_overview = result.presentation_plan.planning_origin == "legacy" and slide.layout == "data_overview"
+        if slide.theme_id or (slide.layout not in {"auto", "single", "single_metric_hero"} and not legacy_overview):
+            continue
         if slide.bullets or slide.insight_ids or any(b.role in {"kpi", "table", "commentary"} or b.insight_ids for b in slide.visual_blocks):
             continue
         chart_ids = list(dict.fromkeys(slide.chart_ids + [cid for b in slide.visual_blocks for cid in b.chart_ids]))

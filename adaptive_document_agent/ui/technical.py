@@ -55,7 +55,13 @@ def render(st, result: PipelineResult) -> None:
             st.info("A deterministic evidence-only fallback presentation was generated in place of the invalid AI plan.")
     elif result.presentation_plan:
         st.subheader("Presentation Plan Diagnostics")
-        st.success("AI presentation plan validated successfully.")
+        from adaptive_document_agent.services.presentation_editorial import review_presentation
+        editorial = review_presentation(result.presentation_plan, result)
+        if editorial:
+            st.warning("Presentation plan has editorial findings; evidence validation alone does not certify report quality.")
+        else:
+            st.success("Presentation plan passed the automated evidence and editorial checks.")
+        st.caption(f"Planning origin: {result.presentation_plan.planning_origin}")
 
     st.subheader("Document Profile")
     st.json(result.profile.model_dump(mode="json"))

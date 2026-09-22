@@ -49,8 +49,19 @@ class PresentationPlanner:
             stage="presentation",
         )
         validator = PresentationPlanValidator()
+        from adaptive_document_agent.services.presentation_editorial import review_presentation, stamp_editorial_review
+        # Status is assigned here, never trusted from the structured response.
+        proposed.planning_origin = "model"
+        safe_original = None
         try:
-            return validator.validate(proposed, result)
+            validator.validate(proposed, result)
+            safe_original = proposed.model_copy(deep=True)
+            editorial = review_presentation(proposed, result)
+            if editorial:
+                raise ValueError("Presentation editorial review: " + " ".join(
+                    f"{item.slide_id or 'deck'}: {item.message}" for item in editorial
+                ))
+            return stamp_editorial_review(proposed, result, origin="model")
         except ValueError as exc:
             model_repair_error = ""
             candidate = proposed
@@ -75,13 +86,19 @@ class PresentationPlanner:
                     stage="presentation",
                     allow_repair=False,
                 )
-                return validator.validate(candidate, result)
+                return stamp_editorial_review(validator.validate(candidate, result), result, origin="repaired")
             except Exception as repair_exc:
                 # The deterministic recovery is deliberately narrower than a model repair:
                 # it can only remove unreferenced material and align citations.
                 model_repair_error = str(repair_exc)
+            if safe_original is not None:
+                # A failed style revision must not discard a previously valid
+                # analytical plan or downgrade it to metric-by-metric recovery.
+                retained = stamp_editorial_review(safe_original, result, origin="model")
+                retained.editorial_notes.append("Editorial revision could not be retained; the evidence-validated original plan remains available for review.")
+                return retained
             try:
-                return PresentationPlanRepairer().repair(candidate, result)
+                return stamp_editorial_review(PresentationPlanRepairer().repair(candidate, result), result, origin="repaired")
             except ValueError as deterministic_exc:
                 raise ValueError(
                     "Presentation plan validation failed. Initial reason: "

@@ -93,6 +93,9 @@ def test_complete_pipeline_with_mock_llm_controls_semantic_selection() -> None:
         {
             "title": "Revenue Performance Review",
             "report_type": "Performance analysis",
+            "themes": [{"id": "revenue", "title": "Revenue movement", "question": "How did revenue change?",
+                        "rationale": "The document contains one comparable series.",
+                        "chart_ids": ["chart_eb76411966450f2e"], "insight_ids": ["insight_mock"], "source_pages": [1]}],
             "company": {
                 "name": "Revenue document",
                 "one_line_description": "A source document reporting a three-year revenue series.",
@@ -103,7 +106,7 @@ def test_complete_pipeline_with_mock_llm_controls_semantic_selection() -> None:
                 {"id": "cover", "slide_type": "cover", "title": "Revenue Performance Review", "message": "Three-year evidence review"},
                 {"id": "overview", "slide_type": "company_overview", "title": "Document at a Glance", "source_pages": [1]},
                 {"id": "summary", "slide_type": "executive_summary", "title": "Revenue changed across the reported period", "insight_ids": ["insight_mock"], "source_pages": [1]},
-                {"id": "analysis", "slide_type": "analysis", "title": "Revenue rose across all reported years", "section_title": "Financial Performance", "message": "The retained series shows sustained growth.", "chart_ids": ["chart_eb76411966450f2e"], "insight_ids": ["insight_mock"], "source_pages": [1]},
+                {"id": "analysis", "slide_type": "analysis", "title": "Revenue rose across all reported years", "section_title": "Financial Performance", "message": "The reported series shows sustained growth.", "chart_ids": ["chart_eb76411966450f2e"], "insight_ids": ["insight_mock"], "source_pages": [1], "theme_id": "revenue", "analytical_question": "How did revenue change?", "selection_reason": "Revenue is the only comparable series in this document."},
                 {"id": "quality", "slide_type": "data_quality", "title": "Data quality and methodology"},
                 {"id": "appendix", "slide_type": "appendix", "title": "Source data"},
             ],

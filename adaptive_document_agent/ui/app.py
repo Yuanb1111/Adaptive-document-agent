@@ -176,17 +176,47 @@ def run_app() -> None:
     with tab_technical:
         technical.render(st, result)
     st.subheader("Exports & Deliverables")
+    from adaptive_document_agent.services.presentation_editorial import review_presentation
+    editorial = review_presentation(result.presentation_plan, result)
+    degraded = any(item.code in {"presentation_degraded", "presentation_legacy"} for item in editorial)
+    if degraded:
+        st.warning("PowerPoint is an evidence-only fallback, not a completed analytical presentation. The file may pass data and layout checks while its narrative still needs review.")
+    elif editorial:
+        st.warning("PowerPoint needs editorial review. Data and layout checks do not confirm analytical or design quality.")
+    if editorial:
+        with st.expander("Presentation quality and planning diagnostics"):
+            for item in editorial:
+                st.write(f"{item.slide_id + ': ' if item.slide_id else ''}{item.message}")
+            for issue in result.validation_warnings:
+                if issue.code == "presentation_plan_failed":
+                    st.write(issue.message)
     from adaptive_document_agent.services.qa_reporter import CriticalQAError
+
+    artwork = None
+    artwork_error = None
+    with st.expander("Presentation artwork (optional)"):
+        st.caption("Choose an image appropriate to this document for the cover and overview. It is embedded in the PowerPoint only and is not sent to a model. Use a static PNG/JPEG under 8 MB.")
+        uploaded_artwork = st.file_uploader("Cover and overview illustration", type=["png", "jpg", "jpeg"], key=f"ppt_artwork_{result.document.sha256}")
+        if uploaded_artwork is not None:
+            from adaptive_document_agent.services.presentation_artwork import validate_artwork
+            try:
+                artwork = validate_artwork(uploaded_artwork.getvalue())
+            except ValueError as exc:
+                artwork_error = str(exc)
+                st.error(artwork_error)
 
     pptx_bytes: bytes | None = None
     qa_error: CriticalQAError | None = None
     visual_report = None
     from adaptive_document_agent.services.presentation_visual_qa import VisualQAError
     try:
+        if artwork_error:
+            raise CriticalQAError(artwork_error)
         with st.spinner("Building and verifying PowerPoint…"):
             verified = export_pptx_with_report(
                 result, visual_cache=st.session_state.setdefault("ppt_visual_cache", {}),
                 build_cache=st.session_state.setdefault("ppt_build_cache", {}),
+                artwork=artwork,
             )
         pptx_bytes = verified.payload
         visual_report = verified.report
@@ -208,7 +238,7 @@ def run_app() -> None:
     with col1:
         if pptx_bytes:
             st.download_button(
-                "Download presentation (.pptx)",
+                "Download evidence-only draft (.pptx)" if degraded else "Download presentation (.pptx)",
                 pptx_bytes,
                 "analysis_presentation.pptx",
                 "application/vnd.openxmlformats-officedocument.presentationml.presentation",
