@@ -276,7 +276,8 @@ def test_presentation_plan_recovery_fallback_builds_complete_modern_structure() 
     assert "analysis" in slide_types
     assert slide_types[-2] == "data_quality"
     assert slide_types[-1] == "appendix"
-    assert fallback_plan.company.name == "Company overview"
+    assert fallback_plan.company.name == ""
+    assert fallback_plan.company.identity_state == "UNRESOLVED"
 
 
 def test_chart_planner_prioritizes_core_metrics_over_peripheral_items() -> None:

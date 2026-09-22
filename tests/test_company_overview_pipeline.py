@@ -44,6 +44,51 @@ from adaptive_document_agent.services.qa_reporter import (
 )
 
 
+@pytest.mark.parametrize("hq_pages", [[103], []])
+def test_cover_name_and_issuer_bound_hq_exclude_competitor_and_investor(hq_pages):
+    pages = [
+        DocumentPage(page_number=1, text="GLOBAL OFFERING\nEXAMPLE MOTION CORP LTD\nStock Code: 4321"),
+        DocumentPage(page_number=103, text=("INDUSTRY OVERVIEW\nTop 10 market players\n"
+            "Company A\nEstablished in 2005, headquartered in Denmark.\n"
+            "Our Company\nEstablished in 2015, headquartered in Shenzhen, China.\n"
+            "Company B\nEstablished in 2008, headquartered in Shanghai, China.")),
+        DocumentPage(page_number=151, text="HISTORY AND CORPORATE STRUCTURE\nGroup Co., Ltd.\nInvestor details."),
+    ]
+    company = CompanyProfile(name="Group Co., Ltd.", headquarters="Denmark",
+                             field_source_pages={"name": [151], "headquarters": hq_pages})
+    result = _make_dummy_pipeline_result(pages, company)
+    recovered = extract_structured_company_fields(company, result)
+    assert recovered.name == "EXAMPLE MOTION CORP LTD"
+    assert recovered.field_source_pages["name"] == [1]
+    assert recovered.headquarters == "Shenzhen, China"
+    assert recovered.field_source_pages["headquarters"] == [103]
+    assert recovered.market_position == ""
+
+
+def test_suffix_fragment_and_listing_heading_are_not_identity_values():
+    from adaptive_document_agent.services.company_extractor import validate_headquarters, validate_listing_market
+    assert validate_company_name("Group Co., Ltd.") == ""
+    assert validate_headquarters("Ed In Denmark") == ""
+    assert validate_listing_market("For Listing On The Stock Exchange") == ""
+    result = _make_dummy_pipeline_result([
+        DocumentPage(page_number=1, text="Prospectus"),
+        DocumentPage(page_number=20, text="APPLICATION FOR LISTING ON THE STOCK EXCHANGE"),
+        DocumentPage(page_number=151, text="HISTORY AND CORPORATE STRUCTURE\nInvestor Holdings Limited"),
+    ])
+    recovered = extract_structured_company_fields(CompanyProfile(), result)
+    assert recovered.identity_state == "UNRESOLVED"
+    assert recovered.name == "" and recovered.listing_market == ""
+
+
+def test_multiple_cover_entities_do_not_choose_the_first_legal_name():
+    result = _make_dummy_pipeline_result([
+        DocumentPage(page_number=1, text="Global Offering\nSponsor Holdings Limited\nIssuer Holdings Limited"),
+    ])
+    recovered = extract_structured_company_fields(CompanyProfile(name="Unnamed robotics company"), result)
+    assert recovered.identity_state == "UNRESOLVED"
+    assert recovered.name == ""
+
+
 def _make_dummy_pipeline_result(
     pages: list[DocumentPage],
     company: CompanyProfile | None = None,

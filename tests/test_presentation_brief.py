@@ -167,3 +167,55 @@ def test_insight_gateway_receives_normalized_units_and_all_input_periods():
     assert '"raw_unit": "RMB thousands"' in payload
     assert '"value": 10000000.0' in payload
     assert '"unit_scale": 1000.0' in payload
+
+
+def test_planned_summary_recovers_cash_flow_beside_usable_revenue_finding():
+    result = result_fixture()
+    result.insights[0].title = "Revenue rose"
+    result.insights[0].narrative = "Revenue rose between FY2021 and FY2023."
+    result.insights[1].narrative = "Cash flow declined with no turning points."
+    result.observations[3].value = 6_367_000
+    result.observations[5].value = -157_700_000
+    plan = PresentationSlide(id="summary", slide_type="executive_summary", title="Summary",
+                             insight_ids=["i0", "i1"])
+    deck = blank_deck()
+    _add_planned_summary(deck, result, plan, DocumentIndex(result.observations))
+    text = visible(deck.slides[0])
+    assert "Revenue rose" in text and "Operating cash flow" in text
+    assert "157.7" in text and "turning point" not in text
+    assert "turning points" in deck.slides[0].notes_slide.notes_text_frame.text
+
+
+def test_brief_allows_complete_two_line_metric_heading():
+    title = "Net cash from or used in operating activities across the reported business operations"
+    deck = blank_deck()
+    render_brief(deck, "Summary", [BriefItem(title, "Cash flow moved from positive to negative.", [2])])
+    assert title in visible(deck.slides[0])
+
+
+def test_four_priority_summary_findings_remain_visible_with_complete_caveats():
+    from adaptive_document_agent.services.presentation_brief import render_summary
+    deck = blank_deck()
+    items = [
+        BriefItem("Revenue grew over the reported annual periods", "Revenue increased from RMB 174,314 thousand in FY2021 to RMB 286,749 thousand in FY2023, representing a 28.3% compound annual growth rate over the period.", [1], "Revenue"),
+        BriefItem("Operating cash flow", "Operating cash flow moved from positive RMB 6.4 million to negative RMB 157.7 million.", [2]),
+        BriefItem("Gross profit grew at a 19.1% CAGR from FY2021 to FY2023", "Gross profit increased from RMB 88,080 thousand in FY2021 to RMB 124,844 thousand in FY2023, a 19.1% CAGR. This is below the 28.3% revenue CAGR over the same period, suggesting gross margin pressure.", [1], "Gross profit"),
+        BriefItem("Total indebtedness", "Total indebtedness increased from RMB 8.5 million to RMB 87.1 million.", [3]),
+    ]
+    render_summary(deck, "Executive Summary", items)
+    slide = deck.slides[0]
+    assert len(deck.slides) == 1
+    assert len([s for s in slide.shapes if s.name == "brief:body"]) == 4
+    assert all(item.text in visible(slide) for item in items)
+    assert all(item.title in slide.notes_slide.notes_text_frame.text for item in items)
+
+
+def test_oversized_summary_uses_one_full_width_page_without_empty_quadrants():
+    from adaptive_document_agent.services.presentation_brief import render_summary
+    deck = blank_deck()
+    items = [BriefItem("Very long", "Complete qualification. " * 80, [1])]
+    items += [BriefItem(f"Finding {i}", "A supported finding.", [2]) for i in range(3)]
+    render_summary(deck, "Summary", items)
+    assert len(deck.slides) == 1
+    assert all(s.width.inches > 10 for s in deck.slides[0].shapes if s.name == "brief:body")
+    assert items[0].text in deck.slides[0].notes_slide.notes_text_frame.text

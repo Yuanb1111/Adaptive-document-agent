@@ -86,7 +86,7 @@ class ObservationExtractor:
             is_category_under_metric = False
             if current_section:
                 sec_sem = classify_metric(current_section)
-                if sec_sem.is_currency or sec_sem.is_percentage:
+                if (sec_sem.is_currency or sec_sem.is_percentage) and not re.search(r"(?i)\b(?:related to|for|from|by)\s*$", current_section):
                     is_category_under_metric = True
 
             for column in numeric_columns:

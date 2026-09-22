@@ -215,14 +215,15 @@ def test_company_at_a_glance_empty_facts_full_width() -> None:
 
     assert "KEY FACTS" not in glance_text
     assert "Pioneer Robotics Ltd." in glance_text
-    assert "BUSINESS FOCUS" in glance_text
-    assert "Stock Code: 9988.HK" in glance_text
+    assert "Business and products" in glance_text
+    assert "Stock code: 9988.HK" in glance_text
     assert "Offering: Main Board IPO" in glance_text
-    assert "Currency: RMB" in glance_text
+    assert "Reporting currency: RMB" in glance_text
 
     panels = [s for s in glance_slide.shapes if not getattr(s, "text", "").strip() and not s.has_table and not s.has_chart]
     full_width_panels = [p for p in panels if abs(p.width.inches - 11.70) < 0.15]
-    assert len(full_width_panels) >= 1
+    assert len(full_width_panels) == 0
+    assert len([s for s in glance_slide.shapes if s.name == "brief:body"]) == 3
 
 
 def test_company_at_a_glance_missing_identity_fallback() -> None:

@@ -64,7 +64,7 @@ class BorderlessTableExtractor:
             headers = geometric_headers(header_sources, anchors, headers)
             alignments = {r.line_index: align_sparse_values(r.values, r.boxes, anchors, maximum_values)
                           for r in group if len(r.values) < maximum_values}
-            row_specs = self._rows_with_sections(group, lines, maximum_values, alignments=alignments)
+            row_specs = self._rows_with_sections(group, lines, maximum_values, alignments=alignments, header_index=year_index)
             raw_rows = [cells for cells, _, _ in row_specs]
             has_ambiguous_rows = any(ambiguous for _, _, ambiguous in row_specs)
             context_start = max(0, (year_index if year_index is not None else group[0].line_index) - 8)
@@ -301,11 +301,29 @@ class BorderlessTableExtractor:
         return " ".join(chunks[0])
 
     @staticmethod
-    def _rows_with_sections(group: list[_CandidateRow], lines: list[str], width: int, *, alignments=None) -> list[tuple[list[str | None], list[str | None], bool]]:
+    def _rows_with_sections(group: list[_CandidateRow], lines: list[str], width: int, *, alignments=None, header_index=None) -> list[tuple[list[str | None], list[str | None], bool]]:
         output: list[tuple[list[str | None], list[str | None], bool]] = []
         initial_context = lines[max(0, group[0].line_index - 5) : group[0].line_index]
         active_period = next((period for line in reversed(initial_context) if (period := BorderlessTableExtractor._period_from_line(line))), None)
         previous_index = group[0].line_index - 2
+        # A first row can wrap before its numeric line. Preserve the bullet's
+        # whole label and its preceding parent header (including wrapped 'for'
+        # / 'related to' qualifiers), rather than losing both during grouping.
+        prefix = lines[(header_index + 1 if header_index is not None else max(0, group[0].line_index - 5)):group[0].line_index]
+        marker = next((i for i in range(len(prefix)-1, -1, -1)
+                       if re.match(r"^[–—•-]\s+", prefix[i])), None)
+        first_prefix = ""
+        if marker is not None or re.match(r"^[–—•-]\s+", lines[group[0].line_index]):
+            if marker is not None:
+                first_prefix = " ".join(prefix[marker:])
+            parent_lines = []
+            for line in reversed(prefix[:marker] if marker is not None else prefix):
+                if (not line.strip() or re.search(r"(?i)\d|audited|unaudited|RMB|USD|HKD|CNY|thousands?|millions?|^\(|%", line)
+                        or len(line) > 100):
+                    break
+                parent_lines.insert(0, line.strip())
+            if parent_lines:
+                output.append(([" ".join(parent_lines).rstrip(":"), *([None] * width)], [None] * (width + 1), False))
         for row in group:
             between = [line.strip(" .:") for line in lines[previous_index + 1 : row.line_index] if line.strip(" .:")]
             period_updates = [period for line in between if (period := BorderlessTableExtractor._period_from_line(line))]
@@ -314,7 +332,9 @@ class BorderlessTableExtractor:
             between = [line for line in between if not BorderlessTableExtractor._period_from_line(line)
                        and sum(bool(re.search(r"\d", m.group())) for m in _VALUE.finditer(line)) < 2]
             label = row.label
-            if between and label[:1].islower():
+            if row is group[0] and first_prefix:
+                label = re.sub(r"^[–—•-]\s+", "", first_prefix) + " " + label
+            elif between and label[:1].islower():
                 label = " ".join([*between, label])
             elif between and previous_index >= group[0].line_index:
                 for section in between:

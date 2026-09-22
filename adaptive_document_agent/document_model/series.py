@@ -120,10 +120,13 @@ def display_metric_name(observation: Observation) -> str:
 
     # A leading dash commonly marks a child row. Restore a short, usable
     # parent label only when the source explicitly retained one.
-    if observation.metric_original.lstrip().startswith(("-", "\u2013", "\u2014", "\u2022")):
-        context = " ".join(observation.dimensions.get("table_context", "").split()).strip(" :;,-")
-        if context and len(context) <= 48 and is_meaningful_metric_name(context) and context.casefold() not in label.casefold():
-            label = f"{context}: {label}"
+    context = observation.parent_section or observation.dimensions.get("section", "")
+    if not context and observation.metric_original.lstrip().startswith(("-", "\u2013", "\u2014", "\u2022")):
+        context = observation.dimensions.get("table_context", "")
+    context = " ".join(context.split()).strip(" :;,-")
+    if context and len(context) <= 100 and is_meaningful_metric_name(context) and context.casefold() not in label.casefold():
+        separator = " " if re.search(r"(?i)\b(?:related to|for|from|by)$", context) else ": "
+        label = f"{context}{separator}{label}"
     return label
 
 

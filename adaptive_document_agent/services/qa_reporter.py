@@ -100,11 +100,12 @@ def sanitize_company_identity_contradictions(result: PipelineResult) -> list[QAI
 
     def _contains_unnamed(text: str) -> bool:
         t = text.casefold()
-        return any(phrase in t for phrase in _UNNAMED_ISSUER_PHRASES)
+        return any(phrase in t for phrase in _UNNAMED_ISSUER_PHRASES) or bool(_re.search(r"\bunnamed\s+(?:[\w-]+\s+){0,3}(?:company|issuer)\b", t))
 
     def _clean_text(text: str) -> str:
         """Remove or replace unnamed-issuer disclaimers when company is resolved."""
         result_text = text
+        result_text = _re.sub(r"(?i)\bunnamed\s+(?:[\w-]+\s+){0,3}(?:company|issuer)\b", company_name, result_text)
         result_text = _re.sub(r"(?i)\(?(?:prospectus|document)\s+for\s+an?\s+(?:unnamed\s+issuer|issuer\s+unnamed)\)?", f"(prospectus for {company_name})", result_text)
         result_text = _re.sub(r"(?i)\b(?:unnamed\s+issuer|issuer\s+unnamed)\b", company_name, result_text)
         result_text = _re.sub(r"(?i)\b(?:unnamed\s+company|company\s+unnamed)\b", company_name, result_text)

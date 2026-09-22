@@ -128,7 +128,11 @@ def is_generic_name(name: str) -> bool:
         return True
     if cleaned in _GENERIC_NAMES:
         return True
+    if re.fullmatch(r"(?:group|company|holdings|corp\.?)(?:\s+co\.?,?)?\s+(?:ltd\.?|limited)", cleaned):
+        return True
     if any(p in cleaned for p in ("unnamed issuer", "company not identified", "unnamed company", "issuer unknown")):
+        return True
+    if re.search(r"\bunnamed\s+(?:[\w-]+\s+){0,3}(?:company|issuer)\b", cleaned):
         return True
     if re.match(r"(?i)^(?:the\s+)?(?:company|group|issuer|corporation|prospectus|annual report|overview)$", cleaned):
         return True
@@ -234,7 +238,9 @@ def validate_product(product: str) -> str:
     # Must contain letters and not be a standalone generic word
     if not re.search(r"[A-Za-z\u4e00-\u9fa5]", s):
         return ""
-    if s.casefold() in {"products", "services", "offerings", "solutions", "excerpts", "others", "various", "general", "including", "and", "or", "the"}:
+    if s.casefold() in {"products", "services", "offerings", "solutions", "excerpts", "others", "various", "general", "including", "and", "or", "the", "development", "manufacturing", "production", "commercialization"}:
+        return ""
+    if re.search(r"(?i)\b(?:applied for listing|listed on|stock exchange|publicly.listed)\b", s):
         return ""
     return s
 
@@ -337,6 +343,8 @@ def validate_listing_market(market: str) -> str:
         return ""
     if s.casefold() in _GENERIC_PLACEHOLDERS:
         return ""
+    if re.search(r"(?i)\b(?:application|for listing|on the stock exchange)\b", s):
+        return ""
     for ex in _VALID_STOCK_EXCHANGES:
         if re.search(rf"(?i)\b{re.escape(ex)}\b", s):
             return ex.upper() if ex != "Main Board" else "Main Board"
@@ -394,7 +402,7 @@ def validate_headquarters(hq: str) -> str:
         return ""
     if s.casefold() in _GENERIC_PLACEHOLDERS:
         return ""
-    if re.match(r"^[a-z]\s+[a-z]{3,}", s, re.IGNORECASE):
+    if re.match(r"(?i)^(?:[a-z]\s+[a-z]{3,}|(?:ed|in|located\s+in)\s+)", s):
         return ""
     return s.title()
 
@@ -437,7 +445,7 @@ def extract_structured_company_fields(
     # Base text sources with known or inferred page attribution
     discovered_sources: list[tuple[int, str]] = []
     for p_num, p_text in profile_page_texts:
-        discovered_sources.append((p_num, p_text[:1800]))
+        discovered_sources.append((p_num, p_text))
 
     # If no discovered pages, fall back to profile summary/purpose on page 1
     if not discovered_sources:
@@ -445,12 +453,14 @@ def extract_structured_company_fields(
         summary_text = f"{company.one_line_description}\n{profile.document_summary}\n{profile.document_purpose}\n{profile.overview_title}"
         discovered_sources.append((summary_page, summary_text))
 
-    combined_text = "\n".join(t for _, t in discovered_sources)
-
     # -------------------------------------------------------------------------
     # 1. Company / Issuer Legal Name
     # -------------------------------------------------------------------------
-    name = validate_company_name(company.name)
+    from .company_evidence import cover_name, issuer_windows, supported_field
+    cover = cover_name(discovered_sources)
+    name = validate_company_name(cover[0]) if cover else validate_company_name(company.name)
+    if cover and name:
+        field_source_pages["name"] = [cover[1]]
     if not name and profile:
         # Check profile overview title
         cand = validate_company_name(profile.overview_title)
@@ -462,7 +472,8 @@ def extract_structured_company_fields(
         line_name_pattern = re.compile(
             r"\b([A-Z][A-Za-z0-9&.,' -]{2,60}?\s+(?:Co\.,?\s*Ltd|Pte\.?\s*Ltd|Holdings\s+Limited|Holdings\s+Ltd|Limited|Corporation|Corp|Incorporated|Inc|Holdings|Group|Ltd)\.?)(?:\s|$|[,\n])"
         )
-        for p_num, p_text in discovered_sources:
+        for p_num, p_text in issuer_windows(discovered_sources, name):
+            candidates = []
             for line in p_text.splitlines():
                 line_clean = line.strip()
                 if not line_clean:
@@ -472,19 +483,32 @@ def extract_structured_company_fields(
                     "",
                     line_clean,
                 ).strip()
-                match = line_name_pattern.search(line_clean)
+                match = line_name_pattern.fullmatch(line_clean)
                 if match:
                     cand = validate_company_name(match.group(1).strip(" ,;"))
                     if cand:
-                        name = cand
-                        field_source_pages.setdefault("name", []).append(p_num)
-                        break
+                        candidates.append(cand)
+            if len(set(candidates)) == 1:
+                name = candidates[0]
+                field_source_pages["name"] = [p_num]
             if name:
                 break
 
     is_resolved = bool(name and not is_generic_name(name))
     identity_state = "RESOLVED" if is_resolved else "UNRESOLVED"
-    final_name = name or (company.name if company else "") or ""
+    final_name = name or ""
+    discovered_sources = issuer_windows(discovered_sources, final_name)
+    # Revalidate cited model fields against the same entity-bound windows.
+    updates = {}
+    for field in ("headquarters", "industry", "market_position", "listing_market"):
+        value = getattr(company, field, "")
+        pages = field_source_pages.get(field, [])
+        if field == "headquarters" and value and doc and doc.pages and not pages:
+            pages = company.source_pages or [page for page, _ in discovered_sources]
+        if value and pages and not supported_field(value, pages, discovered_sources):
+            updates[field] = ""
+            field_source_pages.pop(field, None)
+    company = company.model_copy(update=updates)
 
     # -------------------------------------------------------------------------
     # 2. Industry
@@ -712,7 +736,7 @@ def extract_structured_company_fields(
     headquarters = validate_headquarters(company.headquarters)
     if not headquarters:
         hq_regex = re.compile(
-            r"(?i)\b(?:headquarters?|head\s+office|registered\s+office|principal\s+place\s+of\s+business)\s*(?::|is\s+in|in|located\s+in)?\s*([A-Za-z\s,.-]{3,45}?)(?:\.\s|\.$|;\s*|\n|$)"
+            r"(?i)\b(?:headquarters?|headquartered|head\s+office|registered\s+office|principal\s+place\s+of\s+business)\b\s*(?::|is\s+in|in|located\s+in)?\s*([A-Za-z ,.-]{3,45}?)(?:\.\s|\.$|;\s*|\n|$)"
         )
         for p_num, p_text in discovered_sources:
             hq_match = hq_regex.search(p_text)

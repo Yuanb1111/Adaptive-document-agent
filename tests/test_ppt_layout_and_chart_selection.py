@@ -157,7 +157,7 @@ def test_company_overview_structured_extraction():
 
 
 def test_company_overview_unresolved_name_snapshot_layout():
-    """When company name is unresolved, slide shows 'Issuer name not identified' note only and uses 4 cards."""
+    """Unresolved identity remains explicit in a flat, readable three-part brief."""
     result = _base_result()
     company = CompanyProfile(
         name="",  # Unresolved
@@ -193,17 +193,14 @@ def test_company_overview_unresolved_name_snapshot_layout():
     # Must contain the unresolved issuer note
     assert "Issuer name not identified in supplied pages" in slide_text
 
-    # Must NOT contain long narrative dump
-    for shape in company_slide.shapes:
-        if shape.has_text_frame:
-            for p in shape.text_frame.paragraphs:
-                # No single unstructured paragraph > 200 characters
-                assert len(p.text) < 220, f"Paragraph was too long ({len(p.text)} chars): {p.text}"
-
-    assert "ISSUER PROFILE & IDENTITY" in slide_text
-    assert "BUSINESS FOCUS & MODEL" in slide_text
-    assert "CORE PRODUCTS & OFFERINGS" in slide_text
-    assert "MARKETS, POSITION & LISTING" in slide_text
+    assert "Document overview" in slide_text
+    assert "Business and products" in slide_text
+    assert "Markets and listing" in slide_text
+    bodies = [shape for shape in company_slide.shapes if shape.name == "brief:body"]
+    assert len(bodies) == 3
+    assert all(p.font.size.pt == 18 for s in bodies for p in s.text_frame.paragraphs)
+    assert company_slide.notes_slide.notes_text_frame.text
+    assert "ISSUER PROFILE & IDENTITY" not in slide_text
 
 
 def test_company_overview_resolved_name_snapshot_layout():

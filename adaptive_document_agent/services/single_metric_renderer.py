@@ -9,12 +9,16 @@ from .single_metric_analysis import SingleMetricAnalysis
 def add_single_metric_slide(presentation, plan: ChartPlan, analysis: SingleMetricAnalysis, *, title: str, narrative: str):
     # Reuse the established renderer and theme; no provider or document-specific layout.
     from .pptx_export import (
-        _add_native_chart, _base_slide, _content_zone, _display_scale, _panel, _source_footer,
+        _add_native_chart, _display_scale, _panel, _source_footer,
         _text, _unit_label, FOURIER_BG_CARD, FOURIER_DARK, FOURIER_MUTED, FOURIER_PURPLE,
     )
 
     series = analysis.observations
     first, last = series[0], series[-1]
+    if first.parent_section or first.dimensions.get("section"):
+        qualified = display_metric_name(first)
+        if (first.parent_section or first.dimensions.get("section", "")).casefold() not in title.casefold():
+            title = qualified
     scale, scale_label = _display_scale(series, max(abs(o.value) for o in series))
     unit = _unit_label(series, scale_label)
     if (first.unit_family == "currency" or first.unit == "currency") and not first.currency:
@@ -27,9 +31,10 @@ def add_single_metric_slide(presentation, plan: ChartPlan, analysis: SingleMetri
 
     if not narrative.strip():
         narrative = f"{display_metric_name(first)} moved from {value(first.value)} to {value(last.value)} {unit} between {first.period} and {last.period}."
-    slide = _base_slide(presentation, title, narrative)
+    from .slide_compositor import _base
+    slide, top = _base(presentation, title, narrative)
     slide.name = "single_metric_hero"
-    top, height = _content_zone(slide)
+    height = 6.25 - top
     _text(slide, f"{display_metric_name(first)} ({unit})", 0.60, top, 11.35, 0.24,
           size=10, color=FOURIER_MUTED)
     # Leave dedicated slots for four KPIs, annotations and evidence footer.

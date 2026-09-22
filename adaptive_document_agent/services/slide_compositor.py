@@ -241,12 +241,17 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
         layout=slide_plan.layout, has_support=bool(support), has_commentary=bool(text))
     for chart, rect in zip(charts, geometry.charts):
         title = next((b.title for b in slide_plan.visual_blocks if b.chart_ids == [chart.id] and b.title), chart.title)
+        values = [index.get(oid) for oid in chart.observation_ids if index.get(oid)]
+        qualified = {display_metric_name(o) for o in values}
+        # Retain an explicitly extracted parent even when the planned short
+        # label names only the child. Do not turn grants into expense metrics.
+        if len(qualified) == 1 and any(o.parent_section or o.dimensions.get("section") for o in values):
+            title = next(iter(qualified))
         title_lines = _lines(title, rect.w, CHART_TITLE_PT)
         if len(title_lines) > 3:
             raise ValueError(f"Chart title exceeds readable capacity: {chart.id}")
         heading_h = max(0.28, len(title_lines) * 0.23)
         _put_text(slide, title, Rect(rect.x, rect.y, rect.w, heading_h), size=CHART_TITLE_PT, bold=True)
-        values = [index.get(oid) for oid in chart.observation_ids if index.get(oid)]
         totals = [index.get(oid) for oid in chart.total_observation_ids if index.get(oid)]
         bounds = (rect.x, rect.y + heading_h + 0.22, rect.w, rect.h - heading_h - 0.22)
         if bounds[3] < 1.25:

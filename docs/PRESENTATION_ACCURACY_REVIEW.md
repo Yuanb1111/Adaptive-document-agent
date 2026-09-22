@@ -45,3 +45,32 @@ Read-only local extraction against source pages 313, 328, 331 and 333 verified s
 - Verification: full regression suite and local rendering of opening-page replay.
   Replay is a layout test, not a fresh cloud model analysis or proof of future
   model editorial quality. The next deployed run still needs content review.
+
+## PPT4 source attribution and layout revision (2026-09-22, v14)
+
+- Company recovery prefers a complete, unambiguous cover legal name. Relevant
+  industry/ownership pages are not automatically issuer evidence: only bounded
+  issuer-labelled windows may supply fields. Cited headquarters and other scalar
+  fields are rechecked against those windows. Suffix fragments, listing headings
+  and product fragments from adjacent table columns are rejected.
+- Planned company overviews now use the same flat opening brief as the legacy
+  path, with readable text, complete field values and full source copy in notes.
+- Planned summaries recover each technically worded finding from its exact
+  linked, compatible inputs. Four priority findings can use two flat columns;
+  complete claims and caveats remain intact. A source-derived metric heading can
+  replace an overlong heading, while the original heading remains in notes.
+- Borderless extraction retains a parent heading before the first numeric row
+  and a wrapped first-child label. Explicit parent qualifiers propagate through
+  observations, chart headings and appendix labels without changing raw values.
+- Boilerplate fallback slide titles name their actual selected measures. Paired
+  snapshot-chart dates wrap over two lines without losing day/year/audit markers.
+  Single-metric pages use the shared title geometry.
+- Pipeline identity is `2026-09-22-source-context-v14`. Previously generated
+  files are unchanged. Restart and rerun after deploying this version.
+
+Verification includes synthetic regression tests and four locally rendered
+pages covering profile, four-finding summary, qualified child metric and paired
+snapshot charts. Read-only extraction against the original PDF confirms the
+cover identity and retained grant-parent/first-child text. The latest cloud-run
+analysis JSON was unavailable, so the render is a bounded regression replay,
+not a complete rerun or certification of future model-generated content.

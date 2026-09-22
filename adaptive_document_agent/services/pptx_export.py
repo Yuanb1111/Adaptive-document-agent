@@ -333,6 +333,14 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
             linked = {o.id: o for o in _planned_observations(slide_plan, index)}
             for chart in charts:
                 linked.update({oid: index.get(oid) for oid in chart.observation_ids if index.get(oid)})
+            if re.search(r"(?i)evidence.backed comparison|retained reported values|selected observations", slide_plan.message):
+                # Mechanical fallback copy carries no supported takeaway. Name
+                # the actual plotted subjects instead of an over-broad heading.
+                labels = list(dict.fromkeys(display_metric_name(o) for o in linked.values()))
+                evidence_title = " and ".join(labels)
+                slide_plan = slide_plan.model_copy(update={
+                    "title": evidence_title if 0 < len(evidence_title) <= 150 else "Reported measures",
+                    "message": ""})
             single = single_metric_analysis(list(linked.values())) if len(charts) <= 1 else None
             legacy_overview = plan.planning_origin == "legacy" and slide_plan.layout == "data_overview"
             use_hero = not slide_plan.theme_id and (slide_plan.layout in {"auto", "single", "single_metric_hero"} or legacy_overview)
@@ -496,177 +504,44 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
                        | {p for fact in company.key_facts for p in fact.source_pages})
         add_picture_profile(presentation, company, slide_title, pages, presentation._ada_artwork)
         return
-    slide = _base_slide(presentation, slide_title, company.document_type or result.profile.document_type)
-    content_top, content_h = _content_zone(slide)
-
-    _panel(slide, 0.45, content_top, 11.70, content_h, fill=FOURIER_BG_CARD)
-
-    # 1. Gather bullets for Card 1 (Profile & Identity)
-    id_bullets: list[str] = []
-    if company.industry:
-        id_bullets.append(f"Industry: {company.industry}")
-    if company.headquarters:
-        id_bullets.append(f"Headquarters: {company.headquarters}")
-    if company.reporting_currency:
-        id_bullets.append(f"Currency: {company.reporting_currency}")
-    if company.track_record_period:
-        id_bullets.append(f"Track Record: {company.track_record_period}")
-
-    # 2. Gather bullets for Card 2 (Business Focus & Model)
-    bm_bullets: list[str] = []
-    if company.business_model:
-        for part in re.split(r"[;\n]", company.business_model):
-            part_c = part.strip()
-            if part_c and part_c.casefold() not in {"none", "n/a", "unknown"}:
-                bm_bullets.append(part_c)
-    if company.customer_types:
-        valid_custs = [c.strip() for c in company.customer_types if c.strip()]
-        if valid_custs:
-            bm_bullets.append(f"Target Customers: {', '.join(valid_custs[:3])}")
-    if not bm_bullets and company.segments:
-        valid_segs = [s.strip() for s in company.segments if s.strip()]
-        if valid_segs:
-            bm_bullets.extend(valid_segs[:2])
-
-    # 3. Gather bullets for Card 3 (Core Products & Offerings)
-    prod_bullets: list[str] = []
-    for p in company.products:
-        if p.strip() and p.strip().casefold() not in {"none", "n/a", "unknown"}:
-            prod_bullets.append(p.strip())
-    if not prod_bullets and company.segments:
-        prod_bullets = [s.strip() for s in company.segments if s.strip()]
-
-    # 4. Gather bullets for Card 4 (Markets, Position & Listing)
-    mkt_bullets: list[str] = []
-    if company.geographies:
-        valid_geos = [g.strip() for g in company.geographies if g.strip()]
-        if valid_geos:
-            mkt_bullets.append(f"Geographic Markets: {', '.join(valid_geos[:3])}")
-    if getattr(company, "market_position", ""):
-        mkt_bullets.append(f"Market Position: {company.market_position.strip()}")
-    if company.listing_market:
-        mkt_bullets.append(f"Listing Exchange: {company.listing_market.strip()}")
-    if getattr(company, "stock_code", ""):
-        mkt_bullets.append(f"Stock Code: {company.stock_code.strip()}")
-    if getattr(company, "offering_type", ""):
-        mkt_bullets.append(f"Offering: {company.offering_type.strip()}")
-
-    # Determine supported cards to render (never invent missing information)
-    active_cards: list[str] = ["profile"]
-    if bm_bullets:
-        active_cards.append("business_model")
-    if prod_bullets:
-        active_cards.append("products")
-    if mkt_bullets:
-        active_cards.append("markets")
-
-    def _draw_profile_card(c_left: float, c_top: float, c_w: float, c_h: float) -> None:
-        _panel(slide, c_left, c_top, c_w, c_h, fill=WHITE)
-        title_label = "ISSUER PROFILE & IDENTITY"
-        _text(slide, title_label, c_left + 0.20, c_top + 0.15, c_w - 0.40, 0.22, size=10.0, color=FOURIER_PURPLE, bold=True)
-        _rule(slide, c_left + 0.20, c_top + 0.40, c_w - 0.40, 0.01, FOURIER_BORDER)
-
-        name_display = company.name.strip() if has_company_identity else "Document Overview"
-        _text(slide, _summary_text(name_display, 42), c_left + 0.20, c_top + 0.48, c_w - 0.40, 0.32, size=15.0, color=FOURIER_DARK, bold=True)
-
-        y_id = c_top + 0.82
-        if not has_company_identity:
-            _text(slide, "Issuer name not identified in supplied pages", c_left + 0.20, y_id, c_w - 0.40, 0.22, size=9.5, color=FOURIER_PURPLE, bold=True)
-            y_id += 0.28
-
-        if id_bullets:
-            for b in id_bullets[:4]:
-                _text(slide, f"•  {_summary_text(b, 55 if c_w < 8.0 else 100)}", c_left + 0.20, y_id, c_w - 0.40, 0.24, size=10.5, color=FOURIER_DARK)
-                y_id += 0.28
-        else:
-            _text(slide, "Profile details not clearly disclosed in selected source pages.", c_left + 0.20, y_id, c_w - 0.40, 0.24, size=10.0, color=FOURIER_MUTED)
-
-    def _draw_bm_card(c_left: float, c_top: float, c_w: float, c_h: float) -> None:
-        _panel(slide, c_left, c_top, c_w, c_h, fill=WHITE)
-        _text(slide, "BUSINESS FOCUS & MODEL", c_left + 0.20, c_top + 0.15, c_w - 0.40, 0.22, size=10.0, color=FOURIER_PURPLE, bold=True)
-        _rule(slide, c_left + 0.20, c_top + 0.40, c_w - 0.40, 0.01, FOURIER_BORDER)
-        y_bm = c_top + 0.50
-        for b in bm_bullets[:4]:
-            _text(slide, f"•  {_summary_text(b, 56 if c_w < 8.0 else 110)}", c_left + 0.20, y_bm, c_w - 0.40, 0.32, size=10.5, color=FOURIER_DARK)
-            y_bm += 0.36
-
-    def _draw_prod_card(c_left: float, c_top: float, c_w: float, c_h: float) -> None:
-        _panel(slide, c_left, c_top, c_w, c_h, fill=WHITE)
-        _text(slide, "CORE PRODUCTS & OFFERINGS", c_left + 0.20, c_top + 0.15, c_w - 0.40, 0.22, size=10.0, color=FOURIER_PURPLE, bold=True)
-        _rule(slide, c_left + 0.20, c_top + 0.40, c_w - 0.40, 0.01, FOURIER_BORDER)
-        y_prod = c_top + 0.50
-        if c_w > 8.0 and len(prod_bullets) > 2:
-            half_w = (c_w - 0.60) / 2
-            for idx, p in enumerate(prod_bullets[:2], start=1):
-                _text(slide, f"{idx:02d}  {_summary_text(p, 54)}", c_left + 0.20, y_prod + (idx - 1) * 0.36, half_w, 0.32, size=10.5, color=FOURIER_DARK, bold=True)
-            for idx, p in enumerate(prod_bullets[2:4], start=3):
-                _text(slide, f"{idx:02d}  {_summary_text(p, 54)}", c_left + half_w + 0.40, y_prod + (idx - 3) * 0.36, half_w, 0.32, size=10.5, color=FOURIER_DARK, bold=True)
-        else:
-            for idx, p in enumerate(prod_bullets[:4], start=1):
-                _text(slide, f"{idx:02d}  {_summary_text(p, 54 if c_w < 8.0 else 110)}", c_left + 0.20, y_prod, c_w - 0.40, 0.32, size=10.5, color=FOURIER_DARK, bold=True)
-                y_prod += 0.36
-
-    def _draw_mkt_card(c_left: float, c_top: float, c_w: float, c_h: float) -> None:
-        _panel(slide, c_left, c_top, c_w, c_h, fill=WHITE)
-        _text(slide, "MARKETS, POSITION & LISTING", c_left + 0.20, c_top + 0.15, c_w - 0.40, 0.22, size=10.0, color=FOURIER_PURPLE, bold=True)
-        _rule(slide, c_left + 0.20, c_top + 0.40, c_w - 0.40, 0.01, FOURIER_BORDER)
-        y_mkt = c_top + 0.50
-        if c_w > 8.0 and len(mkt_bullets) > 2:
-            half_w = (c_w - 0.60) / 2
-            for idx, b in enumerate(mkt_bullets[:2]):
-                _text(slide, f"•  {_summary_text(b, 56)}", c_left + 0.20, y_mkt + idx * 0.36, half_w, 0.32, size=10.5, color=FOURIER_DARK)
-            for idx, b in enumerate(mkt_bullets[2:4]):
-                _text(slide, f"•  {_summary_text(b, 56)}", c_left + half_w + 0.40, y_mkt + idx * 0.36, half_w, 0.32, size=10.5, color=FOURIER_DARK)
-        else:
-            for b in mkt_bullets[:4]:
-                _text(slide, f"•  {_summary_text(b, 56 if c_w < 8.0 else 110)}", c_left + 0.20, y_mkt, c_w - 0.40, 0.32, size=10.5, color=FOURIER_DARK)
-                y_mkt += 0.36
-
-    draw_lookup = {
-        "profile": _draw_profile_card,
-        "business_model": _draw_bm_card,
-        "products": _draw_prod_card,
-        "markets": _draw_mkt_card,
-    }
-
-    card_w = 5.65
-    gap_x = 0.20
-    col1_left = 0.55
-    col2_left = col1_left + card_w + gap_x  # 6.40
-    card_h = (content_h - 0.50) / 2
-    row1_top = content_top + 0.15
-    row2_top = row1_top + card_h + 0.15
-
-    # Dynamic placement based on number of active supported cards
-    if len(active_cards) == 4:
-        # Full 2x2 grid
-        draw_lookup[active_cards[0]](col1_left, row1_top, card_w, card_h)
-        draw_lookup[active_cards[1]](col2_left, row1_top, card_w, card_h)
-        draw_lookup[active_cards[2]](col1_left, row2_top, card_w, card_h)
-        draw_lookup[active_cards[3]](col2_left, row2_top, card_w, card_h)
-    elif len(active_cards) == 3:
-        # 2 cards top, 1 full-width card bottom
-        draw_lookup[active_cards[0]](col1_left, row1_top, card_w, card_h)
-        draw_lookup[active_cards[1]](col2_left, row1_top, card_w, card_h)
-        draw_lookup[active_cards[2]](col1_left, row2_top, 11.50, card_h)
-    elif len(active_cards) == 2:
-        # 2 side-by-side full-height cards
-        full_h = content_h - 0.30
-        draw_lookup[active_cards[0]](col1_left, row1_top, card_w, full_h)
-        draw_lookup[active_cards[1]](col2_left, row1_top, card_w, full_h)
-    else:
-        # 1 full-width full-height card
-        full_h = content_h - 0.30
-        draw_lookup[active_cards[0]](col1_left, row1_top, 11.50, full_h)
-
-    pages = sorted({
-        *company.source_pages,
-        *slide_plan.source_pages,
-        *(p for p_list in getattr(company, "field_source_pages", {}).values() for p in p_list),
-        *(page for fact in company.key_facts for page in fact.source_pages),
-    })
-    if pages:
-        _text(slide, _source_footer(pages), 0.45, 6.55, 11.70, 0.25, size=9.5, color=FOURIER_MUTED)
+    from .presentation_brief import BriefItem, overview_items, render_brief
+    groups = [
+        (company.name if has_company_identity else "Document overview",
+         [("Industry", company.industry, "industry"),
+          ("Headquarters", company.headquarters, "headquarters"),
+          ("Reporting currency", company.reporting_currency, "reporting_currency"),
+          ("Track record", company.track_record_period, "track_record_period")]),
+        ("Business and products",
+         [("Business model", company.business_model, "business_model"),
+          ("Products", ", ".join(company.products), "products"),
+          ("Customers", ", ".join(company.customer_types), "customer_types")]),
+        ("Markets and listing",
+         [("Markets", ", ".join(company.geographies), "geographies"),
+          ("Market position", company.market_position, "market_position"),
+          ("Exchange", company.listing_market, "listing_market"),
+          ("Stock code", company.stock_code, "stock_code"),
+          ("Offering", company.offering_type, "offering_type")]),
+    ]
+    items = []
+    for heading, fields in groups:
+        populated = [(label, value, key) for label, value, key in fields if value]
+        if populated:
+            pages = sorted({p for _, _, key in populated for p in company.field_source_pages.get(key, [])}
+                           | set(company.field_source_pages.get("name", []) if heading == company.name else []))
+            items.append(BriefItem(heading, ". ".join(f"{label}: {value}" for label, value, _ in populated),
+                                   pages or company.source_pages))
+    if not items:
+        items, _ = overview_items(result.profile)
+    elif has_company_identity and items[0].title != company.name:
+        items.insert(0, BriefItem("Company", company.name, company.field_source_pages.get("name", [])))
+    if not has_company_identity and items:
+        first = items[0]
+        items[0] = BriefItem(first.title, "Issuer name not identified in supplied pages. " + first.text, first.pages)
+    # Full fields and source context remain available without clipping the
+    # visible labels or constructing large, mostly empty cards.
+    notes = company.model_dump_json(indent=2) + "\n\n" + result.profile.document_summary
+    render_brief(presentation, "Company at a Glance" if has_company_identity else "Document at a Glance",
+                 items, notes=notes)
 
 
 def _is_calc_artifact(text: str) -> bool:
@@ -724,21 +599,39 @@ def _add_planned_summary(
         for identifier in slide_plan.insight_ids
         if identifier in insight_by_id
     ]
-    findings = [
-        (_sanitize_investor_narrative(t), _sanitize_investor_narrative(n))
-        for t, n in raw_findings
-        if not _is_calc_artifact(t) and not _is_calc_artifact(n)
-    ]
+    # Recover each selected finding independently. One usable prose item must
+    # not prevent recovery of other important, technically worded findings.
+    by_task = {item.task_id: item for item in result.analysis_results}
+    recovered = []
+    for identifier in slide_plan.insight_ids:
+        insight = insight_by_id.get(identifier)
+        if insight is None:
+            continue
+        if _is_calc_artifact(insight.title) or _is_calc_artifact(insight.narrative):
+            ids = list(dict.fromkeys(oid for task in insight.result_ids if task in by_task
+                                     for oid in by_task[task].input_observation_ids))
+            candidates = _chart_findings([ChartPlan(id="summary_" + identifier,
+                title=insight.title, question="", chart_type="line", observation_ids=ids)], index) if ids else []
+            recovered.extend(candidates[:1])
+        elif insight.evidence:
+            linked = [index.get(oid) for task in insight.result_ids if task in by_task
+                      for oid in by_task[task].input_observation_ids if index.get(oid)]
+            labels = {display_metric_name(o) for o in linked}
+            recovered.append({"title": _sanitize_investor_narrative(insight.title),
+                "narrative": _sanitize_investor_narrative(insight.narrative),
+                "short_title": next(iter(labels)) if len(labels) == 1 else "",
+                "pages": sorted({e.page for e in insight.evidence})})
+    findings = [(str(f["title"]), str(f["narrative"])) for f in recovered]
     if slide_plan.bullets:
         bullet_findings = [
             ("", _sanitize_investor_narrative(bullet))
             for bullet in slide_plan.bullets
             if bullet.strip() and not _is_calc_artifact(bullet)
         ]
-        if len(bullet_findings) >= 3 or not findings:
+        if not findings:
             findings = bullet_findings
         else:
-            findings = [*bullet_findings, *findings[: 5 - len(bullet_findings)]]
+            findings = [*findings, *bullet_findings]
     fallback_pages: set[int] = set()
     if not findings:
         fallback_findings = _chart_findings(_usable_charts(result), index)
@@ -749,7 +642,7 @@ def _add_planned_summary(
         ]
         fallback_pages = {p for item in fallback_findings for p in item.get("pages", [])}
     from .presentation_editorial import distinct_findings
-    from .presentation_brief import BriefItem, render_brief
+    from .presentation_brief import BriefItem, render_brief, render_summary
     # The summary is a short entry point. Explicit KPI/chart plans above remain
     # authoritative; full prose and caveats are retained in the speaker notes.
     pages = sorted(set(slide_plan.source_pages) | fallback_pages | {
@@ -757,8 +650,14 @@ def _add_planned_summary(
         for e in insight_by_id[identifier].evidence})
     notes = "\n\n".join(f"{t}\n{n}" for t, n in raw_findings)
     notes += "\n\n" + "\n".join(slide_plan.bullets)
-    items = [BriefItem(label, narrative, pages) for label, narrative in distinct_findings(findings)]
-    render_brief(presentation, slide_plan.title, items, notes=notes)
+    finding_pages = {(str(f["title"]), str(f["narrative"])): list(f["pages"]) for f in recovered}
+    short_titles = {(str(f["title"]), str(f["narrative"])): str(f.get("short_title", "")) for f in recovered}
+    items = [BriefItem(label, narrative, finding_pages.get((label, narrative), pages), short_titles.get((label, narrative), ""))
+             for label, narrative in distinct_findings(findings)]
+    if recovered:
+        render_summary(presentation, slide_plan.title, items, notes=notes)
+    else:
+        render_brief(presentation, slide_plan.title, items, notes=notes)
 
 
 from adaptive_document_agent.document_model.topic_matcher import (
@@ -1405,6 +1304,14 @@ def _chart_number_format(values: list[float]) -> str:
     return "#,##0;-#,##0;0"
 
 
+def _chart_category_labels(categories: list[str], width: float) -> list[str]:
+    """Wrap crowded dates without removing the day, year or audit marker."""
+    if width >= 7 or len(categories) < 4:
+        return categories
+    return [re.sub(r"^(\d{1,2}\s+[A-Za-z]{3})\s+((?:19|20)\d{2}\*?)$", r"\1\n\2", label)
+            for label in categories]
+
+
 def _add_native_chart(
     slide: Any,
     plan: ChartPlan,
@@ -1475,7 +1382,7 @@ def _add_native_chart(
         categories = list(dict.fromkeys(row[0] for row in rows))
         series_names = list(dict.fromkeys(row[1] for row in rows))
         data = CategoryChartData()
-        data.categories = categories
+        data.categories = _chart_category_labels(categories, bounds[2])
         for name in series_names:
             lookup = {label: value for label, series_name, value in rows if series_name == name}
             data.add_series(name, [lookup.get(label) / scale if lookup.get(label) is not None else None for label in categories])
