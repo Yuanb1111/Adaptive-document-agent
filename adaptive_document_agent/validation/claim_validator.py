@@ -40,7 +40,7 @@ from adaptive_document_agent.document_model import (
     period_sort_key,
 )
 from adaptive_document_agent.document_model.period_semantic_validator import extract_period_basis
-from adaptive_document_agent.models import Observation, PresentationPlan, PresentationSlide, ValidationIssue
+from adaptive_document_agent.models import ChartPlan, Observation, PresentationPlan, PresentationSlide, ValidationIssue
 
 
 class MetricSemanticFamily(str, Enum):
@@ -101,6 +101,9 @@ class DirectionalClaimIssue(ValidationIssue):
     supported_period_text: str = ""
     has_rebound: bool = False
     has_intermediate_decline: bool = False
+    claim_start: int | None = None
+    claim_end: int | None = None
+    span_required: bool = False
 
 
 def observation_series_partition_key(obs: Observation) -> tuple:
@@ -1273,6 +1276,10 @@ def extract_metric_aliases(
         no_punct = re.sub(r"[_\-]+", " ", clean_metric).strip()
         if no_punct:
             aliases.add(no_punct)
+            # Source labels often abbreviate alternatives: 'year/period'.
+            for match in re.finditer(r"\b(\w+)/(\w+)\b", no_punct):
+                for option in match.groups():
+                    aliases.add(no_punct[:match.start()] + option + no_punct[match.end():])
         # Keep both useful interpretations of parentheses.  Removing only the
         # delimiters preserves signed labels such as ``(loss)/gain``; removing
         # the complete group still supports optional qualifiers such as
@@ -1307,13 +1314,16 @@ def extract_metric_aliases(
     if "redemption" in combined and "liabilit" in combined:
         aliases.update(["redemption liabilities", "redemption liability", "liabilities for redemption"])
 
-    if "operating cash" in combined or "cash from operations" in combined or "cash flow from operating" in combined:
+    if "operating cash" in combined or "cash from operations" in combined or "cash flow from operating" in combined or ("cash" in combined and "operating activities" in combined):
         aliases.update(["operating cash flow", "cash from operations", "operating cash flows", "operating cash", "经营活动现金流", "经营现金流"])
-    elif "cash" in combined and not any(k in combined for k in ("cash flow", "operating cash", "investing cash", "financing cash")):
+    elif "cash" in combined and not any(k in combined for k in ("cash flow", "operating", "investing", "financing")):
         aliases.update(["cash and cash equivalents", "cash balance", "cash reserves", "cash", "现金及现金等价物", "现金余额", "现金"])
 
-    if "net loss" in combined or "net_loss" in combined or "adjusted net loss" in combined:
-        aliases.update(["net loss", "net losses", "adjusted net loss", "adjusted net losses", "loss for the year", "loss for the period", "净亏损"])
+    if "net loss" in combined or "net_loss" in combined:
+        if re.search(r"\badjusted\b|non[ -](?:ifrs|gaap)", combined):
+            aliases.update(["adjusted net loss", "adjusted net losses"])
+        else:
+            aliases.update(["net loss", "net losses", "loss for the year", "loss for the period", "净亏损"])
     elif "operating loss" in combined or "operating_loss" in combined:
         aliases.update(["operating loss", "operating losses", "营业亏损"])
 
@@ -1403,6 +1413,15 @@ def associate_clause_directions(
     is_only_metric: bool = False,
     only_metric_name: str | None = None,
 ) -> list[tuple[str, str]]:
+    return [(metric, word) for metric, word, _, _ in _associate_clause_direction_spans(
+        clause, metric_aliases_map, metric_values_map, is_only_metric, only_metric_name)]
+
+
+def _associate_clause_direction_spans(
+    clause: str, metric_aliases_map: dict[str, list[str]],
+    metric_values_map: dict[str, list[str]] | None = None,
+    is_only_metric: bool = False, only_metric_name: str | None = None,
+) -> list[tuple[str, str, int, int]]:
     """Find directional claims in a local clause and associate each only with its specific metric."""
     all_alias_pairs: list[tuple[int, str, str]] = []
     for m_name, aliases in metric_aliases_map.items():
@@ -1451,15 +1470,15 @@ def associate_clause_directions(
 
     if not metric_spans:
         if is_only_metric and only_metric_name:
-            return [(only_metric_name, dw) for _, _, dw in dir_spans]
+            return [(only_metric_name, dw, ds, de) for ds, de, dw in dir_spans]
         return []
 
     if len(metric_spans) == 1:
         m_name = metric_spans[0][2]
-        return [(m_name, dw) for _, _, dw in dir_spans]
+        return [(m_name, dw, ds, de) for ds, de, dw in dir_spans]
 
     # Multiple metrics in clause: associate each directional word with closest metric span
-    assocs: list[tuple[str, str]] = []
+    assocs: list[tuple[str, str, int, int]] = []
     for ds, de, dw in dir_spans:
         closest_m = None
         min_dist = 999999
@@ -1474,7 +1493,7 @@ def associate_clause_directions(
                 min_dist = dist
                 closest_m = m_name
         if closest_m:
-            assocs.append((closest_m, dw))
+            assocs.append((closest_m, dw, ds, de))
     return assocs
 
 
@@ -1509,10 +1528,12 @@ class ClaimValidator:
         self,
         plan: PresentationPlan,
         observations: list[Observation],
+        charts: list[ChartPlan] | None = None,
     ) -> list[ValidationIssue]:
         """Validate entire presentation plan and return structured ValidationIssues."""
         issues: list[ValidationIssue] = []
         obs_by_id = {obs.id: obs for obs in observations}
+        chart_by_id = {chart.id: chart for chart in charts or []}
 
         for slide in plan.slides:
             # 1. Slide-type scoping: skip non-analytical slide types
@@ -1531,7 +1552,8 @@ class ClaimValidator:
                 for oid in getattr(block, "observation_ids", []):
                     if oid in obs_by_id and obs_by_id[oid] not in slide_obs:
                         slide_obs.append(obs_by_id[oid])
-            for chart in getattr(slide, "charts", []):
+            chart_ids = set(slide.chart_ids) | {cid for block in slide.visual_blocks for cid in block.chart_ids}
+            for chart in (chart_by_id[cid] for cid in chart_ids if cid in chart_by_id):
                 for oid in getattr(chart, "observation_ids", []):
                     if oid in obs_by_id and obs_by_id[oid] not in slide_obs:
                         slide_obs.append(obs_by_id[oid])
@@ -1591,7 +1613,7 @@ class ClaimValidator:
 
             first_obs = series_list[0]["first"]
             aliases = extract_metric_aliases(
-                metric_name,
+                first_obs.metric_original,
                 canonical_name=first_obs.metric_canonical,
                 pres_label=getattr(first_obs, "presentation_label", None),
             )
@@ -1663,7 +1685,7 @@ class ClaimValidator:
 
             clauses = split_into_clauses(comp_text)
             for clause in clauses:
-                assocs = associate_clause_directions(
+                assocs = _associate_clause_direction_spans(
                     clause,
                     metric_aliases_map,
                     metric_values_map,
@@ -1671,7 +1693,7 @@ class ClaimValidator:
                     only_metric_name=only_metric_name,
                 )
 
-                for m_name, dir_word in assocs:
+                for m_name, dir_word, direction_start, direction_end in assocs:
                     if m_name not in metric_series_map:
                         continue
                     series_list = metric_series_map[m_name]
@@ -1899,6 +1921,16 @@ class ClaimValidator:
                         bs_subtype = info["bs_subtype"]
                         trend_state = info["trend_state"]
 
+                        label_spans = [m.span() for aliases in metric_aliases_map.values() for alias in aliases
+                                       for m in re.finditer(r"\b" + re.escape(alias) + r"\b", clause, re.IGNORECASE)]
+                        local_start = max((end for start, end in label_spans if end <= direction_start), default=0)
+                        local_end = min((start for start, end in label_spans if start >= direction_end), default=len(clause))
+                        if (info.get("non_monotonic", {}).get("is_non_monotonic")
+                                and re.search(r"(?i)\b(?:steadily|continuously|consistently|monotonically|at each subsequent (?:reported )?(?:date|period)|every (?:year|period))\b", clause[local_start:local_end])):
+                            issues.append(ValidationIssue(code="non_monotonic_claim", severity="error", stage="presentation",
+                                related_ids=[o.id for o in info["sorted_obs"]],
+                                message=f"Slide {slide.id} {comp_type}: '{m_name}' changes direction within the selected series; a continuous movement claim requires scoped evidence or a model revision."))
+
                         issue_key = (slide.id, m_name.casefold(), comp_type, bullet_idx, info["period_basis"], info["start_period"], info["end_period"])
                         if issue_key in seen_issues:
                             continue
@@ -1933,6 +1965,9 @@ class ClaimValidator:
                             continue
 
                         offending = _detect_offending_in_text(dir_word, trend_state, family)
+                        if (dir_word == "turned negative" and val_end >= 0
+                                or dir_word == "turned positive" and val_end <= 0):
+                            offending = dir_word
                         if offending:
                             non_monotonic = info.get("non_monotonic", {})
                             if non_monotonic.get("is_non_monotonic"):
@@ -1983,11 +2018,32 @@ class ClaimValidator:
                                     start_period=info["start_period"],
                                     end_period=info["end_period"],
                                     period_basis=info["period_basis"],
-                                    has_rebound=bool(non_monotonic.get("had_rebound")),
+                                    has_rebound=bool(non_monotonic.get("had_rebound") and info["sorted_obs"][-1].value > info["sorted_obs"][-2].value),
                                     has_intermediate_decline=bool(non_monotonic.get("had_intermediate_decline")),
                                 )
                             )
 
+        # Bind every repair to the exact directional token that produced it.
+        # Ambiguous/repeated bindings remain errors, never global replacements.
+        for issue in issues:
+            if not isinstance(issue, DirectionalClaimIssue):
+                continue
+            issue.span_required = True
+            text = (slide.bullets[issue.bullet_index] if issue.target_component == "bullet"
+                    and issue.bullet_index is not None else getattr(slide, issue.target_component, ""))
+            matches, cursor = [], 0
+            for clause in split_into_clauses(text):
+                offset = text.find(clause, cursor)
+                cursor = offset + len(clause)
+                for metric, word, start, end in _associate_clause_direction_spans(
+                    clause, metric_aliases_map, metric_values_map, is_only_metric, only_metric_name
+                ):
+                    token = re.search(r"\b" + re.escape(issue.offending_direction) + r"\b",
+                                      clause[start:end], flags=re.IGNORECASE)
+                    if metric == issue.metric_name and token:
+                        matches.append((offset + start + token.start(), offset + start + token.end()))
+            if len(matches) == 1:
+                issue.claim_start, issue.claim_end = matches[0]
         return issues
 
     def validate_slide_claims(
@@ -2010,6 +2066,8 @@ def apply_structured_issue_replacement(text: str, issue: DirectionalClaimIssue) 
     state = issue.expected_direction
     offending = issue.offending_direction
     family = issue.semantic_family
+    if issue.span_required and (issue.claim_start is None or issue.claim_end is None):
+        return text, False
 
     replacement = None
 
@@ -2046,7 +2104,7 @@ def apply_structured_issue_replacement(text: str, issue: DirectionalClaimIssue) 
             replacement = _STANDARD_INCREASE_REPLACEMENTS.get(offending.casefold(), "increased")
     elif state == TrendState.DECREASED.value:
         if getattr(issue, "has_rebound", False):
-            period_label = "period" if any(k in (issue.end_period or "") for k in ("6M", "3M", "Q", "H", "interim")) else "year"
+            period_label = "year" if issue.period_basis == "FY" else "period"
             replacement = f"declined overall, with a partial rebound in the final {period_label}"
         elif family == MetricSemanticFamily.EXPENSE.value:
             replacement = _EXPENSE_DECREASE_REPLACEMENTS.get(offending.casefold(), "decreased")
@@ -2069,6 +2127,14 @@ def apply_structured_issue_replacement(text: str, issue: DirectionalClaimIssue) 
         if issue.supported_period_text.casefold() not in replacement.casefold():
             replacement = f"{replacement} {issue.supported_period_text}"
 
+    if issue.claim_start is not None and issue.claim_end is not None:
+        start, end = issue.claim_start, issue.claim_end
+        original = text[start:end]
+        if original.casefold() != offending.casefold():
+            return text, False
+        changed, _ = replace_word_preserving_case(original, offending, replacement)
+        return text[:start] + changed + text[end:], True
+
     # Clause-aware replacement: find the specific clause mentioning issue.metric_name
     delims = r"(\r?\n+|;\s*|\s+[—–]\s+|(?<!\d)\.(?!\d)\s+|,\s*(?:while|whilst|whereas|although|though|but|however|yet)\b|\b(?:while|whilst|whereas|although|though|but|however|yet)\b|(?<!\d),(?!\d)\s+(?=[a-zA-Z]))"
     parts = re.split(delims, text, flags=re.IGNORECASE)
@@ -2090,12 +2156,7 @@ def apply_structured_issue_replacement(text: str, issue: DirectionalClaimIssue) 
     if replaced:
         return "".join(new_parts), True
 
-    # Fallback to general replace if metric was not isolated in a single clause
-    fallback_text = text
-    if issue.is_mixed_period_repair and issue.supported_period_text:
-        fallback_text = re.sub(r"(?i)\s+(?:across|over|during|throughout)\s+(?:the\s+)?(?:track\s+record|review|reporting|full)?\s*period\b", "", fallback_text)
-        fallback_text = re.sub(r"(?i)\s+compared\s+to\s+the\s+prior\s+(?:fiscal\s+year|period)\b", "", fallback_text)
-    return replace_word_preserving_case(fallback_text, offending, replacement)
+    return text, False
 
 
 def repair_presentation_plan_from_issues(
@@ -2106,8 +2167,18 @@ def repair_presentation_plan_from_issues(
     repairs: list[str] = []
     slide_by_id = {s.id: s for s in plan.slides}
 
+    bindings: dict[tuple, set[str]] = defaultdict(set)
     for issue in issues:
+        if isinstance(issue, DirectionalClaimIssue) and issue.claim_start is not None:
+            key = (issue.slide_id, issue.target_component, issue.bullet_index, issue.claim_start, issue.claim_end)
+            bindings[key].add(issue.expected_direction)
+
+    # Right-to-left edits keep the validated offsets of earlier claims intact.
+    for issue in sorted(issues, key=lambda i: getattr(i, "claim_start", None) or -1, reverse=True):
         if not isinstance(issue, DirectionalClaimIssue):
+            continue
+        key = (issue.slide_id, issue.target_component, issue.bullet_index, issue.claim_start, issue.claim_end)
+        if len(bindings.get(key, set())) > 1:
             continue
         if issue.expected_direction in (TrendState.AMBIGUOUS.value, "INCOMPATIBLE", TrendState.FLAT.value):
             # Unsafe or ambiguous: do not repair, keep blocked
@@ -2158,8 +2229,9 @@ def repair_slide_claims(
 def repair_presentation_plan(
     plan: PresentationPlan,
     observations: list[Observation],
+    charts: list[ChartPlan] | None = None,
 ) -> tuple[PresentationPlan, list[str]]:
     """Execute claim repairs across all slides using structured validation issues."""
     validator = ClaimValidator()
-    issues = validator.validate_plan(plan, observations)
+    issues = validator.validate_plan(plan, observations, charts)
     return repair_presentation_plan_from_issues(plan, issues)

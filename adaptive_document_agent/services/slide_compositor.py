@@ -6,6 +6,8 @@ never clipped or replaced with invented filler.
 """
 
 from dataclasses import dataclass
+import json
+import re
 import textwrap
 
 from adaptive_document_agent.document_model import display_metric_name
@@ -34,7 +36,8 @@ class CompositionGeometry:
 
 
 def compose_geometry(width: float, height: float, top: float, chart_count: int, *,
-                     layout: str, has_support: bool, has_commentary: bool) -> CompositionGeometry:
+                     layout: str, has_support: bool, has_commentary: bool,
+                     commentary_text: str = "") -> CompositionGeometry:
     """Partition the content zone into non-overlapping slots with a common baseline."""
     left, total = 0.55, width - 1.1
     # Reserve the template's copyright/page-number band separately from sources.
@@ -58,14 +61,17 @@ def compose_geometry(width: float, height: float, top: float, chart_count: int, 
         support = Rect(left, top, total, 1.02)
         top += 1.02 + GUTTER
         if has_commentary:
-            commentary = Rect(left, bottom - .72, total, .72)
+            needed = len(_lines(commentary_text, total - .18, 12)) * 16 / 72 + .23
+            band_h = max(.72, min(needed, bottom - top - GUTTER - 1.8))
+            commentary = Rect(left, bottom - band_h, total, band_h)
             chart_bottom = commentary.y - GUTTER
         cw = (total - GUTTER * (chart_count - 1)) / chart_count
         charts = [Rect(left + i * (cw + GUTTER), top, cw, chart_bottom - top) for i in range(chart_count)]
-        if any(r.h < 1.8 or r.w < 2.4 for r in charts):
+        if any(r.h < 1.8 - 1e-6 or r.w < 2.4 for r in charts):
             # Preserve content with the established overflow/continuation path.
             return compose_geometry(width, height, support.y, chart_count,
-                layout="two_up", has_support=has_support, has_commentary=has_commentary)
+                layout="two_up", has_support=has_support, has_commentary=has_commentary,
+                commentary_text=commentary_text)
         return CompositionGeometry(charts, support, commentary, footer)
     side = chart_count == 1 and (has_support or has_commentary)
     if side:
@@ -83,6 +89,10 @@ def compose_geometry(width: float, height: float, top: float, chart_count: int, 
     else:
         if has_support or has_commentary:
             band_h = 1.22
+            if has_commentary:
+                text_width = total * .52 - GUTTER if has_support else total
+                needed = len(_lines(commentary_text, text_width - .18, 12)) * 16 / 72 + .23
+                band_h = max(band_h, min(needed, bottom - top - GUTTER - 2.2))
             chart_bottom = bottom - band_h - GUTTER
             if has_support and has_commentary:
                 support = Rect(left, bottom - band_h, total * 0.48, band_h)
@@ -143,11 +153,19 @@ def _put_commentary(slide, text: str, rect: Rect) -> str:
         parts[-1] += paragraph[len(body):]
         lines.extend(parts)
     from .pptx_export import _rule
+    cut = sum(len(line) for line in lines[:capacity])
+    if cut < len(text):
+        # Prefer a complete paragraph/sentence over fragments such as a currency
+        # prefix separated from its amount. Oversized single sentences still
+        # make progress and retain every character on the following page.
+        boundaries = [m.end() for m in re.finditer(r"\n+|(?<=[.!?。！？])\s+", text[:cut])]
+        if boundaries:
+            cut = boundaries[-1]
     _rule(slide, rect.x, rect.y + .03, .035, min(rect.h - .06, .62), PURPLE)
-    _put_text(slide, "".join(lines[:capacity]),
+    _put_text(slide, text[:cut],
               Rect(rect.x + .18, rect.y, rect.w - .18, rect.h))
     # Reflow on the next page, whose text column can be wider than this slot.
-    return "".join(lines[capacity:])
+    return text[cut:]
 
 
 def _base(presentation, title, message):
@@ -223,22 +241,40 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
             return rendered
     chart_obs = {oid for c in charts for oid in c.observation_ids}
     explicit = [oid for b in slide_plan.visual_blocks if b.role in {"kpi", "table"} for oid in b.observation_ids]
-    extra = [oid for oid in slide_plan.observation_ids if oid not in chart_obs]
+    # References establish provenance, not a request to display every raw row.
+    # Retain the legacy data-only fallback when no visual selection exists.
+    legacy_data_layout = slide_plan.layout in {"chart_plus_kpis", "chart_with_data", "data_overview"}
+    extra = ([oid for oid in slide_plan.observation_ids if oid not in chart_obs]
+             if not slide_plan.visual_blocks and (not charts or legacy_data_layout) else [])
     support_ids = list(dict.fromkeys([*explicit, *extra]))
     support = [index.get(oid) for oid in support_ids if index.get(oid)]
     if any(o.value is None or not o.evidence or o.validation_status not in {"valid", "partially_valid"} for o in support):
         raise ValueError("Supporting KPI/table evidence is incomplete or invalid.")
     insight_ids = list(dict.fromkeys(slide_plan.insight_ids + [iid for b in slide_plan.visual_blocks for iid in b.insight_ids]))
     insight_map = {i.id: i for i in result.insights}
-    commentary = list(dict.fromkeys([*slide_plan.bullets, *(insight_map[i].narrative for i in insight_ids if i in insight_map)]))
+    visible_insights = [iid for b in slide_plan.visual_blocks if b.role == "commentary" for iid in b.insight_ids]
+    if not slide_plan.bullets and not visible_insights:
+        visible_insights = insight_ids
+    commentary = list(dict.fromkeys([*slide_plan.bullets, *(insight_map[i].narrative for i in visible_insights if i in insight_map)]))
     text = "\n".join(t for t in commentary if t.strip() and t.strip() != slide_plan.message.strip())
     pages = sorted(set(slide_plan.source_pages) | {e.page for o in support for e in o.evidence}
                    | {e.page for c in charts for oid in [*c.observation_ids, *c.total_observation_ids] if index.get(oid) for e in index.get(oid).evidence}
                    | {e.page for iid in insight_ids if iid in insight_map for e in insight_map[iid].evidence})
     slide, top = _base(presentation, slide_plan.title, slide_plan.message)
     slide.name = f"composed_{slide_plan.layout}"
+    reference_ids = set(slide_plan.observation_ids) | chart_obs | set(support_ids)
+    reference_ids.update(oid for b in slide_plan.visual_blocks for oid in b.observation_ids)
+    reference_ids.update(oid for c in charts for oid in c.total_observation_ids)
+    # Keep exact values, qualifiers and page-level evidence recoverable without
+    # turning supporting references into duplicate audience-facing pages.
+    slide.notes_slide.notes_text_frame.text = json.dumps({
+        "slide_id": slide_plan.id,
+        "observations": [index.get(oid).model_dump(mode="json") for oid in sorted(reference_ids) if index.get(oid)],
+        "insights": [insight_map[i].model_dump(mode="json") for i in insight_ids if i in insight_map],
+        "source_pages": pages,
+    }, ensure_ascii=False, indent=2)
     geometry = compose_geometry(presentation.slide_width.inches, presentation.slide_height.inches, top, len(charts),
-        layout=slide_plan.layout, has_support=bool(support), has_commentary=bool(text))
+        layout=slide_plan.layout, has_support=bool(support), has_commentary=bool(text), commentary_text=text)
     for chart, rect in zip(charts, geometry.charts):
         title = next((b.title for b in slide_plan.visual_blocks if b.chart_ids == [chart.id] and b.title), chart.title)
         values = [index.get(oid) for oid in chart.observation_ids if index.get(oid)]
@@ -348,7 +384,11 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
         full = Rect(0.55, ctop, presentation.slide_width.inches - 1.1, bottom - ctop)
         if overflow:
             overflow = draw_support(continuation, overflow, full, table=True)
-        else:
+            used_bottom = max((s.top.inches + s.height.inches for s in continuation.shapes if s.name.startswith("table:")), default=ctop)
+            text_top = used_bottom + GUTTER
+            if not overflow and remaining and bottom - text_top >= .75:
+                remaining = _put_commentary(continuation, remaining, Rect(full.x, text_top, full.w, bottom - text_top))
+        elif remaining:
             remaining = _put_commentary(continuation, remaining, full)
         _put_text(continuation, _source_footer(pages), geometry.footer, size=FOOTNOTE_PT, color=MUTED)
         slides.append(continuation)

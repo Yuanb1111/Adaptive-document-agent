@@ -255,7 +255,7 @@ def repair_presentation_plan_claims(result: PipelineResult) -> list[str]:
     """
     if not result.presentation_plan:
         return []
-    plan, repairs = repair_presentation_plan(result.presentation_plan, result.observations)
+    plan, repairs = repair_presentation_plan(result.presentation_plan, result.observations, result.charts)
     result.presentation_plan = plan
     return repairs
 
@@ -411,7 +411,7 @@ def run_comprehensive_qa(result: PipelineResult, auto_repair: bool = True) -> QA
 
         # Revalidation pass
         validator = ClaimValidator()
-        claim_issues = validator.validate_plan(result.presentation_plan, result.observations)
+        claim_issues = validator.validate_plan(result.presentation_plan, result.observations, result.charts)
         reported_claim_transitions: set[tuple[str, str, str, str]] = set()
         for issue in claim_issues:
             if issue.code == "directional_contradiction":
@@ -438,10 +438,11 @@ def run_comprehensive_qa(result: PipelineResult, auto_repair: bool = True) -> QA
                     )
                 )
             else:
-                report.warnings.append(
+                target = report.critical_errors if issue.severity == "error" else report.warnings
+                target.append(
                     QAItem(
                         code=issue.code,
-                        severity="WARNING",
+                        severity="CRITICAL" if issue.severity == "error" else "WARNING",
                         message=issue.message,
                         related_ids=issue.related_ids,
                     )
@@ -572,7 +573,7 @@ def run_comprehensive_qa(result: PipelineResult, auto_repair: bool = True) -> QA
     if result.presentation_plan:
         from adaptive_document_agent.validation.cross_slide_validator import CrossSlideValidator
 
-        cross_issues = CrossSlideValidator(result.presentation_plan, result.observations).validate_and_repair(auto_repair=auto_repair)
+        cross_issues = CrossSlideValidator(result.presentation_plan, result.observations, result.charts).validate_and_repair(auto_repair=auto_repair)
         for issue in cross_issues:
             if issue.severity == "CRITICAL":
                 report.critical_errors.append(issue)

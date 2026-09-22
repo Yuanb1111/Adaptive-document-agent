@@ -9,7 +9,7 @@ from adaptive_document_agent.utils.ids import stable_id
 
 from .normalizer import infer_unit_defaults
 from .column_roles import explicit_percentage
-from .borderless_layout import source_lines, column_anchors, align_sparse_values, geometric_headers
+from .borderless_layout import source_lines, column_anchors, align_sparse_values, geometric_headers, is_wrapped_label
 from .period_header_geometry import geometric_periods
 
 _VALUE = re.compile(r"(?<![A-Za-z0-9])(?:\(?[+-]?(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)\)?[%％]?|[—–]|-(?!\S))")
@@ -64,7 +64,7 @@ class BorderlessTableExtractor:
             headers = geometric_headers(header_sources, anchors, headers)
             alignments = {r.line_index: align_sparse_values(r.values, r.boxes, anchors, maximum_values)
                           for r in group if len(r.values) < maximum_values}
-            row_specs = self._rows_with_sections(group, lines, maximum_values, alignments=alignments, header_index=year_index)
+            row_specs = self._rows_with_sections(group, lines, maximum_values, alignments=alignments, header_index=year_index, sources=sources)
             raw_rows = [cells for cells, _, _ in row_specs]
             has_ambiguous_rows = any(ambiguous for _, _, ambiguous in row_specs)
             context_start = max(0, (year_index if year_index is not None else group[0].line_index) - 8)
@@ -111,6 +111,7 @@ class BorderlessTableExtractor:
                                    alignment_status="ambiguous" if ambiguous else "resolved") for cells, row_periods, ambiguous in row_specs],
                     raw_cells=raw_rows,
                     raw_header_lines=[s.text for s in sources[max(0, year_index-4):group[0].line_index]] if year_index is not None else [],
+                    raw_body_lines=[s.text for s in sources[group[0].line_index:group[-1].line_index+1]],
                     confidence=0.68 if years else 0.55,
                     default_unit=unit,
                     default_raw_unit=raw_unit,
@@ -126,7 +127,11 @@ class BorderlessTableExtractor:
 
     @staticmethod
     def _parse_row(index: int, line: str) -> _CandidateRow | None:
-        line = re.sub(r"(?<=[A-Za-z])\(\d+\)", "", line)
+        # Only attached label annotations, including consecutive markers and a
+        # marker after a closing label parenthesis. Whitespace-separated '(2)'
+        # remains an accounting value. Mask rather than shift source offsets.
+        line = re.sub(r"(?<=[A-Za-z\u3400-\u9fff])(?P<close>\)*)(?P<notes>(?:\(\d+\))+)(?=\s|\.|$)",
+                      lambda match: match.group("close") + " " * len(match.group("notes")), line)
         # A list marker preceding a word belongs to the label, not the first
         # value. Keep real minus signs, parenthesised losses and empty cells.
         line = re.sub(r"^\s*[–—•-]\s+(?=[A-Za-z\u3400-\u9fff])", "", line)
@@ -301,7 +306,7 @@ class BorderlessTableExtractor:
         return " ".join(chunks[0])
 
     @staticmethod
-    def _rows_with_sections(group: list[_CandidateRow], lines: list[str], width: int, *, alignments=None, header_index=None) -> list[tuple[list[str | None], list[str | None], bool]]:
+    def _rows_with_sections(group: list[_CandidateRow], lines: list[str], width: int, *, alignments=None, header_index=None, sources=None) -> list[tuple[list[str | None], list[str | None], bool]]:
         output: list[tuple[list[str | None], list[str | None], bool]] = []
         initial_context = lines[max(0, group[0].line_index - 5) : group[0].line_index]
         active_period = next((period for line in reversed(initial_context) if (period := BorderlessTableExtractor._period_from_line(line))), None)
@@ -334,6 +339,13 @@ class BorderlessTableExtractor:
             label = row.label
             if row is group[0] and first_prefix:
                 label = re.sub(r"^[–—•-]\s+", "", first_prefix) + " " + label
+            elif (between and sources and row.line_index > 0
+                  and between[-1] == lines[row.line_index-1].strip(" .:")
+                  and is_wrapped_label(sources[row.line_index-1], sources[row.line_index], row.boxes)):
+                label = between.pop() + " " + label
+                for section in between:
+                    if len(section) <= 80 and len(re.findall(r"[A-Za-z]", section)) >= 2:
+                        output.append(([section, *([None] * width)], [None] * (width + 1), False))
             elif between and label[:1].islower():
                 label = " ".join([*between, label])
             elif between and previous_index >= group[0].line_index:

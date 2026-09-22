@@ -108,6 +108,9 @@ def validate_presentation_data(result: PipelineResult):
         if any(is_positive_topic_mismatch(observations[oid], slide, is_supporting_kpi=oid in kpi_ids) for oid in block_ids if oid in observations):
             issues.append(QAItem(code="slide_topic_mismatch", severity="CRITICAL", slide_id=slide.id,
                 related_ids=sorted(block_ids), message=f"Visual block table does not match slide '{slide.title}'."))
+        from .scoped_narrative_values import scoped_value_errors
+        for error in scoped_value_errors(slide, [observations[oid] for oid in obs_ids if oid in observations], result.observations):
+            issues.append(QAItem(code="metric_value_provenance_mismatch", severity="CRITICAL", slide_id=slide.id, message=error))
         if slide.slide_type != "analysis":
             continue
         numeric_ids = {oid for oid in obs_ids if oid in observations and observations[oid].value is not None}

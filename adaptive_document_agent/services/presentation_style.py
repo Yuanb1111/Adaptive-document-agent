@@ -1,6 +1,7 @@
 """Shared presentation tokens and deterministic semantic colours, independent of company."""
 
 from hashlib import sha256
+import math
 
 FONT = "Arial"
 DARK = "111827"
@@ -11,6 +12,17 @@ GUTTER = 0.28
 MIN_BODY_PT = 12
 CHART_TITLE_PT = 14
 FOOTNOTE_PT = 9
+
+
+def readable_axis_bounds(low: float, high: float) -> tuple[float, float, float]:
+    """Round padded axis limits to regular ticks without changing data values."""
+    span = high - low
+    if not math.isfinite(span) or span <= 0:
+        raise ValueError("Axis bounds must have a finite positive range.")
+    raw_step = span / 5
+    order = 10 ** math.floor(math.log10(raw_step))
+    step = next(m * order for m in (1, 2, 2.5, 5, 10) if m * order >= raw_step)
+    return math.floor(low / step) * step, math.ceil(high / step) * step, step
 
 
 def semantic_color(key: str) -> str:

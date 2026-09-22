@@ -1480,6 +1480,12 @@ def _add_native_chart(
                         chart.value_axis.maximum_scale = max_scaled * 1.25 if max_scaled > 0 else 0.0
                         chart.value_axis.minimum_scale = min_scaled * 1.45 if min_scaled < 0 else 0.0
                         chart.category_axis.tick_label_position = XL_TICK_LABEL_POSITION.LOW
+                    if has_negative:
+                        from .presentation_style import readable_axis_bounds
+                        low, high, step = readable_axis_bounds(chart.value_axis.minimum_scale, chart.value_axis.maximum_scale)
+                        chart.value_axis.minimum_scale = low
+                        chart.value_axis.maximum_scale = high
+                        chart.value_axis.major_unit = step
             except (AttributeError, ValueError, TypeError, NameError):
                 pass
     except (AttributeError, ValueError):

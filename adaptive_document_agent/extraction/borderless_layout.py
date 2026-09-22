@@ -63,6 +63,30 @@ def column_anchors(full_rows: list[list[tuple[float, float]]], width: int):
     return edges, centers, gap
 
 
+def is_wrapped_label(prefix: SourceLine, row: SourceLine, value_boxes) -> bool:
+    """Use a close hanging indent in the label column, never metric keywords.
+
+    Section headings/bulleted children are not wrapped labels. Without source
+    coordinates keep the existing conservative text-only interpretation.
+    """
+    if not prefix.spans or not row.spans or not value_boxes:
+        return False
+    if any(v is None for v in (prefix.top, prefix.bottom, row.top)):
+        return False
+    if (prefix.text.rstrip().endswith((":", "：")) or prefix.text.isupper()
+            or re.match(r"^[–—•-]\s+", row.text)):
+        return False
+    height = prefix.bottom - prefix.top
+    gap = row.top - prefix.bottom
+    prefix_left = min(s[2] for s in prefix.spans)
+    row_left = min(s[2] for s in row.spans)
+    prefix_right = max(s[3] for s in prefix.spans)
+    data_left = min(box[0] for box in value_boxes)
+    return (height > 0 and 0 <= gap <= height * .5
+            and height * .25 < row_left - prefix_left < height * 2
+            and prefix_right < data_left)
+
+
 def align_sparse_values(values: list[str], boxes, anchors, width: int):
     if not anchors or len(boxes) != len(values):
         return None

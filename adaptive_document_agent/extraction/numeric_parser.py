@@ -52,7 +52,7 @@ def parse_number(raw: str | int | float) -> ParsedNumber | None:
         value = float(raw)
         return ParsedNumber(raw_value=original, value=value) if isfinite(value) else None
 
-    text = original.replace("\u00a0", " ").strip()
+    text = original.replace("\u00a0", " ").replace("％", "%").strip()
     negative = (text.startswith("(") and text.endswith(")")) or text.endswith("-")
     if negative:
         text = text[1:-1] if text.startswith("(") else text[:-1]
@@ -86,6 +86,12 @@ def parse_number(raw: str | int | float) -> ParsedNumber | None:
         raw_unit = " ".join(part for part in [raw_unit, raw_scale] if part)
         text = text[: scale_match.start()] + text[scale_match.end() :]
 
+    # Unit suffixes may sit outside accounting parentheses: '(12.5)%'.
+    # Strip them first, then recognise the remaining parenthesised number.
+    text = text.strip()
+    if not negative and text.startswith("(") and text.endswith(")"):
+        negative = True
+        text = text[1:-1]
     cleaned = text.strip().replace(",", "")
     cleaned = re.sub(r"(?<=\d)\s+(?=\d{3}(?:\D|$))", "", cleaned)
     if not re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)", cleaned):
@@ -104,4 +110,3 @@ def parse_number(raw: str | int | float) -> ParsedNumber | None:
         currency=currency,
         confidence=0.95 if scale_match or currency_match else 1.0,
     )
-

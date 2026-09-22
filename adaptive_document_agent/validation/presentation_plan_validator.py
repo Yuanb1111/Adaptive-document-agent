@@ -307,6 +307,12 @@ class PresentationPlanValidator:
                 unsupported_numbers = claimed_numbers - allowed_numbers
                 if unsupported_numbers:
                     errors.append(f"slide {slide.id} contains unsupported numeric claims: {sorted(unsupported_numbers)}")
+                from .scoped_narrative_values import scoped_value_errors
+                selected_observations = [observation_by_id[oid] for oid in referenced_observation_ids if oid in observation_by_id]
+                errors.extend(scoped_value_errors(slide, selected_observations, result.observations))
+                from .claim_validator import ClaimValidator
+                errors.extend(issue.message for issue in ClaimValidator().validate_slide(slide, selected_observations)
+                              if issue.code == "non_monotonic_claim")
 
         summaries = [slide for slide in plan.slides if slide.slide_type == "executive_summary"]
         risks = [slide for slide in plan.slides if slide.slide_type == "risks"]

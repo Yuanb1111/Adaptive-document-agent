@@ -346,7 +346,7 @@ class DocumentOrchestrator:
                     from adaptive_document_agent.validation.claim_validator import repair_presentation_plan
                     from adaptive_document_agent.validation.cross_slide_validator import CrossSlideValidator
 
-                    presentation_plan, plan_repairs = repair_presentation_plan(presentation_plan, index.observations)
+                    presentation_plan, plan_repairs = repair_presentation_plan(presentation_plan, index.observations, charts)
                     for repair_msg in plan_repairs:
                         issues.append(
                             ValidationIssue(
@@ -356,7 +356,7 @@ class DocumentOrchestrator:
                                 stage="presentation",
                             )
                         )
-                    cross_val = CrossSlideValidator(presentation_plan, index.observations)
+                    cross_val = CrossSlideValidator(presentation_plan, index.observations, charts)
                     cross_issues = cross_val.validate_and_repair(auto_repair=True)
                     for c_issue in cross_issues:
                         issues.append(
