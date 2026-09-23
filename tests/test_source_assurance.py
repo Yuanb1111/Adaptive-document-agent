@@ -115,6 +115,21 @@ def test_profile_paginates_all_supported_facts_at_readable_size():
     assert all(p.font.size.pt >= 18 for s in deck.slides for shape in s.shapes if shape.name == "brief:body" for p in shape.text_frame.paragraphs)
 
 
+def test_oversized_company_fact_paginates_without_losing_source_copy():
+    from adaptive_document_agent.services.presentation_brief import BriefItem, render_profile
+
+    deck = blank_deck()
+    detail = "The source describes the company's products and sales channels across its reported markets, " * 35
+    render_profile(deck, "Company at a Glance", [BriefItem("Business and products", detail, [7])])
+
+    bodies = [shape.text for slide in deck.slides for shape in slide.shapes if shape.name == "brief:body"]
+    assert len(deck.slides) > 1
+    assert "".join(bodies) == detail
+    assert all(p.font.size.pt == 18 for slide in deck.slides for shape in slide.shapes
+               if shape.name == "brief:body" for p in shape.text_frame.paragraphs)
+    assert all("p. 7" in visible(slide) for slide in deck.slides)
+
+
 def test_company_overview_uses_richer_fields_without_duplicate_fact_continuation():
     from adaptive_document_agent.models import DocumentPage
     from adaptive_document_agent.services.pptx_export import _add_company_at_a_glance

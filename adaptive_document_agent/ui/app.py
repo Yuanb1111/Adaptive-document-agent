@@ -236,6 +236,8 @@ def run_app() -> None:
         visual_report = exc.report
     except CriticalQAError as exc:
         qa_error = exc
+    except ValueError as exc:
+        qa_error = CriticalQAError(f"PowerPoint generation failed: {exc}. No verified file was produced.")
     except Exception as exc:
         qa_error = CriticalQAError(f"PowerPoint generation failed ({type(exc).__name__}). No verified file was produced.")
 

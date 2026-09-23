@@ -56,7 +56,8 @@ def overview_items(profile: Any) -> tuple[list[BriefItem], str]:
 
 
 def render_brief(presentation: Any, title: str, items: list[BriefItem], *,
-                 notes: str = "", excerpt: bool = False, max_items: int = 3) -> Any:
+                 notes: str = "", excerpt: bool = False, max_items: int = 3,
+                 row_height_limit: float = 2.8) -> Any:
     """One flat page with bounded complete findings, no shrinking or overflow."""
     from .slide_compositor import _base
     from .pptx_export import _source_footer, _text, FOURIER_DARK, FOURIER_MUTED, FOURIER_PURPLE
@@ -70,7 +71,7 @@ def render_brief(presentation: Any, title: str, items: list[BriefItem], *,
         key = " ".join((item.title + " " + item.text).casefold().split())
         needed = _item_height(item, width)
         if (not item.text.strip() or key in seen or is_technical_copy(item.text)
-                or not fits_brief(item, width, min(2.8, bottom - top))
+                or not fits_brief(item, width, min(row_height_limit, bottom - top))
                 or used_height + needed + .12 * len(selected) > bottom - top):
             continue
         seen.add(key)
@@ -115,34 +116,55 @@ def render_profile(presentation: Any, title: str, items: list[BriefItem], *, not
         if compact_page is not None:
             return [compact_page]
     width = presentation.slide_width.inches - 1.3
+    from .slide_compositor import _lines
+    # Reserve the space required by a continuation title on every page.
+    top = max(1.45, .52 + .38 * len(_lines(title + " (continued)", width, 24)) + .15)
+    capacity = presentation.slide_height.inches - 1.28 - top
     expanded = []
     for item in items:
         if not item.text.strip() or is_technical_copy(item.text):
             continue
-        if _item_height(item, width) <= 2.4 and fits_brief(item, width, 2.8):
-            expanded.append(item)
-        else:
-            parts = re.split(r"(?<=[.!?。！？])\s+", item.text)
-            for part in parts:
-                piece = BriefItem(item.title, part, item.pages)
-                if _item_height(piece, width) > 2.4 or not fits_brief(piece, width, 2.8):
-                    raise ValueError("Company profile fact exceeds readable capacity; shorten its wording without dropping source qualifications.")
-                expanded.append(piece)
-    from .slide_compositor import _lines
-    # Account for the longer continuation title on every profile page.
-    top = max(1.45, .52 + .38 * len(_lines(title + " (continued)", width, 24)) + .15)
-    capacity = presentation.slide_height.inches - 1.28 - top
+        expanded.extend(_split_profile_item(item, width, capacity))
     pages, group, used = [], [], 0.0
     for item in expanded:
         needed = _item_height(item, width)
         if group and used + needed + .12 * len(group) > capacity:
-            pages.append(render_brief(presentation, title + (" (continued)" if pages else ""), group, notes=notes, max_items=len(group)))
+            pages.append(render_brief(presentation, title + (" (continued)" if pages else ""),
+                                      group, notes=notes, max_items=len(group), row_height_limit=capacity))
             group, used = [], 0.0
         group.append(item)
         used += needed
     if group:
-        pages.append(render_brief(presentation, title + (" (continued)" if pages else ""), group, notes=notes, max_items=len(group)))
+        pages.append(render_brief(presentation, title + (" (continued)" if pages else ""),
+                                  group, notes=notes, max_items=len(group), row_height_limit=capacity))
     return pages or [render_brief(presentation, title, [], notes=notes)]
+
+
+def _split_profile_item(item: BriefItem, width: float, capacity: float) -> list[BriefItem]:
+    """Split oversized copy at a readable page boundary without losing text."""
+    remaining = item.text
+    parts = []
+    while remaining:
+        candidate = BriefItem(item.title, remaining, item.pages, item.short_title)
+        if _item_height(candidate, width) <= capacity and fits_brief(candidate, width, capacity):
+            parts.append(candidate)
+            break
+        low, high = 1, len(remaining)
+        while low < high:
+            middle = (low + high + 1) // 2
+            piece = BriefItem(item.title, remaining[:middle], item.pages, item.short_title)
+            if _item_height(piece, width) <= capacity and fits_brief(piece, width, capacity):
+                low = middle
+            else:
+                high = middle - 1
+        if low < 1 or not fits_brief(BriefItem(item.title, remaining[:low], item.pages), width, capacity):
+            raise ValueError("Company profile heading exceeds readable page capacity.")
+        # Keep clauses together when a boundary falls near the available space.
+        boundary = max((match.end() for match in re.finditer(r"(?<=[.!?。！？])\s+|\s+", remaining[:low])
+                        if match.end() >= low * .6), default=low)
+        parts.append(BriefItem(item.title, remaining[:boundary], item.pages, item.short_title))
+        remaining = remaining[boundary:]
+    return parts
 
 
 def _render_profile_grid(presentation: Any, title: str, items: list[BriefItem], notes: str) -> Any | None:
