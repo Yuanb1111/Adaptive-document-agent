@@ -163,9 +163,9 @@ def _render_profile_grid(presentation: Any, title: str, items: list[BriefItem], 
     layouts = []
     for item in items:
         heading_lines = len(_lines(item.title, col_width, 18))
-        body_lines = len(_lines(item.text, col_width, 17))
+        body_lines = len(_lines(item.text, col_width, 18))
         heading_h = max(.34, heading_lines * .31)
-        body_h = body_lines * 17 * 1.25 / 72 + .08
+        body_h = body_lines * 18 * 1.25 / 72 + .08
         if heading_lines > 2 or heading_h + body_h > row_height:
             slide_id = presentation.slides._sldIdLst[-1]
             presentation.part.drop_rel(slide_id.rId)
@@ -180,10 +180,10 @@ def _render_profile_grid(presentation: Any, title: str, items: list[BriefItem], 
         y = top + row * (row_height + gap_y)
         heading = _text(slide, item.title, x, y, col_width, heading_h,
                         size=18, bold=True, color=FOURIER_PURPLE)
-        heading.name = "profile:heading"
+        heading.name = "brief:heading"
         body = _text(slide, item.text, x, y + heading_h + .06, col_width,
-                     body_h, size=17, color=FOURIER_DARK)
-        body.name = "profile:body"
+                     body_h, size=18, color=FOURIER_DARK)
+        body.name = "brief:body"
 
     pages = sorted({page for item in items for page in item.pages})
     _text(slide, _source_footer(pages), .55, presentation.slide_height.inches - .82,
