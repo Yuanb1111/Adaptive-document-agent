@@ -2236,6 +2236,10 @@ def repair_presentation_plan(
     charts: list[ChartPlan] | None = None,
 ) -> tuple[PresentationPlan, list[str]]:
     """Execute claim repairs across all slides using structured validation issues."""
+    from .presentation_evidence_alignment import align_redundant_slide_evidence
+
+    alignment_repairs = align_redundant_slide_evidence(plan, observations, charts)
     validator = ClaimValidator()
     issues = validator.validate_plan(plan, observations, charts)
-    return repair_presentation_plan_from_issues(plan, issues)
+    repaired_plan, claim_repairs = repair_presentation_plan_from_issues(plan, issues)
+    return repaired_plan, [*alignment_repairs, *claim_repairs]
