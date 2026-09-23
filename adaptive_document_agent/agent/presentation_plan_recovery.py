@@ -67,6 +67,7 @@ class PresentationPlanRecovery:
         company_profile = extract_structured_company_fields(initial_company, result)
         has_identity = is_company_identity_resolved(company_profile)
 
+        summary_slide = self._summary_slide(result)
         slides: list[PresentationSlide] = [
             PresentationSlide(
                 id="slide_cover",
@@ -80,7 +81,7 @@ class PresentationPlanRecovery:
                 title="Company at a Glance" if has_identity else "Document at a Glance",
                 source_pages=company_profile.source_pages or company_pages,
             ),
-            self._summary_slide(result),
+            summary_slide,
         ]
 
         # Thematic analysis slides with context-aware grouping
@@ -151,7 +152,7 @@ class PresentationPlanRecovery:
             )
 
         # Key Risks: only generated if risk evidence exists
-        risk_slide = self._risks_slide(result)
+        risk_slide = self._risks_slide(result, summary_slide)
         if risk_slide:
             slides.append(risk_slide)
 
@@ -286,12 +287,15 @@ class PresentationPlanRecovery:
         )
 
     @classmethod
-    def _risks_slide(cls, result: PipelineResult) -> PresentationSlide | None:
-        """Generate a risks slide only when explicit, evidenced risks exist."""
+    def _risks_slide(cls, result: PipelineResult, summary: PresentationSlide) -> PresentationSlide | None:
+        """Add only evidenced risks that are not already in the summary."""
         risk_terms = ("risk", "anomaly", "watch", "limitation", "decline", "negative", "loss", "uncertainty")
+        summary_ids = set(summary.insight_ids)
+        normalize = lambda value: re.sub(r"[\W_]+", " ", value.casefold()).strip()
+        summary_copy = {normalize(value) for value in (summary.message, *summary.bullets) if value.strip()}
         risk_insights = [
             item for item in result.insights
-            if item.evidence and (
+            if item.evidence and item.id not in summary_ids and normalize(item.title) not in summary_copy and (
                 item.kind in {"risk", "anomaly", "limitation"}
                 or any(term in item.title.casefold() or term in item.narrative.casefold() for term in risk_terms)
             )

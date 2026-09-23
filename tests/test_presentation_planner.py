@@ -280,6 +280,15 @@ def test_presentation_plan_recovery_fallback_builds_complete_modern_structure() 
     assert fallback_plan.company.identity_state == "UNRESOLVED"
 
 
+def test_fallback_omits_risk_already_selected_for_summary() -> None:
+    result = _result()
+    result.insights[0].kind = "risk"
+    plan = PresentationPlanRecovery().fallback(result)
+    assert plan.planning_origin == "fallback"
+    assert all(slide.slide_type != "risks" for slide in plan.slides)
+    PresentationPlanValidator().validate(plan, result)
+
+
 def test_chart_planner_prioritizes_core_metrics_over_peripheral_items() -> None:
     from adaptive_document_agent.agent.chart_planner import ChartPlanner
 
