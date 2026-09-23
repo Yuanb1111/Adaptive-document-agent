@@ -27,6 +27,7 @@ from .executor import AnalysisExecutor
 from .insight_generator import InsightGenerator
 from .presentation_planner import PresentationPlanner
 from .presentation_plan_recovery import PresentationPlanRecovery
+from .presentation_topic_selector import PresentationTopicSelector, series_directory
 from .report_generator import ReportGenerator
 from .report_planner import DynamicReportPlanner
 from .semantic_resolver import SemanticResolver
@@ -168,10 +169,33 @@ class DocumentOrchestrator:
         elif candidates_images:
             profile.data_quality_notes.append("Chart candidates were detected; no vision model is configured.")
 
+        topic_selection = None
+        requested_series = []
         notify("Generating insights and dynamic report")
         with record_timing(timings, "reporting"):
             insights = InsightGenerator(self.gateway).generate(results, observations)
             report_plan = DynamicReportPlanner(self.gateway).plan(profile, insights)
+            if self.gateway:
+                notify("Selecting presentation questions before chart generation")
+                topic_result = PipelineResult(
+                    document=document, profile=profile, observations=index.observations,
+                    analysis_plan=plan, analysis_results=results, insights=insights,
+                    report_plan=report_plan,
+                )
+                try:
+                    topic_selection = PresentationTopicSelector(self.gateway).select(topic_result)
+                    _, series_by_id = series_directory(topic_result)
+                    requested_series = [
+                        series_by_id[series_id]
+                        for topic in topic_selection.topics for series_id in topic.series_ids
+                    ]
+                except Exception as exc:
+                    issues.append(ValidationIssue(
+                        code="presentation_topic_selection_failed",
+                        message="Question-first presentation selection was unavailable: "
+                                + " ".join(str(exc).split())[:800],
+                        severity="warning", stage="presentation",
+                    ))
             charts = ChartPlanner().plan(
                 plan,
                 results,
@@ -180,6 +204,8 @@ class DocumentOrchestrator:
                 insights=insights,
                 report_plan=report_plan,
                 analysis_focus=analysis_focus,
+                requested_series=requested_series,
+                only_requested=bool(topic_selection and topic_selection.topics),
             )
             markdown = ReportGenerator().generate(
                 profile,
@@ -263,6 +289,8 @@ class DocumentOrchestrator:
                         insights=insights,
                         report_plan=report_plan,
                         analysis_focus=analysis_focus,
+                        requested_series=requested_series,
+                        only_requested=bool(topic_selection and topic_selection.topics),
                     )
                     if charts and report_plan:
                         markdown = ReportGenerator().generate(
@@ -304,6 +332,7 @@ class DocumentOrchestrator:
                     report_plan=report_plan,
                     report_markdown=markdown,
                     charts=charts,
+                    presentation_topics=topic_selection,
                     validation_warnings=issues,
                 )
                 try:
@@ -322,11 +351,23 @@ class DocumentOrchestrator:
                         )
                     )
                     try:
-                        presentation_plan = PresentationPlanRecovery().fallback(planning_result)
+                        recovery = PresentationPlanRecovery()
+                        if topic_selection and topic_selection.topics:
+                            try:
+                                presentation_plan = recovery.from_selected_topics(planning_result)
+                            except ValueError as topic_exc:
+                                issues.append(ValidationIssue(
+                                    code="presentation_topic_recovery_failed",
+                                    message="Selected questions could not form a validated presentation: "
+                                            + " ".join(str(topic_exc).split())[:800],
+                                    severity="warning", stage="presentation",
+                                ))
+                        if presentation_plan is None:
+                            presentation_plan = recovery.fallback(planning_result)
                         issues.append(
                             ValidationIssue(
                                 code="presentation_plan_fallback",
-                                message="An evidence-only presentation plan was generated in place of the invalid AI plan.",
+                                message="A validated question-first or evidence-only presentation plan was generated in place of the invalid AI slide plan.",
                                 severity="info",
                                 stage="presentation",
                             )
@@ -384,6 +425,7 @@ class DocumentOrchestrator:
             presentation_plan=presentation_plan,
             report_markdown=markdown,
             charts=charts,
+            presentation_topics=topic_selection,
             validation_warnings=issues,
             llm_usage=list(self.gateway.usage) if self.gateway else [],
             timings_ms=timings,

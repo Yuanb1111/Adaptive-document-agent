@@ -189,8 +189,12 @@ def build_presentation(result: PipelineResult, template_path: str | Path | None 
     else:
         _build_legacy_presentation(presentation, result)
 
-    # Append official Thank You slide at the very end after all appendix slides
-    _add_thank_you_slide(presentation)
+    # A sourced conclusion is a stronger ending than a generic template signoff.
+    has_planned_closing = bool(result.presentation_plan and any(
+        slide.slide_type == "risks" for slide in result.presentation_plan.slides
+    ))
+    if not has_planned_closing:
+        _add_thank_you_slide(presentation)
 
     _number_slides(presentation)
 
@@ -316,6 +320,7 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
 
     rendered_charts: list[ChartPlan] = []
     ordinal = 0
+    closing_slide_plan: PresentationSlide | None = None
     for slide_plan in plan.slides[3:]:
         if slide_plan.slide_type == "analysis":
             chart_requests = _planned_chart_requests(slide_plan)
@@ -394,7 +399,7 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
                 else:
                     continue
         elif slide_plan.slide_type == "risks":
-            _add_planned_text_slide(presentation, result, slide_plan)
+            closing_slide_plan = slide_plan
         elif slide_plan.slide_type == "data_quality":
             # Keep full methodological disclosure in the summary and appendix
             # notes without spending a sparse standalone audience page on it.
@@ -426,6 +431,8 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
             if quality_notes and len(presentation.slides) > previous_slide_count:
                 notes = presentation.slides[previous_slide_count].notes_slide.notes_text_frame
                 notes.text += "\n\nSource scope and data-quality notes:\n" + "\n".join(quality_notes)
+    if closing_slide_plan is not None:
+        _add_planned_text_slide(presentation, result, closing_slide_plan)
 
 
 def _planned_chart_requests(slide_plan: PresentationSlide) -> list[tuple[str, str | None]]:
@@ -465,7 +472,10 @@ def _add_planned_contents(presentation: Any, planned_slides: list[PresentationSl
         "data_quality": "Data Quality",
         "appendix": "Appendix",
     }
-    for item in planned_slides:
+    contents_order = [item for item in planned_slides if item.slide_type != "risks"] + [
+        item for item in planned_slides if item.slide_type == "risks"
+    ]
+    for item in contents_order:
         if item.slide_type not in defaults or item.slide_type == "data_quality":
             continue
         label = (item.section_title or defaults[item.slide_type]).strip()
@@ -2575,9 +2585,12 @@ def _finding_value(item: Observation, scale: float, scale_label: str) -> str:
 def _appendix_observations(result: PipelineResult, charts: list[ChartPlan]) -> list[Observation]:
     index = DocumentIndex(result.observations)
     used_ids = [identifier for plan in charts for identifier in [*plan.observation_ids, *plan.total_observation_ids]]
+    if result.presentation_plan and result.presentation_plan.themes:
+        for theme in result.presentation_plan.themes:
+            used_ids.extend(theme.observation_ids)
     selected = [index.get(identifier) for identifier in used_ids]
     pool = [item for item in selected if item is not None and item.value is not None]
-    if not pool or len(pool) < 8:
+    if not (result.presentation_plan and result.presentation_plan.themes) and (not pool or len(pool) < 8):
         all_obs = [item for item in result.observations if item is not None and item.value is not None]
         seen_ids = {p.id for p in pool}
         pool = pool + [item for item in all_obs if item.id not in seen_ids]

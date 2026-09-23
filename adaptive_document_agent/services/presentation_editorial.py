@@ -45,7 +45,9 @@ def review_presentation(plan: PresentationPlan | None, result: PipelineResult) -
     if plan is None:
         return [EditorialFinding("presentation_legacy", "Legacy evidence export: no analytical presentation plan is available.")]
     findings = []
-    if plan.planning_origin == "fallback" or any(i.code == "presentation_plan_fallback" for i in result.validation_warnings):
+    if plan.planning_origin == "topic_recovery":
+        findings.append(EditorialFinding("presentation_degraded", "Question-first recovery: the model-selected analytical questions were retained, but the final slide wording needs editorial review."))
+    elif plan.planning_origin == "fallback" or any(i.code == "presentation_plan_fallback" for i in result.validation_warnings):
         findings.append(EditorialFinding("presentation_degraded", "Evidence-only fallback: the analytical presentation plan could not be retained. Review the planning diagnostic before using this deck as a final report."))
     analysis = [s for s in plan.slides if s.slide_type == "analysis"]
     # This is a review request, not an instruction to merge incompatible bases
@@ -108,6 +110,6 @@ def stamp_editorial_review(plan: PresentationPlan, result: PipelineResult, *, or
     """Server-owned status; never accept the model's self-assessment."""
     plan.planning_origin = origin
     findings = review_presentation(plan, result)
-    plan.editorial_status = "degraded" if origin == "fallback" else "needs_review" if findings else "ready"
+    plan.editorial_status = "degraded" if origin in {"fallback", "topic_recovery"} else "needs_review" if findings else "ready"
     plan.editorial_notes = [f"{f.slide_id + ': ' if f.slide_id else ''}{f.message}" for f in findings]
     return plan

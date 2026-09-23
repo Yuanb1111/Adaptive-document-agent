@@ -4,9 +4,11 @@ import pytest
 from adaptive_document_agent.agent.executor import AnalysisExecutor
 from adaptive_document_agent.agent.orchestrator import DocumentOrchestrator
 from adaptive_document_agent.agent.presentation_planner import PresentationPlanner
+from adaptive_document_agent.agent.presentation_topic_selector import series_directory
 from adaptive_document_agent.document_model import DocumentIndex
 from adaptive_document_agent.models import AnalysisTask, Observation
 from adaptive_document_agent.services.llm import LLMGateway, LLMSettings, MockLLMClient, ProviderName
+from adaptive_document_agent.utils.ids import stable_id
 
 
 def synthetic_time_series_pdf() -> bytes:
@@ -119,6 +121,9 @@ def test_complete_pipeline_with_mock_llm_controls_semantic_selection() -> None:
     baseline = DocumentOrchestrator().analyse_pdf(pdf)
     candidate_ids = [item.id for item in baseline.candidates]
     task = baseline.analysis_plan[0]
+    topic_directory, topic_lookup = series_directory(baseline)
+    topic_series_id = topic_directory[0]["id"]
+    topic_chart_id = stable_id("chart", "topic_series", *(item.id for item in topic_lookup[topic_series_id]))
     responses = [
         {"summary": "Three-year revenue series", "metrics": ["Revenue"], "time_periods": ["2023", "2024", "2025"]},
         {
@@ -135,12 +140,14 @@ def test_complete_pipeline_with_mock_llm_controls_semantic_selection() -> None:
         {"scores": [{"candidate_id": identifier, "score": 0.9, "reasons": ["Relevant and complete"], "rejected": False} for identifier in candidate_ids]},
         {"insights": [{"id": "insight_mock", "title": task.title, "narrative": "The validated series changed over the reported period.", "kind": "calculated_result", "confidence": 0.9, "result_ids": [task.id]}]},
         {"title": "Revenue Performance Analysis", "sections": [{"title": "Revenue Performance", "purpose": "Explain the validated change.", "insight_ids": ["insight_mock"]}]},
+        {"topics": [{"id": "revenue", "title": "Revenue movement", "question": "How did revenue change?",
+                     "rationale": "The document contains one comparable series.", "series_ids": [topic_series_id]}]},
         {
             "title": "Revenue Performance Review",
             "report_type": "Performance analysis",
             "themes": [{"id": "revenue", "title": "Revenue movement", "question": "How did revenue change?",
                         "rationale": "The document contains one comparable series.",
-                        "chart_ids": ["chart_eb76411966450f2e"], "insight_ids": ["insight_mock"], "source_pages": [1]}],
+                        "chart_ids": [topic_chart_id], "insight_ids": ["insight_mock"], "source_pages": [1]}],
             "company": {
                 "name": "Revenue document",
                 "one_line_description": "A source document reporting a three-year revenue series.",
@@ -151,7 +158,7 @@ def test_complete_pipeline_with_mock_llm_controls_semantic_selection() -> None:
                 {"id": "cover", "slide_type": "cover", "title": "Revenue Performance Review", "message": "Three-year evidence review"},
                 {"id": "overview", "slide_type": "company_overview", "title": "Document at a Glance", "source_pages": [1]},
                 {"id": "summary", "slide_type": "executive_summary", "title": "Revenue changed across the reported period", "insight_ids": ["insight_mock"], "source_pages": [1]},
-                {"id": "analysis", "slide_type": "analysis", "title": "Revenue rose across all reported years", "section_title": "Financial Performance", "message": "The reported series shows sustained growth.", "chart_ids": ["chart_eb76411966450f2e"], "insight_ids": ["insight_mock"], "source_pages": [1], "theme_id": "revenue", "analytical_question": "How did revenue change?", "selection_reason": "Revenue is the only comparable series in this document."},
+                {"id": "analysis", "slide_type": "analysis", "title": "Revenue rose across all reported years", "section_title": "Financial Performance", "message": "The reported series shows sustained growth.", "chart_ids": [topic_chart_id], "insight_ids": ["insight_mock"], "source_pages": [1], "theme_id": "revenue", "analytical_question": "How did revenue change?", "selection_reason": "Revenue is the only comparable series in this document."},
                 {"id": "quality", "slide_type": "data_quality", "title": "Data quality and methodology"},
                 {"id": "appendix", "slide_type": "appendix", "title": "Source data"},
             ],
@@ -167,7 +174,7 @@ def test_complete_pipeline_with_mock_llm_controls_semantic_selection() -> None:
     assert result.presentation_plan is not None
     assert result.presentation_plan.slides[1].title == "Document at a Glance"
     assert "## Revenue overview" in result.report_markdown
-    assert len(client.calls) == 8
+    assert len(client.calls) == 9
 
 
 def test_presentation_plan_failure_does_not_discard_completed_analysis(monkeypatch: pytest.MonkeyPatch) -> None:

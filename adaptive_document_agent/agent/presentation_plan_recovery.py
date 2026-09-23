@@ -16,6 +16,7 @@ from adaptive_document_agent.models import (
     PipelineResult,
     PresentationPlan,
     PresentationSlide,
+    PresentationTheme,
     PresentationVisualBlock,
 )
 from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
@@ -29,6 +30,109 @@ class PresentationPlanRecovery:
     def repair(self, plan: PresentationPlan, result: PipelineResult) -> PresentationPlan:
         """Prune unsupported material and align citations via PresentationPlanRepairer."""
         return PresentationPlanRepairer().repair(plan, result)
+
+    def from_selected_topics(self, result: PipelineResult) -> PresentationPlan:
+        """Retain model-selected questions if final slide writing fails validation.
+
+        The model has decided semantic relationships. This recovery only binds
+        its exact series IDs to validated observations and available charts.
+        """
+        from .presentation_topic_selector import series_directory
+
+        selection = result.presentation_topics
+        if not selection or not selection.topics:
+            raise ValueError("No selected presentation topics are available")
+        base = self.fallback(result)
+        _, series_by_id = series_directory(result)
+        observation_by_id = {item.id: item for item in result.observations}
+        from adaptive_document_agent.services.pptx_export import _usable_charts
+        usable_chart_ids = {chart.id for chart in _usable_charts(result)}
+        themes: list[PresentationTheme] = []
+        analysis_slides: list[PresentationSlide] = []
+        for topic in selection.topics:
+            members = list(dict.fromkeys(
+                item.id for sid in topic.series_ids for item in series_by_id.get(sid, [])
+                if item.value is not None and item.evidence
+                and item.validation_status in {"valid", "partially_valid"}
+            ))
+            observations = {oid: observation_by_id[oid] for oid in members if oid in observation_by_id}
+            if len(observations) < 2:
+                continue
+            chart_ids = [
+                chart.id for chart in result.charts if chart.id in usable_chart_ids
+                if set(chart.observation_ids) <= observations.keys()
+                and set(chart.observation_ids) & observations.keys()
+            ][:3]
+            if not chart_ids and len(members) > 40:
+                # Never silently truncate a large unchartable series into a
+                # purportedly complete audience analysis.
+                continue
+            pages = sorted({e.page for item in observations.values() for e in item.evidence})
+            theme = PresentationTheme(
+                id=topic.id, title=topic.title, question=topic.question,
+                rationale=topic.rationale, chart_ids=chart_ids,
+                observation_ids=members, caveats=topic.caveats,
+                source_pages=pages,
+            )
+            layout = "hero_plus_supporting" if len(chart_ids) > 1 else "chart_with_data" if chart_ids else "data_overview"
+            slide = PresentationSlide(
+                id=f"topic_{topic.id}", slide_type="analysis", title=topic.title,
+                section_id=topic.id, section_title=topic.title,
+                slide_role="overview", layout=layout, message=topic.question,
+                chart_ids=chart_ids, observation_ids=members[:40],
+                theme_id=topic.id, analytical_question=topic.question,
+                selection_reason=topic.rationale, comparison_mode="parallel" if len(chart_ids) > 1 else "context",
+                source_pages=pages,
+            )
+            themes.append(theme)
+            analysis_slides.append(slide)
+        if not analysis_slides:
+            raise ValueError("Selected presentation topics contain no usable analytical evidence")
+        base.themes = themes
+        base.coverage_notes = [
+            f"{series_by_id[item.series_id][0].metric_original}: {item.reason}"
+            for item in selection.omissions if item.series_id in series_by_id
+        ]
+        linked_metrics = set()
+        for theme in themes:
+            for oid in theme.observation_ids:
+                item = observation_by_id.get(oid)
+                if item is None:
+                    continue
+                categories = item.category_dimensions or {
+                    key: value for key, value in item.dimensions.items()
+                    if key not in {"table_context", "section", "period_basis", "column_role"}
+                }
+                label = item.metric_original.strip()
+                if categories:
+                    linked_metrics.add((label + " (" + ", ".join(str(v) for _, v in sorted(categories.items())) + ")").casefold())
+                else:
+                    linked_metrics.add(label.casefold())
+        topic_insight_ids = {
+            item.id for item in result.insights
+            if item.metric and item.metric.strip().casefold() in linked_metrics
+        }
+        selected_observation_ids = {oid for theme in themes for oid in theme.observation_ids}
+        inputs_by_task = {
+            item.task_id: set(item.input_observation_ids)
+            for item in result.analysis_results
+        }
+        topic_insight_ids.update(
+            item.id for item in result.insights
+            if any(inputs_by_task.get(task_id) and inputs_by_task[task_id] <= selected_observation_ids
+                   for task_id in item.result_ids)
+        )
+        closing = self._risks_slide(
+            result, base.slides[2], allowed_insight_ids=topic_insight_ids,
+            include_summary_insights=True,
+        )
+        base.slides = [
+            *base.slides[:3], *analysis_slides,
+            *([closing] if closing else []),
+            *(slide for slide in base.slides if slide.slide_type in {"data_quality", "appendix"}),
+        ]
+        from adaptive_document_agent.services.presentation_editorial import stamp_editorial_review
+        return stamp_editorial_review(PresentationPlanValidator().validate(base, result), result, origin="topic_recovery")
 
     def fallback(self, result: PipelineResult) -> PresentationPlan:
         """Build a modern, evidence-only deck when no AI plan can be validated.
@@ -66,13 +170,23 @@ class PresentationPlanRecovery:
         )
         company_profile = extract_structured_company_fields(initial_company, result)
         has_identity = is_company_identity_resolved(company_profile)
+        if has_identity and re.search(
+            r"(?i)\b(?:unnamed\s+(?:issuer|company)|(?:issuer|company)\s+name\s+(?:is\s+)?(?:not\s+(?:stated|provided|disclosed)|unavailable))\b",
+            company_profile.one_line_description,
+        ):
+            # A scoped discovery summary cannot contradict a sourced identity.
+            company_profile.one_line_description = ""
+            company_profile.field_source_pages.pop("one_line_description", None)
+        cover_title = result.report_plan.title
+        if has_identity and re.search(r"(?i)\bunnamed\s+(?:\w+\s+){0,3}(?:issuer|company|prospectus)\b", cover_title):
+            cover_title = f"{company_profile.name}: {result.profile.document_type}"
 
         summary_slide = self._summary_slide(result)
         slides: list[PresentationSlide] = [
             PresentationSlide(
                 id="slide_cover",
                 slide_type="cover",
-                title=result.report_plan.title,
+                title=cover_title,
                 message=result.profile.document_purpose or "Evidence-bound document intelligence analysis",
             ),
             PresentationSlide(
@@ -287,35 +401,54 @@ class PresentationPlanRecovery:
         )
 
     @classmethod
-    def _risks_slide(cls, result: PipelineResult, summary: PresentationSlide) -> PresentationSlide | None:
-        """Add only evidenced risks that are not already in the summary."""
-        risk_terms = ("risk", "anomaly", "watch", "limitation", "decline", "negative", "loss", "uncertainty")
+    def _risks_slide(
+        cls, result: PipelineResult, summary: PresentationSlide,
+        *, allowed_insight_ids: set[str] | None = None,
+        include_summary_insights: bool = False,
+    ) -> PresentationSlide | None:
+        """Close with sourced implications and monitoring points, not metric names."""
         summary_ids = set(summary.insight_ids)
         normalize = lambda value: re.sub(r"[\W_]+", " ", value.casefold()).strip()
         summary_copy = {normalize(value) for value in (summary.message, *summary.bullets) if value.strip()}
-        risk_insights = [
+        eligible = [
             item for item in result.insights
-            if item.evidence and item.id not in summary_ids and normalize(item.title) not in summary_copy and (
-                item.kind in {"risk", "anomaly", "limitation"}
-                or any(term in item.title.casefold() or term in item.narrative.casefold() for term in risk_terms)
-            )
+            if item.evidence
+            and (allowed_insight_ids is None or item.id in allowed_insight_ids)
+            and (include_summary_insights or item.id not in summary_ids)
+            and (include_summary_insights or normalize(item.title) not in summary_copy)
         ]
-        if not risk_insights:
+        eligible.sort(key=lambda item: (item.importance, item.confidence), reverse=True)
+        bullets: list[str] = []
+        selected_ids: list[str] = []
+        pages: set[int] = set()
+        for field in ("implication", "watch_item"):
+            for item in eligible:
+                statement = (getattr(item, field) or "").strip()
+                if (not statement or any(char.isdigit() for char in statement)
+                    or re.search(r"(?i)\b(?:caused|driven by|due to|contributed to)\b", statement)
+                    or normalize(statement) in summary_copy
+                    or normalize(statement) in {normalize(bullet) for bullet in bullets}):
+                    continue
+                bullets.append(statement)
+                selected_ids.append(item.id)
+                pages.update(source.page for source in item.evidence)
+                if len(bullets) >= 4:
+                    break
+            if len(bullets) >= 4:
+                break
+        if not bullets:
             return None
-        risk_insights = sorted(risk_insights, key=lambda item: (item.importance, item.confidence), reverse=True)[:4]
-        pages = sorted({source.page for item in risk_insights for source in item.evidence})
-        bullets = [item.title for item in risk_insights if not any(char.isdigit() for char in item.title)][:4]
         return PresentationSlide(
             id="slide_risks",
             slide_type="risks",
-            title="Key Risks and Watch Items",
+            title="Conclusions and Watch Items",
             section_id="risks",
-            section_title="Key risks",
+            section_title="Conclusions",
             slide_role="risk",
-            message="Evidence-backed risk indicators and areas of operational or financial monitoring.",
+            message="Implications and indicators to monitor, based on the cited findings.",
             bullets=bullets,
-            insight_ids=[item.id for item in risk_insights],
-            source_pages=pages,
+            insight_ids=list(dict.fromkeys(selected_ids)),
+            source_pages=sorted(pages),
         )
 
     @staticmethod

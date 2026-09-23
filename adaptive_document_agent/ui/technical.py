@@ -53,7 +53,7 @@ def render(st, result: PipelineResult) -> None:
         else:
             st.markdown(f"- `{presentation_failure.message}`")
         if any(issue.code == "presentation_plan_fallback" for issue in result.validation_warnings):
-            st.info("A deterministic evidence-only fallback presentation was generated in place of the invalid AI plan.")
+            st.info("A validated question-first or evidence-only fallback presentation replaced the invalid AI slide draft.")
     elif result.presentation_plan:
         st.subheader("Presentation Plan Diagnostics")
         from adaptive_document_agent.services.presentation_editorial import review_presentation
@@ -69,6 +69,13 @@ def render(st, result: PipelineResult) -> None:
             st.error(issue.message)
     if result.presentation_plan is None:
         st.warning("No validated presentation plan is available. PowerPoint uses the legacy draft layout.")
+
+    if result.presentation_topics:
+        st.subheader("Presentation Questions Selected Before Charts")
+        st.json([item.model_dump(mode="json") for item in result.presentation_topics.topics])
+        if result.presentation_topics.omissions:
+            st.caption("Important evidence considered but not promoted to a presentation topic")
+            st.json([item.model_dump(mode="json") for item in result.presentation_topics.omissions])
 
     st.subheader("Document Profile")
     st.json(result.profile.model_dump(mode="json"))

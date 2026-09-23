@@ -125,12 +125,61 @@ class ChartPlanner:
         report_plan: ReportPlan | None = None,
         analysis_focus: str | None = None,
         maximum: int = 10,
+        requested_series: list[list[Observation]] | None = None,
+        only_requested: bool = False,
     ) -> list[ChartPlan]:
         valid_tasks = {result.task_id: result for result in results if result.result is not None and result.evidence}
         output: list[ChartPlan] = []
         seen_series: set[tuple[str, ...]] = set()
         seen_metrics: set[str] = set()
         chart_type_counts: Counter[ChartType] = Counter()
+
+        # A semantic topic decision precedes visual selection. Valid requested
+        # series are not displaced by the generic top-ten chart quota.
+        for requested in requested_series or []:
+            observations = [index.get(item.id) for item in requested]
+            observations = [item for item in observations if item and item.value is not None and item.evidence]
+            if len(observations) < 2 or conflicting_groups(observations):
+                continue
+            series = best_period_series(observations)
+            if len(series) < 2 or not is_meaningful_metric(series[0]) or not score_chartability(series).is_chartable:
+                continue
+            identifiers = [item.id for item in series]
+            series_key = tuple(sorted(identifiers))
+            if series_key in seen_series:
+                continue
+            label = display_metric_name(series[0])
+            metric = metric_key(series[0])
+            chart_type = self._select_period_chart_type(series, chart_type_counts)
+            available_types: list[ChartType] = ["line", "bar", "table"]
+            if len(series) >= 4 and all(float(item.value) >= 0 for item in series if item.value is not None):
+                available_types.insert(2, "area")
+            output.append(ChartPlan(
+                id=stable_id("chart", "topic_series", *identifiers),
+                title=f"{label} — Reported Values",
+                chart_type=chart_type,
+                question="How do the reported values compare across compatible periods?",
+                observation_ids=identifiers,
+                source_pages=sorted({e.page for item in series for e in item.evidence}),
+                available_chart_types=available_types,
+                x_metric=metric,
+                y_metric=metric,
+                x_axis_title="Period",
+                y_axis_title=self._metric_title(label, series),
+            ))
+            seen_series.add(series_key)
+            seen_metrics.add(metric)
+            chart_type_counts[chart_type] += 1
+
+        if only_requested:
+            from adaptive_document_agent.services.composition_candidates import reported_composition_charts
+            requested_ids = {item.id for group in requested_series or [] for item in group}
+            for chart in reported_composition_charts(index, maximum=len(index.observations)):
+                if (set(chart.observation_ids) <= requested_ids
+                    and tuple(sorted(chart.observation_ids)) not in seen_series):
+                    output.append(chart)
+                    seen_series.add(tuple(sorted(chart.observation_ids)))
+            return output
 
         focus_terms = [w.casefold() for w in re.findall(r"\b\w{3,}\b", analysis_focus or "")]
         insight_text = " ".join(
@@ -200,9 +249,12 @@ class ChartPlanner:
             scored_tasks.append((score, task, observations, identifiers, supported_type, x_metric, y_metric))
 
         # Select top task charts
+        total_limit = max(maximum, len(output))
         for _, task, observations, identifiers, _, x_metric, y_metric in sorted(
             scored_tasks, key=lambda item: item[0], reverse=True
         ):
+            if len(output) >= total_limit:
+                break
             series_key = tuple(sorted(identifiers))
             if series_key in seen_series:
                 continue
@@ -231,8 +283,6 @@ class ChartPlanner:
                     y_axis_title=self._metric_title(y_metric or x_metric, observations),
                 )
             )
-            if len(output) >= maximum:
-                break
 
         # Reported categorical matrices offer composition views only when their
         # complete denominator and compatible periods can be established.

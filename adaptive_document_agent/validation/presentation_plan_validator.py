@@ -80,6 +80,17 @@ class PresentationPlanValidator:
         ) or bool(plan.company.products or plan.company.segments or plan.company.geographies or plan.company.key_facts)
         if company_has_content and not company_pages:
             errors.append("company profile content must cite at least one source page")
+        from adaptive_document_agent.services.company_extractor import is_generic_name
+        if plan.company.name.strip() and not is_generic_name(plan.company.name) and company_pages:
+            identity_absent = re.compile(
+                r"(?i)\b(?:unnamed\s+(?:\w+\s+){0,3}(?:issuer|company|prospectus)"
+                r"|(?:issuer|company)(?:\s+legal)?\s+name\s+(?:is\s+)?not\s+(?:stated|provided|disclosed))\b"
+            )
+            if identity_absent.search(plan.company.one_line_description):
+                errors.append("company overview contradicts the sourced company identity")
+            cover_title = next((slide.title for slide in plan.slides if slide.slide_type == "cover"), plan.title)
+            if identity_absent.search(cover_title):
+                errors.append("cover title contradicts the sourced company identity")
         for label, values in (
             ("products", plan.company.products),
             ("segments", plan.company.segments),

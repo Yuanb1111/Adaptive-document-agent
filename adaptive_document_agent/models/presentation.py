@@ -122,13 +122,38 @@ class PresentationTheme(BaseModel):
     source_pages: list[int] = Field(default_factory=list)
 
 
+class PresentationTopic(BaseModel):
+    """A model-selected question, before any presentation chart is chosen."""
+
+    id: str
+    title: str
+    question: str
+    rationale: str
+    series_ids: list[str] = Field(default_factory=list, max_length=3)
+    caveats: list[str] = Field(default_factory=list, max_length=3)
+
+
+class PresentationOmission(BaseModel):
+    """An important considered series omitted from the audience narrative."""
+
+    series_id: str
+    reason: str
+
+
+class PresentationTopicSelection(BaseModel):
+    """The semantic topic decision made before chart generation."""
+
+    topics: list[PresentationTopic] = Field(default_factory=list, max_length=8)
+    omissions: list[PresentationOmission] = Field(default_factory=list, max_length=12)
+
+
 class PresentationPlan(BaseModel):
     """AI-selected story plan consumed by the deterministic PPT renderer."""
 
     title: str
     report_type: str = "Document analysis"
     company: CompanyProfile = Field(default_factory=CompanyProfile)
-    planning_origin: Literal["model", "repaired", "fallback", "legacy"] = "legacy"
+    planning_origin: Literal["model", "repaired", "topic_recovery", "fallback", "legacy"] = "legacy"
     editorial_status: Literal["unreviewed", "ready", "needs_review", "degraded"] = "unreviewed"
     editorial_notes: list[str] = Field(default_factory=list)
     coverage_notes: list[str] = Field(default_factory=list, max_length=12)

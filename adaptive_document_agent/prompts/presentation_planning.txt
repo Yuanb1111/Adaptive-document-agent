@@ -9,6 +9,9 @@ Do not place a number in a title, message, or bullet unless that exact number ap
 When retained references have source pages, copy those page numbers into the slide source_pages field.
 
 The plan must remain document-adaptive. Do not force finance, liquidity, working capital, cash flow, or any other topic unless the supplied evidence supports it.
+When preselected_topics are supplied, they were chosen from the full extracted series directory before chart generation. Use those analytical questions and their linked evidence as the main presentation backbone. You may combine overlapping questions or omit one with a specific coverage note, but do not replace the selected story with the first available charts. important_omissions record significant evidence considered but not promoted to a page. Chart availability does not decide semantic importance; an evidence-backed table is valid when a selected series is not chartable.
+Every analysis page must use at least one observation from a preselected topic. Represent each preselected topic in the analysis pages, or name its topic ID or title and the reason for omission in coverage_notes. You may use additional corroborating evidence when it is relevant and compatible.
+The user-selected analysis scope provides the primary quantitative evidence. Background page excerpts can inform the company overview and source-supported business context, but may not replace an observation or imply a financial driver without a supported link.
 
 Theme-first planning, within this single response:
 1. Read the evidence_catalog series, periods, scopes, limitations and calculations. Use the document purpose and validated insights to decide which analytical questions matter. Different metrics can be related even when their labels share no words. Structural related_evidence links are retrieval hints, NOT semantic conclusions or proof of causality.

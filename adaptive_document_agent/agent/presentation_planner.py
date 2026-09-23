@@ -23,22 +23,40 @@ class PresentationPlanner:
         # thousands of observations; an oversized catalogue makes it harder
         # for the model to organise a coherent story even when it fits its
         # nominal context window. Chart observations remain available below.
+        has_preselected_topics = bool(result.presentation_topics and result.presentation_topics.topics)
         catalog = build_evidence_catalog(
             result,
-            max_series=30,
-            max_observations=130,
-            max_source_pages=8,
-            max_calculations=90,
+            max_series=16 if has_preselected_topics else 30,
+            max_observations=80 if has_preselected_topics else 130,
+            max_source_pages=6 if has_preselected_topics else 8,
+            max_calculations=50 if has_preselected_topics else 90,
         )
         catalog_ids = {o["id"] for o in catalog["observations"]}
         chart_ids = {oid for c in result.charts for oid in [*c.observation_ids, *c.total_observation_ids]}
+        topic_observation_ids: set[str] = set()
+        topic_evidence = []
+        if result.presentation_topics:
+            from .presentation_topic_selector import series_directory
+            _, series_by_id = series_directory(result)
+            for topic in result.presentation_topics.topics:
+                members = [o for sid in topic.series_ids for o in series_by_id.get(sid, [])]
+                topic_observation_ids.update(o.id for o in members)
+                topic_evidence.append({
+                    **topic.model_dump(mode="json"),
+                    "observation_ids": [o.id for o in members],
+                    "source_pages": sorted({e.page for o in members for e in o.evidence}),
+                    "chart_ids": [c.id for c in result.charts if set(c.observation_ids) & {o.id for o in members}],
+                })
         payload = {
             "document_profile": result.profile.model_dump(mode="json"),
             "document_page_count": result.document.page_count,
             "page_excerpts": self._page_excerpts(result.document, result.profile, result.observations),
             "observations": catalog.pop("observations"),
             "evidence_catalog": catalog,
-            "chart_observations": [observation_record(o) for o in result.observations if o.id in chart_ids - catalog_ids],
+            "chart_observations": [observation_record(o) for o in result.observations if o.id in (chart_ids | topic_observation_ids) - catalog_ids],
+            "preselected_topics": topic_evidence,
+            "important_omissions": [item.model_dump(mode="json") for item in result.presentation_topics.omissions]
+            if result.presentation_topics else [],
             "insights": [
                 {
                     **item.model_dump(mode="json", exclude={"evidence"}),
@@ -65,6 +83,7 @@ class PresentationPlanner:
         safe_original = None
         try:
             validator.validate(proposed, result)
+            self._validate_topic_alignment(proposed, result)
             safe_original = proposed.model_copy(deep=True)
             editorial = review_presentation(proposed, result)
             if editorial:
@@ -96,25 +115,68 @@ class PresentationPlanner:
                     stage="presentation",
                     allow_repair=False,
                 )
-                return stamp_editorial_review(validator.validate(candidate, result), result, origin="repaired")
+                validator.validate(candidate, result)
+                self._validate_topic_alignment(candidate, result)
+                revised_findings = review_presentation(candidate, result)
+                if revised_findings:
+                    raise ValueError("Presentation editorial revision remains weak: " + " ".join(
+                        f"{item.slide_id or 'deck'}: {item.message}" for item in revised_findings
+                    ))
+                return stamp_editorial_review(candidate, result, origin="repaired")
             except Exception as repair_exc:
                 # The deterministic recovery is deliberately narrower than a model repair:
                 # it can only remove unreferenced material and align citations.
                 model_repair_error = str(repair_exc)
             if safe_original is not None:
+                if result.presentation_topics and result.presentation_topics.topics:
+                    raise ValueError(
+                        "The evidence-validated slide draft remained editorially weak; "
+                        "retain the preselected question plan instead. " + model_repair_error
+                    )
                 # A failed style revision must not discard a previously valid
                 # analytical plan or downgrade it to metric-by-metric recovery.
                 retained = stamp_editorial_review(safe_original, result, origin="model")
                 retained.editorial_notes.append("Editorial revision could not be retained; the evidence-validated original plan remains available for review.")
                 return retained
             try:
-                return stamp_editorial_review(PresentationPlanRepairer().repair(candidate, result), result, origin="repaired")
+                repaired = PresentationPlanRepairer().repair(candidate, result)
+                self._validate_topic_alignment(repaired, result)
+                if result.presentation_topics and review_presentation(repaired, result):
+                    raise ValueError("Deterministic repair retained editorial weaknesses in the selected story")
+                return stamp_editorial_review(repaired, result, origin="repaired")
             except ValueError as deterministic_exc:
                 raise ValueError(
                     "Presentation plan validation failed. Initial reason: "
                     f"{exc}. AI repair reason: {model_repair_error}. "
                     f"Deterministic repair reason: {deterministic_exc}"
                 ) from deterministic_exc
+
+    @staticmethod
+    def _validate_topic_alignment(plan: PresentationPlan, result: PipelineResult) -> None:
+        selection = result.presentation_topics
+        if not selection or not selection.topics:
+            return
+        from .presentation_topic_selector import series_directory
+        from adaptive_document_agent.validation.narrative_plan_validator import expanded_observation_ids
+
+        _, series_by_id = series_directory(result)
+        chart_by_id = {chart.id: chart for chart in result.charts}
+        topic_sets = {
+            topic.id: {item.id for sid in topic.series_ids for item in series_by_id.get(sid, [])}
+            for topic in selection.topics
+        }
+        selected_ids = set().union(*topic_sets.values())
+        analysis_sets = [
+            expanded_observation_ids(slide, chart_by_id)
+            for slide in plan.slides if slide.slide_type == "analysis"
+        ]
+        if any(not ids & selected_ids for ids in analysis_sets):
+            raise ValueError("An analysis page does not answer a preselected evidence-backed question")
+        coverage = " ".join(plan.coverage_notes).casefold()
+        for topic in selection.topics:
+            if not any(ids & topic_sets[topic.id] for ids in analysis_sets):
+                if topic.id.casefold() not in coverage and topic.title.casefold() not in coverage:
+                    raise ValueError(f"Preselected topic {topic.id} was omitted without a coverage reason")
 
     @staticmethod
     def _observation_catalog(observations: list[Observation], charts: list[ChartPlan]) -> list[dict[str, object]]:
