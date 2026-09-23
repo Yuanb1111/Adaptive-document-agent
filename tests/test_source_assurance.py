@@ -6,7 +6,7 @@ from adaptive_document_agent.models.table import ExtractedTable, TableRow
 import io
 import pytest
 from pptx import Presentation
-from adaptive_document_agent.models import PresentationSlide, PresentationVisualBlock
+from adaptive_document_agent.models import CompanyFact, CompanyProfile, PresentationSlide, PresentationVisualBlock
 from adaptive_document_agent.services.presentation_evidence import build_evidence_catalog
 from adaptive_document_agent.services.presentation_editorial import review_presentation
 from adaptive_document_agent.validation.claim_validator import ClaimValidator
@@ -113,6 +113,80 @@ def test_profile_paginates_all_supported_facts_at_readable_size():
     all_text = "\n".join(visible(s) for s in deck.slides)
     assert all(i.text in all_text for i in items)
     assert all(p.font.size.pt >= 18 for s in deck.slides for shape in s.shapes if shape.name == "brief:body" for p in shape.text_frame.paragraphs)
+
+
+def test_company_overview_uses_richer_fields_without_duplicate_fact_continuation():
+    from adaptive_document_agent.models import DocumentPage
+    from adaptive_document_agent.services.pptx_export import _add_company_at_a_glance
+    from tests.test_company_overview_pipeline import _make_dummy_pipeline_result
+
+    company = CompanyProfile(
+        name="Example Robotics Limited",
+        one_line_description="Develops collaborative robots for industrial and education applications.",
+        industry="Industrial automation",
+        products=["Six-axis cobots", "Four-axis cobots"],
+        segments=["Industrial", "Education"],
+        business_model="Direct sales and distributors",
+        geographies=["Mainland China", "Europe"],
+        listing_market="HKEX",
+        listing_facts=["H-share global offering"],
+        identity_state="RESOLVED",
+        source_pages=[1],
+        field_source_pages={key: [1] for key in (
+            "name", "one_line_description", "industry", "products", "segments",
+            "business_model", "geographies", "listing_market", "listing_facts"
+        )},
+        key_facts=[
+            CompanyFact(label="Main products/services", value="Six-axis and four-axis cobots", source_pages=[1]),
+            CompanyFact(label="Listing market", value="HKEX", source_pages=[1]),
+        ],
+    )
+    result = _make_dummy_pipeline_result([
+        DocumentPage(page_number=1, text=(
+            "EXAMPLE ROBOTICS LIMITED\nIndustrial automation\n"
+            "Develops collaborative robots for industrial and education applications.\n"
+            "Six-axis cobots and four-axis cobots. Direct sales and distributors.\n"
+            "Mainland China and Europe. HKEX H-share global offering."
+        ))
+    ], company)
+    deck = blank_deck()
+
+    _add_company_at_a_glance(deck, result, result.presentation_plan.slides[1])
+
+    assert len(deck.slides) == 1
+    text = visible(deck.slides[0])
+    assert "Develops collaborative robots" in text
+    assert "Segments: Industrial, Education" in text
+    assert "Listing details: H-share global offering" in text
+    assert text.count("Listing market") == 0
+
+
+def test_four_watch_items_render_on_one_page_without_continuation():
+    from adaptive_document_agent.services.pptx_export import _add_planned_text_slide
+
+    result = paired_result()
+    bullets = [
+        "Operating cash outflows could absorb available liquidity.",
+        "Higher borrowings could reduce financial flexibility.",
+        "Inventory growth increases the importance of stock conversion.",
+        "The latest adjusted loss improvement may not persist.",
+    ]
+    slide = PresentationSlide(
+        id="risks",
+        slide_type="risks",
+        title="Risks and Watch Items",
+        message="The reported movements identify four areas to monitor.",
+        bullets=bullets,
+        source_pages=[1, 2],
+    )
+    deck = blank_deck()
+
+    _add_planned_text_slide(deck, result, slide)
+
+    assert len(deck.slides) == 1
+    text = visible(deck.slides[0])
+    assert all(bullet in text for bullet in bullets)
+    assert "continued" not in text.casefold()
 
 
 def test_no_chart_kpis_keep_commentary_and_readable_font():

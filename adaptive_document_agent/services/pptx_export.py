@@ -507,20 +507,23 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
     from .presentation_brief import BriefItem, overview_items, render_profile
     groups = [
         (company.name if has_company_identity else "Document overview",
-         [("Industry", company.industry, "industry"),
+         [("Profile", company.one_line_description, "one_line_description"),
+          ("Industry", company.industry, "industry"),
           ("Headquarters", company.headquarters, "headquarters"),
           ("Reporting currency", company.reporting_currency, "reporting_currency"),
           ("Track record", company.track_record_period, "track_record_period")]),
         ("Business and products",
          [("Business model", company.business_model, "business_model"),
           ("Products", ", ".join(company.products), "products"),
+          ("Segments", ", ".join(company.segments), "segments"),
           ("Customers", ", ".join(company.customer_types), "customer_types")]),
         ("Markets and listing",
          [("Markets", ", ".join(company.geographies), "geographies"),
           ("Market position", company.market_position, "market_position"),
           ("Exchange", company.listing_market, "listing_market"),
           ("Stock code", company.stock_code, "stock_code"),
-          ("Offering", company.offering_type, "offering_type")]),
+          ("Offering", company.offering_type, "offering_type"),
+          ("Listing details", ", ".join(company.listing_facts), "listing_facts")]),
     ]
     items = []
     for heading, fields in groups:
@@ -541,8 +544,28 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
     # visible labels or constructing large, mostly empty cards.
     notes = company.model_dump_json(indent=2) + "\n\n" + result.profile.document_summary
     visible_copy = " ".join(item.text for item in items).casefold()
+    represented_fact_labels = {
+        "industry": bool(company.industry),
+        "headquarters": bool(company.headquarters),
+        "reporting currency": bool(company.reporting_currency),
+        "track record period": bool(company.track_record_period),
+        "main products services": bool(company.products or company.segments),
+        "products services": bool(company.products or company.segments),
+        "business model": bool(company.business_model),
+        "customers": bool(company.customer_types),
+        "customer types": bool(company.customer_types),
+        "main geographic market": bool(company.geographies),
+        "geographic markets": bool(company.geographies),
+        "market position": bool(company.market_position),
+        "listing market": bool(company.listing_market),
+        "stock code": bool(company.stock_code),
+        "offering type": bool(company.offering_type),
+    }
     for fact in company.key_facts:
-        if fact.value.strip() and fact.source_pages and fact.value.casefold() not in visible_copy:
+        normal_label = re.sub(r"[^a-z0-9]+", " ", fact.label.casefold()).strip()
+        already_represented = represented_fact_labels.get(normal_label, False)
+        if (fact.value.strip() and fact.source_pages and not already_represented
+                and fact.value.casefold() not in visible_copy):
             items.append(BriefItem(fact.label, fact.value, fact.source_pages))
             visible_copy += " " + fact.value.casefold()
     render_profile(presentation, "Company at a Glance" if has_company_identity else "Document at a Glance",
@@ -839,6 +862,17 @@ def _add_planned_text_slide(presentation: Any, result: PipelineResult, slide_pla
         messages = [("Evidence note", "The retained evidence supports this topic, but no additional narrative was supplied.")]
 
     is_risk_or_watch = slide_plan.slide_type == "risks" or "watch" in slide_plan.title.casefold()
+    if is_risk_or_watch and len(messages) <= 4:
+        from .presentation_brief import BriefItem, render_summary
+        items = [BriefItem(f"Watch item {number}", _sanitize_investor_narrative(narrative),
+                           slide_plan.source_pages)
+                 for number, (_, narrative) in enumerate(messages, start=1)
+                 if narrative.strip()]
+        notes = "Analytical interpretation based on reported movements.\n\n" + "\n\n".join(
+            narrative for _, narrative in messages if narrative.strip()
+        )
+        render_summary(presentation, slide_plan.title, items, notes=notes)
+        return
     body = "\n\n".join(f"{label}\n{narrative}" if label else narrative for label, narrative in messages)
     if is_risk_or_watch:
         body = "Analytical interpretation based on reported movements\n\n" + body

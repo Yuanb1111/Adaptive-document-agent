@@ -109,6 +109,11 @@ def render_brief(presentation: Any, title: str, items: list[BriefItem], *,
 
 def render_profile(presentation: Any, title: str, items: list[BriefItem], *, notes: str = "") -> list:
     """Paginate supported profile facts instead of silently hiding them in notes."""
+    compact_items = [item for item in items if item.text.strip() and not is_technical_copy(item.text)]
+    if 3 <= len(compact_items) <= 4:
+        compact_page = _render_profile_grid(presentation, title, compact_items, notes)
+        if compact_page is not None:
+            return [compact_page]
     width = presentation.slide_width.inches - 1.3
     expanded = []
     for item in items:
@@ -138,6 +143,54 @@ def render_profile(presentation: Any, title: str, items: list[BriefItem], *, not
     if group:
         pages.append(render_brief(presentation, title + (" (continued)" if pages else ""), group, notes=notes, max_items=len(group)))
     return pages or [render_brief(presentation, title, [], notes=notes)]
+
+
+def _render_profile_grid(presentation: Any, title: str, items: list[BriefItem], notes: str) -> Any | None:
+    """Keep a complete company snapshot on one flat page when columns remain readable."""
+    from .slide_compositor import _base, _lines
+    from .pptx_export import _source_footer, _text, FOURIER_DARK, FOURIER_MUTED, FOURIER_PURPLE
+
+    columns = 3 if len(items) == 3 else 2
+    rows = 1 if len(items) == 3 else 2
+    left = .65
+    gap_x = .34
+    gap_y = .18
+    total_width = presentation.slide_width.inches - 1.3
+    col_width = (total_width - gap_x * (columns - 1)) / columns
+    slide, top = _base(presentation, title, "")
+    bottom = presentation.slide_height.inches - 1.20
+    row_height = (bottom - top - gap_y * (rows - 1)) / rows
+    layouts = []
+    for item in items:
+        heading_lines = len(_lines(item.title, col_width, 18))
+        body_lines = len(_lines(item.text, col_width, 17))
+        heading_h = max(.34, heading_lines * .31)
+        body_h = body_lines * 17 * 1.25 / 72 + .08
+        if heading_lines > 2 or heading_h + body_h > row_height:
+            slide_id = presentation.slides._sldIdLst[-1]
+            presentation.part.drop_rel(slide_id.rId)
+            presentation.slides._sldIdLst.remove(slide_id)
+            return None
+        layouts.append((item, heading_h, body_h))
+
+    for index, (item, heading_h, body_h) in enumerate(layouts):
+        column = index % columns
+        row = index // columns
+        x = left + column * (col_width + gap_x)
+        y = top + row * (row_height + gap_y)
+        heading = _text(slide, item.title, x, y, col_width, heading_h,
+                        size=18, bold=True, color=FOURIER_PURPLE)
+        heading.name = "profile:heading"
+        body = _text(slide, item.text, x, y + heading_h + .06, col_width,
+                     body_h, size=17, color=FOURIER_DARK)
+        body.name = "profile:body"
+
+    pages = sorted({page for item in items for page in item.pages})
+    _text(slide, _source_footer(pages), .55, presentation.slide_height.inches - .82,
+          presentation.slide_width.inches - 1.1, .20, size=9, color=FOURIER_MUTED)
+    full_copy = "\n\n".join(f"{item.title}\n{item.text}\n{_source_footer(item.pages)}" for item in items)
+    slide.notes_slide.notes_text_frame.text = "\n\n".join(s for s in (notes, full_copy) if s)
+    return slide
 
 
 def render_summary(presentation: Any, title: str, items: list[BriefItem], *, notes: str = "") -> Any:
