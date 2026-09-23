@@ -32,8 +32,10 @@ def test_qualified_totals_are_never_components(label):
     with pytest.raises(ValueError, match="Aggregate totals"):
         composition_data(plan, values)
     charts = reported_composition_charts(DocumentIndex(values))
-    assert len(charts) == 1
-    chosen = charts[0]
+    assert {chart.chart_type for chart in charts} == {"stacked_bar", "doughnut"}
+    for chart in charts:
+        assert not set(chart.observation_ids) & set(chart.total_observation_ids)
+    chosen = next(chart for chart in charts if chart.chart_type == "stacked_bar")
     assert len(chosen.observation_ids) == 4
     assert len(chosen.total_observation_ids) == 2
     components = [o for o in values if o.id in chosen.observation_ids]

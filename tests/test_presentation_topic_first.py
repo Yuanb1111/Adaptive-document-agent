@@ -343,10 +343,15 @@ def test_thematic_appendix_keeps_selected_evidence_without_unrelated_conflicts()
         item.value = float(ordinal + 1)
         item.raw_value = str(ordinal + 1)
     result.observations.extend(conflicting)
-    assert build_presentation(result).startswith(b"PK")
+    deck = Presentation(io.BytesIO(build_presentation(result)))
+    tables = [shape.table for slide in deck.slides for shape in slide.shapes if shape.has_table]
+    assert tables
+    table_text = " ".join(cell.text for table in tables for row in table.rows for cell in row.cells)
+    assert "Others" not in table_text
+    assert all(item.period.replace("FY", "") in table_text for item in lookup[selected_id])
 
 
-def test_sourced_conclusion_follows_appendix_without_generic_signoff() -> None:
+def test_conclusion_precedes_data_index_and_final_thank_you() -> None:
     result = _result()
     result.presentation_plan = PresentationPlan(title="Revenue review", slides=[
         PresentationSlide(id="cover", slide_type="cover", title="Revenue review"),
@@ -365,6 +370,48 @@ def test_sourced_conclusion_follows_appendix_without_generic_signoff() -> None:
     ])
     deck = Presentation(io.BytesIO(build_presentation(result)))
     last_text = " ".join(shape.text for shape in deck.slides[-1].shapes if shape.has_text_frame)
-    assert "Conclusions and Watch Items" in last_text
-    assert "Monitor whether the revenue trend continues" in last_text
-    assert "THANK YOU" not in last_text
+    texts = [" ".join(shape.text for shape in slide.shapes if shape.has_text_frame) for slide in deck.slides]
+    closing = next(i for i, text in enumerate(texts) if "Monitor whether the revenue trend continues" in text)
+    appendix = [i for i, slide in enumerate(deck.slides) if any(shape.has_table for shape in slide.shapes)]
+    assert "Conclusions and Watch Items" in texts[closing]
+    assert "Watch item 1" not in texts[closing]
+    assert appendix and all(closing < i < len(texts) - 1 for i in appendix)
+    assert "Data Index" in texts[appendix[0]]
+    assert "THANK YOU" in last_text
+
+
+def test_closing_reserves_space_for_lower_ranked_watch_items():
+    result = _result()
+    template = result.insights[0]
+    result.insights = [template.model_copy(update={
+        "id": f"finding-{i}", "title": label, "importance": 1 - i / 10,
+        "implication": label + " remains relevant to the reported performance.",
+        "watch_item": "Monitor the pace of reported changes." if i == 3 else None,
+    }) for i, label in enumerate(("Demand", "Costs", "Capacity", "Liquidity"))]
+    closing = PresentationPlanRecovery._risks_slide(
+        result, PresentationSlide(id="summary", slide_type="executive_summary", title="Summary"),
+    )
+    assert "Monitor the pace of reported changes." in closing.bullets
+    from adaptive_document_agent.services.presentation_closing import render_closing
+    deck = Presentation()
+    render_closing(deck, result, closing)
+    text = " ".join(shape.text for slide in deck.slides for shape in slide.shapes if shape.has_text_frame)
+    assert "Watch items" in text
+    assert all(bullet in text for bullet in closing.bullets)
+
+
+def test_topic_recovery_selects_composition_across_category_series():
+    from tests.test_p0_composition import matrix, result_for
+    observations, _ = matrix()
+    result = result_for(observations, [])
+    directory, lookup = series_directory(result)
+    result.presentation_topics = PresentationTopicSelection(topics=[PresentationTopic(
+        id="mix", title="Category mix", question="How did the category mix change?",
+        rationale="The source reports a complete category composition.",
+        series_ids=[entry["id"] for entry in directory],
+    )])
+    result.charts = ChartPlanner().plan([], [], DocumentIndex(observations),
+        requested_series=list(lookup.values()), only_requested=True)
+    plan = PresentationPlanRecovery().from_selected_topics(result)
+    selected = {cid for slide in plan.slides if slide.slide_type == "analysis" for cid in slide.chart_ids}
+    assert any(chart.id in selected and chart.chart_type == "stacked_percent" for chart in result.charts)

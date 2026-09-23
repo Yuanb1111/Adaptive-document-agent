@@ -194,12 +194,7 @@ def build_presentation(result: PipelineResult, template_path: str | Path | None 
     else:
         _build_legacy_presentation(presentation, result)
 
-    # A sourced conclusion is a stronger ending than a generic template signoff.
-    has_planned_closing = bool(result.presentation_plan and any(
-        slide.slide_type == "risks" for slide in result.presentation_plan.slides
-    ))
-    if not has_planned_closing:
-        _add_thank_you_slide(presentation)
+    _add_thank_you_slide(presentation)
 
     _number_slides(presentation)
 
@@ -311,7 +306,7 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
     # Standard order: 1. Cover, 2. Contents, 3. Company at a Glance, 4. Executive Summary
     cover = slides_by_type["cover"]
     _add_cover(presentation, result, title=cover.title, purpose=cover.message)
-    _add_planned_contents(presentation, plan.slides, evidence_in_notes=plan.planning_origin == "topic_recovery")
+    _add_planned_contents(presentation, plan.slides)
     _add_company_at_a_glance(presentation, result, slides_by_type["company_overview"])
     _add_planned_summary(presentation, result, slides_by_type["executive_summary"], index)
     quality_notes = list(dict.fromkeys([
@@ -325,7 +320,6 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
 
     rendered_charts: list[ChartPlan] = []
     ordinal = 0
-    closing_slide_plan: PresentationSlide | None = None
     for slide_plan in plan.slides[3:]:
         if slide_plan.slide_type == "analysis":
             chart_requests = _planned_chart_requests(slide_plan)
@@ -404,22 +398,16 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
                 else:
                     continue
         elif slide_plan.slide_type == "risks":
-            closing_slide_plan = slide_plan
+            _add_planned_text_slide(presentation, result, slide_plan)
         elif slide_plan.slide_type == "data_quality":
             # Keep full methodological disclosure in the summary and appendix
             # notes without spending a sparse standalone audience page on it.
             continue
         elif slide_plan.slide_type == "appendix":
-            if plan.planning_origin == "topic_recovery":
-                # Topic-first pages already retain their complete observation
-                # records in speaker notes. The separate JSON/CSV exports hold
-                # the full extracted dataset; avoid sparse audience appendix
-                # pages generated only by differing period bases.
-                continue
             previous_slide_count = len(presentation.slides)
-            if rendered_charts:
+            if rendered_charts or plan.themes:
                 appendix_charts = rendered_charts
-                _add_evidence_table_slides(presentation, result, appendix_charts, title=slide_plan.title)
+                _add_evidence_table_slides(presentation, result, appendix_charts, title="Data Index")
             else:
                 from adaptive_document_agent.models.validation import ValidationIssue
 
@@ -442,8 +430,6 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
             if quality_notes and len(presentation.slides) > previous_slide_count:
                 notes = presentation.slides[previous_slide_count].notes_slide.notes_text_frame
                 notes.text += "\n\nSource scope and data-quality notes:\n" + "\n".join(quality_notes)
-    if closing_slide_plan is not None:
-        _add_planned_text_slide(presentation, result, closing_slide_plan)
 
 
 def _planned_chart_requests(slide_plan: PresentationSlide) -> list[tuple[str, str | None]]:
@@ -483,17 +469,15 @@ def _add_planned_contents(
         "analysis": "Analysis",
         "risks": "Key Risks and Watch Items",
         "data_quality": "Data Quality",
-        "appendix": "Appendix",
+        "appendix": "Data Index",
     }
-    contents_order = [item for item in planned_slides if item.slide_type != "risks"] + [
-        item for item in planned_slides if item.slide_type == "risks"
-    ]
+    contents_order = planned_slides
     for item in contents_order:
         if item.slide_type not in defaults or item.slide_type == "data_quality":
             continue
         if evidence_in_notes and item.slide_type == "appendix":
             continue
-        label = (item.section_title or defaults[item.slide_type]).strip()
+        label = ("Data Index" if item.slide_type == "appendix" else item.section_title or defaults[item.slide_type]).strip()
         # Clean section label: show section names only, not long slide titles
         if len(label) > 36:
             label = label.split(":", 1)[0].split("—", 1)[0].split("-", 1)[0].strip()
@@ -902,6 +886,10 @@ def _render_data_comparison_table(
 
 
 def _add_planned_text_slide(presentation: Any, result: PipelineResult, slide_plan: PresentationSlide) -> None:
+    if slide_plan.slide_type == "risks":
+        from .presentation_closing import render_closing
+        render_closing(presentation, result, slide_plan)
+        return
     insight_by_id = {item.id: item for item in result.insights}
     messages = [("", item) for item in slide_plan.bullets]
     if not messages:
@@ -1830,8 +1818,8 @@ def _add_evidence_table_slides(
         if categories:
             metric_name += " — " + ", ".join(str(v) for _, v in sorted(categories.items()))
         if len(name_contexts.get(display_metric_name(item), ())) > 1:
-            context = item.dimensions.get("table_context") or item.source_section or "Unspecified context"
-            metric_name += f" ({context})"
+            contexts = sorted(name_contexts[display_metric_name(item)])
+            metric_name += f" [source {contexts.index(source_context_key(item)) + 1}]"
         theme = _classify_financial_theme(
             metric_name,
             item.parent_section or item.source_section or item.dimensions.get("section") or "",
@@ -1905,13 +1893,14 @@ def _add_evidence_table_slides(
                                  if any(p in entry["periods"] for p in p_chunk)}
                 if not theme_metrics:
                     continue
-                needed_rows = 1 + len(theme_metrics)
-                if current_rows > 0 and current_rows + needed_rows > 10:
-                    slide_specs.append((p_chunk, current_bundle, is_bs))
-                    current_bundle = [(theme, theme_metrics)]
-                    current_rows = needed_rows
-                else:
-                    current_bundle.append((theme, theme_metrics))
+                entries = list(theme_metrics.items())
+                for start in range(0, len(entries), 9):
+                    chunk = dict(entries[start:start + 9])
+                    needed_rows = 1 + len(chunk)
+                    if current_rows > 0 and current_rows + needed_rows > 10:
+                        slide_specs.append((p_chunk, current_bundle, is_bs))
+                        current_bundle, current_rows = [], 0
+                    current_bundle.append((theme, chunk))
                     current_rows += needed_rows
             if current_bundle:
                 slide_specs.append((p_chunk, current_bundle, is_bs))
@@ -1933,6 +1922,16 @@ def _add_evidence_table_slides(
         if total_specs > 1:
             slide_subtitle += f" | Appendix {spec_index} of {total_specs}"
         slide = _base_slide(presentation, title, slide_subtitle)
+        source_notes = []
+        included_labels = {key: entry["label"] for _, entries in theme_entries for key, entry in entries.items()}
+        for item in observations:
+            if metric_identity_key(item) in included_labels:
+                source_notes.append(
+                    f"{included_labels[metric_identity_key(item)]}; period={item.period}; raw={item.raw_value}; "
+                    f"unit={item.raw_unit or item.unit}; context={source_context_key(item)}; "
+                    f"pages={sorted({e.page for e in item.evidence})}"
+                )
+        slide.notes_slide.notes_text_frame.text = "Data Index source records\n" + "\n".join(source_notes)
         content_top, content_h = _content_zone(slide)
 
         # Deduplicate and filter out columns that have no values across all metrics in this spec
@@ -2001,8 +2000,9 @@ def _add_evidence_table_slides(
             else:
                 row_fill = WHITE if row_idx % 2 == 0 else FOURIER_BG_CARD
                 cell0 = table.cell(row_idx, 0)
-                cell0.text = _summary_text(row_label, 50)
+                cell0.text = row_label
                 _cell_style(cell0, fill=row_fill, color=FOURIER_DARK, bold=False, size=9.5)
+                cell0.text_frame.word_wrap = True
                 cell0.vertical_anchor = MSO_ANCHOR.MIDDLE
                 cell0.text_frame.paragraphs[0].alignment = PP_ALIGN.LEFT
 
@@ -2650,12 +2650,17 @@ def _finding_value(item: Observation, scale: float, scale_label: str) -> str:
 def _appendix_observations(result: PipelineResult, charts: list[ChartPlan]) -> list[Observation]:
     index = DocumentIndex(result.observations)
     used_ids = [identifier for plan in charts for identifier in [*plan.observation_ids, *plan.total_observation_ids]]
+    if result.presentation_plan:
+        for slide in result.presentation_plan.slides:
+            if slide.slide_type not in {"appendix", "data_quality"}:
+                used_ids.extend(slide.observation_ids)
+                used_ids.extend(oid for block in slide.visual_blocks for oid in block.observation_ids)
     if result.presentation_plan and result.presentation_plan.themes:
         for theme in result.presentation_plan.themes:
             used_ids.extend(theme.observation_ids)
     selected = [index.get(identifier) for identifier in used_ids]
     pool = [item for item in selected if item is not None and item.value is not None]
-    if not (result.presentation_plan and result.presentation_plan.themes) and (not pool or len(pool) < 8):
+    if not result.presentation_plan and (not pool or len(pool) < 8):
         all_obs = [item for item in result.observations if item is not None and item.value is not None]
         seen_ids = {p.id for p in pool}
         pool = pool + [item for item in all_obs if item.id not in seen_ids]

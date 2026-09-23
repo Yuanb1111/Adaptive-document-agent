@@ -69,7 +69,23 @@ class PresentationPlanRecovery:
                 continue
             chart_ids: list[str] = []
             visible_series: set[str] = set()
+            # A validated composition can cover several model-selected category
+            # series together. Do not lose it by matching one series at a time.
+            compositions = sorted((chart for chart in result.charts
+                if chart.id in usable_chart_ids
+                and chart.chart_type in {"stacked_bar", "stacked_percent", "doughnut"}
+                and set(chart.observation_ids) <= observations.keys()),
+                key=lambda chart: (-len(chart.observation_ids), chart.id))
+            for chart in compositions:
+                covered = {sid for sid in topic.series_ids
+                    if {item.id for item in series_by_id.get(sid, [])} <= set(chart.observation_ids)}
+                if covered:
+                    chart_ids.append(chart.id)
+                    visible_series.update(covered)
+                    break
             for series_id in topic.series_ids:
+                if series_id in visible_series:
+                    continue
                 series_observation_ids = {item.id for item in series_by_id.get(series_id, [])} & observations.keys()
                 matching = next((chart for chart in result.charts
                                  if chart.id in usable_chart_ids and chart.id not in chart_ids
@@ -476,21 +492,26 @@ class PresentationPlanRecovery:
         bullets: list[str] = []
         selected_ids: list[str] = []
         pages: set[int] = set()
+        # Reserve space for findings and monitoring points instead of filling
+        # all four slots with implications before considering watch items.
+        groups = []
+        seen = set(summary_copy)
         for field in ("implication", "watch_item"):
+            candidates = []
             for item in eligible:
                 statement = (getattr(item, field) or "").strip()
                 if (not statement or any(char.isdigit() for char in statement)
                     or re.search(r"(?i)\b(?:caused|driven by|due to|contributed to)\b", statement)
-                    or normalize(statement) in summary_copy
-                    or normalize(statement) in {normalize(bullet) for bullet in bullets}):
+                    or normalize(statement) in seen):
                     continue
-                bullets.append(statement)
-                selected_ids.append(item.id)
-                pages.update(source.page for source in item.evidence)
-                if len(bullets) >= 4:
-                    break
-            if len(bullets) >= 4:
-                break
+                seen.add(normalize(statement))
+                candidates.append((item, statement))
+            groups.append(candidates)
+        ordered = groups[0][:2] + groups[1][:2] + groups[0][2:] + groups[1][2:]
+        for item, statement in ordered[:4]:
+            bullets.append(statement)
+            selected_ids.append(item.id)
+            pages.update(source.page for source in item.evidence)
         if not bullets:
             return None
         return PresentationSlide(

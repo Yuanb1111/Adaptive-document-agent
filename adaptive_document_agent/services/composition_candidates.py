@@ -1,6 +1,6 @@
 """Expose safe structural chart choices; never select an industry-specific storyline."""
 
-from adaptive_document_agent.document_model import display_metric_name
+from adaptive_document_agent.document_model import display_metric_name, period_sort_key
 from adaptive_document_agent.models import ChartPlan
 from adaptive_document_agent.utils.ids import stable_id
 
@@ -37,4 +37,26 @@ def reported_composition_charts(index, *, maximum=3):
                 continue
             plan.available_chart_types = [kind, "table"]
             candidates.append(plan)
+            # Offer a clearly labelled single-period view only after the full
+            # category matrix passed validation. The model can pair this with
+            # the trend chart when the latest mix answers its selected question.
+            if kind != "doughnut":
+                latest = max((o.period for o in components), key=period_sort_key)
+                snapshot = [o for o in components if o.period == latest]
+                snapshot_totals = [o for o in totals if o.period == latest]
+                ring = plan.model_copy(update={
+                    "id": stable_id("composition", metric, dimension, latest),
+                    "title": f"{plan.title} ({latest})",
+                    "question": f"What is the reported {dimension} mix in {latest}?",
+                    "chart_type": "doughnut", "available_chart_types": ["doughnut", "table"],
+                    "observation_ids": [o.id for o in snapshot],
+                    "total_observation_ids": [o.id for o in snapshot_totals],
+                    "x_dimension": dimension, "x_axis_title": dimension,
+                    "source_pages": sorted({e.page for o in [*snapshot, *snapshot_totals] for e in o.evidence}),
+                })
+                try:
+                    composition_data(ring, snapshot, snapshot_totals)
+                except ValueError:
+                    continue
+                candidates.append(ring)
     return sorted(candidates, key=lambda c: (-len(c.observation_ids), c.id))[:maximum]

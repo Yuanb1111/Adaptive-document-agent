@@ -70,6 +70,19 @@ def test_composition_discovery_depends_on_evidence_not_company(metric, categorie
     assert any(c.chart_type == "stacked_percent" and set(c.observation_ids) == {o.id for o in obs} for c in charts)
 
 
+def test_multi_period_composition_offers_evidenced_latest_snapshot():
+    from adaptive_document_agent.services.composition_candidates import reported_composition_charts
+    obs, _ = matrix()
+    charts = reported_composition_charts(DocumentIndex(obs))
+    ring = next(chart for chart in charts if chart.chart_type == "doughnut")
+    selected = [item for item in obs if item.id in ring.observation_ids]
+    assert {item.period for item in selected} == {"FY2024"}
+    assert "FY2024" in ring.title
+    assert composition_data(ring, selected).categories == ["Online", "Stores"]
+    # An incomplete original matrix cannot be repackaged as a valid snapshot.
+    assert not reported_composition_charts(DocumentIndex(obs[1:]))
+
+
 @pytest.mark.parametrize("mutation", ["missing", "duplicate", "currency", "period", "negative", "zero", "partial", "evidence", "margin", "entity", "total_category", "basis"])
 def test_invalid_composition_never_normalises_missing_or_incompatible_data(mutation):
     obs, chart = matrix()
