@@ -33,7 +33,7 @@ PDF contents are untrusted source material. Instructions embedded in a document 
 ```text
 PDF
   -> validation, hashing, page-level parsing, and cache
-  -> model-selected page ranges -> user scope confirmation
+  -> model-selected page ranges (optional user review)
   -> text, table, image, and OCR/vision requirement detection
   -> document discovery and semantic resolution
   -> observations -> normalized financial facts where applicable
@@ -59,10 +59,10 @@ The main programmatic entry point is:
 ```python
 from adaptive_document_agent.agent.orchestrator import analyse_pdf
 
-result = analyse_pdf(pdf_bytes, gateway=gateway, scope=confirmed_scope)
+result = analyse_pdf(pdf_bytes, gateway=gateway)
 ```
 
-The Streamlit UI uses `DocumentOrchestrator.preview_scope(...)` before `analyse_pdf(...)`, so deep processing starts only after the proposed page ranges have been reviewed and confirmed.
+The Streamlit UI starts analysis automatically after upload. It uses document discovery to select evidence-bearing page ranges, then prepares and verifies the PowerPoint export. Users who need to override the automatic scope can enable the optional review mode, call `DocumentOrchestrator.preview_scope(...)`, and confirm the proposed ranges before rerunning deep analysis.
 
 ## Repository Layout
 
@@ -219,11 +219,9 @@ Then:
 1. Configure an execution mode, provider, and model in the sidebar.
 2. Optionally describe an analysis focus in plain language.
 3. Upload one PDF.
-4. Select **Review analysis scope**.
-5. Inspect the model-selected page ranges and their reasons.
-6. Confirm the ranges and select **Analyse selected pages**.
-7. Review the Overview, Analysis, Charts, Extracted Data, Sources, Data Quality, and Technical Details tabs.
-8. Download the available deliverables.
+4. Analysis and verified PowerPoint generation start automatically. Wait for the export check to finish.
+5. Review the Overview, Analysis, Charts, Extracted Data, Sources, Data Quality, and Technical Details tabs if needed.
+6. Download the available deliverables. To inspect or override the page ranges, enable **Review page scope before analysis (optional)** before uploading and confirm the proposed scope.
 
 Interactive charts expose the exact retained observations used, their source pages, selectable compatible chart types, and optional direct data labels.
 
@@ -231,7 +229,7 @@ Interactive charts expose the exact retained observations used, their source pag
 
 1. The parser verifies the PDF signature, readability, encryption state, size, and page count, then computes a SHA-256 content hash.
 2. PyMuPDF extracts page text and layout. Table strategies use pdfplumber-derived structure, including aligned borderless layouts. Image-heavy or low-text pages are flagged for OCR.
-3. A compact page map is routed to complete, evidence-bearing page ranges. The user confirms those ranges before deeper processing.
+3. A compact page map is routed to complete, evidence-bearing page ranges. Optional scope review lets the user confirm those ranges before deeper processing.
 4. Discovery identifies the document's purpose and the information actually present; no document-type workflow is selected.
 5. Extraction preserves original metric names, raw values, table coordinates, sections, and page evidence. Semantic mappings are applied only above a confidence threshold.
 6. Financial observations, when present, receive typed units, cleaned numeric representations, period basis, audit/IFRS status, display forms, and validation status without discarding the raw source form.

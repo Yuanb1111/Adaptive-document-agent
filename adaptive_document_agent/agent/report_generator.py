@@ -64,7 +64,7 @@ class ReportGenerator:
         return [
             "## Evidence Coverage",
             "",
-            f"- Confirmed analysis scope: pages {ranges}.",
+            f"- Analysis scope: pages {ranges}.",
             f"- Retained fact base: {len(displayable)} observations across {len(metrics)} metrics and {len(tables)} source tables.",
             f"- Page-level evidence is retained from {len(evidence_pages)} pages; {chart_count} validated visualisations were planned.",
             "- The selected facts below are a readable overview; the complete retained fact base remains available in the CSV export.",

@@ -15,6 +15,37 @@ from .exports import render_report_downloads
 from .sidebar import render_sidebar
 
 
+def _analyse_upload(st, raw_pdf, *, scope_key, analysis_focus, settings, cache, scope=None, force=False):
+    """Run one upload through discovery and analysis, reusing it on widget reruns."""
+    if not force and st.session_state.get("analysis_result_key") == scope_key:
+        cached = st.session_state.get("analysis_result")
+        if cached is not None:
+            return cached
+    if not settings.model:
+        st.error("Configure a model before analysis.")
+        return None
+    try:
+        gateway = LLMGateway(create_llm_client(settings), settings)
+        status = st.status("Analysing PDF and preparing presentation…", expanded=True)
+
+        def update(stage: str) -> None:
+            status.write(stage)
+
+        result = DocumentOrchestrator(gateway, cache=cache).analyse_pdf(
+            raw_pdf,
+            progress=update,
+            analysis_focus=analysis_focus,
+            scope=scope,
+        )
+        st.session_state["analysis_result"] = result
+        st.session_state["analysis_result_key"] = scope_key
+        status.update(label="Analysis complete", state="complete", expanded=False)
+        return result
+    except Exception as exc:
+        st.error(f"Analysis could not be completed: {exc}")
+        return None
+
+
 def run_app() -> None:
     try:
         import streamlit as st
@@ -51,6 +82,7 @@ def run_app() -> None:
         placeholder="Describe what you want the Agent to find and analyse. Leave blank for automatic discovery.",
         height=90,
     )
+    review_scope = st.toggle("Review page scope before analysis (optional)", value=False)
     uploaded = st.file_uploader("Upload one PDF", type=["pdf"], accept_multiple_files=False)
     if not uploaded:
         st.info("Upload a PDF to begin. You do not need to choose a document type.")
@@ -68,72 +100,64 @@ def run_app() -> None:
             )
         ).encode("utf-8")
     )
-    if st.button("Review analysis scope"):
-        if not settings.model:
-            st.error("Configure a model before analysis.")
-            return
-        try:
-            gateway = LLMGateway(create_llm_client(settings), settings)
-            status = st.status("Preparing analysis scope…", expanded=True)
-
-            def update(stage: str) -> None:
-                status.write(stage)
-
-            preview = DocumentOrchestrator(gateway, cache=cache).preview_scope(
-                raw_pdf,
-                progress=update,
-                analysis_focus=analysis_focus,
-            )
-            st.session_state["analysis_scope"] = preview
-            st.session_state["analysis_scope_key"] = scope_key
-            st.session_state.pop("analysis_result", None)
-            status.update(label="Analysis scope ready", state="complete", expanded=False)
-        except Exception as exc:
-            st.error(f"Analysis scope could not be prepared: {exc}")
-            return
-    preview = st.session_state.get("analysis_scope") if st.session_state.get("analysis_scope_key") == scope_key else None
-    if preview:
-        st.subheader("Confirm analysis scope")
-        st.dataframe(
-            [
-                {
-                    "Section": item.title,
-                    "Start page": item.start_page,
-                    "End page": item.end_page,
-                    "Pages": item.end_page - item.start_page + 1,
-                    "Why selected": item.reason,
-                }
-                for item in preview.page_ranges
-            ],
-            use_container_width=True,
-            hide_index=True,
-        )
-        st.caption(f"Selected {preview.selected_page_count} of {preview.page_count} pages. Deep analysis starts only after confirmation.")
-        confirmed = st.checkbox("I confirm these page ranges for deep analysis", key=f"confirm_{scope_key}")
-        if st.button("Analyse selected pages", type="primary", disabled=not confirmed):
+    result = st.session_state.get("analysis_result") if st.session_state.get("analysis_result_key") == scope_key else None
+    if review_scope:
+        if st.button("Review analysis scope"):
+            if not settings.model:
+                st.error("Configure a model before analysis.")
+                return
             try:
                 gateway = LLMGateway(create_llm_client(settings), settings)
-                status = st.status("Starting analysis…", expanded=True)
+                status = st.status("Preparing analysis scope…", expanded=True)
 
-                def update_analysis(stage: str) -> None:
+                def update(stage: str) -> None:
                     status.write(stage)
 
-                result = DocumentOrchestrator(gateway, cache=cache).analyse_pdf(
+                preview = DocumentOrchestrator(gateway, cache=cache).preview_scope(
                     raw_pdf,
-                    progress=update_analysis,
+                    progress=update,
                     analysis_focus=analysis_focus,
-                    scope=preview,
                 )
-                st.session_state["analysis_result"] = result
-                st.session_state["analysis_result_key"] = scope_key
-                status.update(label="Analysis complete", state="complete", expanded=False)
+                st.session_state["analysis_scope"] = preview
+                st.session_state["analysis_scope_key"] = scope_key
+                status.update(label="Analysis scope ready", state="complete", expanded=False)
             except Exception as exc:
-                st.error(f"Analysis could not be completed: {exc}")
+                st.error(f"Analysis scope could not be prepared: {exc}")
                 return
+        preview = st.session_state.get("analysis_scope") if st.session_state.get("analysis_scope_key") == scope_key else None
+        if preview:
+            st.subheader("Confirm analysis scope")
+            st.dataframe(
+                [
+                    {
+                        "Section": item.title,
+                        "Start page": item.start_page,
+                        "End page": item.end_page,
+                        "Pages": item.end_page - item.start_page + 1,
+                        "Why selected": item.reason,
+                    }
+                    for item in preview.page_ranges
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+            st.caption(f"Selected {preview.selected_page_count} of {preview.page_count} pages. Confirm to replace the automatic analysis with these ranges.")
+            confirmed = st.checkbox("I confirm these page ranges for deep analysis", key=f"confirm_{scope_key}")
+            if st.button("Analyse selected pages", type="primary", disabled=not confirmed):
+                updated = _analyse_upload(
+                    st, raw_pdf, scope_key=scope_key, analysis_focus=analysis_focus,
+                    settings=settings, cache=cache, scope=preview, force=True,
+                )
+                if updated is not None:
+                    result = updated
+        elif result is None:
+            st.info("Review and confirm the page scope before starting deep analysis, or turn off this optional review to run automatically.")
     else:
-        st.info("Review and confirm the page scope before starting deep analysis.")
-    result = st.session_state.get("analysis_result") if st.session_state.get("analysis_result_key") == scope_key else None
-    if not result:
+        result = _analyse_upload(
+            st, raw_pdf, scope_key=scope_key, analysis_focus=analysis_focus,
+            settings=settings, cache=cache,
+        )
+    if result is None:
         return
     tab_overview, tab_analysis, tab_charts, tab_data, tab_sources, tab_quality, tab_technical = st.tabs(["Overview", "Analysis", "Charts", "Extracted Data", "Sources", "Data Quality", "Technical Details"])
     with tab_overview:
