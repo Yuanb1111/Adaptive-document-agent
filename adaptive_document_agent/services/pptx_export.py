@@ -2548,10 +2548,14 @@ def _chart_group_title(plans: list[ChartPlan], index: DocumentIndex) -> str:
 
 def _usable_charts(result: PipelineResult) -> list[ChartPlan]:
     from .composition_data import COMPOSITION_TYPES, composition_data
+    from .presentation_evidence import ambiguous_source_table_ids, observation_uses_ambiguous_table
     index = DocumentIndex(result.observations)
+    ambiguous_tables = ambiguous_source_table_ids(result)
     output: list[ChartPlan] = []
     for plan in result.charts:
         observations = [index.get(identifier) for identifier in plan.observation_ids]
+        if any(item and observation_uses_ambiguous_table(item, ambiguous_tables) for item in observations):
+            continue
         observations = [item for item in observations if item and is_meaningful_metric(item)]
         if plan.chart_type in COMPOSITION_TYPES:
             composition_data(plan, observations, [index.get(oid) for oid in plan.total_observation_ids if index.get(oid)])

@@ -588,6 +588,23 @@ def run_comprehensive_qa(result: PipelineResult, auto_repair: bool = True) -> QA
             report.critical_errors.append(issue)
         else:
             report.warnings.append(issue)
+    if result.presentation_topics and result.presentation_topics.topics and not result.presentation_plan:
+        report.critical_errors.append(QAItem(
+            code="presentation_plan_missing",
+            severity="CRITICAL",
+            message="Selected analytical questions could not form a validated presentation plan. "
+                    "Review presentation planning and recovery errors before export.",
+        ))
+    if result.presentation_plan and result.presentation_plan.planning_origin != "legacy":
+        from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
+        try:
+            PresentationPlanValidator().validate(result.presentation_plan, result)
+        except ValueError as exc:
+            report.critical_errors.append(QAItem(
+                code="presentation_plan_invalid_after_repair",
+                severity="CRITICAL",
+                message=str(exc),
+            ))
     report.is_export_blocked = report.has_critical_errors
     return report
 

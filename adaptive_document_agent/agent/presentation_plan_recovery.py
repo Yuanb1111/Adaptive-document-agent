@@ -52,7 +52,13 @@ class PresentationPlanRecovery:
         usable_chart_ids = {chart.id for chart in _usable_charts(result)}
         themes: list[PresentationTheme] = []
         analysis_slides: list[PresentationSlide] = []
+        unavailable_topics: list[str] = []
         for topic in selection.topics:
+            if any(series_id not in series_by_id for series_id in topic.series_ids):
+                unavailable_topics.append(
+                    f"{topic.title}: selected evidence was excluded because its source series is not reliable"
+                )
+                continue
             members = list(dict.fromkeys(
                 item.id for sid in topic.series_ids for item in series_by_id.get(sid, [])
                 if item.value is not None and item.evidence
@@ -82,6 +88,24 @@ class PresentationPlanRecovery:
                 for oid in chart.observation_ids
             }
             supporting_ids = [oid for oid in members if oid not in charted_ids][:12]
+            referenced_ids = set(supporting_ids) | charted_ids
+            allowed_numbers = PresentationPlanValidator._numbers(" ".join(
+                str(value) for oid in referenced_ids if oid in observations
+                for value in (
+                    observations[oid].value, observations[oid].raw_value,
+                    observations[oid].period, observations[oid].entity,
+                    observations[oid].dimensions,
+                ) if value is not None
+            ))
+
+            def supported(text: str) -> bool:
+                return not (PresentationPlanValidator._numbers(text) - allowed_numbers)
+
+            safe_title = topic.takeaway if topic.takeaway and supported(topic.takeaway) else topic.title
+            if not supported(safe_title):
+                safe_title = topic.question if supported(topic.question) else "Selected evidence"
+            safe_question = topic.question if supported(topic.question) else "How do the cited measures compare?"
+            safe_reason = topic.rationale if supported(topic.rationale) else ""
             # A two-chart layout must not silently hide a third series named
             # in the model's analytical question. Show its sourced endpoints
             # in the bottom evidence band; retain every point in notes.
@@ -105,14 +129,14 @@ class PresentationPlanRecovery:
             )
             layout = "hero_plus_supporting" if len(chart_ids) > 1 else "chart_with_data" if chart_ids else "data_overview"
             slide = PresentationSlide(
-                id=f"topic_{topic.id}", slide_type="analysis", title=topic.takeaway or topic.title,
+                id=f"topic_{topic.id}", slide_type="analysis", title=safe_title,
                 section_id=topic.id, section_title=topic.title,
-                slide_role="overview", layout=layout, message=topic.question,
+                slide_role="overview", layout=layout, message=safe_question,
                 chart_ids=chart_ids, observation_ids=supporting_ids,
                 visual_blocks=[PresentationVisualBlock(role="kpi", observation_ids=visible_support_ids)]
                 if visible_support_ids else [],
-                theme_id=topic.id, analytical_question=topic.question,
-                selection_reason=topic.rationale, comparison_mode="parallel" if len(chart_ids) > 1 else "context",
+                theme_id=topic.id, analytical_question=safe_question,
+                selection_reason=safe_reason, comparison_mode="parallel" if len(chart_ids) > 1 else "context",
                 source_pages=pages,
             )
             themes.append(theme)
@@ -123,7 +147,7 @@ class PresentationPlanRecovery:
         base.coverage_notes = [
             f"{series_by_id[item.series_id][0].metric_original}: {item.reason}"
             for item in selection.omissions if item.series_id in series_by_id
-        ]
+        ] + unavailable_topics
         linked_metrics = set()
         for theme in themes:
             for oid in theme.observation_ids:
@@ -577,7 +601,12 @@ class PresentationPlanRecovery:
     def _audience_label(observation) -> str:
         """Remove source footnote markers from prose, retaining raw evidence."""
         label = display_metric_name(observation) if observation else ""
-        return re.sub(r"(?<=[A-Za-z])\(\d{1,2}\)(?=\s|$)", "", label)
+        label = re.sub(r"(?<=[A-Za-z])\(\d{1,2}\)(?=\s|$)", "", label)
+        if observation:
+            category = observation.category_dimensions.get("category") or observation.dimensions.get("category")
+            if category and category.casefold() not in label.casefold():
+                label = f"{label}: {category}"
+        return label
 
     @staticmethod
     def _chart_label(chart: ChartPlan, result: PipelineResult) -> str:

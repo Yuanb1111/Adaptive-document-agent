@@ -182,6 +182,60 @@ def test_failed_slide_writing_can_retain_selected_question() -> None:
     PresentationPlanValidator().validate(plan, result)
 
 
+def test_topic_recovery_uses_neutral_title_when_endpoint_is_not_on_slide() -> None:
+    result = _result()
+    prototype = result.observations[0]
+    result.observations = []
+    for year in range(2021, 2036):
+        item = prototype.model_copy(deep=True)
+        item.id = f"revenue-{year}"
+        item.period = f"FY{year}"
+        item.value = float(year * 1000)
+        item.raw_value = str(year * 1000)
+        result.observations.append(item)
+    series_id = series_directory(result)[0][0]["id"]
+    result.presentation_topics = PresentationTopicSelection(topics=[PresentationTopic(
+        id="growth", title="Revenue movement", question="How did revenue move?",
+        rationale="The reported series spans several years.",
+        takeaway="Revenue peaked in 2033", series_ids=[series_id],
+    )])
+    chart = result.charts[0]
+    chart.observation_ids = ["revenue-2034", "revenue-2035"]
+
+    plan = PresentationPlanRecovery().from_selected_topics(result)
+    slide = next(item for item in plan.slides if item.theme_id == "growth")
+
+    assert slide.title == "Revenue movement"
+    assert "revenue-2033" not in slide.observation_ids
+    PresentationPlanValidator().validate(plan, result)
+
+
+def test_fallback_distinguishes_same_metric_categories_in_visual_blocks() -> None:
+    result = _result()
+    originals = result.observations
+    result.observations = []
+    result.charts = []
+    for category, suffix in (("Inventory", "stock"), ("Receivables", "debtors")):
+        group = [item.model_copy(deep=True) for item in originals]
+        for item in group:
+            item.id = f"{suffix}-{item.period}"
+            item.metric_original = "Current assets"
+            item.metric_canonical = "Current assets"
+            item.dimensions["category"] = category
+        result.observations.extend(group)
+        chart = _result().charts[0].model_copy(deep=True)
+        chart.id = f"chart-{suffix}"
+        chart.title = "Current assets — Reported Values"
+        chart.observation_ids = [item.id for item in group]
+        result.charts.append(chart)
+
+    plan = PresentationPlanRecovery().fallback(result)
+    titles = [block.title for slide in plan.slides if slide.slide_type == "analysis" for block in slide.visual_blocks]
+
+    assert "Current assets: Inventory" in titles
+    assert "Current assets: Receivables" in titles
+
+
 def test_recovered_question_shows_third_series_and_keeps_detail_in_notes() -> None:
     result = _result()
     original = result.observations

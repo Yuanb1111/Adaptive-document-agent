@@ -356,6 +356,10 @@ class PresentationPlanValidator:
         currency = r"(?:RMB|CNY|CNH|USD|HKD|SGD|GBP|EUR|JPY|AUD|CAD|CHF)"
         value = re.sub(rf"(?i)\b{currency}\s*['\u2019]000(?:s)?\b", " ", value)
         value = re.sub(rf"(?i)\b({currency}|FY)(?=[+-]?\d)", r"\1 ", value)
+        # An interim label such as 6M2023 is one period marker. Its leading
+        # duration is not a standalone numerical claim, while the year must
+        # remain available for provenance checks.
+        value = re.sub(r"(?i)\b\d{1,2}M(?=\d{4}\b)", " ", value)
         grouped_or_decimal = re.compile(
             r"(?<![A-Za-z0-9_.,])[+-]?(?:"
             r"\d{1,3}(?:[, '\u00a0\u202f\u2019]\d{3})+(?:\.\d+)?"

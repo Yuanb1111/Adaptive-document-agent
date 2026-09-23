@@ -4,7 +4,11 @@ import json
 
 from adaptive_document_agent.models import PipelineResult, PresentationTopicSelection
 from adaptive_document_agent.services.llm import LLMGateway
-from adaptive_document_agent.services.presentation_evidence import evidence_groups
+from adaptive_document_agent.services.presentation_evidence import (
+    ambiguous_source_table_ids,
+    evidence_groups,
+    observation_uses_ambiguous_table,
+)
 from adaptive_document_agent.utils.ids import stable_id
 
 from .prompting import load_prompt, untrusted_document_message
@@ -14,8 +18,21 @@ def series_directory(result: PipelineResult) -> tuple[list[dict[str, object]], d
     """Expose every extracted metric scope, without truncating to a chart quota."""
     directory: list[dict[str, object]] = []
     lookup: dict[str, list] = {}
-    for group in evidence_groups(result.observations):
+    ambiguous_tables = ambiguous_source_table_ids(result)
+    eligible = [
+        item for item in result.observations
+        if not observation_uses_ambiguous_table(item, ambiguous_tables)
+    ]
+    for group in evidence_groups(eligible):
         if not any(item.value is not None and item.evidence for item in group):
+            continue
+        by_period: dict[str, set[float]] = {}
+        for item in group:
+            if item.period and item.value is not None:
+                by_period.setdefault(item.period, set()).add(float(item.value))
+        if any(len(values) > 1 for values in by_period.values()):
+            # Missing category/series labels make these same-period values
+            # impossible to interpret as a single coherent measure.
             continue
         identifier = stable_id("presentation_series", *(item.id for item in group))
         lookup[identifier] = group

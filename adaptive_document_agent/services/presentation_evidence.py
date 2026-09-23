@@ -18,6 +18,28 @@ from .single_metric_analysis import single_metric_analysis
 _META = {"table_context", "section", "column_role", "period_basis"}
 
 
+def ambiguous_source_table_ids(result: PipelineResult) -> set[str]:
+    """Identify tables whose sparse alignment cannot support presentation claims.
+
+    The raw cells and observations remain in the document model. This only
+    prevents an unverified table from becoming an audience-facing series.
+    """
+    return {
+        table.table_id
+        for page in result.document.pages
+        for table in page.tables
+        if any(row.alignment_status == "ambiguous" for row in table.rows)
+    }
+
+
+def observation_uses_ambiguous_table(observation: Observation, table_ids: set[str]) -> bool:
+    """Check every retained table reference, not only the preferred table ID."""
+    return bool(
+        observation.effective_table_id in table_ids
+        or any(source.table_id in table_ids for source in observation.evidence)
+    )
+
+
 def _subject_scope(o: Observation) -> tuple:
     dims = tuple(sorted((k, v) for k, v in {**o.dimensions, **o.category_dimensions}.items() if k not in _META))
     return metric_key(o), o.unit, o.currency, o.entity, dims, o.ifrs_status
