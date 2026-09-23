@@ -92,6 +92,22 @@ class PresentationPlanner:
                 ))
             return stamp_editorial_review(proposed, result, origin="model")
         except ValueError as exc:
+            if result.presentation_topics and result.presentation_topics.topics:
+                # Re-sending a full large-document slide plan for a second
+                # model attempt is costly. Try bounded deterministic repair;
+                # the orchestrator can retain the already model-selected
+                # questions if the slide draft still fails validation.
+                try:
+                    repaired = PresentationPlanRepairer().repair(proposed, result)
+                    self._validate_topic_alignment(repaired, result)
+                    if review_presentation(repaired, result):
+                        raise ValueError("Deterministic repair retained editorial weaknesses")
+                    return stamp_editorial_review(repaired, result, origin="repaired")
+                except ValueError as repair_exc:
+                    raise ValueError(
+                        "Presentation plan validation failed. Initial reason: "
+                        f"{exc}. Deterministic repair reason: {repair_exc}"
+                    ) from repair_exc
             model_repair_error = ""
             candidate = proposed
             try:

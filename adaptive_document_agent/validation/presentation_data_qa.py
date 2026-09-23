@@ -12,11 +12,19 @@ def validate_presentation_data(result: PipelineResult):
     from adaptive_document_agent.services.qa_reporter import QAItem
 
     issues = []
+    scoped_ids = _presentation_evidence_ids(result)
+    selected_tables = {
+        table_id
+        for obs in result.observations if scoped_ids is not None and obs.id in scoped_ids
+        for table_id in (obs.effective_table_id, *(e.table_id for e in obs.evidence))
+        if table_id
+    }
     for page in result.document.pages:
         for table in page.tables:
             for row_index, row in enumerate(table.rows):
                 if row.alignment_status == "ambiguous":
-                    issues.append(QAItem(code="ambiguous_table_alignment", severity="CRITICAL", related_ids=[table.table_id],
+                    severity = "CRITICAL" if scoped_ids is None or table.table_id in selected_tables else "WARNING"
+                    issues.append(QAItem(code="ambiguous_table_alignment", severity=severity, related_ids=[table.table_id],
                         message=f"Table {table.table_id}, page {row.page}, row {row_index + 1} has unresolved blank-cell alignment. Raw values are retained; re-extract with source geometry before export."))
     for obs in result.observations:
         is_pct = obs.unit in {"%", "percent", "percentage"} or obs.unit_family == "percentage"
@@ -28,12 +36,12 @@ def validate_presentation_data(result: PipelineResult):
         )
         if monetary and ((is_pct and not strong_pct) or (not is_pct and "%" in obs.display_value)):
             issues.append(QAItem(
-                code="monetary_percentage_mismatch", severity="CRITICAL", related_ids=[obs.id],
+                code="monetary_percentage_mismatch", severity="CRITICAL" if scoped_ids is None or obs.id in scoped_ids else "WARNING", related_ids=[obs.id],
                 message=f"Metric '{obs.metric_original}' is displayed as a percentage without source percentage evidence. Re-evaluate column {obs.column_id} in table {obs.effective_table_id}.",
             ))
         if is_pct and obs.value is not None and abs(obs.value) > 1000:
             issues.append(QAItem(
-                code="implausible_percentage", severity="CRITICAL", related_ids=[obs.id],
+                code="implausible_percentage", severity="CRITICAL" if scoped_ids is None or obs.id in scoped_ids else "WARNING", related_ids=[obs.id],
                 message=f"Metric '{obs.metric_original}' has implausible percentage {obs.value:g}%. Re-evaluate the source column role and alignment before export.",
             ))
 
@@ -41,7 +49,10 @@ def validate_presentation_data(result: PipelineResult):
     from adaptive_document_agent.document_model.series import metric_key, metric_identity_key, source_context_key
     from adaptive_document_agent.services.composition_data import COMPOSITION_TYPES, composition_data
     observation_map = {o.id: o for o in result.observations}
+    planned_chart_ids = _planned_chart_ids(result)
     for chart in result.charts:
+        if planned_chart_ids is not None and chart.id not in planned_chart_ids:
+            continue
         values = [observation_map[oid] for oid in chart.observation_ids if oid in observation_map]
         if chart.chart_type in COMPOSITION_TYPES:
             try:
@@ -124,3 +135,39 @@ def validate_presentation_data(result: PipelineResult):
                 message=f"Slide {slide.id} repeats the title, narrative and evidence of slide {seen[signature]}."))
         seen[signature] = slide.id
     return issues
+
+
+def _presentation_evidence_ids(result: PipelineResult) -> set[str] | None:
+    """Keep questionable unused facts visible without blocking a sourced deck."""
+    if not result.presentation_plan and not result.presentation_topics:
+        # Legacy plans have no bounded audience evidence contract.
+        return None
+    planned_chart_ids = _planned_chart_ids(result)
+    ids = {
+        oid for chart in result.charts
+        if planned_chart_ids is None or chart.id in planned_chart_ids
+        for oid in (*chart.observation_ids, *chart.total_observation_ids)
+    }
+    if result.presentation_plan:
+        ids.update(oid for theme in result.presentation_plan.themes for oid in theme.observation_ids)
+        for slide in result.presentation_plan.slides:
+            ids.update(slide.observation_ids)
+            ids.update(oid for block in slide.visual_blocks for oid in block.observation_ids)
+    if result.presentation_topics and not result.presentation_plan:
+        from adaptive_document_agent.agent.presentation_topic_selector import series_directory
+        _, lookup = series_directory(result)
+        ids.update(
+            obs.id for topic in result.presentation_topics.topics
+            for series_id in topic.series_ids for obs in lookup.get(series_id, [])
+        )
+    return ids
+
+
+def _planned_chart_ids(result: PipelineResult) -> set[str] | None:
+    if not result.presentation_plan:
+        return None
+    return {
+        chart_id
+        for slide in result.presentation_plan.slides
+        for chart_id in (*slide.chart_ids, *(cid for block in slide.visual_blocks for cid in block.chart_ids))
+    }

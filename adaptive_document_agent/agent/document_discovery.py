@@ -34,6 +34,12 @@ class DocumentRoute(BaseModel):
     selected_page_ranges: list[AnalysisPageRange] = Field(default_factory=list)
 
 
+class RouteBudgetSelection(BaseModel):
+    """Model-ranked primary ranges when initial routing is too broad."""
+
+    primary_range_indexes: list[int] = Field(default_factory=list, min_length=1, max_length=4)
+
+
 class DocumentDiscovery:
     def __init__(self, gateway: LLMGateway | None = None, *, target_tokens: int = 6_000, cache: DiskCache | None = None) -> None:
         self.gateway = gateway
@@ -49,17 +55,29 @@ class DocumentDiscovery:
         routed_ranges: list[AnalysisPageRange] | None = None,
     ) -> DocumentProfile:
         notify = progress or (lambda _: None)
-        chunks = semantic_chunks(document.pages, target_tokens=self.target_tokens)
         if not self.gateway:
+            chunks = semantic_chunks(document.pages, target_tokens=self.target_tokens)
             profile = self._deterministic_profile(document, chunks)
             profile.analysis_focus = analysis_focus.strip() if analysis_focus and analysis_focus.strip() else None
             return profile
-        if routed_ranges is None and len(chunks) > 24:
+        if routed_ranges is None and (document.page_count > 160 or self._estimated_chunk_count(document.pages) > 24):
             notify("Mapping the large document and selecting relevant sections")
             routed_ranges = self._route_large_document(document, analysis_focus)
         routed_ranges = routed_ranges or []
         if routed_ranges:
+            # Build heavy chunk text only for deep-analysis pages. The full
+            # page-preserving document remains available for background facts.
+            chunks = [
+                chunk
+                for item in routed_ranges
+                for chunk in semantic_chunks(
+                    [page for page in document.pages if item.start_page <= page.page_number <= item.end_page],
+                    target_tokens=self.target_tokens,
+                )
+            ]
             chunks = self._select_chunks(chunks, routed_ranges)
+        else:
+            chunks = semantic_chunks(document.pages, target_tokens=self.target_tokens)
         discoveries = self._discover_chunks(chunks, notify)
         compact = "\n".join(
             f"Pages {chunk.start_page}-{chunk.end_page}: {discovery.model_dump_json()}"
@@ -125,8 +143,7 @@ class DocumentDiscovery:
 
     def route(self, document: ParsedDocument, analysis_focus: str | None = None) -> list[AnalysisPageRange]:
         """Select a bounded scope that can be reviewed before deep analysis."""
-        chunks = semantic_chunks(document.pages, target_tokens=self.target_tokens)
-        if self.gateway and len(chunks) > 24:
+        if self.gateway and (document.page_count > 160 or self._estimated_chunk_count(document.pages) > 24):
             selected = self._route_large_document(document, analysis_focus)
             if selected:
                 return selected
@@ -138,6 +155,10 @@ class DocumentDiscovery:
                 reason="The document is small enough to analyse as a complete page-preserving scope.",
             )
         ]
+
+    def _estimated_chunk_count(self, pages: list) -> int:
+        estimated_tokens = sum(max(1, len(page.text) // 4) for page in pages)
+        return max(1, (estimated_tokens + self.target_tokens - 1) // self.target_tokens)
 
     def _route_large_document(self, document: ParsedDocument, analysis_focus: str | None) -> list[AnalysisPageRange]:
         page_map: list[str] = []
@@ -162,6 +183,39 @@ class DocumentDiscovery:
             start, end = max(1, item.start_page), min(maximum_page, item.end_page)
             if start <= end:
                 output.append(item.model_copy(update={"start_page": start, "end_page": end}))
+        if not output:
+            raise ValueError("No valid evidence-bearing page range was selected for deep analysis")
+        if sum(item.end_page - item.start_page + 1 for item in output) > 160:
+            excerpts = []
+            for index, item in enumerate(output):
+                sample_pages = {item.start_page, (item.start_page + item.end_page) // 2, item.end_page}
+                excerpts.append({
+                    "index": index,
+                    "title": item.title,
+                    "start_page": item.start_page,
+                    "end_page": item.end_page,
+                    "reason": item.reason,
+                    "page_excerpts": [
+                        {"page": page.page_number, "text": " ".join(page.text.split())[:350]}
+                        for page in document.pages if page.page_number in sample_pages
+                    ],
+                })
+            narrowed = self.gateway.generate_structured(  # type: ignore[union-attr]
+                [
+                    {"role": "system", "content": load_prompt("document_route_budget.txt")},
+                    {"role": "user", "content": "User analysis focus: " + (analysis_focus.strip() if analysis_focus else "Automatic discovery")},
+                    untrusted_document_message(json.dumps(excerpts, ensure_ascii=False)),
+                ],
+                RouteBudgetSelection,
+                stage="discovery",
+            )
+            indices = narrowed.primary_range_indexes
+            if len(indices) != len(set(indices)) or any(index < 0 or index >= len(output) for index in indices):
+                raise ValueError("The primary section selection contains invalid range indexes")
+            primary = [output[index] for index in indices]
+            if sum(item.end_page - item.start_page + 1 for item in primary) > 160:
+                raise ValueError("The primary section selection exceeds the deep-analysis page budget")
+            output = sorted(primary, key=lambda item: item.start_page)
         return output
 
     @staticmethod
@@ -172,7 +226,12 @@ class DocumentDiscovery:
             if any(chunk.start_page <= item.end_page and chunk.end_page >= item.start_page for item in ranges)
         ]
         if selected:
-            return selected[:maximum]
+            if len(selected) <= maximum:
+                return selected
+            # Sample the whole selected scope, including late sections, rather
+            # than silently dropping everything after the first 32 chunks.
+            return [selected[round(index * (len(selected) - 1) / (maximum - 1))]
+                    for index in range(maximum)]
         if len(chunks) <= maximum:
             return chunks
         step = len(chunks) / maximum

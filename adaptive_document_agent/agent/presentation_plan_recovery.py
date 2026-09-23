@@ -42,7 +42,9 @@ class PresentationPlanRecovery:
         selection = result.presentation_topics
         if not selection or not selection.topics:
             raise ValueError("No selected presentation topics are available")
-        base = self.fallback(result)
+        # The generic fallback's chart pages are discarded below. Do not let
+        # an unrelated generic chart invalidate model-selected topic recovery.
+        base = self.fallback(result, validate=False)
         _, series_by_id = series_directory(result)
         observation_by_id = {item.id: item for item in result.observations}
         from adaptive_document_agent.services.pptx_export import _usable_charts
@@ -62,12 +64,17 @@ class PresentationPlanRecovery:
                 chart.id for chart in result.charts if chart.id in usable_chart_ids
                 if set(chart.observation_ids) <= observations.keys()
                 and set(chart.observation_ids) & observations.keys()
-            ][:3]
+            ][:2]
             if not chart_ids and len(members) > 40:
                 # Never silently truncate a large unchartable series into a
                 # purportedly complete audience analysis.
                 continue
             pages = sorted({e.page for item in observations.values() for e in item.evidence})
+            charted_ids = {
+                oid for chart in result.charts if chart.id in chart_ids
+                for oid in chart.observation_ids
+            }
+            supporting_ids = [oid for oid in members if oid not in charted_ids][:12]
             theme = PresentationTheme(
                 id=topic.id, title=topic.title, question=topic.question,
                 rationale=topic.rationale, chart_ids=chart_ids,
@@ -79,7 +86,7 @@ class PresentationPlanRecovery:
                 id=f"topic_{topic.id}", slide_type="analysis", title=topic.title,
                 section_id=topic.id, section_title=topic.title,
                 slide_role="overview", layout=layout, message=topic.question,
-                chart_ids=chart_ids, observation_ids=members[:40],
+                chart_ids=chart_ids, observation_ids=supporting_ids,
                 theme_id=topic.id, analytical_question=topic.question,
                 selection_reason=topic.rationale, comparison_mode="parallel" if len(chart_ids) > 1 else "context",
                 source_pages=pages,
@@ -134,7 +141,7 @@ class PresentationPlanRecovery:
         from adaptive_document_agent.services.presentation_editorial import stamp_editorial_review
         return stamp_editorial_review(PresentationPlanValidator().validate(base, result), result, origin="topic_recovery")
 
-    def fallback(self, result: PipelineResult) -> PresentationPlan:
+    def fallback(self, result: PipelineResult, *, validate: bool = True) -> PresentationPlan:
         """Build a modern, evidence-only deck when no AI plan can be validated.
 
         Base structure:
@@ -204,13 +211,13 @@ class PresentationPlanRecovery:
             chart_ids = [item.id for item in group]
             pages = sorted({page for item in group for page in item.source_pages})
             obs_first = next((index.get(oid) for oid in group[0].observation_ids if index.get(oid)), None)
-            first_label = display_metric_name(obs_first) if obs_first else self._chart_label(group[0], result)
+            first_label = self._audience_label(obs_first) if obs_first else self._chart_label(group[0], result)
             group_title = _chart_group_title(group, index)
             layout = "single" if len(group) == 1 else "two_up" if len(group) == 2 else "three_up"
             blocks = [
                 PresentationVisualBlock(
                     role="hero" if idx == 0 else "supporting",
-                    title=display_metric_name(next((index.get(oid) for oid in chart.observation_ids if index.get(oid)), None)) or self._chart_label(chart, result),
+                    title=self._audience_label(next((index.get(oid) for oid in chart.observation_ids if index.get(oid)), None)) or self._chart_label(chart, result),
                     chart_ids=[chart.id],
                 )
                 for idx, chart in enumerate(group)
@@ -293,16 +300,16 @@ class PresentationPlanRecovery:
             ]
         )
 
-        from adaptive_document_agent.services.presentation_editorial import stamp_editorial_review
-        recovered = PresentationPlanValidator().validate(
-            PresentationPlan(
-                title=result.report_plan.title,
-                report_type="Evidence-bound document analysis",
-                company=company_profile,
-                slides=slides,
-            ),
-            result,
+        recovered = PresentationPlan(
+            title=result.report_plan.title,
+            report_type="Evidence-bound document analysis",
+            company=company_profile,
+            slides=slides,
         )
+        if not validate:
+            return recovered
+        from adaptive_document_agent.services.presentation_editorial import stamp_editorial_review
+        recovered = PresentationPlanValidator().validate(recovered, result)
         return stamp_editorial_review(recovered, result, origin="fallback")
 
     @staticmethod
@@ -541,6 +548,12 @@ class PresentationPlanRecovery:
                     remaining.remove(candidate)
             groups.append(group)
         return groups
+
+    @staticmethod
+    def _audience_label(observation) -> str:
+        """Remove source footnote markers from prose, retaining raw evidence."""
+        label = display_metric_name(observation) if observation else ""
+        return re.sub(r"(?<=[A-Za-z])\(\d{1,2}\)(?=\s|$)", "", label)
 
     @staticmethod
     def _chart_label(chart: ChartPlan, result: PipelineResult) -> str:

@@ -8,6 +8,7 @@ from pptx import Presentation
 
 from adaptive_document_agent.agent.chart_planner import ChartPlanner
 from adaptive_document_agent.agent.presentation_plan_recovery import PresentationPlanRecovery
+from adaptive_document_agent.agent.presentation_planner import PresentationPlanner
 from adaptive_document_agent.agent.presentation_topic_selector import PresentationTopicSelector, series_directory
 from adaptive_document_agent.document_model import DocumentIndex
 from adaptive_document_agent.models import PresentationPlan, PresentationSlide, PresentationTopic, PresentationTopicSelection
@@ -175,6 +176,44 @@ def test_sourced_company_identity_cannot_be_called_unnamed() -> None:
     plan.company.one_line_description = "Unnamed issuer with robotics products"
     with pytest.raises(ValueError, match="contradicts the sourced company identity"):
         PresentationPlanValidator().validate(plan, result)
+
+
+def test_recovery_removes_source_footnote_marker_from_audience_label() -> None:
+    result = _result()
+    for item in result.observations:
+        item.metric_original = "Average distributor value(1) (RMB in thousands)"
+        item.metric_canonical = item.metric_original
+    result.charts = ChartPlanner().plan(
+        [], [], DocumentIndex(result.observations),
+        requested_series=[result.observations], only_requested=True,
+    )
+    plan = PresentationPlanRecovery().fallback(result)
+    analysis = next(slide for slide in plan.slides if slide.slide_type == "analysis")
+    assert "(1)" not in analysis.section_title
+    assert all("(1)" not in block.title for block in analysis.visual_blocks)
+
+
+def test_selected_topics_avoid_a_second_full_slide_plan_request() -> None:
+    result = _result()
+    selected_id = series_directory(result)[0][0]["id"]
+    result.presentation_topics = PresentationTopicSelection(topics=[PresentationTopic(
+        id="growth", title="Revenue movement", question="How did revenue move?",
+        rationale="Comparable annual evidence", series_ids=[selected_id],
+    )])
+
+    class Gateway:
+        calls = 0
+
+        def generate_structured(self, messages, response_model, **kwargs):
+            self.calls += 1
+            return response_model(title="Invalid empty slide draft")
+
+    gateway = Gateway()
+    try:
+        PresentationPlanner(gateway).plan(result)
+    except ValueError:
+        pass  # The orchestrator retains the model-selected questions.
+    assert gateway.calls == 1
 
 
 def test_thematic_appendix_keeps_selected_evidence_without_unrelated_conflicts() -> None:
