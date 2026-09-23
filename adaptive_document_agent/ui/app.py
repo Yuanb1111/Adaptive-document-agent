@@ -47,6 +47,8 @@ def _analyse_upload(st, raw_pdf, *, scope_key, analysis_focus, settings, cache, 
 
 
 def run_app() -> None:
+    from adaptive_document_agent.utils.timing import configure_timing_logging
+    configure_timing_logging()
     try:
         import streamlit as st
     except ImportError as exc:

@@ -66,7 +66,7 @@ def test_failed_chunk_does_not_produce_partial_discovery(monkeypatch):
 
 
 @pytest.mark.parametrize("provider,url,opt_in,expected", [
-    (ProviderName.OPENAI, None, True, 3),
+    (ProviderName.OPENAI, None, True, 4),
     (ProviderName.OPENAI, None, False, 1),
     (ProviderName.OLLAMA, None, True, 1),
     (ProviderName.OPENAI_COMPATIBLE, "http://127.0.0.1:8000/v1", True, 1),

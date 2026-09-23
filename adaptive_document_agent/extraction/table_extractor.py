@@ -26,17 +26,20 @@ class TableExtractor:
                         continue
                     page_tables: list[ExtractedTable] = []
                     found_tables = page.find_tables()
+                    # Word geometry is identical for all table-header lookups
+                    # on this page; avoid rebuilding it several times per table.
+                    words = page.extract_words(x_tolerance=2, y_tolerance=2) if found_tables else []
                     for index, found in enumerate(found_tables):
                         raw = [[self._clean(cell) for cell in row] for row in found.extract()]
                         if not raw:
                             continue
                         width = max(len(row) for row in raw)
                         bbox = tuple(float(value) for value in found.bbox)
-                        context = self._context_above(page, found, distance=90)
+                        context = self._context_above(page, found, distance=90, words=words)
                         default_unit, default_scale, default_currency, default_raw_unit = self._infer_defaults(raw, context)
                         table_title, unit_header = self._extract_title_and_unit(context)
                         headers, column_periods, data_rows, col_types, col_currs, col_scales = self._infer_schema_and_roles(
-                            page, found, raw, default_unit, default_currency, default_scale
+                            page, found, raw, default_unit, default_currency, default_scale, words=words
                         )
                         rows = self._build_table_rows(data_rows, page_number)
                         non_empty = sum(cell is not None for row in raw for cell in row)
@@ -68,6 +71,9 @@ class TableExtractor:
                         from .table_candidate_selector import TableCandidateSelector
                         page_tables = TableCandidateSelector.merge_or_replace_tables(page_tables, borderless_tables)
                     result[page_number] = page_tables
+                    # Parsed tables own their raw cells and evidence. Keeping
+                    # pdfplumber's layout cache for all prior pages is unnecessary.
+                    page.close()
         except Exception:
             return result
         return result
@@ -87,10 +93,12 @@ class TableExtractor:
         default_unit: str | None,
         default_currency: str | None,
         default_scale: float | None,
+        *,
+        words: list[dict[str, object]] | None = None,
     ) -> tuple[list[str], list[str | None], list[list[str | None]], list[str], list[str | None], list[float | None]]:
         from .table_reconstructor import TableReconstructor
 
-        context = self._context_above(page, found, distance=90)
+        context = self._context_above(page, found, distance=90, words=words)
         headers, periods, data_rows, col_types, col_currs, col_scales = TableReconstructor.reconstruct_multi_tier_headers(
             raw,
             default_unit=default_unit,
@@ -101,7 +109,7 @@ class TableExtractor:
 
         width = max(len(r) for r in raw) if raw else 0
         if width >= 2 and (not any(periods) or None in periods[1:]):
-            words = self._words_above(page, found, distance=65)
+            words = self._words_above(page, found, distance=65, words=words)
             year_lines: dict[float, list[dict[str, object]]] = {}
             for word in words:
                 if re.search(r"(?:19|20)\d{2}", str(word["text"])):
@@ -309,18 +317,20 @@ class TableExtractor:
                 title = line
         return title, unit
 
-    def _words_above(self, page: object, found: object, *, distance: float) -> list[dict[str, object]]:
+    def _words_above(self, page: object, found: object, *, distance: float, words: list[dict[str, object]] | None = None) -> list[dict[str, object]]:
         left, top, right, _ = found.bbox
+        if words is None:
+            words = page.extract_words(x_tolerance=2, y_tolerance=2)
         return [
             word
-            for word in page.extract_words(x_tolerance=2, y_tolerance=2)
+            for word in words
             if top - distance <= float(word["top"]) < top
             and left - 5 <= float(word["x0"])
             and float(word["x1"]) <= right + 5
         ]
 
-    def _context_above(self, page: object, found: object, *, distance: float) -> str:
-        return " ".join(str(word["text"]) for word in self._words_above(page, found, distance=distance))
+    def _context_above(self, page: object, found: object, *, distance: float, words: list[dict[str, object]] | None = None) -> str:
+        return " ".join(str(word["text"]) for word in self._words_above(page, found, distance=distance, words=words))
 
     @staticmethod
     def _numeric_like(value: str | None) -> bool:
