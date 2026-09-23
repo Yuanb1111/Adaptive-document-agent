@@ -211,10 +211,66 @@ def test_company_discovery_finds_profile_outside_financial_pages() -> None:
     assert enriched.reporting_currency == "RMB"
     assert "FY2021" in enriched.track_record_period
 
-    # 3. Verify per-field source pages are recorded
+    # Verify per-field source pages are recorded
     assert 1 in enriched.field_source_pages.get("name", []) or 15 in enriched.field_source_pages.get("name", [])
     assert 15 in enriched.field_source_pages.get("products", [])
     assert 16 in enriched.field_source_pages.get("geographies", []) or 16 in enriched.field_source_pages.get("market_position", [])
+
+
+def test_profile_discovery_keeps_business_overview_continuation_ahead_of_risk_hits() -> None:
+    pages = [
+        DocumentPage(page_number=1, text="ACME ROBOTICS LIMITED\nStock Code: 1234"),
+        DocumentPage(page_number=10, text=(
+            "OVERVIEW\nWe are a developer and manufacturer of collaborative robots. "
+            "Our products cover industrial automation and education."
+        )),
+        DocumentPage(page_number=11, text="Our product portfolio includes Series A and Series B robots."),
+        DocumentPage(page_number=12, text="Our sales network serves customers across several markets."),
+        DocumentPage(page_number=40, text=(
+            "Risk factors\nWe cannot assure you that distributors will buy our products. "
+            "This could materially and adversely affect our business."
+        )),
+    ]
+    result = _make_dummy_pipeline_result(pages)
+    selected = CompanyProfileDiscovery.rank_profile_pages(result.document, result.profile, max_pages=4)
+    assert selected == [1, 10, 11, 12]
+
+
+def test_prospectus_distribution_is_not_a_company_product() -> None:
+    assert validate_product("printed copies of this prospectus") == ""
+    result = _make_dummy_pipeline_result([
+        DocumentPage(page_number=1, text="ACME ROBOTICS LIMITED"),
+        DocumentPage(page_number=2, text="The company provides printed copies of this prospectus on request."),
+    ])
+    recovered = extract_structured_company_fields(CompanyProfile(name="ACME ROBOTICS LIMITED"), result)
+    assert recovered.products == []
+
+
+def test_issuer_product_series_are_recovered_without_forecast_period() -> None:
+    result = _make_dummy_pipeline_result([
+        DocumentPage(page_number=1, text="ACME ROBOTICS LIMITED"),
+        DocumentPage(page_number=10, text=(
+            "OVERVIEW\nWe are a company that specializes in the development, manufacturing\n"
+            "and commercialization of collaborative robots. "
+            "Our products cover industrial automation."
+        )),
+        DocumentPage(page_number=11, text=(
+            "OUR PRODUCTS\nCR Series\nOur CR Series includes collaborative robot models.\n"
+            "Nova Series\nThe Nova Series features lightweight robot models."
+        )),
+        DocumentPage(page_number=12, text="Industry revenue is forecast to grow from 2023 to 2028."),
+    ])
+    company = CompanyProfile(
+        name="ACME ROBOTICS LIMITED",
+        products=["printed copies of this prospectus"],
+        track_record_period="2023 to 2028",
+        field_source_pages={"products": [1], "track_record_period": [12]},
+    )
+    recovered = extract_structured_company_fields(company, result)
+    assert recovered.products == ["CR Series", "Nova Series"]
+    assert recovered.one_line_description == "Development, manufacturing and commercialization of collaborative robots"
+    assert recovered.field_source_pages["products"] == [11]
+    assert recovered.track_record_period == ""
 
 
 # =============================================================================

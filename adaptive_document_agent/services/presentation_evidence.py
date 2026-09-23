@@ -89,7 +89,14 @@ def _tokens(text: str) -> set[str]:
     return set(re.findall(r"[^\W_]{2,}", text.casefold()))
 
 
-def build_evidence_catalog(result: PipelineResult, *, max_series: int = 60, max_observations: int = 240) -> dict:
+def build_evidence_catalog(
+    result: PipelineResult,
+    *,
+    max_series: int = 60,
+    max_observations: int = 240,
+    max_source_pages: int = 12,
+    max_calculations: int = 240,
+) -> dict:
     """Retrieve whole small series fairly, guided by prior semantic-stage outputs.
 
 Limits are explicit in the payload. Large series are omitted, not silently
@@ -178,7 +185,7 @@ their own bounded catalogue even when a series is outside the retrieval budget.
     for group in selected:
         for o in group:
             for e in o.evidence:
-                if e.page not in snippets_by_page and len(snippets_by_page) >= 12:
+                if e.page not in snippets_by_page and len(snippets_by_page) >= max_source_pages:
                     continue
                 text = page_text.get(e.page) or e.text or ""
                 if not text.strip():
@@ -196,6 +203,6 @@ their own bounded catalogue even when a series is outside the retrieval budget.
     calculations = [c for c in all_calculations.values() if set(c["observation_ids"]) <= selected_ids]
     return {"series": bundles, "source_snippets": snippets,
             "observations": [observation_record(o) for g in selected for o in g],
-            "calculations": calculations[:240], "omitted_series_count": len(groups) - len(selected),
-            "total_series_count": len(groups), "retrieval_limits": {"series": max_series, "observations": max_observations, "source_pages": 12, "characters_per_source_page": 2400},
+            "calculations": calculations[:max_calculations], "omitted_series_count": len(groups) - len(selected),
+            "total_series_count": len(groups), "retrieval_limits": {"series": max_series, "observations": max_observations, "source_pages": max_source_pages, "calculations": max_calculations, "characters_per_source_page": 2400},
             "coverage_note": "This is a bounded evidence catalogue, not proof that omitted topics are absent from the document."}

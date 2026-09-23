@@ -201,6 +201,10 @@ def validate_product(product: str) -> str:
     # Reject generic placeholders
     if s.casefold() in _GENERIC_PLACEHOLDERS or s.casefold() in _GENERIC_NAMES:
         return ""
+    # Distribution of a document is not an issuer product. This often appears
+    # in prospectus front matter and can otherwise match a broad verb pattern.
+    if re.search(r"(?i)\b(?:printed|electronic)\s+copies?\b.*\b(?:prospectus|report|document)\b", s):
+        return ""
     # Reject navigation artifacts
     for pat in _NAVIGATION_ARTIFACT_PATTERNS:
         if pat.search(s):
@@ -281,7 +285,7 @@ def validate_geography(geo: str) -> str:
 def validate_market_position(pos: str) -> str:
     """Validate market position or ranking claim."""
     s = _clean_text_fragment(pos)
-    if not s or len(s) < 6 or len(s) > 160:
+    if not s or len(s) < 6 or len(s) > 240:
         return ""
     if s.casefold() in _GENERIC_PLACEHOLDERS:
         return ""
@@ -479,6 +483,22 @@ def extract_structured_company_fields(
     identity_state = "RESOLVED" if is_resolved else "UNRESOLVED"
     final_name = name or ""
     discovered_sources = issuer_windows(discovered_sources, final_name)
+    description = company.one_line_description.strip()
+    if not description and is_resolved:
+        for p_num, p_text in discovered_sources:
+            prose = re.sub(r"\s+", " ", p_text)
+            match = re.search(
+                r"(?i)\bwe\s+are\s+[^.]{0,100}?\bspecializ(?:es?|ing)\s+in\s+(?:the\s+)?([^.]{12,180})",
+                prose,
+            )
+            if not match:
+                continue
+            clause = re.split(r"\s*,\s*or\s+commonly\s+known\b", match.group(1), maxsplit=1, flags=re.I)[0]
+            clause = _clean_text_fragment(clause)
+            if clause and not _has_broken_prefix(clause):
+                description = clause[0].upper() + clause[1:]
+                field_source_pages["one_line_description"] = [p_num]
+                break
     # Revalidate cited model fields against the same entity-bound windows.
     updates = {}
     for field in ("headquarters", "industry", "market_position", "listing_market"):
@@ -516,8 +536,9 @@ def extract_structured_company_fields(
     existing_products = [validate_product(p) for p in company.products]
     products = [p for p in existing_products if p]
     if not products:
+        field_source_pages.pop("products", None)
         prod_regex = re.compile(
-            r"(?i)\b(?:core products?|products and services|main offerings|offerings include|specializ(?:es|ing|ed)?\s+in|develops and sells|\bprovides?\b)\s*(?::|include[s]?|consisting of)?\s*([^.;\n]{5,180})"
+            r"(?i)\b(?:core products?|products and services|main offerings|offerings include|specializ(?:es|ing|ed)?\s+in|develops and sells)\s*(?::|include[s]?|consisting of)?\s*([^.;\n]{5,180})"
         )
         for p_num, p_text in discovered_sources:
             for prod_match in prod_regex.finditer(p_text):
@@ -535,6 +556,23 @@ def extract_structured_company_fields(
                 vs = validate_product(s)
                 if vs and vs not in products:
                     products.append(vs)
+        # Product-line headings can be more reliable than a broad sentence
+        # match in a long catalogue. Require the adjacent prose to identify
+        # the line as the issuer's own offering.
+        if not products:
+            series_heading = re.compile(
+                r"(?m)^[ \t]*([A-Z][A-Za-z0-9-]*(?:[ \t]+[A-Z][A-Za-z0-9-]*){0,3}[ \t]+Series)[ \t]*$"
+            )
+            for p_num, p_text in discovered_sources:
+                for match in series_heading.finditer(p_text):
+                    heading = match.group(1)
+                    nearby = p_text[match.end():match.end() + 260]
+                    if not re.search(rf"(?i)\b(?:our|the)\s+{re.escape(heading)}\b", nearby):
+                        continue
+                    product = validate_product(heading)
+                    if product and product not in products:
+                        products.append(product)
+                        field_source_pages.setdefault("products", []).append(p_num)
 
     # -------------------------------------------------------------------------
     # 4. Business Model
@@ -634,6 +672,20 @@ def extract_structured_company_fields(
                     market_position = cand
                     field_source_pages.setdefault("market_position", []).append(p_num)
                     break
+    if market_position and len(market_position) < 80:
+        for p_num, p_text in discovered_sources:
+            prose = re.sub(r"\s+", " ", p_text)
+            match = re.search(
+                r"(?i)\bwe\s+are\s+.{0,120}?\b(?:top\s+\d+|ranked|leading|largest)\b"
+                r".{0,300}?\baccording\s+to\s+[^.]{3,80}\.",
+                prose,
+            )
+            if match and market_position.casefold() in match.group(0).casefold():
+                detailed = validate_market_position(match.group(0))
+                if detailed:
+                    market_position = detailed
+                    field_source_pages["market_position"] = [p_num]
+                    break
 
     # -------------------------------------------------------------------------
     # 8. Listing & Offering Facts (Exchange, Stock Code, Offering Type)
@@ -692,10 +744,24 @@ def extract_structured_company_fields(
                 break
 
     track_record = validate_track_record_period(company.track_record_period)
+    if track_record:
+        period_pages = field_source_pages.get("track_record_period", [])
+        supported = False
+        for p_num, p_text in discovered_sources:
+            if period_pages and p_num not in period_pages:
+                continue
+            for match in re.finditer(re.escape(track_record), p_text, re.I):
+                if re.search(r"(?i)\b(?:track\s+record|review)\s+period\b", p_text[max(0, match.start()-140):match.start()]):
+                    supported = True
+                    break
+            if supported:
+                break
+        if not supported:
+            track_record = ""
+            field_source_pages.pop("track_record_period", None)
     if not track_record:
         tr_regexes = [
-            re.compile(r"(?i)\b(?:track\s+record\s+period|review\s+period):\s*([^\n;.]+)\b"),
-            re.compile(r"\b(FY\s*20\d{2}\s*[-–to ]+\s*FY\s*20\d{2}|20\d{2}\s*[-–to ]+\s*20\d{2})\b"),
+            re.compile(r"(?i)\b(?:track\s+record\s+period|review\s+period)\s*(?::|covers?|spans?|from|is)?\s*([^\n;.]+)\b"),
         ]
         for p_num, p_text in discovered_sources:
             for pat in tr_regexes:
@@ -736,16 +802,24 @@ def extract_structured_company_fields(
                     field_source_pages.setdefault("reporting_currency", []).append(p_num)
                     break
 
-    listing_facts: list[str] = [f for f in getattr(company, "listing_facts", []) if f and f.casefold() not in _GENERIC_PLACEHOLDERS]
-    if not listing_facts:
-        if stock_code:
-            listing_facts.append(f"Stock Code: {stock_code}")
-        if listing_market:
-            listing_facts.append(f"Exchange: {listing_market}")
-        if offering_type:
-            listing_facts.append(f"Offering Type: {offering_type}")
-        if track_record:
-            listing_facts.append(f"Track Record: {track_record}")
+    listing_facts: list[str] = []
+    if stock_code:
+        listing_facts.append(f"Stock Code: {stock_code}")
+    if listing_market:
+        listing_facts.append(f"Exchange: {listing_market}")
+    if offering_type:
+        listing_facts.append(f"Offering Type: {offering_type}")
+    if track_record:
+        listing_facts.append(f"Track Record: {track_record}")
+    extra_listing_pages = field_source_pages.get("listing_facts", [])
+    for fact in getattr(company, "listing_facts", []):
+        fact = _clean_text_fragment(fact)
+        if (fact and fact.casefold() not in _GENERIC_PLACEHOLDERS
+                and not re.match(r"(?i)^(?:stock\s*code|exchange|offering\s*type|track\s*record)\s*:", fact)
+                and extra_listing_pages
+                and supported_field(fact, extra_listing_pages, discovered_sources)
+                and fact not in listing_facts):
+            listing_facts.append(fact)
 
     # Deduplicate per-field source pages
     clean_field_source_pages: dict[str, list[int]] = {}
@@ -771,6 +845,7 @@ def extract_structured_company_fields(
     return company.model_copy(
         update={
             "name": final_name,
+            "one_line_description": description,
             "industry": industry,
             "headquarters": headquarters,
             "reporting_currency": reporting_currency,

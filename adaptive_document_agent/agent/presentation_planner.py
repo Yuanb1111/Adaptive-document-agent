@@ -19,7 +19,17 @@ class PresentationPlanner:
 
     def plan(self, result: PipelineResult) -> PresentationPlan:
         from adaptive_document_agent.services.presentation_evidence import build_evidence_catalog, observation_record
-        catalog = build_evidence_catalog(result)
+        # Keep the semantic planning context focused. Large PDFs can contain
+        # thousands of observations; an oversized catalogue makes it harder
+        # for the model to organise a coherent story even when it fits its
+        # nominal context window. Chart observations remain available below.
+        catalog = build_evidence_catalog(
+            result,
+            max_series=30,
+            max_observations=130,
+            max_source_pages=8,
+            max_calculations=90,
+        )
         catalog_ids = {o["id"] for o in catalog["observations"]}
         chart_ids = {oid for c in result.charts for oid in [*c.observation_ids, *c.total_observation_ids]}
         payload = {
@@ -152,7 +162,7 @@ class PresentationPlanner:
         for page_number in preferred_pages:
             if 1 <= page_number <= document.page_count and page_number not in selected:
                 selected.append(page_number)
-            if len(selected) >= 16:
+            if len(selected) >= 12:
                 break
         page_by_number = {page.page_number: page for page in document.pages}
         return [

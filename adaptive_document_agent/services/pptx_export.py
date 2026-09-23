@@ -305,6 +305,14 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
     _add_planned_contents(presentation, plan.slides)
     _add_company_at_a_glance(presentation, result, slides_by_type["company_overview"])
     _add_planned_summary(presentation, result, slides_by_type["executive_summary"], index)
+    quality_notes = list(dict.fromkeys([
+        *result.profile.data_quality_notes,
+        *(warning.message for warning in result.validation_warnings
+          if warning.severity in {"error", "warning"}),
+    ]))
+    if quality_notes:
+        notes = presentation.slides[-1].notes_slide.notes_text_frame
+        notes.text += "\n\nSource scope and data-quality notes:\n" + "\n".join(quality_notes)
 
     rendered_charts: list[ChartPlan] = []
     ordinal = 0
@@ -388,11 +396,13 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
         elif slide_plan.slide_type == "risks":
             _add_planned_text_slide(presentation, result, slide_plan)
         elif slide_plan.slide_type == "data_quality":
-            _add_quality_slide(presentation, result, title=slide_plan.title)
+            # Keep full methodological disclosure in the summary and appendix
+            # notes without spending a sparse standalone audience page on it.
+            continue
         elif slide_plan.slide_type == "appendix":
+            previous_slide_count = len(presentation.slides)
             if rendered_charts:
                 appendix_charts = rendered_charts
-                _add_section_divider(presentation, "Evidence appendix", "The retained values behind the charts")
                 _add_evidence_table_slides(presentation, result, appendix_charts, title=slide_plan.title)
             else:
                 from adaptive_document_agent.models.validation import ValidationIssue
@@ -413,6 +423,9 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
                     subtitle="Representative retained evidence (no charts in body)",
                     max_pages=1,
                 )
+            if quality_notes and len(presentation.slides) > previous_slide_count:
+                notes = presentation.slides[previous_slide_count].notes_slide.notes_text_frame
+                notes.text += "\n\nSource scope and data-quality notes:\n" + "\n".join(quality_notes)
 
 
 def _planned_chart_requests(slide_plan: PresentationSlide) -> list[tuple[str, str | None]]:
@@ -453,7 +466,7 @@ def _add_planned_contents(presentation: Any, planned_slides: list[PresentationSl
         "appendix": "Appendix",
     }
     for item in planned_slides:
-        if item.slide_type not in defaults:
+        if item.slide_type not in defaults or item.slide_type == "data_quality":
             continue
         label = (item.section_title or defaults[item.slide_type]).strip()
         # Clean section label: show section names only, not long slide titles
@@ -523,7 +536,8 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
           ("Exchange", company.listing_market, "listing_market"),
           ("Stock code", company.stock_code, "stock_code"),
           ("Offering", company.offering_type, "offering_type"),
-          ("Listing details", ", ".join(company.listing_facts), "listing_facts")]),
+          ("Listing details", ", ".join(fact for fact in company.listing_facts
+           if not re.match(r"(?i)^(?:stock\s*code|exchange|offering\s*type|track\s*record)\s*:", fact)), "listing_facts")]),
     ]
     items = []
     for heading, fields in groups:

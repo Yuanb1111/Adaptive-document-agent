@@ -115,6 +115,30 @@ def test_pptx_export_contains_editable_chart_and_table() -> None:
         assert b'crossAx val="-' not in chart_xml
 
 
+def test_planned_quality_notes_are_retained_without_a_standalone_page() -> None:
+    result = _result()
+    result.presentation_plan = PresentationPlan(
+        title="Financial information analysis",
+        company=CompanyProfile(name="Example Automation", source_pages=[8]),
+        slides=[
+            PresentationSlide(id="cover", slide_type="cover", title="Financial information analysis"),
+            PresentationSlide(id="company", slide_type="company_overview", title="Company at a Glance"),
+            PresentationSlide(id="summary", slide_type="executive_summary", title="Executive Summary"),
+            PresentationSlide(id="revenue", slide_type="analysis", title="Revenue increased", section_title="Revenue", message="Revenue increased over the reported years.", chart_ids=["chart-1"], source_pages=[234]),
+            PresentationSlide(id="quality", slide_type="data_quality", title="Data Quality and Scope"),
+            PresentationSlide(id="appendix", slide_type="appendix", title="Source Data Appendix"),
+        ],
+    )
+    deck = Presentation(io.BytesIO(export_pptx(result)))
+    text = "\n".join(shape.text for slide in deck.slides for shape in slide.shapes if shape.has_text_frame)
+    assert "Data Quality and Scope" not in text
+    assert "Data Quality" not in " ".join(s.text for s in deck.slides[1].shapes if s.has_text_frame)
+    assert any(
+        "Values use RMB in thousands in the source table" in slide.notes_slide.notes_text_frame.text
+        for slide in deck.slides
+    )
+
+
 def test_pptx_export_renders_validated_ai_story_plan() -> None:
     result = _result()
     result.presentation_plan = PresentationPlan(

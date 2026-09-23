@@ -129,7 +129,25 @@ _FINANCIAL_STATEMENT_PHRASES = [
     "independent auditor's report",
     "accountant's report",
     "statutory financial statements",
+    "financial information",
 ]
+
+_ISSUER_OVERVIEW = re.compile(
+    r"(?i)\b(?:we\s+are|our\s+(?:products?|cobots?|solutions?|sales\s+network|customers?))\b"
+)
+_BUSINESS_SUBSTANCE = re.compile(
+    r"(?i)\b(?:develop\w*|manufactur\w*|commercializ\w*|"
+    r"product\s+(?:portfolio|series|range)|customer\s+base|direct\s+sales|distributors?)\b"
+)
+_ADMINISTRATIVE_CONTENT = re.compile(
+    r"(?i)\b(?:documents?\s+delivered\s+to\s+the\s+registrar|"
+    r"application\s+for\s+listing|underwriting|shareholders?\s+general\s+meeting|"
+    r"over-allocation|disclosure\s+of\s+interests)\b"
+)
+_RISK_DISCLOSURE = re.compile(
+    r"(?i)\b(?:risk\s+factors|risks?\s+and\s+uncertainties|"
+    r"materially\s+and\s+adversely\s+affect|we\s+cannot\s+assure\s+you)\b"
+)
 
 
 class CompanyProfileDiscovery:
@@ -161,6 +179,21 @@ class CompanyProfileDiscovery:
                 score += 8.0
                 break
 
+        # A page about the issuer's operations is more useful than a page
+        # that merely repeats listing terminology or names other companies.
+        has_issuer_business = bool(
+            _ISSUER_OVERVIEW.search(page_text[:1_600])
+            and _BUSINESS_SUBSTANCE.search(page_text[:1_600])
+        )
+        overview_heading = re.search(
+            r"(?im)^\s*(?:business\s+overview|our\s+business|overview)\s*$",
+            page_text[:1_800],
+        )
+        if overview_heading and has_issuer_business:
+            score += 18.0
+        elif has_issuer_business and re.search(r"(?i)^\s*(?:our\s+history|business\s+summary)", page_text):
+            score += 10.0
+
         # 3. Category keyword scoring with per-category caps
         for cat, keywords in _CATEGORY_KEYWORDS.items():
             cat_matches = 0
@@ -178,6 +211,11 @@ class CompanyProfileDiscovery:
             num_digits = sum(c.isdigit() for c in page_text)
             if num_digits > 200 or len(lines) > 40:
                 score -= 10.0
+
+        if _ADMINISTRATIVE_CONTENT.search(heading_candidate):
+            score -= 8.0
+        if _RISK_DISCLOSURE.search(page_text[:1_000]) and not overview_heading:
+            score -= 15.0
 
         return max(score, 0.0)
 
@@ -203,18 +241,33 @@ class CompanyProfileDiscovery:
 
         scored_pages.sort(key=lambda item: (item[0], -item[1]), reverse=True)
 
+        page_by_number = {page.page_number: page for page in document.pages}
         selected: list[int] = []
+        if 1 in page_by_number:
+            selected.append(1)
+
+        # A substantive overview frequently continues into the next pages.
+        # Retain that context before filling the budget with isolated keyword
+        # hits from risk, listing, or accounting sections.
+        anchors = []
         for _, page_num in scored_pages:
-            if page_num not in selected:
-                selected.append(page_num)
-            if len(selected) >= max_pages:
+            text = page_by_number[page_num].text
+            if re.match(r"(?i)^\s*(?:our\s+history|history\s+and\s+corporate)", text):
+                continue
+            if re.search(r"(?im)^\s*(?:business\s+overview|our\s+business|overview)\s*$", text[:1_800]):
+                if _ISSUER_OVERVIEW.search(text[:1_600]) and _BUSINESS_SUBSTANCE.search(text[:1_600]):
+                    anchors.append(page_num)
+            if len(anchors) >= 2:
                 break
+        for anchor in anchors:
+            for page_num in range(anchor, anchor + 3):
+                if page_num in page_by_number and page_num not in selected and len(selected) < max_pages:
+                    selected.append(page_num)
 
-        # Always include page 1 if not present and document has pages
-        if 1 not in selected and document.page_count >= 1:
-            selected.insert(0, 1)
-
-        return sorted(selected[:max_pages])
+        for _, page_num in scored_pages:
+            if page_num not in selected and len(selected) < max_pages:
+                selected.append(page_num)
+        return sorted(selected)
 
     @classmethod
     def get_profile_page_texts(
