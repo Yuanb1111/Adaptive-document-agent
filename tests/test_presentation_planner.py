@@ -122,6 +122,33 @@ def test_presentation_plan_validator_accepts_company_excerpt_pages_and_grouped_n
     }
 
 
+def test_presentation_plan_validator_keeps_source_amount_and_period_separate() -> None:
+    result = _result()
+    result.observations[0].period = "2021-12-31"
+    result.observations[0].raw_value = "267,025"
+    plan = PresentationPlan(
+        title="Review",
+        slides=[
+            PresentationSlide(id="cover", slide_type="cover", title="Review"),
+            PresentationSlide(id="overview", slide_type="company_overview", title="Company at a Glance"),
+            PresentationSlide(
+                id="summary", slide_type="executive_summary",
+                title="Revenue was 267,025 in 2021",
+                observation_ids=["revenue-2023"], source_pages=[234],
+            ),
+            PresentationSlide(
+                id="analysis", slide_type="analysis", section_title="Revenue",
+                title="Reported revenue", message="The source reports revenue across periods.",
+                chart_ids=["chart-1"], source_pages=[234],
+            ),
+            PresentationSlide(id="quality", slide_type="data_quality", title="Data quality"),
+            PresentationSlide(id="appendix", slide_type="appendix", title="Source data"),
+        ],
+    )
+
+    assert PresentationPlanValidator().validate(plan, result) is plan
+
+
 def test_presentation_planner_repairs_one_semantically_invalid_plan() -> None:
     result = _result()
     invalid = {

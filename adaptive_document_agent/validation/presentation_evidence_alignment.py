@@ -1,4 +1,4 @@
-"""Align redundant slide references with the coherent series used by its charts."""
+"""Align redundant slide references with one coherent source series."""
 
 from __future__ import annotations
 
@@ -44,16 +44,13 @@ def align_redundant_slide_evidence(
 ) -> list[str]:
     """Replace only proven duplicate references; leave conflicting contexts blocked.
 
-    A chart's own observation IDs establish its plotted source series. Model-written
-    slide plans can also cite a second table containing the same reported facts.
-    Reconcile those references only when at least two distinct periods match one
-    coherent chart series and every referenced fact in that source group matches.
-    Raw observations and their original provenance remain unchanged.
+    A chart's observation IDs establish its plotted source series. Unplotted
+    secondary metrics may use an exact-match superset source. Reconcile only
+    when at least two periods and every referenced fact match. Raw observations
+    and their original provenance remain unchanged.
     """
-    if not charts:
-        return []
     obs_by_id = {item.id: item for item in observations}
-    chart_by_id = {item.id: item for item in charts}
+    chart_by_id = {item.id: item for item in charts or []}
     repairs: list[str] = []
 
     for slide in plan.slides:
@@ -100,6 +97,34 @@ def align_redundant_slide_evidence(
             if len(candidates) == 1:
                 replacements.update(candidates[0])
 
+        # A slide may cite a secondary metric without plotting it. If one
+        # cited source is a complete, exact-value superset of another source,
+        # use its coherent series for presentation references. Never infer
+        # equivalence from labels alone or from a single overlapping period.
+        for (metric, context), direct in direct_series.items():
+            if (
+                len({item.period for item in direct}) < 2
+                or any(item.id in replacements for item in direct)
+                or any(chart_metric == metric for chart_metric, _, _ in chart_series)
+            ):
+                continue
+            direct_periods = {item.period for item in direct}
+            candidates = []
+            for (peer_metric, peer_context), series in direct_series.items():
+                peer_periods = {item.period for item in series}
+                if peer_metric != metric or peer_context == context or not direct_periods < peer_periods:
+                    continue
+                matches = {}
+                for item in direct:
+                    peers = [candidate for candidate in series if _same_reported_fact(item, candidate)]
+                    if len(peers) != 1:
+                        break
+                    matches[item.id] = peers[0].id
+                if len(matches) == len(direct):
+                    candidates.append(matches)
+            if len(candidates) == 1:
+                replacements.update(candidates[0])
+
         if not replacements:
             continue
         slide.observation_ids = list(dict.fromkeys(replacements.get(oid, oid) for oid in slide.observation_ids))
@@ -134,6 +159,6 @@ def align_redundant_slide_evidence(
             ]
         repairs.append(
             f"Slide {slide.id}: aligned {len(replacements)} duplicate observation references "
-            "with their chart source series"
+            "with a coherent source series"
         )
     return repairs

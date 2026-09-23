@@ -312,7 +312,10 @@ class PresentationPlanValidator:
                     item = insight_by_id.get(identifier)
                     if item:
                         allowed_text_parts.extend((item.title, item.narrative))
-                allowed_numbers = self._numbers(" ".join(allowed_text_parts))
+                # Each item is a separate source field. Joining them can turn
+                # a grouped amount followed by a year ("341,055 2023") into
+                # one false numeric token and hide the supported year.
+                allowed_numbers = set().union(*(self._numbers(part) for part in allowed_text_parts))
                 for cid in slide.calculation_ids:
                     if cid in calculations:
                         calc = calculations[cid]
@@ -410,4 +413,4 @@ class PresentationPlanValidator:
             if insight_pages & pages:
                 text_parts.append(insight.title)
                 text_parts.append(insight.narrative)
-        return cls._numbers(" ".join(text_parts))
+        return set().union(*(cls._numbers(part) for part in text_parts))
