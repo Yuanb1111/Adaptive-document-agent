@@ -46,6 +46,7 @@ class PresentationPlanRecovery:
         # an unrelated generic chart invalidate model-selected topic recovery.
         base = self.fallback(result, validate=False)
         _, series_by_id = series_directory(result)
+        from adaptive_document_agent.document_model import period_sort_key
         observation_by_id = {item.id: item for item in result.observations}
         from adaptive_document_agent.services.pptx_export import _usable_charts
         usable_chart_ids = {chart.id for chart in _usable_charts(result)}
@@ -60,11 +61,17 @@ class PresentationPlanRecovery:
             observations = {oid: observation_by_id[oid] for oid in members if oid in observation_by_id}
             if len(observations) < 2:
                 continue
-            chart_ids = [
-                chart.id for chart in result.charts if chart.id in usable_chart_ids
-                if set(chart.observation_ids) <= observations.keys()
-                and set(chart.observation_ids) & observations.keys()
-            ][:2]
+            chart_ids: list[str] = []
+            visible_series: set[str] = set()
+            for series_id in topic.series_ids:
+                series_observation_ids = {item.id for item in series_by_id.get(series_id, [])} & observations.keys()
+                matching = next((chart for chart in result.charts
+                                 if chart.id in usable_chart_ids and chart.id not in chart_ids
+                                 and set(chart.observation_ids) <= series_observation_ids
+                                 and set(chart.observation_ids) & series_observation_ids), None)
+                if matching is not None and len(chart_ids) < 2:
+                    chart_ids.append(matching.id)
+                    visible_series.add(series_id)
             if not chart_ids and len(members) > 40:
                 # Never silently truncate a large unchartable series into a
                 # purportedly complete audience analysis.
@@ -75,6 +82,21 @@ class PresentationPlanRecovery:
                 for oid in chart.observation_ids
             }
             supporting_ids = [oid for oid in members if oid not in charted_ids][:12]
+            # A two-chart layout must not silently hide a third series named
+            # in the model's analytical question. Show its sourced endpoints
+            # in the bottom evidence band; retain every point in notes.
+            visible_support_ids: list[str] = []
+            for series_id in topic.series_ids:
+                if series_id in visible_series:
+                    continue
+                series_items = sorted(
+                    (item for item in series_by_id.get(series_id, []) if item.id in supporting_ids),
+                    key=lambda item: period_sort_key(item.period),
+                )
+                if series_items:
+                    visible_support_ids.extend([series_items[0].id, series_items[-1].id]
+                                               if len(series_items) > 1 else [series_items[0].id])
+            visible_support_ids = list(dict.fromkeys(visible_support_ids))[:12]
             theme = PresentationTheme(
                 id=topic.id, title=topic.title, question=topic.question,
                 rationale=topic.rationale, chart_ids=chart_ids,
@@ -83,10 +105,12 @@ class PresentationPlanRecovery:
             )
             layout = "hero_plus_supporting" if len(chart_ids) > 1 else "chart_with_data" if chart_ids else "data_overview"
             slide = PresentationSlide(
-                id=f"topic_{topic.id}", slide_type="analysis", title=topic.title,
+                id=f"topic_{topic.id}", slide_type="analysis", title=topic.takeaway or topic.title,
                 section_id=topic.id, section_title=topic.title,
                 slide_role="overview", layout=layout, message=topic.question,
                 chart_ids=chart_ids, observation_ids=supporting_ids,
+                visual_blocks=[PresentationVisualBlock(role="kpi", observation_ids=visible_support_ids)]
+                if visible_support_ids else [],
                 theme_id=topic.id, analytical_question=topic.question,
                 selection_reason=topic.rationale, comparison_mode="parallel" if len(chart_ids) > 1 else "context",
                 source_pages=pages,

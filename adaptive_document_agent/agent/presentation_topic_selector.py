@@ -149,7 +149,7 @@ class PresentationTopicSelector:
                 if value is not None
             ))
             claimed = PresentationPlanValidator._numbers(" ".join(
-                (topic.title, topic.question, topic.rationale, *topic.caveats)
+                (topic.title, topic.question, topic.rationale, topic.takeaway, *topic.caveats)
             ))
             if claimed - allowed:
                 raise ValueError(f"Topic {topic.id} contains unsupported numeric claims")

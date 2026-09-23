@@ -61,6 +61,7 @@ class CompanyProfile(BaseModel):
     document_type: str = ""
     track_record_period: str = ""
     products: list[str] = Field(default_factory=list, max_length=6)
+    application_areas: list[str] = Field(default_factory=list, max_length=6)
     segments: list[str] = Field(default_factory=list, max_length=6)
     geographies: list[str] = Field(default_factory=list, max_length=6)
     business_model: str = ""
@@ -129,6 +130,7 @@ class PresentationTopic(BaseModel):
     title: str
     question: str
     rationale: str
+    takeaway: str = ""
     series_ids: list[str] = Field(default_factory=list, max_length=3)
     caveats: list[str] = Field(default_factory=list, max_length=3)
 

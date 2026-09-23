@@ -89,6 +89,63 @@ def test_multiple_cover_entities_do_not_choose_the_first_legal_name():
     assert recovered.name == ""
 
 
+def test_explicit_application_areas_are_cited_without_inference():
+    result = _make_dummy_pipeline_result([
+        DocumentPage(page_number=1, text="GLOBAL OFFERING\nACME MOTION CORP LTD"),
+        DocumentPage(page_number=2, text=("BUSINESS OVERVIEW\nWe build automation equipment with "
+            "use cases in manufacturing, retail, and healthcare settings. "
+            "Our sales are through distributors.")),
+    ])
+    recovered = extract_structured_company_fields(CompanyProfile(), result)
+    assert recovered.application_areas == ["manufacturing", "retail", "healthcare settings"]
+    assert recovered.field_source_pages["application_areas"] == [2]
+
+    unsupported = CompanyProfile(application_areas=["aerospace"],
+        field_source_pages={"application_areas": [2]})
+    assert "aerospace" not in extract_structured_company_fields(unsupported, result).application_areas
+
+
+@pytest.mark.parametrize("listing_text", [
+    "(payable in full on application in Hong\nKong dollars, subject to refund)\nNominal value : RMB1 per share",
+    "Payable on application in Hong Kong dollars, subject to refund.",
+])
+def test_listing_application_is_not_a_business_use_case(listing_text: str):
+    result = _make_dummy_pipeline_result([
+        DocumentPage(page_number=1, text="GLOBAL OFFERING\nACME MOTION CORP LTD\n" + listing_text),
+        DocumentPage(page_number=2, text="BUSINESS OVERVIEW\nThe company sells motion equipment."),
+    ])
+    recovered = extract_structured_company_fields(CompanyProfile(), result)
+    assert recovered.application_areas == []
+    assert "application_areas" not in recovered.field_source_pages
+
+
+def test_products_listed_in_issuer_prose_keep_source_and_drop_price_qualifier():
+    result = _make_dummy_pipeline_result([
+        DocumentPage(page_number=1, text="ACME DRINKS LIMITED"),
+        DocumentPage(page_number=2, text=(
+            "BUSINESS\nOVERVIEW\nWe provide value-for-money products to consumers, "
+            "including fruit drinks, tea drinks, ice\ncream and coffee, typically "
+            "priced around one dollar per item."
+        )),
+    ])
+    recovered = extract_structured_company_fields(CompanyProfile(), result)
+    assert recovered.products == ["fruit drinks", "tea drinks", "ice cream", "coffee"]
+    assert recovered.field_source_pages["products"] == [2]
+
+
+def test_explicit_issuer_model_in_prose_is_cited():
+    result = _make_dummy_pipeline_result([
+        DocumentPage(page_number=1, text="ACME DRINKS LIMITED"),
+        DocumentPage(page_number=2, text=(
+            "BUSINESS\nOVERVIEW\nWe serve consumers with freshly-made drinks. "
+            "Through a franchise model, we have cultivated a store network."
+        )),
+    ])
+    recovered = extract_structured_company_fields(CompanyProfile(), result)
+    assert recovered.business_model == "Franchise model"
+    assert recovered.field_source_pages["business_model"] == [2]
+
+
 def _make_dummy_pipeline_result(
     pages: list[DocumentPage],
     company: CompanyProfile | None = None,
@@ -234,6 +291,24 @@ def test_profile_discovery_keeps_business_overview_continuation_ahead_of_risk_hi
     result = _make_dummy_pipeline_result(pages)
     selected = CompanyProfileDiscovery.rank_profile_pages(result.document, result.profile, max_pages=4)
     assert selected == [1, 10, 11, 12]
+
+
+def test_profile_discovery_keeps_readable_cover_and_consumer_business_overview() -> None:
+    pages = [
+        DocumentPage(page_number=1, text=""),
+        DocumentPage(page_number=2, text="GLOBAL OFFERING\nACME DRINKS LIMITED\nStock code: 1234"),
+        DocumentPage(page_number=10, text="SUMMARY\nOur store network serves consumers."),
+        DocumentPage(page_number=100, text=(
+            "BUSINESS\nOVERVIEW\nWe are a drinks company providing freshly-made tea and coffee "
+            "to consumers. We have stores in multiple countries."
+        )),
+        DocumentPage(page_number=101, text="Our brand sells drinks through franchised stores."),
+        DocumentPage(page_number=102, text="We operate a network of franchisees."),
+        DocumentPage(page_number=200, text="FINANCIAL INFORMATION\nRevenue and profit."),
+    ]
+    result = _make_dummy_pipeline_result(pages)
+    selected = CompanyProfileDiscovery.rank_profile_pages(result.document, result.profile, max_pages=5)
+    assert selected == [2, 100, 101, 102]
 
 
 def test_prospectus_distribution_is_not_a_company_product() -> None:

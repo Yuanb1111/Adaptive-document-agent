@@ -579,6 +579,7 @@ class PresentationPlanRepairer:
                 business_model,
                 facts,
                 company.products,
+                company.application_areas,
                 company.segments,
                 company.geographies,
             )
@@ -591,6 +592,7 @@ class PresentationPlanRepairer:
                 "business_model": business_model,
                 "track_record_period": track_record,
                 "products": dedupe(company.products),
+                "application_areas": dedupe(company.application_areas),
                 "segments": dedupe(company.segments),
                 "geographies": dedupe(company.geographies),
                 "key_facts": facts[:8],

@@ -104,6 +104,58 @@ def test_correlation_rejects_pooling_annual_and_interim_samples():
     assert len(paired_observations(values, "volume", "output")) == 5
 
 
+def test_native_columns_use_zero_baseline_and_keep_negative_fill():
+    from pptx.enum.chart import XL_CHART_TYPE
+    from adaptive_document_agent.services.pptx_export import _add_native_chart
+
+    deck = Presentation()
+    positive = deck.slides.add_slide(deck.slide_layouts[6])
+    values = [obs("a", 65.9, "FY2021", "Average price"),
+              obs("b", 56.6, "FY2023", "Average price")]
+    plan = ChartPlan(id="price", title="Average price", question="Price change",
+                     chart_type="bar", observation_ids=[o.id for o in values])
+    _add_native_chart(positive, plan, values, (1, 1, 8, 4))
+    chart = next(shape.chart for shape in positive.shapes if shape.has_chart)
+    assert chart.value_axis.minimum_scale == 0
+    assert chart.chart_type == XL_CHART_TYPE.COLUMN_CLUSTERED
+
+    negative = deck.slides.add_slide(deck.slide_layouts[6])
+    losses = [obs("c", -25, "FY2021", "Loss"), obs("d", -90, "FY2023", "Loss")]
+    loss_plan = plan.model_copy(update={"id": "loss", "title": "Loss", "observation_ids": [o.id for o in losses]})
+    _add_native_chart(negative, loss_plan, losses, (1, 1, 8, 4))
+    loss_chart = next(shape.chart for shape in negative.shapes if shape.has_chart)
+    assert loss_chart.series[0].invert_if_negative is False
+    assert loss_chart.value_axis.maximum_scale == 0
+
+
+def test_sparse_period_area_is_not_rendered_as_continuous_fill():
+    from pptx.enum.chart import XL_CHART_TYPE
+    from adaptive_document_agent.services.pptx_export import _add_native_chart
+
+    plan = ChartPlan(id="schedule", title="Planned allocation", question="When?",
+                     chart_type="area", observation_ids=["a", "b", "c"])
+    deck = Presentation()
+    slide = deck.slides.add_slide(deck.slide_layouts[6])
+    sparse = [obs("a", 27, "FY2025"), obs("b", 6, "FY2027"), obs("c", 6, "FY2028")]
+    _add_native_chart(slide, plan, sparse, (1, 1, 8, 4))
+    assert next(shape.chart for shape in slide.shapes if shape.has_chart).chart_type == XL_CHART_TYPE.COLUMN_CLUSTERED
+
+    slide = deck.slides.add_slide(deck.slide_layouts[6])
+    complete = [obs("a", 27, "FY2025"), obs("b", 6, "FY2026"), obs("c", 6, "FY2027")]
+    _add_native_chart(slide, plan, complete, (1, 1, 8, 4))
+    assert next(shape.chart for shape in slide.shapes if shape.has_chart).chart_type == XL_CHART_TYPE.AREA
+
+
+def test_small_monetary_appendix_values_preserve_visible_movement():
+    from adaptive_document_agent.document_model.metric_semantic_classifier import classify_metric
+    from adaptive_document_agent.services.pptx_export import _appendix_display_value
+
+    first = obs("a", 65_900, "FY2021", "Average price")
+    last = obs("b", 56_600, "FY2023", "Average price")
+    assert _appendix_display_value(first, classify_metric("Average price", unit="currency", value=first.value)) == "0.0659"
+    assert _appendix_display_value(last, classify_metric("Average price", unit="currency", value=last.value)) == "0.0566"
+
+
 def test_fallback_preserves_long_copy_and_does_not_advertise_unplotted_series():
     values = [obs("a", 10, "FY2023", "Cost of sales"), obs("b", 20, "FY2024", "Cost of sales")]
     chart = ChartPlan(id="c", title="Cost of sales and Revenue", question="Has multiple periods",

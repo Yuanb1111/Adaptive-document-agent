@@ -77,7 +77,8 @@ class PresentationPlanValidator:
                 plan.company.track_record_period,
                 plan.company.business_model,
             )
-        ) or bool(plan.company.products or plan.company.segments or plan.company.geographies or plan.company.key_facts)
+        ) or bool(plan.company.products or plan.company.application_areas or plan.company.segments
+                  or plan.company.geographies or plan.company.key_facts)
         if company_has_content and not company_pages:
             errors.append("company profile content must cite at least one source page")
         from adaptive_document_agent.services.company_extractor import is_generic_name
@@ -93,6 +94,7 @@ class PresentationPlanValidator:
                 errors.append("cover title contradicts the sourced company identity")
         for label, values in (
             ("products", plan.company.products),
+            ("application_areas", plan.company.application_areas),
             ("segments", plan.company.segments),
             ("geographies", plan.company.geographies),
         ):
@@ -114,12 +116,14 @@ class PresentationPlanValidator:
             ("offering_type", plan.company.offering_type),
             ("reporting_currency", plan.company.reporting_currency),
             *[(f"product {i+1}", p) for i, p in enumerate(plan.company.products)],
+            *[(f"application {i+1}", a) for i, a in enumerate(plan.company.application_areas)],
             *[(f"segment {i+1}", s) for i, s in enumerate(plan.company.segments)],
             *[(f"geography {i+1}", g) for i, g in enumerate(plan.company.geographies)],
         ]
         for field_label, field_val in company_fields_to_check:
             if field_val.strip():
                 field_key = next((key for prefix, key in (("product ", "products"),
+                                  ("application ", "application_areas"),
                                   ("segment ", "segments"), ("geography ", "geographies"))
                                   if field_label.startswith(prefix)), field_label)
                 field_pages = plan.company.field_source_pages.get(field_key)

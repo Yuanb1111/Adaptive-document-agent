@@ -137,6 +137,7 @@ _ISSUER_OVERVIEW = re.compile(
 )
 _BUSINESS_SUBSTANCE = re.compile(
     r"(?i)\b(?:develop\w*|manufactur\w*|commercializ\w*|"
+    r"provid\w*|offer\w*|franchis\w*|sell\w*|"
     r"product\s+(?:portfolio|series|range)|customer\s+base|direct\s+sales|distributors?)\b"
 )
 _ADMINISTRATIVE_CONTENT = re.compile(
@@ -232,6 +233,8 @@ class CompanyProfileDiscovery:
 
         scored_pages: list[tuple[float, int]] = []
         for page in document.pages:
+            if not page.text.strip():
+                continue
             s = cls.score_page(page.text, page.page_number, document.page_count)
             # Extra boost if document summary previously cited this page
             if profile and page.page_number in profile.document_summary_pages:
@@ -243,8 +246,13 @@ class CompanyProfileDiscovery:
 
         page_by_number = {page.page_number: page for page in document.pages}
         selected: list[int] = []
-        if 1 in page_by_number:
-            selected.append(1)
+        # Image-only first pages are common. Preserve the first readable
+        # introductory page as the issuer identity source instead.
+        for page_num in range(1, min(5, document.page_count) + 1):
+            page = page_by_number.get(page_num)
+            if page and page.text.strip():
+                selected.append(page_num)
+                break
 
         # A substantive overview frequently continues into the next pages.
         # Retain that context before filling the budget with isolated keyword

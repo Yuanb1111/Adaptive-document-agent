@@ -224,7 +224,7 @@ def run_app() -> None:
     artwork = None
     artwork_error = None
     with st.expander("Presentation artwork (optional)"):
-        st.caption("Choose an image appropriate to this document for the cover and overview. It is embedded in the PowerPoint only and is not sent to a model. Use a static PNG/JPEG under 8 MB.")
+        st.caption("The Agent can use a cited image from the uploaded PDF on the company slide when one is suitable. Optionally upload your own image for the cover and overview instead. Images stay in the local PowerPoint export and are not sent to a model. Use a static PNG/JPEG under 8 MB.")
         uploaded_artwork = st.file_uploader("Cover and overview illustration", type=["png", "jpg", "jpeg"], key=f"ppt_artwork_{result.document.sha256}")
         if uploaded_artwork is not None:
             from adaptive_document_agent.services.presentation_artwork import validate_artwork
@@ -246,6 +246,7 @@ def run_app() -> None:
                 result, visual_cache=st.session_state.setdefault("ppt_visual_cache", {}),
                 build_cache=st.session_state.setdefault("ppt_build_cache", {}),
                 artwork=artwork,
+                source_pdf=raw_pdf,
             )
         pptx_bytes = verified.payload
         visual_report = verified.report

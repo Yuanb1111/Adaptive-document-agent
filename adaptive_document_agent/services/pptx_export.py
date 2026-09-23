@@ -146,7 +146,8 @@ def _resolve_template_path(template_path: str | Path | None = None) -> Path:
     )
 
 
-def build_presentation(result: PipelineResult, template_path: str | Path | None = None, *, artwork: bytes | None = None) -> bytes:
+def build_presentation(result: PipelineResult, template_path: str | Path | None = None, *, artwork: bytes | None = None,
+                       source_pdf: bytes | None = None) -> bytes:
     """Return an editable, presentation-ready PowerPoint based on the FOURIER Light Version Template."""
     try:
         from pptx import Presentation
@@ -162,6 +163,10 @@ def build_presentation(result: PipelineResult, template_path: str | Path | None 
         raise ValueError(f"Failed to load PowerPoint template at '{resolved_path}': {exc}") from exc
 
     presentation._ada_artwork = artwork
+    presentation._ada_source_visual = None
+    if source_pdf is not None and artwork is None:
+        from .presentation_source_visual import select_company_source_visual
+        presentation._ada_source_visual = select_company_source_visual(source_pdf, result)
     if resolved_path.resolve() == BUNDLED_TEMPLATE_PATH.resolve():
         from .presentation_style import compact_template_branding
         compact_template_branding(presentation)
@@ -306,7 +311,7 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
     # Standard order: 1. Cover, 2. Contents, 3. Company at a Glance, 4. Executive Summary
     cover = slides_by_type["cover"]
     _add_cover(presentation, result, title=cover.title, purpose=cover.message)
-    _add_planned_contents(presentation, plan.slides)
+    _add_planned_contents(presentation, plan.slides, evidence_in_notes=plan.planning_origin == "topic_recovery")
     _add_company_at_a_glance(presentation, result, slides_by_type["company_overview"])
     _add_planned_summary(presentation, result, slides_by_type["executive_summary"], index)
     quality_notes = list(dict.fromkeys([
@@ -405,6 +410,12 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
             # notes without spending a sparse standalone audience page on it.
             continue
         elif slide_plan.slide_type == "appendix":
+            if plan.planning_origin == "topic_recovery":
+                # Topic-first pages already retain their complete observation
+                # records in speaker notes. The separate JSON/CSV exports hold
+                # the full extracted dataset; avoid sparse audience appendix
+                # pages generated only by differing period bases.
+                continue
             previous_slide_count = len(presentation.slides)
             if rendered_charts:
                 appendix_charts = rendered_charts
@@ -460,7 +471,9 @@ def _planned_observations(slide_plan: PresentationSlide, index: DocumentIndex) -
     return output
 
 
-def _add_planned_contents(presentation: Any, planned_slides: list[PresentationSlide]) -> None:
+def _add_planned_contents(
+    presentation: Any, planned_slides: list[PresentationSlide], *, evidence_in_notes: bool = False,
+) -> None:
     slide = _base_slide(presentation, "Contents", "Presentation structure")
     entries: list[str] = []
     seen: set[str] = set()
@@ -477,6 +490,8 @@ def _add_planned_contents(presentation: Any, planned_slides: list[PresentationSl
     ]
     for item in contents_order:
         if item.slide_type not in defaults or item.slide_type == "data_quality":
+            continue
+        if evidence_in_notes and item.slide_type == "appendix":
             continue
         label = (item.section_title or defaults[item.slide_type]).strip()
         # Clean section label: show section names only, not long slide titles
@@ -520,14 +535,23 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
     has_company_identity = is_company_identity_resolved(company)
 
     slide_title = slide_plan.title if has_company_identity else "Document at a Glance"
-    if getattr(presentation, "_ada_artwork", None):
+    artwork = getattr(presentation, "_ada_artwork", None)
+    source_visual = getattr(presentation, "_ada_source_visual", None)
+    if artwork or source_visual:
         from .presentation_artwork import add_picture_profile
         pages = sorted(set(company.source_pages) | set(slide_plan.source_pages)
                        | {p for values in company.field_source_pages.values() for p in values}
                        | {p for fact in company.key_facts for p in fact.source_pages})
-        add_picture_profile(presentation, company, slide_title, pages, presentation._ada_artwork)
+        if source_visual:
+            pages = sorted(set(pages) | {source_visual.page})
+        add_picture_profile(presentation, company, slide_title, pages,
+                            artwork or source_visual.payload,
+                            source_page=source_visual.page if source_visual else None)
         return
     from .presentation_brief import BriefItem, overview_items, render_profile
+    # Keep long qualified ranking claims intact in notes. Truncating the basis,
+    # geography or attribution to make a one-page card would change meaning.
+    visible_market_position = company.market_position if len(company.market_position) <= 160 else ""
     groups = [
         (company.name if has_company_identity else "Document overview",
          [("Profile", company.one_line_description, "one_line_description"),
@@ -538,11 +562,13 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
         ("Business and products",
          [("Business model", company.business_model, "business_model"),
           ("Products", ", ".join(company.products), "products"),
-          ("Segments", ", ".join(company.segments), "segments"),
+          ("Segments", ", ".join(company.segments), "segments")]),
+        ("Applications and customers",
+         [("Applications", ", ".join(company.application_areas), "application_areas"),
           ("Customers", ", ".join(company.customer_types), "customer_types")]),
-        ("Markets and listing",
+        ("Markets and listing" if company.geographies or visible_market_position else "Listing details",
          [("Markets", ", ".join(company.geographies), "geographies"),
-          ("Market position", company.market_position, "market_position"),
+          ("Market position", visible_market_position, "market_position"),
           ("Exchange", company.listing_market, "listing_market"),
           ("Stock code", company.stock_code, "stock_code"),
           ("Offering", company.offering_type, "offering_type"),
@@ -575,6 +601,8 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
         "track record period": bool(company.track_record_period),
         "main products services": bool(company.products or company.segments),
         "products services": bool(company.products or company.segments),
+        "applications": bool(company.application_areas),
+        "use cases": bool(company.application_areas),
         "business model": bool(company.business_model),
         "customers": bool(company.customer_types),
         "customer types": bool(company.customer_types),
@@ -1366,6 +1394,28 @@ def _chart_category_labels(categories: list[str], width: float) -> list[str]:
             for label in categories]
 
 
+def _continuous_period_axis(categories: list[str]) -> bool:
+    """Only connect time points when the displayed periods form a complete cadence.
+
+    Unknown and point-in-time labels deliberately fail closed: an area chart
+    would otherwise imply values for periods the source never reported.
+    """
+    if len(categories) < 3:
+        return False
+    annual = [re.fullmatch(r"(?:FY|CY)?\s*((?:19|20)\d{2})\*?", label.strip(), re.I)
+              for label in categories]
+    if all(annual):
+        years = [int(match.group(1)) for match in annual]
+        return all(right - left == 1 for left, right in zip(years, years[1:]))
+    quarterly = [re.fullmatch(r"(?:Q([1-4])\s*((?:19|20)\d{2})|((?:19|20)\d{2})\s*Q([1-4]))\*?", label.strip(), re.I)
+                 for label in categories]
+    if all(quarterly):
+        positions = [int(match.group(2) or match.group(3)) * 4 + int(match.group(1) or match.group(4))
+                     for match in quarterly]
+        return all(right - left == 1 for left, right in zip(positions, positions[1:]))
+    return False
+
+
 def _add_native_chart(
     slide: Any,
     plan: ChartPlan,
@@ -1440,12 +1490,15 @@ def _add_native_chart(
         for name in series_names:
             lookup = {label: value for label, series_name, value in rows if series_name == name}
             data.add_series(name, [lookup.get(label) / scale if lookup.get(label) is not None else None for label in categories])
+        effective_chart_type = plan.chart_type
+        if effective_chart_type == "area" and not _continuous_period_axis(categories):
+            effective_chart_type = "bar"
         chart_type = {
             "line": XL_CHART_TYPE.LINE_MARKERS,
             "area": XL_CHART_TYPE.AREA,
             "pie": XL_CHART_TYPE.PIE,
             "horizontal_bar": XL_CHART_TYPE.BAR_CLUSTERED,
-        }.get(plan.chart_type if plan.chart_type != "scatter" else "line", XL_CHART_TYPE.COLUMN_CLUSTERED)
+        }.get(effective_chart_type if effective_chart_type != "scatter" else "line", XL_CHART_TYPE.COLUMN_CLUSTERED)
         chart = slide.shapes.add_chart(chart_type, chart_left, chart_top, chart_width, chart_height, data).chart
 
     chart.has_title = False
@@ -1464,6 +1517,10 @@ def _add_native_chart(
             series.format.fill.solid()
             series.format.fill.fore_color.rgb = _rgb(color)
             series.format.line.color.rgb = _rgb(color)
+            # Office otherwise inverts negative columns to a white fill,
+            # making losses and expense ratios nearly invisible on white slides.
+            if chart.chart_type in {XL_CHART_TYPE.COLUMN_CLUSTERED, XL_CHART_TYPE.BAR_CLUSTERED}:
+                series.invert_if_negative = False
         except (AttributeError, ValueError):
             pass
 
@@ -1474,7 +1531,7 @@ def _add_native_chart(
         labels = chart.plots[0].data_labels
         if plan.chart_type == "pie":
             labels.position = XL_DATA_LABEL_POSITION.BEST_FIT
-        elif plan.chart_type in {"line", "area"}:
+        elif chart.chart_type in {XL_CHART_TYPE.LINE_MARKERS, XL_CHART_TYPE.AREA}:
             labels.position = XL_DATA_LABEL_POSITION.ABOVE
         else:
             labels.position = XL_DATA_LABEL_POSITION.OUTSIDE_END
@@ -1534,6 +1591,10 @@ def _add_native_chart(
                         chart.value_axis.maximum_scale = max_scaled * 1.25 if max_scaled > 0 else 0.0
                         chart.value_axis.minimum_scale = min_scaled * 1.45 if min_scaled < 0 else 0.0
                         chart.category_axis.tick_label_position = XL_TICK_LABEL_POSITION.LOW
+                    elif chart.chart_type in {XL_CHART_TYPE.COLUMN_CLUSTERED, XL_CHART_TYPE.BAR_CLUSTERED}:
+                        # A truncated positive bar axis exaggerates small
+                        # changes; line charts may retain automatic scaling.
+                        chart.value_axis.minimum_scale = 0.0
                     if has_negative:
                         from .presentation_style import readable_axis_bounds
                         low, high, step = readable_axis_bounds(chart.value_axis.minimum_scale, chart.value_axis.maximum_scale)
@@ -2708,6 +2769,11 @@ def _appendix_display_value(item: Observation, semantic: Any) -> str:
             scale = 1_000_000.0
         base_val = float(item.value) * scale
     value_in_millions = base_val / 1_000_000.0
+    if 0 < abs(value_in_millions) < 1:
+        # Two decimal places collapse small monetary series (for example,
+        # 0.0659 and 0.0566 million both look like 0.06). Keep enough
+        # significant digits for the displayed trend without changing units.
+        return f"{value_in_millions:,.3g}"
     return _format_scaled(value_in_millions, 1.0)
 
 

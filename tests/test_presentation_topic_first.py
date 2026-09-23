@@ -80,6 +80,18 @@ def test_topic_selector_rejects_unknown_evidence_id() -> None:
         )
 
 
+def test_topic_takeaway_cannot_add_unsupported_numbers() -> None:
+    result = _result()
+    directory, lookup = series_directory(result)
+    selection = PresentationTopicSelection(topics=[PresentationTopic(
+        id="growth", title="Revenue movement", question="How did revenue move?",
+        rationale="Reported annual values exist.", takeaway="Revenue grew by 9999%",
+        series_ids=[directory[0]["id"]],
+    )])
+    with pytest.raises(ValueError, match="unsupported numeric claims"):
+        PresentationTopicSelector._validate(selection, lookup)
+
+
 def test_topic_selector_rejects_background_metric_as_primary_evidence() -> None:
     result = _result()
     outside = [item.model_copy(deep=True) for item in result.observations]
@@ -154,6 +166,7 @@ def test_failed_slide_writing_can_retain_selected_question() -> None:
     result.presentation_topics = PresentationTopicSelection(topics=[PresentationTopic(
         id="growth", title="Revenue movement", question="How did revenue move?",
         rationale="The source reports a comparable annual revenue series.",
+        takeaway="Revenue increased across the reported years",
         series_ids=[selected_id],
     )])
     result.charts = ChartPlanner().plan(
@@ -165,7 +178,45 @@ def test_failed_slide_writing_can_retain_selected_question() -> None:
     assert plan.themes[0].id == "growth"
     assert plan.slides[3].chart_ids
     assert plan.slides[3].analytical_question == "How did revenue move?"
+    assert plan.slides[3].title == "Revenue increased across the reported years"
     PresentationPlanValidator().validate(plan, result)
+
+
+def test_recovered_question_shows_third_series_and_keeps_detail_in_notes() -> None:
+    result = _result()
+    original = result.observations
+    for metric in ("Orders", "Returns"):
+        copies = [item.model_copy(deep=True) for item in original]
+        for item in copies:
+            item.id = item.id.replace("revenue", metric.casefold())
+            item.metric_original = metric
+            item.metric_canonical = metric.casefold()
+        result.observations.extend(copies)
+    directory, lookup = series_directory(result)
+    selected = [entry["id"] for entry in directory]
+    result.presentation_topics = PresentationTopicSelection(topics=[PresentationTopic(
+        id="movement", title="Reported movements", question="How did the three measures move?",
+        rationale="The three comparable series describe related reported movements.",
+        series_ids=selected,
+    )])
+    result.charts = ChartPlanner().plan([], [], DocumentIndex(result.observations),
+        requested_series=[lookup[sid] for sid in selected], only_requested=True)
+    result.presentation_plan = PresentationPlanRecovery().from_selected_topics(result)
+    slide = next(item for item in result.presentation_plan.slides if item.theme_id == "movement")
+    assert len(slide.chart_ids) == 2
+    support = [block for block in slide.visual_blocks if block.role == "kpi"]
+    assert len(support) == 1
+    assert len(support[0].observation_ids) == 2
+    uncharted = set(slide.observation_ids)
+    assert set(support[0].observation_ids) <= uncharted
+
+    deck = Presentation(io.BytesIO(build_presentation(result)))
+    analysis = next(page for page in deck.slides if page.name.startswith("composed_"))
+    assert sum(shape.name.startswith("kpi:") for shape in analysis.shapes) == 2
+    assert all(identifier in analysis.notes_slide.notes_text_frame.text for identifier in uncharted)
+    all_text = [" ".join(shape.text for shape in page.shapes if shape.has_text_frame) for page in deck.slides]
+    assert not any("Source Data Appendix" in content for content in all_text)
+    assert "Appendix" not in all_text[1]
 
 
 def test_sourced_company_identity_cannot_be_called_unnamed() -> None:

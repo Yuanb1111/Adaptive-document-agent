@@ -550,6 +550,26 @@ def extract_structured_company_fields(
             if products:
                 field_source_pages.setdefault("products", []).append(p_num)
                 break
+        # Issuer overviews may describe the actual offerings in prose rather
+        # than under a "core products" heading. Keep the match within one
+        # sentence and discard trailing price/market qualifiers.
+        if not products:
+            listed_products = re.compile(
+                r"(?i)\bproducts?\s+[^.;]{0,60}?\bincluding\s+([^.;]{5,150})"
+            )
+            for p_num, p_text in discovered_sources:
+                prose = re.sub(r"(?<=\S)\s*\n\s*(?=\S)", " ", p_text)
+                match = listed_products.search(prose)
+                if not match:
+                    continue
+                fragment = re.split(r"(?i),?\s+(?:typically|usually|generally|primarily)\b", match.group(1))[0]
+                for raw in re.split(r"[,;]|\band\b", fragment):
+                    product = validate_product(raw)
+                    if product and product not in products:
+                        products.append(product)
+                if products:
+                    field_source_pages.setdefault("products", []).append(p_num)
+                    break
         # If still empty, check segments
         if not products and company.segments:
             for s in company.segments:
@@ -608,6 +628,17 @@ def extract_structured_company_fields(
                 business_model = "; ".join(found_models)
                 field_source_pages.setdefault("business_model", []).append(p_num)
                 break
+        if not business_model:
+            model_phrase = re.compile(
+                r"(?i)\b(?:through|under|using)\s+(?:an?|the)\s+([A-Za-z -]{3,50}\s+model)\b[^.]{0,90}\b(?:we|our)\b"
+            )
+            for p_num, p_text in discovered_sources:
+                match = model_phrase.search(re.sub(r"(?<=\S)\s*\n\s*(?=\S)", " ", p_text))
+                if match:
+                    business_model = validate_business_model(match.group(1))
+                    if business_model:
+                        field_source_pages.setdefault("business_model", []).append(p_num)
+                        break
 
     # -------------------------------------------------------------------------
     # 5. Main Markets / Geographies
@@ -635,6 +666,38 @@ def extract_structured_company_fields(
                 if geographies:
                     field_source_pages.setdefault("geographies", []).append(p_num)
                     break
+
+    # Explicit application/use-case lists provide context for the selected
+    # measures. Never infer an application merely from an industry label.
+    application_areas: list[str] = []
+    application_pages = field_source_pages.get("application_areas", [])
+    for area in company.application_areas:
+        clean = _clean_text_fragment(area)
+        if clean and application_pages and supported_field(clean, application_pages, discovered_sources):
+            application_areas.append(clean)
+    if not application_areas:
+        field_source_pages.pop("application_areas", None)
+        pattern = re.compile(
+            r"(?i)\b(?:use\s+cases?|applications?)\s+(?:in|across|include|including|such\s+as|:)\s+([^.;\n]{8,180})"
+        )
+        for p_num, p_text in discovered_sources:
+            # Keep PDF line boundaries: collapsing an entire page can attach a
+            # listing form's "on application in ..." to the next field label.
+            for raw_line in p_text.splitlines():
+                line = re.sub(r"[ \t]+", " ", raw_line)
+                match = pattern.search(line)
+                if not match or re.search(r"(?i)\b(?:on|upon)\s+$", line[:match.start()]):
+                    continue
+                fragment = re.split(r"(?i),?\s+(?:catering\s+to|serving|among\s+others|and\s+many\s+more)\b", match.group(1))[0]
+                for part in re.split(r",|\s+and\s+", fragment):
+                    clean = _clean_text_fragment(part)
+                    if clean and 3 <= len(clean) <= 45 and clean.casefold() not in _GENERIC_PLACEHOLDERS:
+                        application_areas.append(clean)
+                if application_areas:
+                    field_source_pages["application_areas"] = [p_num]
+                    break
+            if application_areas:
+                break
 
     # -------------------------------------------------------------------------
     # 6. Customer Types
@@ -850,6 +913,7 @@ def extract_structured_company_fields(
             "headquarters": headquarters,
             "reporting_currency": reporting_currency,
             "products": products[:6],
+            "application_areas": list(dict.fromkeys(application_areas))[:6],
             "business_model": business_model,
             "customer_types": customer_types[:6],
             "geographies": geographies[:6],
