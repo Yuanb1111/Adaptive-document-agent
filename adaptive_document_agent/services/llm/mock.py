@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 from .base import LLMClient, LLMResponse
 from .capabilities import ModelCapabilities
-from .exceptions import LLMResponseError
+from .exceptions import LLMResponseError, LLMStructuredOutputError
 from .structured import validate_structured_text
 from .usage import LLMUsage
 
@@ -41,4 +41,4 @@ class MockLLMClient(LLMClient):
         try:
             return validate_structured_text(response.text, response_model), response
         except Exception as exc:
-            raise LLMResponseError("Mock structured response is invalid.") from exc
+            raise LLMStructuredOutputError("Mock structured response is invalid.", response=response) from exc

@@ -42,6 +42,8 @@ class DocumentOrchestrator:
     def __init__(self, gateway: LLMGateway | None = None, *, cache: DiskCache | None = None) -> None:
         self.gateway = gateway
         self.cache = cache
+        if gateway is not None:
+            gateway.cache = cache
 
     def analyse_pdf(
         self,
@@ -81,8 +83,8 @@ class DocumentOrchestrator:
                 else None
             )
             scope = sha256_bytes(str(profile.analysis_page_ranges or "all").encode("utf-8"))[:16]
-            from adaptive_document_agent.utils.pipeline_version import PIPELINE_VERSION
-            cached_tables = self.cache.get_model(f"tables-{PIPELINE_VERSION}-{digest}-{scope}", ParsedDocument) if self.cache else None
+            from adaptive_document_agent.utils.pipeline_version import EXTRACTION_VERSION
+            cached_tables = self.cache.get_model(f"tables-{EXTRACTION_VERSION}-{digest}-{scope}", ParsedDocument) if self.cache else None
             if cached_tables is not None:
                 document = cached_tables
             else:
@@ -91,7 +93,7 @@ class DocumentOrchestrator:
                     page.tables = tables_by_page.get(page.page_number, [])
                 self._reconstruct_tables(document)
                 if self.cache:
-                    self.cache.set_model(f"tables-{PIPELINE_VERSION}-{digest}-{scope}", document)
+                    self.cache.set_model(f"tables-{EXTRACTION_VERSION}-{digest}-{scope}", document)
 
         notify("Extracting structured observations")
         with record_timing(timings, "observation_extraction"):
@@ -122,7 +124,7 @@ class DocumentOrchestrator:
 
         notify("Generating analysis candidates")
         with record_timing(timings, "candidate_generation"):
-            candidates = AnalysisCandidateGenerator(self.gateway).generate(index, profile)
+            candidates = AnalysisCandidateGenerator().generate(index, profile)
             scores = AnalysisValueScorer(self.gateway).score(candidates, index, profile)
 
         notify("Selecting useful analyses")
@@ -174,28 +176,26 @@ class DocumentOrchestrator:
         notify("Generating insights and dynamic report")
         with record_timing(timings, "reporting"):
             insights = InsightGenerator(self.gateway).generate(results, observations)
-            report_plan = DynamicReportPlanner(self.gateway).plan(profile, insights)
-            if self.gateway:
-                notify("Selecting presentation questions before chart generation")
-                topic_result = PipelineResult(
-                    document=document, profile=profile, observations=index.observations,
-                    analysis_plan=plan, analysis_results=results, insights=insights,
-                    report_plan=report_plan,
-                )
-                try:
-                    topic_selection = PresentationTopicSelector(self.gateway).select(topic_result)
-                    _, series_by_id = series_directory(topic_result)
-                    requested_series = [
-                        series_by_id[series_id]
-                        for topic in topic_selection.topics for series_id in topic.series_ids
-                    ]
-                except Exception as exc:
-                    issues.append(ValidationIssue(
-                        code="presentation_topic_selection_failed",
-                        message="Question-first presentation selection was unavailable: "
-                                + " ".join(str(exc).split())[:800],
-                        severity="warning", stage="presentation",
-                    ))
+            notify("Selecting presentation questions before chart generation")
+            from .output_planning import plan_outputs
+            topic_result = PipelineResult(
+                document=document, profile=profile, observations=index.observations,
+                analysis_plan=plan, analysis_results=results, insights=insights,
+            )
+            report_plan, topic_selection, topic_error = plan_outputs(self.gateway, topic_result)
+            if topic_selection is not None:
+                _, series_by_id = series_directory(topic_result)
+                requested_series = [
+                    series_by_id[series_id]
+                    for topic in topic_selection.topics for series_id in topic.series_ids
+                ]
+            if topic_error is not None:
+                issues.append(ValidationIssue(
+                    code="presentation_topic_selection_failed",
+                    message="Question-first presentation selection was unavailable: "
+                            + " ".join(str(topic_error).split())[:800],
+                    severity="warning", stage="presentation",
+                ))
             charts = ChartPlanner().plan(
                 plan,
                 results,
@@ -276,7 +276,7 @@ class DocumentOrchestrator:
 
                     # 3. Regenerate candidate analyses and results if plan lacked depth or charts == 0
                     if len(results) < 2 or not plan or not charts:
-                        candidates = AnalysisCandidateGenerator(self.gateway).generate(index, profile)
+                        candidates = AnalysisCandidateGenerator().generate(index, profile)
                         scores = AnalysisValueScorer(self.gateway).score(candidates, index, profile)
                         plan = AnalysisPlanner().plan(scores, index)
                         results = AnalysisExecutor().execute(plan, index)

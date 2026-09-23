@@ -56,6 +56,17 @@ def render_sidebar(st, *, public_deployment: bool | None = None) -> LLMSettings:
         st.caption("Enter your own API key. It is kept only in the current session and must be entered again later.")
         privacy = {"Auto": PrivacyMode.AUTO, "Cloud": PrivacyMode.CLOUD, "Local Only": PrivacyMode.LOCAL_ONLY}[mode_label]
         api_key = SecretStr(key) if key else (None if public_deployment else defaults.api_key)
+        stage_models = {}
+        with st.expander("Stage models (optional)"):
+            st.caption("Blank uses the main model. All stages use the same provider and endpoint; Local Only never falls back to cloud.")
+            for stage in ("discovery", "semantic", "extraction", "planner", "vision", "insight", "report", "presentation"):
+                value = st.text_input(
+                    f"{stage.title()} model",
+                    value=defaults.stage_models.get(stage, "") if provider == defaults.provider else "",
+                    key=f"stage_model_{provider.value}_{stage}",
+                ).strip()
+                if value:
+                    stage_models[stage] = value
         settings = LLMSettings(
             provider=provider,
             model=model,
@@ -63,6 +74,9 @@ def render_sidebar(st, *, public_deployment: bool | None = None) -> LLMSettings:
             api_key=api_key,
             privacy_mode=privacy,
             discovery_workers=defaults.discovery_workers,
+            stage_models=stage_models,
+            timeout_seconds=defaults.timeout_seconds,
+            temperature=defaults.temperature,
         )
         if settings.is_local:
             st.success("🖥 Local model")

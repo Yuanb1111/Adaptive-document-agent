@@ -80,8 +80,8 @@ def test_monetary_share_pipeline_skips_old_table_cache_and_reuses_new_cache(monk
         assert [o.value for o in observations] == [100000, 125000]
         assert all(o.unit_family == "currency" and o.unit_scale == 1000 for o in observations)
     assert len(calls) == 1
-    from adaptive_document_agent.utils.pipeline_version import PIPELINE_VERSION
-    assert any(key.startswith(f"tables-{PIPELINE_VERSION}-") for key in cache.values)
+    from adaptive_document_agent.utils.pipeline_version import EXTRACTION_VERSION
+    assert any(key.startswith(f"tables-{EXTRACTION_VERSION}-") for key in cache.values)
 
 
 def test_targeted_observations_extend_instead_of_replace_fact_base() -> None:
@@ -136,7 +136,6 @@ def test_complete_pipeline_with_mock_llm_controls_semantic_selection() -> None:
             "detected_time_periods": ["2023", "2024", "2025"],
         },
         {"mappings": [{"original_name": "Revenue", "canonical_name": "revenue", "confidence": 0.95, "reason": "Explicit context"}]},
-        {"selected_candidate_ids": candidate_ids, "rationale": ["Revenue change is central to the document purpose."]},
         {"scores": [{"candidate_id": identifier, "score": 0.9, "reasons": ["Relevant and complete"], "rejected": False} for identifier in candidate_ids]},
         {"insights": [{"id": "insight_mock", "title": task.title, "narrative": "The validated series changed over the reported period.", "kind": "calculated_result", "confidence": 0.9, "result_ids": [task.id]}]},
         {"title": "Revenue Performance Analysis", "sections": [{"title": "Revenue Performance", "purpose": "Explain the validated change.", "insight_ids": ["insight_mock"]}]},
@@ -174,7 +173,7 @@ def test_complete_pipeline_with_mock_llm_controls_semantic_selection() -> None:
     assert result.presentation_plan is not None
     assert result.presentation_plan.slides[1].title == "Document at a Glance"
     assert "## Revenue overview" in result.report_markdown
-    assert len(client.calls) == 9
+    assert len(client.calls) == 8  # selection and scoring share one request
 
 
 def test_presentation_plan_failure_does_not_discard_completed_analysis(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -194,7 +193,6 @@ def test_presentation_plan_failure_does_not_discard_completed_analysis(monkeypat
             "detected_time_periods": ["2023", "2024", "2025"],
         },
         {"mappings": [{"original_name": "Revenue", "canonical_name": "revenue", "confidence": 0.95, "reason": "Explicit context"}]},
-        {"selected_candidate_ids": candidate_ids, "rationale": ["Revenue change is central."]},
         {"scores": [{"candidate_id": identifier, "score": 0.9, "reasons": ["Supported"], "rejected": False} for identifier in candidate_ids]},
         {"insights": [{"id": "insight_mock", "title": task.title, "narrative": "Revenue changed across the period.", "kind": "calculated_result", "confidence": 0.9, "result_ids": [task.id]}]},
         {"title": "Revenue Analysis", "sections": [{"title": "Revenue", "purpose": "Explain the change.", "insight_ids": ["insight_mock"]}]},

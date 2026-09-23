@@ -3,6 +3,7 @@
 import csv
 import io
 import hashlib
+from collections.abc import Callable
 from time import perf_counter
 
 from pathlib import Path
@@ -73,6 +74,7 @@ def export_pptx_with_report(
     build_cache: dict | None = None,
     artwork: bytes | None = None,
     source_pdf: bytes | None = None,
+    progress: Callable[[str], None] | None = None,
 ):
     """Financial QA, native generation, then strict local rendered validation.
 
@@ -87,6 +89,8 @@ def export_pptx_with_report(
     # Automatic QA repair loop:
     # Presentation Plan -> Claim Validation -> Repair contradictory wording -> Revalidate -> Export only if valid.
     started = perf_counter()
+    notify = progress or (lambda _: None)
+    notify("Checking PowerPoint evidence")
     qa = run_comprehensive_qa(result, auto_repair=True)
     qa_finished = perf_counter()
     if not force and qa.has_critical_errors:
@@ -94,6 +98,7 @@ def export_pptx_with_report(
         raise CriticalQAError(f"PowerPoint export blocked due to critical QA errors:\n - {reasons}", financial_report=qa)
 
     try:
+        notify("Building PowerPoint")
         # Cache only native generation. Financial QA above ALWAYS runs; rendered
         # QA below still checks its own content + renderer + policy fingerprint.
         template_digest = None
@@ -107,6 +112,7 @@ def export_pptx_with_report(
         if not build_cache_hit:
             payload = build_presentation(result, template_path=template_path, artwork=artwork, source_pdf=source_pdf)
         build_finished = perf_counter()
+        notify("Rendering and checking PowerPoint layout")
         verified = verify_presentation(payload, renderer=renderer, cache=visual_cache)
         if build_cache is not None:
             build_cache.clear()

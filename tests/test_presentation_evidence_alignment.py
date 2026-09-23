@@ -1,5 +1,7 @@
 """Duplicate financial facts must not cross-wire a slide's plotted series."""
 
+import pytest
+
 from adaptive_document_agent.models import (
     ChartPlan, Observation, PresentationPlan, PresentationSlide,
     PresentationVisualBlock, SourceEvidence,
@@ -147,3 +149,38 @@ def test_unplotted_conflicting_source_is_not_silently_aligned() -> None:
     assert repairs == []
     assert repaired.slides[0].observation_ids == [item.id for item in observations]
     assert any(issue.code == "directional_contradiction" for issue in ClaimValidator().validate_plan(repaired, observations))
+
+
+@pytest.mark.parametrize("conflict", [None, "value", "currency", "audited_status", "period_end"])
+def test_equal_period_duplicate_sources_are_aligned_only_with_matching_scope(conflict):
+    observations = [
+        _fact(f"{context}_{year}", year, value, context=context, page=page)
+        for context, page in [("A", 10), ("B", 11)]
+        for year, value in [(2021, 100), (2022, 120), (2023, 150)]
+    ]
+    if conflict:
+        setattr(observations[-1], conflict, {"value": 151000, "currency": "USD",
+                "audited_status": "unaudited", "period_end": "2023-11-30"}[conflict])
+    snapshot = [o.model_dump() for o in observations]
+    plan = PresentationPlan(title="Inventory", slides=[PresentationSlide(
+        id="inventory", slide_type="analysis", title="Inventories increased",
+        observation_ids=[o.id for o in observations], source_pages=[10, 11],
+    )])
+    repaired, repairs = repair_presentation_plan(plan, observations)
+    assert [o.model_dump() for o in observations] == snapshot
+    if conflict:
+        assert len(repaired.slides[0].observation_ids) == 6
+        assert ClaimValidator().validate_plan(repaired, observations)
+    else:
+        assert repaired.slides[0].observation_ids == [f"A_{year}" for year in (2021, 2022, 2023)]
+        assert not ClaimValidator().validate_plan(repaired, observations)
+        assert not repair_presentation_plan(repaired, observations)[1]
+
+
+def test_duplicate_adjacent_bounds_are_removed_without_changing_claim():
+    plan = PresentationPlan(title="Test", slides=[PresentationSlide(
+        id="summary", slide_type="analysis",
+        title="Metric changed from FY2021 to FY2023 and from FY2021 to FY2023",
+    )])
+    repaired, _ = repair_presentation_plan(plan, [])
+    assert repaired.slides[0].title == "Metric changed from FY2021 to FY2023"

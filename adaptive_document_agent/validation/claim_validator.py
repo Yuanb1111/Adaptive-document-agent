@@ -1806,7 +1806,7 @@ class ClaimValidator:
                             trends = {s["trend_state"] for s in series_list}
                             if len(trends) == 1 and None not in trends:
                                 common_trend = next(iter(trends))
-                                periods_text = " and ".join(f"from {s['first'].period} to {s['last'].period}" for s in series_list)
+                                periods_text = " and ".join(dict.fromkeys(f"from {s['first'].period} to {s['last'].period}" for s in series_list))
                                 issue_key = (slide.id, m_name.casefold(), comp_type, bullet_idx, "unqualified_mixed")
                                 if issue_key not in seen_issues:
                                     seen_issues.add(issue_key)
@@ -2239,6 +2239,16 @@ def repair_presentation_plan(
     from .presentation_evidence_alignment import align_redundant_slide_evidence
 
     alignment_repairs = align_redundant_slide_evidence(plan, observations, charts)
+    # Remove only verbatim adjacent repeated bounds left by earlier repairs.
+    duplicate_bounds = re.compile(r"(\bfrom\s+[\w/-]*\d[\w/-]*\s+to\s+[\w/-]*\d[\w/-]*)(?:\s+and\s+\1)+", re.IGNORECASE)
+    for slide in plan.slides:
+        for field in ("title", "message"):
+            old = getattr(slide, field)
+            if old:
+                new = duplicate_bounds.sub(r"\1", old)
+                if new != old:
+                    setattr(slide, field, new)
+                    alignment_repairs.append(f"Slide {slide.id}: removed duplicate period bounds in {field}")
     validator = ClaimValidator()
     issues = validator.validate_plan(plan, observations, charts)
     repaired_plan, claim_repairs = repair_presentation_plan_from_issues(plan, issues)

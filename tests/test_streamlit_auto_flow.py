@@ -36,10 +36,11 @@ def test_upload_auto_analysis_reuses_result_and_manual_scope_can_override(monkey
     calls = []
     result = object()
     settings = SimpleNamespace(model="configured-model")
+    cache = SimpleNamespace(get_model=lambda *args: None, set_model=lambda *args: None)
 
     class Orchestrator:
         def __init__(self, gateway, *, cache) -> None:
-            assert cache == "cache"
+            assert cache is not None
 
         def analyse_pdf(self, raw_pdf, *, progress, analysis_focus, scope):
             calls.append((raw_pdf, analysis_focus, scope))
@@ -48,9 +49,9 @@ def test_upload_auto_analysis_reuses_result_and_manual_scope_can_override(monkey
 
     monkeypatch.setattr(ui_app, "DocumentOrchestrator", Orchestrator)
     monkeypatch.setattr(ui_app, "create_llm_client", lambda settings: "client")
-    monkeypatch.setattr(ui_app, "LLMGateway", lambda client, settings: "gateway")
+    monkeypatch.setattr(ui_app, "LLMGateway", lambda client, settings, **kwargs: "gateway")
     kwargs = dict(scope_key="pdf-and-settings", analysis_focus="financial performance",
-                  settings=settings, cache="cache")
+                  settings=settings, cache=cache)
 
     assert ui_app._analyse_upload(st, b"%PDF", **kwargs) is result
     assert calls == [(b"%PDF", "financial performance", None)]

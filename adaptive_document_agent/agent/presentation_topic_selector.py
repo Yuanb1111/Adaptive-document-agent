@@ -105,7 +105,6 @@ class PresentationTopicSelector:
                 for item in sorted(result.insights, key=lambda item: -item.importance)[:18]
                 if item.evidence
             ],
-            "report_sections": [item.model_dump(mode="json") for item in result.report_plan.sections],
             "background_page_excerpts": context_pages,
         }
         messages = [

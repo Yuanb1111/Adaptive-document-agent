@@ -79,10 +79,8 @@ class DocumentDiscovery:
         else:
             chunks = semantic_chunks(document.pages, target_tokens=self.target_tokens)
         discoveries = self._discover_chunks(chunks, notify)
-        compact = "\n".join(
-            f"Pages {chunk.start_page}-{chunk.end_page}: {discovery.model_dump_json()}"
-            for chunk, discovery in zip(chunks, discoveries, strict=True)
-        )
+        from .discovery_compaction import compact_discoveries
+        compact = compact_discoveries(chunks, discoveries)
         notify("Merging selected sections into the global document profile")
         messages = [
                 {"role": "system", "content": load_prompt("document_discovery.txt")},
@@ -109,6 +107,14 @@ class DocumentDiscovery:
             page for page in profile.document_summary_pages if page in reviewed_pages
         })
         profile.analysis_focus = analysis_focus.strip() if analysis_focus and analysis_focus.strip() else None
+        # The model ranks/interprets; it must not erase the discovered inventory.
+        for discovery in discoveries:
+            for field, source in (("metrics", "metrics"), ("detected_units", "units"),
+                                  ("detected_time_periods", "time_periods"),
+                                  ("detected_currencies", "currencies"), ("entities", "entities"),
+                                  ("dimensions", "dimensions"), ("data_quality_notes", "data_quality_notes")):
+                target = getattr(profile, field)
+                target.extend(value for value in getattr(discovery, source) if value not in target)
         profile.analysis_page_ranges = [(item.start_page, item.end_page) for item in routed_ranges]
         for item in routed_ranges:
             if item.title not in profile.important_sections:
@@ -240,7 +246,7 @@ class DocumentDiscovery:
     def _discover_chunk(self, chunk: DocumentChunk) -> ChunkDiscovery:
         prompt = load_prompt("document_discovery.txt")
         cache_key = None
-        if self.cache is not None and self.gateway is not None:
+        if self.cache is not None and self.gateway is not None and self.gateway.cache_enabled:
             settings = self.gateway.settings
             identity = {
                 "version": "chunk-discovery-v1",

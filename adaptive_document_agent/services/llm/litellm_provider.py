@@ -3,6 +3,7 @@
 import json
 import re
 import time
+from contextvars import ContextVar
 from typing import Any
 
 from pydantic import BaseModel
@@ -10,9 +11,11 @@ from pydantic import BaseModel
 from .base import LLMClient, LLMResponse
 from .capabilities import ModelCapabilities
 from .config import LLMSettings
-from .exceptions import LLMConfigurationError, LLMResponseError
+from .exceptions import LLMConfigurationError, LLMTransportError, LLMStructuredOutputError
 from .structured import validate_structured_text
 from .usage import LLMUsage
+
+_attempts: ContextVar[list | None] = ContextVar("llm_attempts", default=None)
 
 
 class LiteLLMProvider(LLMClient):
@@ -55,8 +58,11 @@ class LiteLLMProvider(LLMClient):
         transient_retries = 0
         compatibility_retry_used = False
         while True:
+            started = time.perf_counter()
+            event = {"attempt": transient_retries + int(compatibility_retry_used) + 1,
+                     "kind": "compatibility_retry" if compatibility_retry_used else "network_retry" if transient_retries else "initial"}
             try:
-                return completion(
+                result = completion(
                     model=model,
                     messages=messages,
                     api_key=key,
@@ -65,7 +71,10 @@ class LiteLLMProvider(LLMClient):
                     num_retries=0,
                     **request_kwargs,
                 )
+                event["status"] = "success"
+                return result
             except Exception as exc:
+                event.update(status="failed", error_type=type(exc).__name__)
                 rejected_params = self._rejected_optional_params(exc, request_kwargs)
                 if rejected_params and not compatibility_retry_used:
                     for param in rejected_params:
@@ -77,6 +86,10 @@ class LiteLLMProvider(LLMClient):
                     raise
                 transient_retries += 1
                 time.sleep(0.25)
+            finally:
+                event["latency_ms"] = int((time.perf_counter() - started) * 1000)
+                if _attempts.get() is not None:
+                    _attempts.get().append(event)
 
     @classmethod
     def _rejected_optional_params(cls, exc: Exception, request_kwargs: dict[str, Any]) -> set[str]:
@@ -90,6 +103,11 @@ class LiteLLMProvider(LLMClient):
         }
 
     def _litellm_model(self, model: str) -> str:
+        if self.settings.is_local:
+            # A stage override is a model name, not permission to reroute to a
+            # cloud provider (including when an Ollama name contains a slash).
+            prefix = "ollama/" if self.settings.provider.value == "ollama" else "openai/"
+            return model if model.startswith(prefix) else prefix + model
         if "/" in model or self.settings.provider.value == "openai":
             return model
         prefix = {
@@ -103,6 +121,8 @@ class LiteLLMProvider(LLMClient):
 
     def generate_text(self, messages: list[dict[str, Any]], *, temperature: float = 0, max_tokens: int | None = None, model: str | None = None) -> LLMResponse:
         started = time.perf_counter()
+        attempt_log = []
+        token = _attempts.set(attempt_log)
         try:
             raw = self._completion(messages, temperature=temperature, max_tokens=max_tokens, model=model)
             text = raw.choices[0].message.content or ""
@@ -115,11 +135,13 @@ class LiteLLMProvider(LLMClient):
                 latency_ms=int((time.perf_counter() - started) * 1000),
                 estimated_cost=None,
             )
-            return LLMResponse(text=text, usage=usage, raw=raw)
+            return LLMResponse(text=text, usage=usage, raw=raw, attempts=attempt_log)
         except LLMConfigurationError:
             raise
         except Exception as exc:
-            raise LLMResponseError(f"Model request failed: {type(exc).__name__}") from exc
+            raise LLMTransportError(f"Model request failed: {type(exc).__name__}", attempts=attempt_log) from exc
+        finally:
+            _attempts.reset(token)
 
     def generate_structured(self, messages: list[dict[str, Any]], response_model: type[BaseModel], *, temperature: float = 0, model: str | None = None) -> tuple[BaseModel, LLMResponse]:
         schema_instruction = {
@@ -130,4 +152,4 @@ class LiteLLMProvider(LLMClient):
         try:
             return validate_structured_text(response.text, response_model), response
         except (ValueError, TypeError) as exc:
-            raise LLMResponseError("Structured response failed schema validation.") from exc
+            raise LLMStructuredOutputError("Structured response failed schema validation.", response=response) from exc

@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .capabilities import ModelCapabilities
 from .usage import LLMUsage
@@ -13,6 +13,7 @@ class LLMResponse(BaseModel):
     text: str
     usage: LLMUsage | None = None
     raw: Any = None
+    attempts: list[dict[str, Any]] = Field(default_factory=list)
 
     model_config = {"arbitrary_types_allowed": True}
 

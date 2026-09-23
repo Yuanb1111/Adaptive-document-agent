@@ -7,6 +7,7 @@ from adaptive_document_agent.models import AnalysisCandidate, CandidateScore, Do
 from adaptive_document_agent.services.llm import LLMGateway
 
 from .prompting import load_prompt, untrusted_document_message
+from .candidate_generator import AnalysisCandidateGenerator
 
 
 class SemanticCandidateScore(BaseModel):
@@ -25,7 +26,9 @@ class AnalysisValueScorer:
         self.gateway = gateway
 
     def score(self, candidates: list[AnalysisCandidate], index: DocumentIndex, profile: DocumentProfile, *, maximum: int = 20) -> list[CandidateScore]:
-        semantic_scores = self._semantic_scores(candidates, profile)
+        bounded = AnalysisCandidateGenerator._prefilter(candidates, index, profile) if self.gateway else candidates
+        semantic_scores = self._semantic_scores(bounded, profile)
+        bounded_ids = {item.id for item in bounded}
         scored: list[CandidateScore] = []
         purpose_terms = (profile.document_purpose + " " + " ".join(profile.metrics)).casefold()
         for candidate in candidates:
@@ -42,7 +45,10 @@ class AnalysisValueScorer:
             reasons = [f"mean input confidence={confidence:.2f}", f"comparable support={support}"]
             if semantic:
                 reasons.extend(semantic.reasons)
-            if rejected:
+            if self.gateway and semantic is None:
+                rejected = True
+                reasons.append("outside candidate review budget" if candidate.id not in bounded_ids else "model omitted candidate decision")
+            if support < self._minimum(candidate.analysis_type) or confidence < 0.35:
                 reasons.append("insufficient or low-confidence evidence")
             scored.append(CandidateScore(candidate=candidate, score=max(0.0, min(1.0, score)), reasons=reasons, rejected=rejected))
         accepted = sorted((item for item in scored if not item.rejected), key=lambda item: item.score, reverse=True)[:maximum]
@@ -58,7 +64,7 @@ class AnalysisValueScorer:
             return {}
         response = self.gateway.generate_structured(
             [
-                {"role": "system", "content": load_prompt("analysis_planner.txt")},
+                {"role": "system", "content": load_prompt("analysis_planner.txt") + "\nSelect and score candidates in ONE response. Return exactly one decision per supplied candidate ID: score, rejected (true means not selected), and explicit reasons. Assess analytical usefulness, redundancy and evidence. Never add candidate IDs."},
                 untrusted_document_message(str({"document_profile": profile.model_dump(mode="json"), "candidates": [item.model_dump(mode="json") for item in candidates]})),
             ],
             SemanticCandidateScores,

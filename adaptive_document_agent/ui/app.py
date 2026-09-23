@@ -6,7 +6,7 @@ from adaptive_document_agent.services.export import export_pptx_with_report
 from adaptive_document_agent.services.llm import LLMGateway
 from adaptive_document_agent.services.llm.routing import create_llm_client
 from adaptive_document_agent.utils.hashing import sha256_bytes
-from adaptive_document_agent.utils.pipeline_version import PIPELINE_VERSION
+from adaptive_document_agent.utils.pipeline_version import PIPELINE_VERSION, ANALYSIS_VERSION, EXTRACTION_VERSION
 
 from . import analysis, data, overview, quality, sources, technical
 from .charts import chart_rows, render_chart
@@ -15,21 +15,39 @@ from .exports import render_report_downloads
 from .sidebar import render_sidebar
 
 
-def _analyse_upload(st, raw_pdf, *, scope_key, analysis_focus, settings, cache, scope=None, force=False):
+def _analyse_upload(st, raw_pdf, *, scope_key, analysis_focus, settings, cache, scope=None, force=False, progress=None):
     """Run one upload through discovery and analysis, reusing it on widget reruns."""
     if not force and st.session_state.get("analysis_result_key") == scope_key:
         cached = st.session_state.get("analysis_result")
         if cached is not None:
+            if progress:
+                progress.update("Complete")
+            return cached
+    if not force and cache is not None:
+        from adaptive_document_agent.models import PipelineResult
+        cached = cache.get_model(f"analysis-result-{scope_key}", PipelineResult)
+        if cached is not None:
+            st.session_state["analysis_result"] = cached
+            st.session_state["analysis_result_key"] = scope_key
+            if progress:
+                progress.update("Complete")
             return cached
     if not settings.model:
+        if progress:
+            progress.fail("Configure a model before analysis")
         st.error("Configure a model before analysis.")
         return None
+    if progress:
+        progress.reset()
+    status = None
     try:
-        gateway = LLMGateway(create_llm_client(settings), settings)
+        gateway = LLMGateway(create_llm_client(settings), settings, cache_enabled=not force)
         status = st.status("Analysing PDF and preparing presentation…", expanded=True)
 
         def update(stage: str) -> None:
             status.write(stage)
+            if progress:
+                progress.update(stage)
 
         result = DocumentOrchestrator(gateway, cache=cache).analyse_pdf(
             raw_pdf,
@@ -39,9 +57,15 @@ def _analyse_upload(st, raw_pdf, *, scope_key, analysis_focus, settings, cache, 
         )
         st.session_state["analysis_result"] = result
         st.session_state["analysis_result_key"] = scope_key
+        if cache is not None:
+            cache.set_model(f"analysis-result-{scope_key}", result)
         status.update(label="Analysis complete", state="complete", expanded=False)
         return result
     except Exception as exc:
+        if status is not None:
+            status.update(label="Analysis failed", state="error", expanded=True)
+        if progress:
+            progress.fail("Analysis could not be completed")
         st.error(f"Analysis could not be completed: {exc}")
         return None
 
@@ -93,16 +117,24 @@ def run_app() -> None:
     scope_key = sha256_bytes(
         "|".join(
             (
-                PIPELINE_VERSION,
+                ANALYSIS_VERSION,
+                EXTRACTION_VERSION,
                 sha256_bytes(raw_pdf),
                 analysis_focus.strip(),
                 settings.provider.value,
                 settings.model,
                 settings.base_url or "",
+                settings.privacy_mode.value,
+                str(sorted(settings.stage_models.items())),
+                str(settings.temperature),
             )
         ).encode("utf-8")
     )
     result = st.session_state.get("analysis_result") if st.session_state.get("analysis_result_key") == scope_key else None
+    from .processing_progress import ProcessingProgress
+    progress = ProcessingProgress(st.empty())
+    if result is not None:
+        progress.update("Complete")
     if review_scope:
         if st.button("Review analysis scope"):
             if not settings.model:
@@ -114,6 +146,7 @@ def run_app() -> None:
 
                 def update(stage: str) -> None:
                     status.write(stage)
+                    progress.update(stage)
 
                 preview = DocumentOrchestrator(gateway, cache=cache).preview_scope(
                     raw_pdf,
@@ -124,6 +157,7 @@ def run_app() -> None:
                 st.session_state["analysis_scope_key"] = scope_key
                 status.update(label="Analysis scope ready", state="complete", expanded=False)
             except Exception as exc:
+                progress.fail("Analysis scope could not be prepared")
                 st.error(f"Analysis scope could not be prepared: {exc}")
                 return
         preview = st.session_state.get("analysis_scope") if st.session_state.get("analysis_scope_key") == scope_key else None
@@ -149,18 +183,33 @@ def run_app() -> None:
                 updated = _analyse_upload(
                     st, raw_pdf, scope_key=scope_key, analysis_focus=analysis_focus,
                     settings=settings, cache=cache, scope=preview, force=True,
+                    progress=progress,
                 )
-                if updated is not None:
-                    result = updated
+                if updated is None:
+                    return
+                result = updated
         elif result is None:
             st.info("Review and confirm the page scope before starting deep analysis, or turn off this optional review to run automatically.")
     else:
         result = _analyse_upload(
             st, raw_pdf, scope_key=scope_key, analysis_focus=analysis_focus,
             settings=settings, cache=cache,
+            progress=progress,
         )
     if result is None:
         return
+    if st.button("Reanalyse PDF (ignore model cache)"):
+        result = _analyse_upload(
+            st, raw_pdf, scope_key=scope_key, analysis_focus=analysis_focus,
+            settings=settings, cache=cache, force=True, progress=progress,
+            scope=st.session_state.get("analysis_scope") if review_scope else None,
+        )
+        if result is None:
+            return
+    if st.button("Regenerate PowerPoint only"):
+        st.session_state["ppt_build_cache"] = {}
+        st.session_state["ppt_visual_cache"] = {}
+        st.caption("Reusing the existing analysis; rebuilding PowerPoint and rerunning export checks.")
     tab_overview, tab_analysis, tab_charts, tab_data, tab_sources, tab_quality, tab_technical = st.tabs(["Overview", "Analysis", "Charts", "Extracted Data", "Sources", "Data Quality", "Technical Details"])
     with tab_overview:
         overview.render(st, result)
@@ -249,9 +298,11 @@ def run_app() -> None:
                 build_cache=st.session_state.setdefault("ppt_build_cache", {}),
                 artwork=artwork,
                 source_pdf=raw_pdf,
+                progress=progress.update,
             )
         pptx_bytes = verified.payload
         visual_report = verified.report
+        progress.finish()
         st.caption(
             f"PowerPoint export: {verified.timings_ms['ppt_export_total'] / 1000:.1f}s; "
             f"build reused: {verified.build_cache_hit}; rendered QA reused: {visual_report.cache_hit}"
@@ -284,6 +335,7 @@ def run_app() -> None:
     render_report_downloads(st, result, (col2, col3, col4), pdf_cache=st.session_state.setdefault("pdf_export_cache", {}))
 
     if qa_error:
+        progress.fail("PowerPoint export blocked")
         from adaptive_document_agent.services.export_diagnostics import export_diagnostics
         import json
         qa = export_diagnostics(result, qa_error, visual_report)

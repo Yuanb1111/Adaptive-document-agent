@@ -31,6 +31,10 @@ def _same_reported_fact(left: Observation, right: Observation) -> bool:
         and left.currency == right.currency
         and left.period_type == right.period_type
         and left.period_basis == right.period_basis
+        and left.period_start == right.period_start
+        and left.period_end == right.period_end
+        and left.as_of_date == right.as_of_date
+        and left.audited_status == right.audited_status
         and left.ifrs_status == right.ifrs_status
         and left.fact_type == right.fact_type
         and isclose(float(left.value), float(right.value), rel_tol=1e-12, abs_tol=1e-9)
@@ -112,7 +116,11 @@ def align_redundant_slide_evidence(
             candidates = []
             for (peer_metric, peer_context), series in direct_series.items():
                 peer_periods = {item.period for item in series}
-                if peer_metric != metric or peer_context == context or not direct_periods < peer_periods:
+                if peer_metric != metric or peer_context == context or not direct_periods <= peer_periods:
+                    continue
+                # Equal coverage needs a stable one-way tie-break, never A->B->A.
+                # This orders provenance only; semantic identity is still checked below.
+                if direct_periods == peer_periods and peer_context >= context:
                     continue
                 matches = {}
                 for item in direct:
