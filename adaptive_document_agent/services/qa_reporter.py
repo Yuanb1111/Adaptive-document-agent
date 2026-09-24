@@ -255,7 +255,9 @@ def repair_presentation_plan_claims(result: PipelineResult) -> list[str]:
     """
     if not result.presentation_plan:
         return []
-    plan, repairs = repair_presentation_plan(result.presentation_plan, result.observations, result.charts)
+    from adaptive_document_agent.validation.presentation_provenance import insight_inputs
+    plan, repairs = repair_presentation_plan(result.presentation_plan, result.observations, result.charts,
+        insight_observation_ids=insight_inputs(result) if result.insights else None)
     result.presentation_plan = plan
     return repairs
 
@@ -330,7 +332,12 @@ def check_evidence_completeness_for_title_claims(
 
 def run_comprehensive_qa(result: PipelineResult, auto_repair: bool = True) -> QAReport:
     """Execute complete QA audit across numerical, semantic, period, claim, and presentation layers."""
-    if auto_repair and result.presentation_plan and result.presentation_plan.company:
+    from adaptive_document_agent.validation.presentation_provenance import insight_inputs
+    if not auto_repair:
+        result = result.model_copy(deep=True)
+    if (auto_repair and result.presentation_plan and result.presentation_plan.company
+            and not result.presentation_plan.company.summary_overview
+            and not any(i.code == "company_introduction_unavailable" for i in result.validation_warnings)):
         from adaptive_document_agent.services.company_extractor import extract_structured_company_fields
         result.presentation_plan.company = extract_structured_company_fields(result.presentation_plan.company, result)
 
@@ -411,7 +418,8 @@ def run_comprehensive_qa(result: PipelineResult, auto_repair: bool = True) -> QA
 
         # Revalidation pass
         validator = ClaimValidator()
-        claim_issues = validator.validate_plan(result.presentation_plan, result.observations, result.charts)
+        claim_issues = validator.validate_plan(result.presentation_plan, result.observations, result.charts,
+            insight_observation_ids=insight_inputs(result) if result.insights else None)
         reported_claim_transitions: set[tuple[str, str, str, str]] = set()
         for issue in claim_issues:
             if issue.code == "directional_contradiction":
@@ -573,10 +581,12 @@ def run_comprehensive_qa(result: PipelineResult, auto_repair: bool = True) -> QA
     if result.presentation_plan:
         from adaptive_document_agent.validation.cross_slide_validator import CrossSlideValidator
 
-        cross_issues = CrossSlideValidator(result.presentation_plan, result.observations, result.charts).validate_and_repair(auto_repair=auto_repair)
+        cross_issues = CrossSlideValidator(result.presentation_plan, result.observations, result.charts,
+            insight_observation_ids=insight_inputs(result) if result.insights else None).validate_and_repair(auto_repair=auto_repair)
         for issue in cross_issues:
             if issue.severity == "CRITICAL":
-                report.critical_errors.append(issue)
+                if not any(old.message == issue.message and old.slide_id == issue.slide_id for old in report.critical_errors):
+                    report.critical_errors.append(issue)
             elif issue.severity == "WARNING":
                 report.warnings.append(issue)
             else:

@@ -738,6 +738,16 @@ def _add_planned_summary(
         fallback_pages = {p for item in fallback_findings for p in item.get("pages", [])}
     from .presentation_editorial import distinct_findings
     from .presentation_brief import BriefItem, render_brief, render_summary
+    if (result.presentation_plan and result.presentation_plan.planning_origin == "topic_recovery"
+            and slide_plan.bullets
+            and all(not _is_calc_artifact(b) for b in slide_plan.bullets)):
+        # Render the validated/repaired summary, not the pre-repair insight
+        # narrative. Full analytical prose stays in notes and subsequent pages.
+        items = [BriefItem("", _sanitize_investor_narrative(bullet), slide_plan.source_pages)
+                 for bullet in slide_plan.bullets]
+        notes = "\n\n".join(f"{title}\n{body}" for title, body in raw_findings)
+        render_brief(presentation, slide_plan.title, items, notes=notes, max_items=4)
+        return
     # The summary is a short entry point. Explicit KPI/chart plans above remain
     # authoritative; full prose and caveats are retained in the speaker notes.
     pages = sorted(set(slide_plan.source_pages) | fallback_pages | {
@@ -1614,6 +1624,12 @@ def _add_native_chart(
                         # A truncated positive bar axis exaggerates small
                         # changes; line charts may retain automatic scaling.
                         chart.value_axis.minimum_scale = 0.0
+                        chart.value_axis.maximum_scale = max_scaled * 1.20 if max_scaled > 0 else 1.0
+                    elif min_scaled >= 0 and max_scaled > 0:
+                        # Reserve headroom for point labels; automatic maxima can
+                        # place the highest label over the chart's unit heading.
+                        chart.value_axis.maximum_scale = max_scaled + max(
+                            (max_scaled - min_scaled) * .20, max_scaled * .12)
                     if has_negative:
                         from .presentation_style import readable_axis_bounds
                         low, high, step = readable_axis_bounds(chart.value_axis.minimum_scale, chart.value_axis.maximum_scale)

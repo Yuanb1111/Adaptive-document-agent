@@ -399,7 +399,10 @@ class DocumentOrchestrator:
                     from adaptive_document_agent.validation.claim_validator import repair_presentation_plan
                     from adaptive_document_agent.validation.cross_slide_validator import CrossSlideValidator
 
-                    presentation_plan, plan_repairs = repair_presentation_plan(presentation_plan, index.observations, charts)
+                    from adaptive_document_agent.validation.presentation_provenance import insight_inputs
+                    insight_refs = insight_inputs(planning_result)
+                    presentation_plan, plan_repairs = repair_presentation_plan(presentation_plan, index.observations, charts,
+                        insight_observation_ids=insight_refs)
                     for repair_msg in plan_repairs:
                         issues.append(
                             ValidationIssue(
@@ -409,7 +412,8 @@ class DocumentOrchestrator:
                                 stage="presentation",
                             )
                         )
-                    cross_val = CrossSlideValidator(presentation_plan, index.observations, charts)
+                    cross_val = CrossSlideValidator(presentation_plan, index.observations, charts,
+                        insight_observation_ids=insight_refs)
                     cross_issues = cross_val.validate_and_repair(auto_repair=True)
                     for c_issue in cross_issues:
                         issues.append(

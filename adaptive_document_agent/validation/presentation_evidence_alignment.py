@@ -136,6 +136,8 @@ def align_redundant_slide_evidence(
         if not replacements:
             continue
         slide.observation_ids = list(dict.fromkeys(replacements.get(oid, oid) for oid in slide.observation_ids))
+        slide.bullet_observation_ids = [list(dict.fromkeys(replacements.get(oid, oid) for oid in ids))
+                                       for ids in slide.bullet_observation_ids]
         for block in slide.visual_blocks:
             block.observation_ids = list(dict.fromkeys(replacements.get(oid, oid) for oid in block.observation_ids))
 

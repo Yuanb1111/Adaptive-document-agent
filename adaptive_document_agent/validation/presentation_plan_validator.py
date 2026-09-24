@@ -58,6 +58,8 @@ class PresentationPlanValidator:
 
         observation_by_id = {item.id: item for item in result.observations}
         insight_by_id = {item.id: item for item in result.insights}
+        from .presentation_provenance import insight_inputs
+        insight_observation_ids = insight_inputs(result)
         chart_by_id = {item.id: item for item in result.charts}
         valid_pages = set(range(1, result.document.page_count + 1))
 
@@ -261,6 +263,11 @@ class PresentationPlanValidator:
                                 f"slide {slide.id} requests unsupported chart type {block.chart_type} for {identifier}"
                             )
 
+            if slide.bullet_observation_ids:
+                if len(slide.bullet_observation_ids) != len(slide.bullets):
+                    errors.append(f"slide {slide.id}: bullet evidence must match the bullet count")
+                if any(not ids or not set(ids) <= set(slide.observation_ids) for ids in slide.bullet_observation_ids):
+                    errors.append(f"slide {slide.id}: bullet evidence must use retained slide observation IDs")
             referenced_pages: set[int] = set()
             referenced_observation_ids = set(observation_ids)
             for identifier in observation_ids:
@@ -271,6 +278,9 @@ class PresentationPlanValidator:
                 item = insight_by_id.get(identifier)
                 if item:
                     referenced_pages.update(source.page for source in item.evidence)
+                    linked_ids = insight_observation_ids.get(identifier, [])
+                    referenced_observation_ids.update(linked_ids)
+                    referenced_pages.update(e.page for oid in linked_ids for e in observation_by_id[oid].evidence)
             for identifier in chart_ids:
                 item = chart_by_id.get(identifier)
                 if item:
@@ -310,6 +320,13 @@ class PresentationPlanValidator:
                             for value in (item.value, item.raw_value, item.period, item.entity, item.dimensions)
                             if value is not None
                         )
+                        if item.unit == "percent" or item.unit_family == "percentage":
+                            # Percent observations may retain a numeric raw cell
+                            # with '%' only in its header. Do not require the
+                            # model to drop the unit in audience-facing prose.
+                            allowed_text_parts.append(f"{item.value}%")
+                            if re.fullmatch(r"[+-]?[\d,.]+", item.raw_value.strip()):
+                                allowed_text_parts.append(item.raw_value + "%")
                 for identifier in insight_ids:
                     item = insight_by_id.get(identifier)
                     if item:

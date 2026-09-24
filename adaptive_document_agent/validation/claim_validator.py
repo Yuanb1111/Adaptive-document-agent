@@ -1312,7 +1312,8 @@ def extract_metric_aliases(
         aliases.add(re.sub(r"\binventories\b", "inventory", alias, flags=re.I))
         aliases.add(re.sub(r"\binventory\b", "inventories", alias, flags=re.I))
 
-    if any(k in combined for k in ("gross profit margin", "gross margin", "gross profit as % of revenue", "gp margin", "gross_margin", "gross_profit_margin")):
+    if (any(k in combined for k in ("gross profit margin", "gross margin", "gross profit as % of revenue", "gp margin", "gross_margin", "gross_profit_margin"))
+            or re.search(r"gross[ _]+profit\s*:?\s*(?:%\s*of|share of|as % of)\s*revenue", combined)):
         aliases.update(["gross profit margin", "gross margin", "gp margin", "gross margins", "毛利率"])
     elif any(k in combined for k in ("revenue", "turnover", "top line", "topline")) and not any(k in combined for k in ("gross profit as %", "margin", "/ revenue", "% of revenue", "share of revenue", "days", "inventory", "inventories", "receivable", "payable", "turnover ratio")):
         aliases.update(["revenue", "total revenue", "turnover", "top line", "topline", "营业收入", "收入"])
@@ -1535,6 +1536,7 @@ class ClaimValidator:
         plan: PresentationPlan,
         observations: list[Observation],
         charts: list[ChartPlan] | None = None,
+        *, insight_observation_ids: dict[str, list[str]] | None = None,
     ) -> list[ValidationIssue]:
         """Validate entire presentation plan and return structured ValidationIssues."""
         issues: list[ValidationIssue] = []
@@ -1554,6 +1556,11 @@ class ClaimValidator:
                 continue
 
             slide_obs = [obs_by_id[oid] for oid in slide.observation_ids if oid in obs_by_id]
+            linked_insights = set(slide.insight_ids) | {iid for b in slide.visual_blocks for iid in b.insight_ids}
+            for iid in linked_insights:
+                for oid in (insight_observation_ids or {}).get(iid, []):
+                    if oid in obs_by_id and obs_by_id[oid] not in slide_obs:
+                        slide_obs.append(obs_by_id[oid])
             for block in getattr(slide, "visual_blocks", []):
                 for oid in getattr(block, "observation_ids", []):
                     if oid in obs_by_id and obs_by_id[oid] not in slide_obs:
@@ -1565,7 +1572,7 @@ class ClaimValidator:
                         slide_obs.append(obs_by_id[oid])
 
             # For executive summary, synthesize whole document observations
-            if slide.slide_type in ("executive_summary", "summary") and not slide_obs:
+            if slide.slide_type in ("executive_summary", "summary") and not slide_obs and insight_observation_ids is None:
                 slide_obs = list(observations)
 
             # 2. If a slide has no linked observations, skip numeric directional validation
@@ -1593,6 +1600,19 @@ class ClaimValidator:
         observations: list[Observation],
     ) -> list[ValidationIssue]:
         """Validate a single slide against observations, returning structured DirectionalClaimIssue objects."""
+        if slide.bullet_observation_ids and len(slide.bullet_observation_ids) == len(slide.bullets):
+            # Different summary bullets can discuss the same metric over annual
+            # and interim periods. Never pool their evidence when checking text.
+            base = slide.model_copy(update={"bullets": [], "bullet_observation_ids": []})
+            scoped_issues = self.validate_slide(base, observations)
+            for index, (bullet, ids) in enumerate(zip(slide.bullets, slide.bullet_observation_ids)):
+                part = slide.model_copy(update={"title": "", "message": "", "bullets": [bullet],
+                                                "bullet_observation_ids": []})
+                for issue in self.validate_slide(part, [o for o in observations if o.id in ids]):
+                    if getattr(issue, "target_component", None) == "bullet":
+                        issue.bullet_index = index
+                    scoped_issues.append(issue)
+            return scoped_issues
         issues: list[ValidationIssue] = []
 
         by_metric: dict[str, list[Observation]] = {}
@@ -2240,6 +2260,7 @@ def repair_presentation_plan(
     plan: PresentationPlan,
     observations: list[Observation],
     charts: list[ChartPlan] | None = None,
+    *, insight_observation_ids: dict[str, list[str]] | None = None,
 ) -> tuple[PresentationPlan, list[str]]:
     """Execute claim repairs across all slides using structured validation issues."""
     from .presentation_evidence_alignment import align_redundant_slide_evidence
@@ -2256,6 +2277,19 @@ def repair_presentation_plan(
                     setattr(slide, field, new)
                     alignment_repairs.append(f"Slide {slide.id}: removed duplicate period bounds in {field}")
     validator = ClaimValidator()
-    issues = validator.validate_plan(plan, observations, charts)
+    before = plan.model_copy(deep=True)
+    issues = validator.validate_plan(plan, observations, charts, insight_observation_ids=insight_observation_ids)
     repaired_plan, claim_repairs = repair_presentation_plan_from_issues(plan, issues)
+    # Repairs are transactional: never retain a change introducing a new error.
+    def issue_key(issue):
+        return (getattr(issue, "slide_id", None), getattr(issue, "metric_name", None),
+                issue.code, getattr(issue, "target_component", None), getattr(issue, "bullet_index", None),
+                getattr(issue, "expected_direction", None))
+    original_keys = {issue_key(i) for i in issues}
+    after = validator.validate_plan(repaired_plan, observations, charts, insight_observation_ids=insight_observation_ids)
+    unsafe = {getattr(i, "slide_id", None) for i in after if issue_key(i) not in original_keys}
+    if unsafe:
+        original_slides = {s.id: s for s in before.slides}
+        repaired_plan.slides = [original_slides[s.id] if s.id in unsafe else s for s in repaired_plan.slides]
+        claim_repairs = [m for m in claim_repairs if not any(m.startswith(f"Slide {sid} ") for sid in unsafe)]
     return repaired_plan, [*alignment_repairs, *claim_repairs]

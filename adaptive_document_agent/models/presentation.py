@@ -116,6 +116,7 @@ class PresentationSlide(BaseModel):
     layout: PresentationLayout = "auto"
     message: str = ""
     bullets: list[str] = Field(default_factory=list, max_length=5)
+    bullet_observation_ids: list[list[str]] = Field(default_factory=list, max_length=5)
     chart_ids: list[str] = Field(default_factory=list, max_length=3)
     observation_ids: list[str] = Field(default_factory=list, max_length=40)
     insight_ids: list[str] = Field(default_factory=list, max_length=6)

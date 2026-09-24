@@ -194,6 +194,51 @@ class PresentationPlanRecovery:
             if any(inputs_by_task.get(task_id) and inputs_by_task[task_id] <= selected_observation_ids
                    for task_id in item.result_ids)
         )
+        # Preserve the model's topic order and represent distinct questions,
+        # rather than filling the summary with several highly scored insights
+        # about one metric. Only exact task-input provenance can bind an item.
+        chosen = []
+        for theme in themes:
+            candidates = [item for item in result.insights
+                if item.id not in {i.id for i in chosen}
+                and item.evidence and not self._is_calc_artifact(item.title)
+                and not any(char.isdigit() for char in item.title)
+                and item.result_ids
+                and all(inputs_by_task.get(task_id)
+                        and inputs_by_task[task_id] <= set(theme.observation_ids)
+                        for task_id in item.result_ids)]
+            if candidates:
+                chosen.append(max(candidates, key=lambda item: (item.importance, item.confidence)))
+            if len(chosen) == 4:
+                break
+        if chosen:
+            summary = base.slides[2]
+            summary.insight_ids = [item.id for item in chosen]
+            summary.bullets = [item.title for item in chosen]
+            summary.source_pages = sorted({e.page for item in chosen for e in item.evidence})
+        # Prefer the model's actual topic takeaways over generic insight names
+        # such as "Cash trend". Bind every included statement to complete series;
+        # never trim an evidence set merely to meet the slide reference limit.
+        topic_by_id = {topic.id: topic for topic in selection.topics}
+        takeaways, summary_ids, bullet_inputs = [], set(), []
+        for theme in themes:
+            takeaway = topic_by_id[theme.id].takeaway
+            combined = summary_ids | set(theme.observation_ids)
+            if (takeaway and not any(char.isdigit() for char in takeaway)
+                    and len(combined) <= 40):
+                takeaways.append(takeaway)
+                bullet_inputs.append(list(theme.observation_ids))
+                summary_ids = combined
+            if len(takeaways) == 4:
+                break
+        if takeaways:
+            summary = base.slides[2]
+            summary.bullets = takeaways
+            summary.bullet_observation_ids = bullet_inputs
+            summary.insight_ids = []
+            summary.observation_ids = sorted(summary_ids)
+            summary.source_pages = sorted({e.page for oid in summary_ids
+                                           for e in observation_by_id[oid].evidence})
         closing = self._risks_slide(
             result, base.slides[2], allowed_insight_ids=topic_insight_ids,
             include_summary_insights=True,

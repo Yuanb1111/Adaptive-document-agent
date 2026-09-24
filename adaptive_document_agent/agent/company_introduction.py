@@ -37,6 +37,7 @@ def ensure_company_introduction(gateway, result, plan) -> None:
     """
     if (plan.company.summary_overview and plan.company.summary_business
             and not validate_summary(plan.company, result)):
+        _shorten_cover(plan)
         return
     candidates = summary_excerpts(result.document, result.profile)
     selected = gateway.generate_structured([
@@ -62,8 +63,10 @@ def ensure_company_introduction(gateway, result, plan) -> None:
          "model. Do not repeat the overview or substitute financial results. Use 2-4 items "
          "per page, each at most 180 characters, with short labels and a literal contiguous "
          "source_quote from one cited page that supports the whole claim. Use the source's "
-         "numeric spelling, do not calculate. Cite only supplied pages. Page titles must "
-         "be short topic labels without numeric claims. Provide the legal company name "
+         "numeric spelling, do not calculate. Cite only supplied pages. "
+         "Preserve the date, measurement basis and attribution of every market ranking; "
+         "omit a ranking if its qualifiers cannot fit rather than generalizing it. "
+         "Page titles must be short topic labels without numeric claims. Provide the legal company name "
          "only with a literal name_quote and name_page. If insufficient, return null pages."},
         untrusted_document_message(json.dumps(excerpts, ensure_ascii=False)),
     ]
@@ -104,3 +107,12 @@ def ensure_company_introduction(gateway, result, plan) -> None:
             messages += [untrusted_document_message(draft.model_dump_json()),
                          {"role": "system", "content": "Correct the following validation failures using only supplied evidence: " + "; ".join(errors)}]
     raise ValueError("Company introduction could not be verified: " + "; ".join(errors))
+
+
+def _shorten_cover(plan) -> None:
+    """Apply the same concise cover to already verified introductions."""
+    if plan.company.name and plan.company.identity_state == "RESOLVED":
+        for slide in plan.slides:
+            if slide.slide_type == "cover":
+                slide.title = plan.company.name
+                slide.message = "Document analysis"

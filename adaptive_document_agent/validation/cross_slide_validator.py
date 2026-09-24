@@ -78,11 +78,12 @@ def _qa_item(code: str, severity: str, message: str, slide_id: str | None = None
 class CrossSlideValidator:
     """Validates cross-slide consistency, placeholders, working-capital logic, and summary alignment."""
 
-    def __init__(self, plan: PresentationPlan, observations: list[Observation], charts=None) -> None:
+    def __init__(self, plan: PresentationPlan, observations: list[Observation], charts=None, *, insight_observation_ids=None) -> None:
         self.plan = plan
         self.observations = observations
         self.obs_by_id = {o.id: o for o in observations}
         self.charts = charts
+        self.insight_observation_ids = insight_observation_ids
 
     def validate_and_repair(self, *, auto_repair: bool = True) -> list[QAItem]:
         """Execute full cross-slide validation and apply auto-repairs in-place."""
@@ -317,16 +318,19 @@ class CrossSlideValidator:
         A multi-metric analysis slide is not a time series. Never compare its
         first and last observations or replace direction words across a sentence.
         """
-        from adaptive_document_agent.validation.claim_validator import repair_presentation_plan_from_issues
+        from adaptive_document_agent.validation.claim_validator import repair_presentation_plan
 
         summaries = [s for s in self.plan.slides if s.slide_type == "executive_summary"]
         summary_plan = PresentationPlan(title=self.plan.title, slides=summaries)
         validator = ClaimValidator()
-        found = validator.validate_plan(summary_plan, self.observations, self.charts)
+        found = validator.validate_plan(summary_plan, self.observations, self.charts, insight_observation_ids=self.insight_observation_ids)
         repairs = []
         if auto_repair:
-            _, repairs = repair_presentation_plan_from_issues(summary_plan, found)
-            found = validator.validate_plan(summary_plan, self.observations, self.charts)
+            summary_plan, repairs = repair_presentation_plan(summary_plan, self.observations, self.charts,
+                insight_observation_ids=self.insight_observation_ids)
+            updated = {s.id: s for s in summary_plan.slides}
+            self.plan.slides = [updated.get(s.id, s) for s in self.plan.slides]
+            found = validator.validate_plan(summary_plan, self.observations, self.charts, insight_observation_ids=self.insight_observation_ids)
         return [
             *[_qa_item("summary_detail_contradiction_repaired", "INFO", message) for message in repairs],
             *[_qa_item("summary_detail_contradiction", "CRITICAL", issue.message, getattr(issue, "slide_id", None))
