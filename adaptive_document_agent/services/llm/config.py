@@ -24,8 +24,8 @@ class PrivacyMode(StrEnum):
 
 
 class LLMSettings(BaseModel):
-    provider: ProviderName = ProviderName.OLLAMA
-    model: str = ""
+    provider: ProviderName = ProviderName.DEEPSEEK
+    model: str = "deepseek-flash"
     api_key: SecretStr | None = None
     base_url: str | None = None
     timeout_seconds: float = Field(default=120.0, gt=0)
@@ -58,7 +58,7 @@ class LLMSettings(BaseModel):
             load_dotenv()
         except ImportError:
             pass
-        provider = ProviderName(os.getenv("LLM_PROVIDER", "ollama").lower())
+        provider = ProviderName(os.getenv("LLM_PROVIDER", "deepseek").lower())
         privacy_raw = "local_only" if os.getenv("LOCAL_ONLY", "false").lower() == "true" else os.getenv("EXECUTION_MODE", "auto").lower()
         stage_models = {
             stage: value
@@ -68,7 +68,7 @@ class LLMSettings(BaseModel):
         key = os.getenv("LLM_API_KEY") or os.getenv(f"{provider.value.upper()}_API_KEY")
         return cls(
             provider=provider,
-            model=os.getenv("LLM_MODEL", ""),
+            model=os.getenv("LLM_MODEL", "deepseek-flash" if provider == ProviderName.DEEPSEEK else ""),
             api_key=SecretStr(key) if key else None,
             base_url=os.getenv("LLM_BASE_URL") or None,
             timeout_seconds=float(os.getenv("LLM_TIMEOUT_SECONDS", "120")),

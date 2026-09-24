@@ -62,6 +62,8 @@ class PresentationPlanValidator:
         valid_pages = set(range(1, result.document.page_count + 1))
 
         company_pages = {*plan.company.source_pages}
+        from adaptive_document_agent.services.company_summary import validate_summary
+        errors.extend(validate_summary(plan.company, result))
         company_pages.update(page for fact in plan.company.key_facts for page in fact.source_pages)
         company_pages.update(page for pages in plan.company.field_source_pages.values() for page in pages)
         if company_pages - valid_pages:

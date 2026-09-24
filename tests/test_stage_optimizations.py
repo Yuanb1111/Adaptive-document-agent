@@ -126,13 +126,21 @@ def test_force_bypasses_chunk_and_gateway_model_caches(tmp_path):
 
 def test_sidebar_connects_stage_models_and_does_not_carry_to_other_provider(monkeypatch):
     from adaptive_document_agent.ui.sidebar import render_sidebar
-    defaults = LLMSettings(provider=ProviderName.OPENAI, model="main", stage_models={"discovery": "fast"})
+    defaults = LLMSettings(
+        provider=ProviderName.OPENAI,
+        model="gpt-6-sol",
+        stage_models={"discovery": "gpt-6-luna"},
+    )
     monkeypatch.setattr(LLMSettings, "from_env", lambda: defaults)
     class UI:
         sidebar = nullcontext()
         provider = "OpenAI"
         def selectbox(self, label, options, **kwargs):
-            return self.provider if label == "Provider" else "Auto"
+            if label == "Provider":
+                return self.provider
+            if label == "Execution Mode":
+                return "Auto"
+            return options[kwargs.get("index", 0)]
         def text_input(self, label, value="", **kwargs):
             return value
         def expander(self, *args):
@@ -140,7 +148,7 @@ def test_sidebar_connects_stage_models_and_does_not_carry_to_other_provider(monk
         def __getattr__(self, name):
             return lambda *args, **kwargs: None
     ui = UI()
-    assert render_sidebar(ui, public_deployment=False).stage_models == {"discovery": "fast"}
+    assert render_sidebar(ui, public_deployment=False).stage_models == {"discovery": "gpt-6-luna"}
     ui.provider = "DeepSeek"
     assert render_sidebar(ui, public_deployment=False).stage_models == {}
 

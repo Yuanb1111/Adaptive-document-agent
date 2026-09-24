@@ -21,4 +21,5 @@ def render(st, result: PipelineResult) -> None:
             "Confidence": item.confidence,
             "Page": sorted({source.page for source in item.evidence}),
         })
-    st.dataframe(rows, use_container_width=True)
+    st.caption(f"{len(rows)} extracted observation(s). The table preserves raw values and page provenance.")
+    st.dataframe(rows, use_container_width=True, hide_index=True)

@@ -2,16 +2,14 @@
 
 from adaptive_document_agent.agent.orchestrator import DocumentOrchestrator
 from adaptive_document_agent.document_model import DocumentIndex
-from adaptive_document_agent.services.export import export_pptx_with_report
 from adaptive_document_agent.services.llm import LLMGateway
 from adaptive_document_agent.services.llm.routing import create_llm_client
 from adaptive_document_agent.utils.hashing import sha256_bytes
 from adaptive_document_agent.utils.pipeline_version import PIPELINE_VERSION, ANALYSIS_VERSION, EXTRACTION_VERSION
 
-from . import analysis, data, overview, quality, sources, technical
+from . import analysis, data, deliverables, overview, quality, sources, technical
 from .charts import chart_rows, render_chart
 from .deployment import cache_for_session, is_public_deployment
-from .exports import render_report_downloads
 from .sidebar import render_sidebar
 
 
@@ -210,6 +208,10 @@ def run_app() -> None:
         st.session_state["ppt_build_cache"] = {}
         st.session_state["ppt_visual_cache"] = {}
         st.caption("Reusing the existing analysis; rebuilding PowerPoint and rerunning export checks.")
+
+    deliverables.render(st, result, raw_pdf, progress)
+    st.divider()
+    st.subheader("Explore the analysis")
     tab_overview, tab_analysis, tab_charts, tab_data, tab_sources, tab_quality, tab_technical = st.tabs(["Overview", "Analysis", "Charts", "Extracted Data", "Sources", "Data Quality", "Technical Details"])
     with tab_overview:
         overview.render(st, result)
@@ -219,31 +221,34 @@ def run_app() -> None:
         index = DocumentIndex(result.observations)
         if not result.charts:
             st.info("No chart met the usefulness and evidence thresholds.")
-        for plan in result.charts:
-            style_labels = {
-                "line": "Line",
-                "bar": "Vertical bar",
-                "horizontal_bar": "Horizontal bar",
-                "area": "Area",
-                "pie": "Pie",
-                "scatter": "Scatter",
-                "table": "Data table",
-            }
-            available = plan.available_chart_types or [plan.chart_type]
-            selected_style = st.selectbox(
-                f"Chart style — {plan.title}",
-                available,
-                format_func=lambda value: style_labels.get(value, value),
-                key=f"chart_style_{plan.id}",
-            )
-            show_labels = st.toggle("Show values directly on chart", value=True, key=f"chart_labels_{plan.id}")
-            st.plotly_chart(
-                render_chart(plan, index, chart_type=selected_style, show_data_labels=show_labels),
-                use_container_width=True,
-            )
-            st.caption(f"Source pages: {', '.join(map(str, plan.source_pages))}")
-            with st.expander("View the exact data used in this visual"):
-                st.dataframe(chart_rows(plan, index), use_container_width=True, hide_index=True)
+        if result.charts:
+            st.caption(f"{len(result.charts)} validated visual(s), shown in analytical order.")
+        for chart_index, plan in enumerate(result.charts):
+            with st.expander(f"{chart_index + 1}. {plan.title}", expanded=chart_index == 0):
+                style_labels = {
+                    "line": "Line",
+                    "bar": "Vertical bar",
+                    "horizontal_bar": "Horizontal bar",
+                    "area": "Area",
+                    "pie": "Pie",
+                    "scatter": "Scatter",
+                    "table": "Data table",
+                }
+                available = plan.available_chart_types or [plan.chart_type]
+                selected_style = st.selectbox(
+                    f"Chart style — {plan.title}",
+                    available,
+                    format_func=lambda value: style_labels.get(value, value),
+                    key=f"chart_style_{plan.id}",
+                )
+                show_labels = st.toggle("Show values directly on chart", value=True, key=f"chart_labels_{plan.id}")
+                st.plotly_chart(
+                    render_chart(plan, index, chart_type=selected_style, show_data_labels=show_labels),
+                    use_container_width=True,
+                )
+                st.caption(f"Source pages: {', '.join(map(str, plan.source_pages))}")
+                with st.expander("View the exact data used in this visual"):
+                    st.dataframe(chart_rows(plan, index), use_container_width=True, hide_index=True)
     with tab_data:
         data.render(st, result)
     with tab_sources:
@@ -252,117 +257,3 @@ def run_app() -> None:
         quality.render(st, result)
     with tab_technical:
         technical.render(st, result)
-    st.subheader("Exports & Deliverables")
-    from adaptive_document_agent.services.presentation_editorial import review_presentation
-    editorial = review_presentation(result.presentation_plan, result)
-    degraded = any(item.code in {"presentation_degraded", "presentation_legacy"} for item in editorial)
-    legacy = result.presentation_plan is None
-    if legacy:
-        st.warning("PowerPoint uses the legacy export because no validated presentation plan is available. The modern analytical layout was not applied. Treat this file as a draft.")
-    elif degraded:
-        st.warning("PowerPoint is an evidence-only fallback, not a completed analytical presentation. The file may pass data and layout checks while its narrative still needs review.")
-    elif editorial:
-        st.warning("PowerPoint needs editorial review. Data and layout checks do not confirm analytical or design quality.")
-    if editorial:
-        with st.expander("Presentation quality and planning diagnostics"):
-            for item in editorial:
-                st.write(f"{item.slide_id + ': ' if item.slide_id else ''}{item.message}")
-            for issue in result.validation_warnings:
-                if issue.code in {"presentation_plan_failed", "presentation_plan_fallback_failed"}:
-                    st.write(issue.message)
-    from adaptive_document_agent.services.qa_reporter import CriticalQAError
-
-    artwork = None
-    artwork_error = None
-    with st.expander("Presentation artwork (optional)"):
-        st.caption("The Agent can use a cited image from the uploaded PDF on the company slide when one is suitable. Optionally upload your own image for the cover and overview instead. Images stay in the local PowerPoint export and are not sent to a model. Use a static PNG/JPEG under 8 MB.")
-        uploaded_artwork = st.file_uploader("Cover and overview illustration", type=["png", "jpg", "jpeg"], key=f"ppt_artwork_{result.document.sha256}")
-        if uploaded_artwork is not None:
-            from adaptive_document_agent.services.presentation_artwork import validate_artwork
-            try:
-                artwork = validate_artwork(uploaded_artwork.getvalue())
-            except ValueError as exc:
-                artwork_error = str(exc)
-                st.error(artwork_error)
-
-    pptx_bytes: bytes | None = None
-    qa_error: CriticalQAError | None = None
-    visual_report = None
-    from adaptive_document_agent.services.presentation_visual_qa import VisualQAError
-    try:
-        if artwork_error:
-            raise CriticalQAError(artwork_error)
-        with st.spinner("Building and verifying PowerPoint…"):
-            verified = export_pptx_with_report(
-                result, visual_cache=st.session_state.setdefault("ppt_visual_cache", {}),
-                build_cache=st.session_state.setdefault("ppt_build_cache", {}),
-                artwork=artwork,
-                source_pdf=raw_pdf,
-                progress=progress.update,
-            )
-        pptx_bytes = verified.payload
-        visual_report = verified.report
-        progress.finish()
-        st.caption(
-            f"PowerPoint export: {verified.timings_ms['ppt_export_total'] / 1000:.1f}s; "
-            f"build reused: {verified.build_cache_hit}; rendered QA reused: {visual_report.cache_hit}"
-        )
-        with st.expander("PowerPoint export timing (ms)"):
-            st.json(verified.timings_ms)
-    except VisualQAError as exc:
-        qa_error = exc
-        visual_report = exc.report
-    except CriticalQAError as exc:
-        qa_error = exc
-    except ValueError as exc:
-        qa_error = CriticalQAError(f"PowerPoint generation failed: {exc}. No verified file was produced.")
-    except Exception as exc:
-        qa_error = CriticalQAError(f"PowerPoint generation failed ({type(exc).__name__}). No verified file was produced.")
-
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        if pptx_bytes:
-            st.download_button(
-                "Download legacy draft (.pptx)" if legacy else "Download evidence-only draft (.pptx)" if degraded else "Download presentation (.pptx)",
-                pptx_bytes,
-                "analysis_presentation.pptx",
-                "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                type="primary",
-                use_container_width=True,
-            )
-        else:
-            st.button("Download presentation (.pptx)", disabled=True, use_container_width=True, help="Export blocked by Critical QA")
-    render_report_downloads(st, result, (col2, col3, col4), pdf_cache=st.session_state.setdefault("pdf_export_cache", {}))
-
-    if qa_error:
-        progress.fail("PowerPoint export blocked")
-        from adaptive_document_agent.services.export_diagnostics import export_diagnostics
-        import json
-        qa = export_diagnostics(result, qa_error, visual_report)
-        stage = qa["export_error"]["stage"]
-        st.error(f"PowerPoint export blocked — {stage}")
-        st.markdown(
-            "The presentation did not pass the financial or rendered-layout export gate. "
-            "No verified PowerPoint file is available. Review the reason below:"
-        )
-        for err in qa["critical_errors"]:
-            st.error(f"[{err['code']}]: {err['message']}")
-
-        with st.expander("🔍 View Detailed QA Audit Report & Artifacts", expanded=False):
-            st.json(qa)
-            st.download_button(
-                "Download complete export diagnostic report (qa_report.json)",
-                json.dumps(qa, indent=2),
-                "qa_report.json",
-                "application/json",
-            )
-
-    if visual_report:
-        import json
-        with st.expander("PowerPoint rendered validation report", expanded=visual_report.status == "failed"):
-            st.caption(f"Status: {visual_report.status}; render passes: {visual_report.attempts}; cache reused: {visual_report.cache_hit}")
-            for limitation in visual_report.coverage:
-                st.caption(limitation)
-            st.json(visual_report.to_dict())
-            st.download_button("Download visual QA report", json.dumps(visual_report.to_dict(), indent=2),
-                               "ppt_visual_qa.json", "application/json")

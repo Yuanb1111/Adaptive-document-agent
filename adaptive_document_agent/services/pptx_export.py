@@ -508,6 +508,23 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
     if plan is None:  # pragma: no cover - guarded by caller
         return
 
+    if plan.company.summary_overview and plan.company.summary_business:
+        from .company_summary import validate_summary
+        from .presentation_brief import BriefItem, render_profile
+
+        errors = validate_summary(plan.company, result)
+        if errors:
+            raise ValueError("Invalid company Summary introduction: " + "; ".join(errors))
+        for summary in (plan.company.summary_overview, plan.company.summary_business):
+            rendered = render_profile(
+                presentation, summary.title,
+                [BriefItem(item.label, item.text, item.source_pages) for item in summary.items],
+                notes=summary.model_dump_json(indent=2),
+            )
+            if len(rendered) != 1:
+                raise ValueError("Company Summary copy exceeds its one-page budget; shorten the introduction.")
+        return
+
     from adaptive_document_agent.services.company_extractor import (
         extract_structured_company_fields,
         is_company_identity_resolved,

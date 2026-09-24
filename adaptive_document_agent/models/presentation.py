@@ -47,6 +47,23 @@ class CompanyFact(BaseModel):
     source_pages: list[int] = Field(default_factory=list)
 
 
+class CompanySummaryItem(BaseModel):
+    """A concise Summary claim with a literal supporting passage."""
+
+    label: str = Field(min_length=1, max_length=60)
+    text: str = Field(min_length=1, max_length=280)
+    source_pages: list[int] = Field(min_length=1)
+    source_quote: str = Field(min_length=1)
+
+
+class CompanySummaryPage(BaseModel):
+    """One model-selected part of the two-page company introduction."""
+
+    title: str = Field(min_length=1, max_length=65)
+    source_section: str = Field(min_length=1)
+    items: list[CompanySummaryItem] = Field(min_length=1, max_length=4)
+
+
 class CompanyProfile(BaseModel):
     """Source-only company or document identity selected by the planner."""
 
@@ -72,6 +89,8 @@ class CompanyProfile(BaseModel):
     key_facts: list[CompanyFact] = Field(default_factory=list, max_length=8)
     source_pages: list[int] = Field(default_factory=list)
     field_source_pages: dict[str, list[int]] = Field(default_factory=dict)
+    summary_overview: CompanySummaryPage | None = None
+    summary_business: CompanySummaryPage | None = None
 
 
 class PresentationVisualBlock(BaseModel):
