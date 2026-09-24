@@ -272,6 +272,7 @@ _STOP_WORDS = {
 def extract_topic_tokens(text: str) -> set[str]:
     """Extract topic tokens from text without stripping financial metric keywords."""
     norm = text.casefold()
+    norm = re.sub(r"\blosses\b", "loss", norm)
     strong_aliases = (
         (r"\bresearch\s+(?:and|&)\s+development\b|\br\s*&\s*d\b", "rdtopic"),
         (r"\bgross\s+profit\b", "grossprofit"),
@@ -325,6 +326,7 @@ def metrics_match_topic(
             return True
 
     full_context = f"{slide_title} {slide_context or ''}".strip()
+    full_context = re.sub(r"\blosses\b", "loss", full_context, flags=re.I)
 
     # 2. Direct metric alias match in slide context
     if direct_metric_match(obs, full_context):

@@ -1306,9 +1306,15 @@ def extract_metric_aliases(
 
     combined = f"{canonical_name or ''} {metric_name} {pres_label or ''}".casefold()
 
+    # Inflection must not hide a contradictory claim (inventories vs inventory).
+    # Keep the complete metric phrase: turnover days is not revenue/turnover.
+    for alias in list(aliases):
+        aliases.add(re.sub(r"\binventories\b", "inventory", alias, flags=re.I))
+        aliases.add(re.sub(r"\binventory\b", "inventories", alias, flags=re.I))
+
     if any(k in combined for k in ("gross profit margin", "gross margin", "gross profit as % of revenue", "gp margin", "gross_margin", "gross_profit_margin")):
         aliases.update(["gross profit margin", "gross margin", "gp margin", "gross margins", "毛利率"])
-    elif any(k in combined for k in ("revenue", "turnover", "top line", "topline")) and not any(k in combined for k in ("gross profit as %", "margin", "/ revenue", "% of revenue", "share of revenue")):
+    elif any(k in combined for k in ("revenue", "turnover", "top line", "topline")) and not any(k in combined for k in ("gross profit as %", "margin", "/ revenue", "% of revenue", "share of revenue", "days", "inventory", "inventories", "receivable", "payable", "turnover ratio")):
         aliases.update(["revenue", "total revenue", "turnover", "top line", "topline", "营业收入", "收入"])
 
     if "redemption" in combined and "liabilit" in combined:

@@ -295,7 +295,9 @@ def test_tesla_style_wide_appendix_financial_table() -> None:
     )
     assert "Source: Document disclosures (p." in slide_text
     assert "* Unaudited" in slide_text
-    assert "Complete reported dataset available in accompanying CSV export." in slide_text
+    assert "Rounded display" in slide_text
+    assert "no retained value" in slide_text
+    assert "Source variants and exact values: CSV." in slide_text
 
 
 def test_negative_value_language_sanitization() -> None:

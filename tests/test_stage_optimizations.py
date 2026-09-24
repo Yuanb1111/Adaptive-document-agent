@@ -135,6 +135,8 @@ def test_sidebar_connects_stage_models_and_does_not_carry_to_other_provider(monk
     class UI:
         sidebar = nullcontext()
         provider = "OpenAI"
+        def container(self):
+            return nullcontext()
         def selectbox(self, label, options, **kwargs):
             if label == "Provider":
                 return self.provider

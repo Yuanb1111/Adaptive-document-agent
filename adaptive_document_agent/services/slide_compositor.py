@@ -266,18 +266,27 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
     }, ensure_ascii=False, indent=2)
     geometry = compose_geometry(presentation.slide_width.inches, presentation.slide_height.inches, top, len(charts),
         layout=slide_plan.layout, has_support=bool(support), has_commentary=bool(text), commentary_text=text)
-    for chart, rect in zip(charts, geometry.charts):
-        title = next((b.title for b in slide_plan.visual_blocks if b.chart_ids == [chart.id] and b.title), chart.title)
+    headings = []
+    for chart in charts:
+        heading = next((b.title for b in slide_plan.visual_blocks if b.chart_ids == [chart.id] and b.title), chart.title)
+        values = [index.get(oid) for oid in chart.observation_ids if index.get(oid)]
+        qualified = {display_metric_name(o) for o in values}
+        if len(qualified) == 1 and not any(o.category_dimensions for o in values) and any(o.parent_section or o.dimensions.get("section") for o in values):
+            heading = next(iter(qualified))
+        headings.append(re.sub(r"(?i)^Adjusted for Adjusted\b", "Adjusted", heading))
+    shared_heading_h = max([.28] + [len(_lines(t, r.w, CHART_TITLE_PT)) * .23
+                                      for t, r in zip(headings, geometry.charts)])
+    for chart, rect, title in zip(charts, geometry.charts, headings):
         values = [index.get(oid) for oid in chart.observation_ids if index.get(oid)]
         qualified = {display_metric_name(o) for o in values}
         # Retain an explicitly extracted parent even when the planned short
         # label names only the child. Do not turn grants into expense metrics.
         if len(qualified) == 1 and not any(o.category_dimensions for o in values) and any(o.parent_section or o.dimensions.get("section") for o in values):
-            title = next(iter(qualified))
+            title = re.sub(r"(?i)^Adjusted for Adjusted\b", "Adjusted", next(iter(qualified)))
         title_lines = _lines(title, rect.w, CHART_TITLE_PT)
         if len(title_lines) > 3:
             raise ValueError(f"Chart title exceeds readable capacity: {chart.id}")
-        heading_h = max(0.28, len(title_lines) * 0.23)
+        heading_h = shared_heading_h
         _put_text(slide, title, Rect(rect.x, rect.y, rect.w, heading_h), size=CHART_TITLE_PT, bold=True)
         totals = [index.get(oid) for oid in chart.total_observation_ids if index.get(oid)]
         bounds = (rect.x, rect.y + heading_h + 0.22, rect.w, rect.h - heading_h - 0.22)
@@ -285,6 +294,8 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
             raise ValueError("Chart labels cannot fit; split the planned charts into additional slides.")
         scale, scale_label = _add_native_chart(slide, chart, values, bounds, compact=rect.w < 4.5, totals=totals)
         unit = "Share (%)" if chart.chart_type == "stacked_percent" else _unit_label(values, scale_label)
+        if chart.chart_type == "line" and any(o.as_of_date or o.period_basis == "point_in_time" for o in values):
+            unit += " | Dates shown as equally spaced categories"
         if chart.chart_type == "doughnut":
             unit = f"{values[0].period} | {unit}"
         _put_text(slide, unit, Rect(rect.x, rect.y + heading_h, rect.w, 0.20), size=FOOTNOTE_PT, color=MUTED)
@@ -296,6 +307,18 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
         horizontal = rect.w > 5.5
         capacity = min(4, max(1, int(rect.w / 2.1))) if horizontal else max(1, int(rect.h / 0.98))
         from .presentation_evidence import evidence_groups
+        if table:
+            # Collapse only exact corroborating values in the visible table.
+            # Every original ID and source remains in the slide's notes above.
+            displayed = []
+            for group in evidence_groups(items):
+                seen_values = set()
+                for o in group:
+                    key = (o.period, o.value, o.audited_status, o.id if not o.period else None)
+                    if key not in seen_values:
+                        seen_values.add(key)
+                        displayed.append(o)
+            items = displayed
         if not table and len(items) > capacity and len(evidence_groups(items)) == 1:
             name = display_metric_name(items[0])
             title_h = len(_lines(name, rect.w, 14)) * .24 + .12
@@ -321,12 +344,42 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
                             p.font.name, p.font.size = FONT, Pt(14)
                 return []
         if table:
+            # A short single-series support band shows ALL periods horizontally,
+            # rather than losing intermediate changes or creating a near-empty continuation.
+            if horizontal and 1 < len(items) <= 6 and len(evidence_groups(items)) == 1:
+                name = display_metric_name(items[0])
+                name = re.sub(r"(?i)^Adjusted for Adjusted\b", "Adjusted", name)
+                cells = [["Metric", *[format_observation_period(o) for o in items]], [name]]
+                for o in items:
+                    semantic = classify_metric(name, unit=o.unit, raw_unit=o.raw_unit, value=o.value)
+                    cells[1].append(format_metric_display_value(o.raw_value, o.value, semantic,
+                        raw_unit=_display_source_unit(o), currency=o.currency, compact=True))
+                widths = [rect.w * .34] + [rect.w * .66 / len(items)] * len(items)
+                heights = [max(.4, max(len(_lines(v, w - .15, 14)) for v, w in zip(row, widths)) * .24 + .1)
+                           for row in cells]
+                if sum(heights) <= rect.h:
+                    shape = owner.shapes.add_table(2, len(items) + 1, Inches(rect.x), Inches(rect.y), Inches(rect.w), Inches(sum(heights)))
+                    shape.name = "table:" + ",".join(o.id for o in items)
+                    for j, w in enumerate(widths):
+                        shape.table.columns[j].width = Inches(w)
+                    for i, row in enumerate(cells):
+                        shape.table.rows[i].height = Inches(heights[i])
+                        for j, value in enumerate(row):
+                            cell = shape.table.cell(i, j)
+                            cell.text = value
+                            for p in cell.text_frame.paragraphs:
+                                p.font.name, p.font.size = FONT, Pt(14)
+                    return []
             rows, heights, shown = [], [0.4], []
             for o in items:
                 name = display_metric_name(o)
                 semantic = classify_metric(name, unit=o.unit, raw_unit=o.raw_unit, value=o.value)
                 display = format_metric_display_value(o.raw_value, o.value, semantic, raw_unit=_display_source_unit(o), currency=o.currency, compact=True)
-                cells = (name, format_observation_period(o), display)
+                period_label = format_observation_period(o)
+                if not period_label:
+                    column = next((e.column_label for e in o.evidence if e.column_label), "")
+                    period_label = "Unspecified" + (f" ({column})" if column else "")
+                cells = (name, period_label, display)
                 row_h = max(0.4, max(len(_lines(v, rect.w * w - 0.15, 14)) for v, w in zip(cells, (0.50, 0.20, 0.30))) * 0.24 + 0.10)
                 if sum(heights) + row_h > rect.h:
                     break
@@ -404,7 +457,11 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
         commentary_rect = Rect(commentary_rect.x, new_top, commentary_rect.w,
                                commentary_rect.y + commentary_rect.h - new_top)
     remaining = _put_commentary(slide, text, commentary_rect) if text else ""
-    _put_text(slide, _source_footer(pages), geometry.footer, size=FOOTNOTE_PT, color=MUTED)
+    visible_observations = support + [index.get(oid) for oid in chart_obs if index.get(oid)]
+    footnote = _source_footer(pages)
+    if any("*" in format_observation_period(o) for o in visible_observations):
+        footnote += " | * Unaudited"
+    _put_text(slide, footnote, geometry.footer, size=FOOTNOTE_PT, color=MUTED)
     slides = [slide]
     while overflow or remaining:
         continuation, ctop = _base(presentation, slide_plan.title + " (continued)", "")
@@ -419,7 +476,7 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
                 remaining = _put_commentary(continuation, remaining, Rect(full.x, text_top, full.w, bottom - text_top))
         elif remaining:
             remaining = _put_commentary(continuation, remaining, full)
-        _put_text(continuation, _source_footer(pages), geometry.footer, size=FOOTNOTE_PT, color=MUTED)
+        _put_text(continuation, footnote, geometry.footer, size=FOOTNOTE_PT, color=MUTED)
         slides.append(continuation)
     return slides
 

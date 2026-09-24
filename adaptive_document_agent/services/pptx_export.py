@@ -306,7 +306,14 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
     # Standard order: 1. Cover, 2. Contents, 3. Company at a Glance, 4. Executive Summary
     cover = slides_by_type["cover"]
     _add_cover(presentation, result, title=cover.title, purpose=cover.message)
-    _add_planned_contents(presentation, plan.slides)
+    contents_slides = list(plan.slides)
+    if plan.company.summary_business:
+        company_index = next((i for i, s in enumerate(contents_slides) if s.slide_type == "company_overview"), None)
+        if company_index is not None:
+            contents_slides.insert(company_index + 1, contents_slides[company_index].model_copy(update={
+                "section_title": plan.company.summary_business.title,
+            }))
+    _add_planned_contents(presentation, contents_slides)
     _add_company_at_a_glance(presentation, result, slides_by_type["company_overview"])
     _add_planned_summary(presentation, result, slides_by_type["executive_summary"], index)
     quality_notes = list(dict.fromkeys([
@@ -506,6 +513,13 @@ def _add_planned_contents(
 def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_plan: PresentationSlide) -> None:
     plan = result.presentation_plan
     if plan is None:  # pragma: no cover - guarded by caller
+        return
+
+    if any(issue.code == "company_introduction_unavailable" for issue in result.validation_warnings):
+        from .presentation_brief import BriefItem, render_profile
+        render_profile(presentation, "Company introduction unavailable", [BriefItem(
+            "Evidence limitation", "A source-verified company introduction could not be generated in this run.", []
+        )], notes="See company_introduction_unavailable in the analysis diagnostics.")
         return
 
     if plan.company.summary_overview and plan.company.summary_business:
@@ -1852,7 +1866,16 @@ def _add_evidence_table_slides(
         all_periods_set.add(period_key)
 
         theme_dict = metrics_by_theme.setdefault(theme, {})
-        metric_entry = theme_dict.setdefault(metric_identity_key(item), {"label": metric_name, "unit": unit_str, "periods": {}, "values": {}, "pages": set()})
+        identity = metric_identity_key(item)
+        if not item.period:
+            # Unknown column semantics are not evidence of a shared period.
+            # Preserve each cell and its original column label, never overwrite
+            # or invent a date merely to make an appendix exportable.
+            identity = (*identity, "unresolved_period", item.id)
+            columns = list(dict.fromkeys(e.column_label for e in item.evidence if e.column_label))
+            location = ", ".join(columns) or item.id
+            metric_name += f" [{location}; period unspecified]"
+        metric_entry = theme_dict.setdefault(identity, {"label": metric_name, "unit": unit_str, "periods": {}, "values": {}, "pages": set()})
 
         if period_key in metric_entry["values"] and item.value is not None and metric_entry["values"][period_key] is not None:
             from math import isclose
@@ -2043,7 +2066,7 @@ def _add_evidence_table_slides(
         has_unaudited = any("*" in h for h in formatted_headers[1:])
         star_note = " | * Unaudited" if has_unaudited else ""
         pages_str = _source_footer(slide_pages)
-        footnote = f"{pages_str}{star_note} | Complete reported dataset available in accompanying CSV export."
+        footnote = f"{pages_str}{star_note} | Rounded display; — = no retained value. Source variants and exact values: CSV."
         _text(slide, footnote, 0.45, 6.22, 11.70, 0.25, size=9.0, color=FOURIER_MUTED)
 
 

@@ -173,7 +173,7 @@ def test_complete_pipeline_with_mock_llm_controls_semantic_selection() -> None:
     assert result.presentation_plan is not None
     assert result.presentation_plan.slides[1].title == "Document at a Glance"
     assert "## Revenue overview" in result.report_markdown
-    assert len(client.calls) == 8  # selection and scoring share one request
+    assert len(client.calls) == 9  # Includes independent introduction-page selection.
 
 
 def test_presentation_plan_failure_does_not_discard_completed_analysis(monkeypatch: pytest.MonkeyPatch) -> None:

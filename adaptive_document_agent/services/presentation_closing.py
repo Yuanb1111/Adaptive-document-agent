@@ -29,7 +29,8 @@ def render_closing(presentation, result, plan):
             normalize(item.implication or ""), normalize(item.watch_item or ""), normalize(item.narrative),
         }]
         pages = sorted({e.page for item in matches for e in item.evidence}) or plan.source_pages
-        groups[int(key in watch_copy)].append(BriefItem("", _sanitize_investor_narrative(text), pages))
+        label = matches[0].metric if len(matches) == 1 and matches[0].metric else ""
+        groups[int(key in watch_copy)].append(BriefItem(label, _sanitize_investor_narrative(text), pages))
 
     notes = "\n\n".join(texts)
     if not all(groups):

@@ -73,6 +73,9 @@ def test_deepseek_live_models_are_loaded_from_models_endpoint(monkeypatch):
 class SidebarUI:
     sidebar = nullcontext()
 
+    def container(self):
+        return nullcontext()
+
     def __init__(self, provider: str):
         self.provider = provider
         self.session_state = {}

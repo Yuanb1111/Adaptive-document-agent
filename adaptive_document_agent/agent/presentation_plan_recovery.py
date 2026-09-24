@@ -118,6 +118,8 @@ class PresentationPlanRecovery:
                 return not (PresentationPlanValidator._numbers(text) - allowed_numbers)
 
             safe_title = topic.takeaway if topic.takeaway and supported(topic.takeaway) else topic.title
+            if len(safe_title.split()) > 18 and supported(topic.title):
+                safe_title = topic.title
             if not supported(safe_title):
                 safe_title = topic.question if supported(topic.question) else "Selected evidence"
             safe_question = topic.question if supported(topic.question) else "How do the cited measures compare?"
@@ -134,8 +136,7 @@ class PresentationPlanRecovery:
                     key=lambda item: period_sort_key(item.period),
                 )
                 if series_items:
-                    visible_support_ids.extend([series_items[0].id, series_items[-1].id]
-                                               if len(series_items) > 1 else [series_items[0].id])
+                    visible_support_ids.extend(item.id for item in series_items)
             visible_support_ids = list(dict.fromkeys(visible_support_ids))[:12]
             theme = PresentationTheme(
                 id=topic.id, title=topic.title, question=topic.question,
@@ -143,13 +144,13 @@ class PresentationPlanRecovery:
                 observation_ids=members, caveats=topic.caveats,
                 source_pages=pages,
             )
-            layout = "hero_plus_supporting" if len(chart_ids) > 1 else "chart_with_data" if chart_ids else "data_overview"
+            layout = "two_up" if len(chart_ids) > 1 else "chart_with_data" if chart_ids else "data_overview"
             slide = PresentationSlide(
                 id=f"topic_{topic.id}", slide_type="analysis", title=safe_title,
                 section_id=topic.id, section_title=topic.title,
                 slide_role="overview", layout=layout, message=safe_question,
                 chart_ids=chart_ids, observation_ids=supporting_ids,
-                visual_blocks=[PresentationVisualBlock(role="kpi", observation_ids=visible_support_ids)]
+                visual_blocks=[PresentationVisualBlock(role="table", observation_ids=visible_support_ids)]
                 if visible_support_ids else [],
                 theme_id=topic.id, analytical_question=safe_question,
                 selection_reason=safe_reason, comparison_mode="parallel" if len(chart_ids) > 1 else "context",

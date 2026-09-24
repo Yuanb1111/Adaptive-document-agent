@@ -18,7 +18,6 @@ class PresentationPlanner:
         self.gateway = gateway
 
     def plan(self, result: PipelineResult) -> PresentationPlan:
-        from adaptive_document_agent.services.company_summary import summary_excerpts
         from adaptive_document_agent.services.presentation_evidence import build_evidence_catalog, observation_record
         # Keep the semantic planning context focused. Large PDFs can contain
         # thousands of observations; an oversized catalogue makes it harder
@@ -51,7 +50,7 @@ class PresentationPlanner:
         payload = {
             "document_profile": result.profile.model_dump(mode="json"),
             "document_page_count": result.document.page_count,
-            "company_summary_excerpts": summary_excerpts(result.document, result.profile),
+            "company_introduction_handled_separately": True,
             "page_excerpts": self._page_excerpts(result.document, result.profile, result.observations),
             "observations": catalog.pop("observations"),
             "evidence_catalog": catalog,

@@ -64,7 +64,7 @@ def validate_summary(company, result) -> list[str]:
             if not set(item.source_pages) <= candidate_text.keys():
                 errors.append(f"{field}: citations must belong to supplied company introduction candidates")
             quote = normalize(item.source_quote)
-            if not any(quote in normalize(candidate_text.get(p, "")) for p in item.source_pages):
+            if not quote or not any(quote in normalize(candidate_text.get(p, "")) for p in item.source_pages):
                 errors.append(f"{field}: supporting quote is absent from cited pages")
             claimed = PresentationPlanValidator._numbers(item.label + " " + item.text)
             allowed = PresentationPlanValidator._numbers(item.source_quote)

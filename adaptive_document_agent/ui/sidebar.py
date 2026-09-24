@@ -91,8 +91,14 @@ def render_sidebar(st, *, public_deployment: bool | None = None) -> LLMSettings:
             default_provider_label = "DeepSeek"
         provider_label = st.selectbox("Provider", provider_labels, index=provider_labels.index(default_provider_label))
         provider = provider_by_label[provider_label]
+        # Reserve the model's visual position before collecting credentials
+        # needed to discover its options during this same Streamlit rerun.
+        model_controls = st.container()
         default_url = defaults.base_url if provider == defaults.provider else ("http://localhost:11434" if provider == ProviderName.OLLAMA else "")
-        base_url = st.text_input("Base URL (optional)", value=default_url)
+        base_url = None
+        if provider in {ProviderName.OLLAMA, ProviderName.OPENAI_COMPATIBLE}:
+            with st.expander("Connection settings"):
+                base_url = st.text_input("Base URL", value=default_url or "", key=f"base_url_{provider.value}")
         key = st.text_input(
             "API key",
             value="",
@@ -125,22 +131,23 @@ def render_sidebar(st, *, public_deployment: bool | None = None) -> LLMSettings:
         if preferred_model and preferred_model not in models:
             models.insert(0, preferred_model)
         options = [*models, _MANUAL_MODEL]
-        selected_model = st.selectbox(
-            "Model",
-            options,
-            index=options.index(preferred_model) if preferred_model in options else 0,
-            key=f"model_select_{provider.value}",
-            help="Provider-specific models. Enter an API key or refresh to load the live catalog.",
-        )
-        if selected_model == _MANUAL_MODEL:
-            model = st.text_input(
-                "Custom model ID",
-                value=preferred_model if preferred_model not in models else "",
-                key=f"custom_model_{provider.value}",
-                help="Use the exact model ID accepted by the selected provider.",
-            ).strip()
-        else:
-            model = selected_model
+        with model_controls:
+            selected_model = st.selectbox(
+                "Model",
+                options,
+                index=options.index(preferred_model) if preferred_model in options else 0,
+                key=f"model_select_{provider.value}",
+                help="Provider-specific models. Enter an API key or refresh to load the live catalog.",
+            )
+            if selected_model == _MANUAL_MODEL:
+                model = st.text_input(
+                    "Custom model ID",
+                    value=preferred_model if preferred_model not in models else "",
+                    key=f"custom_model_{provider.value}",
+                    help="Use the exact model ID accepted by the selected provider.",
+                ).strip()
+            else:
+                model = selected_model
         if catalog_error:
             st.caption(f"Live catalog unavailable: {catalog_error} Showing recommended models and manual entry.")
         elif auto_discover or refresh_models:

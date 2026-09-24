@@ -258,15 +258,15 @@ def test_recovered_question_shows_third_series_and_keeps_detail_in_notes() -> No
     result.presentation_plan = PresentationPlanRecovery().from_selected_topics(result)
     slide = next(item for item in result.presentation_plan.slides if item.theme_id == "movement")
     assert len(slide.chart_ids) == 2
-    support = [block for block in slide.visual_blocks if block.role == "kpi"]
+    support = [block for block in slide.visual_blocks if block.role == "table"]
     assert len(support) == 1
-    assert len(support[0].observation_ids) == 2
+    assert set(support[0].observation_ids) == set(slide.observation_ids)
     uncharted = set(slide.observation_ids)
     assert set(support[0].observation_ids) <= uncharted
 
     deck = Presentation(io.BytesIO(build_presentation(result)))
     analysis = next(page for page in deck.slides if page.name.startswith("composed_"))
-    assert sum(shape.name.startswith("kpi:") for shape in analysis.shapes) == 2
+    assert any(shape.has_table for shape in analysis.shapes)
     assert all(identifier in analysis.notes_slide.notes_text_frame.text for identifier in uncharted)
     all_text = [" ".join(shape.text for shape in page.shapes if shape.has_text_frame) for page in deck.slides]
     assert not any("Source Data Appendix" in content for content in all_text)

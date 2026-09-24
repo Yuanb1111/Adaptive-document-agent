@@ -384,6 +384,18 @@ class DocumentOrchestrator:
                         )
 
                 if presentation_plan:
+                    from .company_introduction import ensure_company_introduction
+                    try:
+                        ensure_company_introduction(self.gateway, planning_result, presentation_plan)
+                    except (LLMResponseError, ValueError) as exc:
+                        from adaptive_document_agent.models.presentation import CompanyProfile
+                        presentation_plan.company = CompanyProfile(
+                            one_line_description="A source-verified company introduction is unavailable for this run."
+                        )
+                        issues.append(ValidationIssue(
+                            code="company_introduction_unavailable", severity="warning", stage="presentation",
+                            message="The independent company introduction could not be verified: " + str(exc)[:500],
+                        ))
                     from adaptive_document_agent.validation.claim_validator import repair_presentation_plan
                     from adaptive_document_agent.validation.cross_slide_validator import CrossSlideValidator
 
