@@ -1,6 +1,7 @@
 """Real-widget checks for branded results and blocked exports; no live model calls."""
 
 from io import BytesIO
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -64,7 +65,7 @@ def test_result_widgets_keep_downloads_evidence_and_export_gate(monkeypatch, blo
                                timings_ms={"ppt_export_total": 123}, build_cache_hit=False)
 
     monkeypatch.setattr(deliverables, "export_pptx_with_report", export)
-    page = AppTest.from_file("app.py", default_timeout=30).run()
+    page = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "app.py"), default_timeout=30).run()
     assert not page.exception, page.exception
     assert [tab.label for tab in page.tabs] == ["Overview", "Analysis", "Charts", "Extracted Data", "Sources", "Data Quality", "Technical Details"]
     assert any("Summary source pages: 2, 4" in item.value for item in page.caption)
