@@ -21,6 +21,25 @@ class BriefItem:
     short_title: str = ""
 
 
+def omit_redundant_summary(plan: Any, summary: Any) -> bool:
+    """Omit only sparse topic summaries that repeat the final analysis headings.
+
+    Independent findings, numeric copy and explicit visuals retain their page.
+    This is a display decision, not a change to the model's plan or evidence.
+    """
+    if (plan.planning_origin not in {"topic_recovery", "topic_compilation"} or summary.insight_ids
+            or summary.chart_ids or summary.visual_blocks):
+        return False
+    normalize = lambda text: " ".join(text.casefold().split())
+    bullets = [normalize(text) for text in summary.bullets if text.strip()]
+    if (not 1 <= len(bullets) <= 3 or sum(map(len, bullets)) > 300
+            or any(char.isdigit() for text in bullets for char in text)):
+        return False
+    headings = {normalize(text) for slide in plan.slides if slide.slide_type == "analysis"
+                for text in (slide.title, slide.section_title) if text.strip()}
+    return all(text in headings for text in bullets)
+
+
 def is_technical_copy(text: str) -> bool:
     """Mechanical diagnostics that belong in the data export, not a takeaway."""
     return bool(re.search(

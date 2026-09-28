@@ -417,6 +417,25 @@ introductions keep all their copy and use a separate preview page when needed.
 The source PDF hash must match the analysed document; the preview is document
 context, not evidence for analytical claims.
 
+Sparse topic summaries that only repeat the analysis headings are omitted from
+the deck and its contents. Their original copy and evidence references remain
+in the introduction's speaker notes and JSON. Summaries with independent
+findings, numeric copy or explicit charts/tables keep their page.
+
+If a standard cover subtitle exceeds the template's readable capacity, export
+uses a fitting document-type label or "Document analysis" and retains the full
+original subtitle and purpose in speaker notes. This adds no model call and
+keeps the template's title and subtitle font sizes.
+
+Directional validation binds temporal phrases such as "widened then narrowed"
+to their observed segments, and explicit period ranges to the corresponding
+observations. Repairs target the exact direction token, including repeated
+words, and retain the other metric clauses and raw evidence. Ambiguous pivots,
+missing periods and unqualified mixed-period sequences require clarification
+instead of a guessed rewrite. This local validation adds no model call; the
+v48 pipeline contract invalidates stale result/export caches while retaining
+the existing extraction and analysis request caches.
+
 For a local visual regression preview with synthetic, clearly labelled data,
 install development dependencies and configure the normal local renderer, then run
 `python -m scripts.preview_presentation_layouts --output .tmp_ppt_review/preview --layout kpi_band`.

@@ -297,11 +297,15 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
     index = DocumentIndex(result.observations)
     chart_by_id = {item.id: item for item in _usable_charts(result)}
     slides_by_type = {slide.slide_type: slide for slide in plan.slides}
+    from .presentation_brief import omit_redundant_summary
+    summary = slides_by_type["executive_summary"]
+    omit_summary = omit_redundant_summary(plan, summary)
 
     # Standard order: 1. Cover, 2. Contents, 3. Company at a Glance, 4. Executive Summary
     cover = slides_by_type["cover"]
     _add_cover(presentation, result, title=cover.title, purpose=cover.message)
-    contents_slides = list(plan.slides)
+    contents_slides = [slide for slide in plan.slides
+                       if not (omit_summary and slide.slide_type == "executive_summary")]
     if plan.company.summary_business:
         company_index = next((i for i, s in enumerate(contents_slides) if s.slide_type == "company_overview"), None)
         if company_index is not None:
@@ -310,7 +314,13 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
             }))
     _add_planned_contents(presentation, contents_slides)
     _add_company_at_a_glance(presentation, result, slides_by_type["company_overview"])
-    _add_planned_summary(presentation, result, slides_by_type["executive_summary"], index)
+    if omit_summary:
+        presentation.slides[-1].notes_slide.notes_text_frame.text += (
+            "\n\nOmitted duplicate summary; original copy and evidence references:\n"
+            + summary.model_dump_json(indent=2)
+        )
+    else:
+        _add_planned_summary(presentation, result, summary, index)
     from .presentation_identity import presentation_quality_notes
     quality_notes = presentation_quality_notes(result)
     if quality_notes:
@@ -1098,10 +1108,11 @@ def _add_cover(
         clean_purpose, clean_title = clean_title, company_name
 
     import json
-    notes = json.dumps({
+    note_data = {
         "planned_title": cover_title, "document_purpose": original_purpose,
         "company_identity": {"name": company_name, "source_pages": identity_pages},
-    }, ensure_ascii=False, indent=2)
+    }
+    notes = json.dumps(note_data, ensure_ascii=False, indent=2)
     if getattr(presentation, "_ada_artwork", None):
         from .presentation_artwork import add_picture_cover
         slide = add_picture_cover(presentation, clean_title, clean_purpose, presentation._ada_artwork)
@@ -1116,9 +1127,22 @@ def _add_cover(
     if title_h > 3.1:
         raise ValueError("Cover title exceeds readable capacity; shorten the presentation title.")
     subtitle_top = max(2.80, 1.35 + title_h + .28)
-    purpose_h = max(.95, len(_lines(clean_purpose, 6.65, 26)) * 26 / 72 * 1.22 + .12)
+    def subtitle_height(text: str) -> float:
+        return max(.95, len(_lines(text, 6.65, 26)) * 26 / 72 * 1.22 + .12)
+
+    purpose_h = subtitle_height(clean_purpose)
     if subtitle_top + purpose_h > 6.15:
-        raise ValueError("Cover subtitle exceeds readable capacity; move detail to the document overview.")
+        # Preserve the whole qualified statement in notes. A complete context
+        # label can replace it on the cover without inventing or truncating a claim.
+        note_data["deferred_cover_subtitle"] = clean_purpose
+        context = clean_presentation_text(result.profile.document_type or "")
+        if (not context or context.casefold() == clean_title.casefold()
+                or subtitle_top + subtitle_height(context) > 6.15):
+            context = "Document analysis"
+        clean_purpose = context
+        purpose_h = subtitle_height(clean_purpose)
+        note_data["displayed_subtitle"] = clean_purpose
+        slide.notes_slide.notes_text_frame.text = json.dumps(note_data, ensure_ascii=False, indent=2)
 
     ph16 = None
     ph15 = None

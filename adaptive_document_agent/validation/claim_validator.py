@@ -41,6 +41,12 @@ from adaptive_document_agent.document_model import (
 )
 from adaptive_document_agent.document_model.period_semantic_validator import extract_period_basis
 from adaptive_document_agent.models import ChartPlan, Observation, PresentationPlan, PresentationSlide, ValidationIssue
+from .direction_scope import (
+    direction_context,
+    has_temporal_sequence,
+    predicate_conjunctions,
+    resolve_direction_scope,
+)
 
 
 class MetricSemanticFamily(str, Enum):
@@ -1438,8 +1444,12 @@ def _associate_clause_direction_spans(
     # one subject has no known alias. Do not lend that predicate to the other
     # metric. Preserve joint subjects such as 'volume and price increased'.
     direction_pattern = r"\b(?:" + "|".join(map(re.escape, _ALL_DIRECTIONAL_WORDS)) + r")\b"
-    for boundary in re.finditer(r"\band\b", clause, re.I):
+    for boundary in predicate_conjunctions(clause):
         left, right = clause[:boundary.start()], clause[boundary.end():]
+        if re.match(r"\s+(?:then|subsequently)\b", right, re.I):
+            # Temporal continuation inherits its subject; an independent
+            # predicate below still must establish its own metric.
+            continue
         if re.search(direction_pattern, left, re.I) and re.search(direction_pattern, right, re.I):
             a = _associate_clause_direction_spans(left, metric_aliases_map, metric_values_map)
             b = _associate_clause_direction_spans(right, metric_aliases_map, metric_values_map)
@@ -1724,7 +1734,10 @@ class ClaimValidator:
                                 )
 
             clauses = split_into_clauses(comp_text)
+            clause_cursor = 0
             for clause in clauses:
+                clause_offset = comp_text.find(clause, clause_cursor)
+                clause_cursor = clause_offset + len(clause)
                 assocs = _associate_clause_direction_spans(
                     clause,
                     metric_aliases_map,
@@ -1732,11 +1745,16 @@ class ClaimValidator:
                     is_only_metric=is_only_metric,
                     only_metric_name=only_metric_name,
                 )
+                metric_spans = [m.span() for aliases in metric_aliases_map.values() for alias in aliases
+                                for m in re.finditer(r"\b" + re.escape(alias) + r"\b", clause, re.I)]
 
                 for m_name, dir_word, direction_start, direction_end in assocs:
                     if m_name not in metric_series_map:
                         continue
                     series_list = metric_series_map[m_name]
+                    scope_text = direction_context(
+                        clause, assocs, (m_name, dir_word, direction_start, direction_end), metric_spans
+                    )
 
                     # 1. Incompatible series check (e.g. only currency mismatch or incompatible periods without comparable series)
                     incomp_series = [s for s in series_list if not s["is_comp"]]
@@ -1786,7 +1804,7 @@ class ClaimValidator:
                                     rf"(?:{p2_pat})\s*(?:to|through|until|–|-|vs\.?)\s*(?:{p1_pat})",
                                     re.IGNORECASE,
                                 )
-                                if cross_pat.search(clause):
+                                if cross_pat.search(scope_text):
                                     has_cross_series = True
                                     _, cross_reason = are_observations_compatible(s1["first"], s2["last"])
                                     issue_key = (slide.id, m_name.casefold(), comp_type, bullet_idx, "incompatible")
@@ -1826,15 +1844,15 @@ class ClaimValidator:
                     # 3. Identify matching series for the clause
                     matching_series = []
                     for s in series_list:
-                        p_first, p_last = str(s["first"].period).strip(), str(s["last"].period).strip()
-                        pat = rf"\b(?:{re.escape(p_first)}|{re.escape(p_last)})\b"
-                        if re.search(pat, clause, re.IGNORECASE):
+                        periods = "|".join(re.escape(str(o.period).strip()) for o in s["sorted_obs"])
+                        pat = rf"\b(?:{periods})\b"
+                        if re.search(pat, scope_text, re.IGNORECASE):
                             matching_series.append(s)
-                        elif s["period_basis"] == "6M" and re.search(r"(?i)\b(?:6M|1H|2H|interim|half[- ]year)\b", clause):
+                        elif s["period_basis"] == "6M" and re.search(r"(?i)\b(?:6M|1H|2H|interim|half[- ]year)\b", scope_text):
                             matching_series.append(s)
-                        elif s["period_basis"] == "3M" and re.search(r"(?i)\b(?:3M|Q[1-4]|quarter)\b", clause):
+                        elif s["period_basis"] == "3M" and re.search(r"(?i)\b(?:3M|Q[1-4]|quarter)\b", scope_text):
                             matching_series.append(s)
-                        elif s["period_basis"] == "FY" and re.search(r"(?i)\b(?:FY|full\s*year|fiscal\s*year)\b", clause):
+                        elif s["period_basis"] == "FY" and re.search(r"(?i)\b(?:FY|full\s*year|fiscal\s*year)\b", scope_text):
                             matching_series.append(s)
 
                     # 4. If no specific period bounds matched
@@ -1842,6 +1860,16 @@ class ClaimValidator:
                         if len(series_list) == 1:
                             matching_series = series_list
                         else:
+                            if has_temporal_sequence(clause, assocs, m_name, metric_spans):
+                                issues.append(DirectionalClaimIssue(
+                                    code="direction_scope_ambiguous", severity="error", stage="presentation",
+                                    message=f"Slide {slide.id} {comp_type}: '{m_name}' temporal sequence has multiple possible period series; explicit periods are required.",
+                                    slide_id=slide.id, metric_name=m_name, target_component=comp_type,
+                                    bullet_index=bullet_idx, offending_direction=dir_word,
+                                    expected_direction="UNRESOLVED_SCOPE",
+                                    related_ids=[o.id for s in series_list for o in s["sorted_obs"]],
+                                ))
+                                continue
                             # Unqualified claim across multiple incompatible series (e.g. "Revenue increased")
                             trends = {s["trend_state"] for s in series_list}
                             if len(trends) == 1 and None not in trends:
@@ -1953,6 +1981,35 @@ class ClaimValidator:
 
                     # 5. Validate matching series
                     for info in matching_series:
+                        scope = resolve_direction_scope(
+                            clause, assocs, (m_name, dir_word, direction_start, direction_end),
+                            info["sorted_obs"],
+                            lambda a, b: determine_trend_state(
+                                m_name, float(a.value), float(b.value), canonical_name=a.metric_canonical
+                            ),
+                            allow_other_period_bases=len(matching_series) > 1,
+                            metric_spans=metric_spans,
+                        )
+                        if scope.error:
+                            issues.append(DirectionalClaimIssue(
+                                code="direction_scope_ambiguous", severity="error", stage="presentation",
+                                message=f"Slide {slide.id} {comp_type}: '{m_name}' — {scope.error}; explicit period evidence is required.",
+                                slide_id=slide.id, metric_name=m_name, target_component=comp_type,
+                                bullet_index=bullet_idx, offending_direction=dir_word,
+                                expected_direction="UNRESOLVED_SCOPE",
+                                related_ids=[o.id for o in info["sorted_obs"]],
+                            ))
+                            continue
+                        if scope.observations is not None:
+                            scoped_series = partition_compatible_series(scope.observations, m_name)
+                            if len(scoped_series) != 1 or not scoped_series[0]["is_comp"]:
+                                issues.append(ValidationIssue(
+                                    code="direction_scope_ambiguous", severity="error", stage="presentation",
+                                    message=f"Slide {slide.id}: '{m_name}' temporal segment has incompatible observations.",
+                                    related_ids=[o.id for o in scope.observations],
+                                ))
+                                continue
+                            info = scoped_series[0]
                         first = info["first"]
                         last = info["last"]
                         val_start = info["val_start"]
@@ -1975,7 +2032,7 @@ class ClaimValidator:
                                 related_ids=[o.id for o in info["sorted_obs"]],
                                 message=f"Slide {slide.id} {comp_type}: '{m_name}' changes direction within the selected series; a continuous movement claim requires scoped evidence or a model revision."))
 
-                        issue_key = (slide.id, m_name.casefold(), comp_type, bullet_idx, info["period_basis"], info["start_period"], info["end_period"])
+                        issue_key = (slide.id, m_name.casefold(), comp_type, bullet_idx, info["period_basis"], info["start_period"], info["end_period"], clause_offset + direction_start)
                         if issue_key in seen_issues:
                             continue
 
@@ -2014,7 +2071,7 @@ class ClaimValidator:
                             offending = dir_word
                         if offending:
                             non_monotonic = info.get("non_monotonic", {})
-                            if non_monotonic.get("is_non_monotonic"):
+                            if scope.observations is None and non_monotonic.get("is_non_monotonic"):
                                 clause_lower = clause.casefold()
                                 is_exempt = (
                                     _NON_MONOTONIC_BEFORE_PATTERN.search(clause_lower) is not None
@@ -2064,6 +2121,9 @@ class ClaimValidator:
                                     period_basis=info["period_basis"],
                                     has_rebound=bool(non_monotonic.get("had_rebound") and info["sorted_obs"][-1].value > info["sorted_obs"][-2].value),
                                     has_intermediate_decline=bool(non_monotonic.get("had_intermediate_decline")),
+                                    claim_start=clause_offset + direction_start + dir_word.index(offending),
+                                    claim_end=clause_offset + direction_start + dir_word.index(offending) + len(offending),
+                                    span_required=True,
                                 )
                             )
 
@@ -2073,6 +2133,8 @@ class ClaimValidator:
             if not isinstance(issue, DirectionalClaimIssue):
                 continue
             issue.span_required = True
+            if issue.claim_start is not None and issue.claim_end is not None:
+                continue
             text = (slide.bullets[issue.bullet_index] if issue.target_component == "bullet"
                     and issue.bullet_index is not None else getattr(slide, issue.target_component, ""))
             matches, cursor = [], 0
