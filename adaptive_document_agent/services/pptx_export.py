@@ -53,19 +53,15 @@ BUNDLED_TEMPLATE_PATH = PACKAGE_ROOT / "templates" / "FOURIER Light Version Temp
 LOCAL_DESKTOP_TEMPLATE_PATH = Path(r"C:\Users\yuanb\Desktop\FOURIER Light Version Template EN_251217.pptx")
 DEFAULT_TEMPLATE_PATH = str(BUNDLED_TEMPLATE_PATH if BUNDLED_TEMPLATE_PATH.exists() else LOCAL_DESKTOP_TEMPLATE_PATH)
 
-# Fourier Light Theme Palette (theme1.xml)
-FOURIER_PURPLE = "5B21B6"        # Institutional highlight / accent
-FOURIER_LIGHT_PURPLE = "AB74FF"  # Accent 2
-FOURIER_TECH_BLUE = "0086D1"     # Accent 3
-FOURIER_AMBER = "F4B923"         # Accent 4
-FOURIER_DEEP_BLUE = "2E3CED"     # Accent 5
-FOURIER_CYAN = "20ECF1"          # Accent 6
-
-FOURIER_DARK = "111827"          # Hero metrics and main text
-FOURIER_MUTED = "6B7280"         # Subtitle, metadata, secondary text
-FOURIER_BG_CARD = "F9FAFB"       # Card / panel background
-FOURIER_BORDER = "E5E7EB"        # Subtle border / rule
-WHITE = "FFFFFF"
+# One source for generated colours; original template artwork stays intact.
+from .fourier_brand import (
+    PRIMARY as FOURIER_PURPLE, LIGHT_PURPLE as FOURIER_LIGHT_PURPLE,
+    TECH_BLUE as FOURIER_TECH_BLUE, AMBER as FOURIER_AMBER,
+    DEEP_BLUE as FOURIER_DEEP_BLUE, CYAN as FOURIER_CYAN,
+    TEXT as FOURIER_DARK, MUTED as FOURIER_MUTED,
+    SURFACE as FOURIER_BG_CARD, BORDER as FOURIER_BORDER, WHITE,
+    CHART_COLORS,
+)
 
 # Aliases for backwards compatibility with tests / helpers
 NAVY = FOURIER_DARK
@@ -82,14 +78,7 @@ STONE = FOURIER_BORDER
 FONT = "Arial"
 TITLE_FONT = "Arial"
 
-CHART_PALETTE = (
-    FOURIER_PURPLE,
-    FOURIER_TECH_BLUE,
-    FOURIER_AMBER,
-    FOURIER_CYAN,
-    FOURIER_LIGHT_PURPLE,
-    FOURIER_DEEP_BLUE,
-)
+CHART_PALETTE = CHART_COLORS
 
 
 def _source_footer(pages: list[int] | set[int] | tuple[int, ...]) -> str:
@@ -167,9 +156,6 @@ def build_presentation(result: PipelineResult, template_path: str | Path | None 
     if source_pdf is not None and artwork is None:
         from .presentation_source_visual import select_company_source_visual
         presentation._ada_source_visual = select_company_source_visual(source_pdf, result)
-    if resolved_path.resolve() == BUNDLED_TEMPLATE_PATH.resolve():
-        from .presentation_style import compact_template_branding
-        compact_template_branding(presentation)
     # Remove template sample slides while retaining master and layouts
     for sld_id in list(presentation.slides._sldIdLst):
         rId = sld_id.rId
@@ -177,16 +163,21 @@ def build_presentation(result: PipelineResult, template_path: str | Path | None 
         del presentation.slides._sldIdLst[presentation.slides._sldIdLst.index(sld_id)]
 
     from .presentation_style import deck_color_map
+    from .composition_data import COMPOSITION_TYPES
     color_keys = []
+    color_groups = []
     color_index = DocumentIndex(result.observations)
     for chart in result.charts:
         values = [color_index.get(oid) for oid in chart.observation_ids if color_index.get(oid)]
-        if chart.series_dimension or chart.chart_type == "doughnut":
+        if chart.chart_type in COMPOSITION_TYPES:
             dimension = chart.series_dimension or chart.x_dimension
-            color_keys.extend(str(({**o.dimensions, **o.category_dimensions}).get(dimension, display_metric_name(o))) for o in values)
+            group = [str(({**o.dimensions, **o.category_dimensions}).get(dimension, display_metric_name(o))) for o in values]
         else:
-            color_keys.extend(name for _, name, _ in _series_rows(chart, values))
-    presentation._ada_colors = deck_color_map(color_keys)
+            rows = _series_rows(chart, values)
+            group = [row[0] if chart.chart_type == "pie" else row[1] for row in rows]
+        color_keys.extend(group)
+        color_groups.append(group)
+    presentation._ada_colors = deck_color_map(color_keys, groups=color_groups)
 
     if result.presentation_plan:
         PresentationPlanValidator().validate(result.presentation_plan, result)
@@ -203,6 +194,8 @@ def build_presentation(result: PipelineResult, template_path: str | Path | None 
     preflight.validate_and_sanitize()
     from .slide_compositor import validate_composed_geometry
     validate_composed_geometry(presentation)
+    from .presentation_brand_qa import validate_generated_brand
+    validate_generated_brand(presentation)
 
     stream = io.BytesIO()
     presentation.save(stream)
@@ -1060,14 +1053,13 @@ def _add_cover(
             clean_title = subject
             clean_purpose = "Document analysis"
 
-    # Dynamic font scaling to prevent title overlap (max 2 lines)
-    is_long_title = len(clean_title) > 36
-    title_font_size = 28 if is_long_title else 36
+    # Retain the template's 36 pt cover title; reflow instead of shrinking it.
+    title_font_size = 36
     title_h = max(.85, len(_lines(clean_title, 6.65, title_font_size)) * title_font_size / 72 * 1.22 + .15)
     if title_h > 3.1:
         raise ValueError("Cover title exceeds readable capacity; shorten the presentation title.")
     subtitle_top = max(2.80, 1.35 + title_h + .28)
-    purpose_h = max(.95, len(_lines(clean_purpose, 6.65, 14)) * .25 + .12)
+    purpose_h = max(.95, len(_lines(clean_purpose, 6.65, 26)) * 26 / 72 * 1.22 + .12)
     if subtitle_top + purpose_h > 6.15:
         raise ValueError("Cover subtitle exceeds readable capacity; move detail to the document overview.")
 
@@ -1093,7 +1085,7 @@ def _add_cover(
             ph.height = Inches(purpose_h)
             ph.text_frame.word_wrap = True
             if ph.text_frame.paragraphs:
-                ph.text_frame.paragraphs[0].font.size = Pt(14)
+                ph.text_frame.paragraphs[0].font.size = Pt(26)
 
     if ph16 is not None and ph15 is not None:
         spTree = slide.shapes._spTree
@@ -1539,20 +1531,34 @@ def _add_native_chart(
 
     chart.has_title = False
     _normalize_axis_ids(chart)
-    chart.has_legend = len(getattr(chart, "series", [])) > 1
+    chart.has_legend = plan.chart_type == "pie" or len(getattr(chart, "series", [])) > 1
     if chart.has_legend:
         # Position legend at TOP so it never collides with panel footers or explanatory text
         chart.legend.position = XL_LEGEND_POSITION.TOP
         chart.legend.font.name = FONT
         chart.legend.font.size = Pt(8.0 if (compact or chart_width < 5.5) else 9.5)
-    chart.chart_style = 10
+        chart.legend.font.color.rgb = _rgb(FOURIER_DARK)
+    chart.chart_style = None
+    chart.font.name = FONT
+    chart.font.color.rgb = _rgb(FOURIER_DARK)
+    from .presentation_style import chart_color, deck_color_map
+    keys = categories if plan.chart_type == "pie" else [series.name for series in chart.series]
+    colors = deck_color_map(keys, groups=[keys], preferred=getattr(slide, "_ada_colors", {}))
     for series_index, series in enumerate(chart.series):
-        from .presentation_style import semantic_color
-        color = getattr(slide, "_ada_colors", {}).get(series.name, semantic_color(series.name))
+        color = FOURIER_PURPLE if plan.chart_type == "pie" else chart_color(series.name, colors)
         try:
             series.format.fill.solid()
             series.format.fill.fore_color.rgb = _rgb(color)
             series.format.line.color.rgb = _rgb(color)
+            if chart.chart_type in {XL_CHART_TYPE.LINE_MARKERS, XL_CHART_TYPE.XY_SCATTER}:
+                series.marker.format.fill.solid()
+                series.marker.format.fill.fore_color.rgb = _rgb(color)
+                series.marker.format.line.color.rgb = _rgb(color)
+            if plan.chart_type == "pie":
+                for point, category in zip(series.points, categories):
+                    point.format.fill.solid()
+                    point.format.fill.fore_color.rgb = _rgb(chart_color(category, colors))
+                    point.format.line.fill.background()
             # Office otherwise inverts negative columns to a white fill,
             # making losses and expense ratios nearly invisible on white slides.
             if chart.chart_type in {XL_CHART_TYPE.COLUMN_CLUSTERED, XL_CHART_TYPE.BAR_CLUSTERED}:
@@ -1566,12 +1572,13 @@ def _add_native_chart(
         chart.plots[0].has_data_labels = plan.show_data_labels
         labels = chart.plots[0].data_labels
         if plan.chart_type == "pie":
-            labels.position = XL_DATA_LABEL_POSITION.BEST_FIT
+            labels.position = XL_DATA_LABEL_POSITION.OUTSIDE_END
         elif chart.chart_type in {XL_CHART_TYPE.LINE_MARKERS, XL_CHART_TYPE.AREA}:
             labels.position = XL_DATA_LABEL_POSITION.ABOVE
         else:
             labels.position = XL_DATA_LABEL_POSITION.OUTSIDE_END
         labels.font.name = FONT
+        labels.font.color.rgb = _rgb(FOURIER_DARK)
         if has_negative and has_positive:
             # Zero-crossing bar labels: use compact size to prevent crowding x-axis
             labels.font.size = Pt(9 if compact else 10.5)
@@ -1590,6 +1597,8 @@ def _add_native_chart(
         # Style axis fonts and DISABLE ALL BACKGROUND GRIDLINES
         if hasattr(chart, "category_axis") and chart.category_axis is not None:
             chart.category_axis.tick_labels.font.name = FONT
+            chart.category_axis.tick_labels.font.color.rgb = _rgb(FOURIER_DARK)
+            chart.category_axis.format.line.color.rgb = _rgb(FOURIER_BORDER)
             chart.category_axis.tick_labels.font.size = Pt(10 if compact else 11)
             chart.category_axis.has_major_gridlines = False
             chart.category_axis.has_minor_gridlines = False
@@ -1598,6 +1607,8 @@ def _add_native_chart(
 
         if hasattr(chart, "value_axis") and chart.value_axis is not None:
             chart.value_axis.tick_labels.font.name = FONT
+            chart.value_axis.tick_labels.font.color.rgb = _rgb(FOURIER_DARK)
+            chart.value_axis.format.line.color.rgb = _rgb(FOURIER_BORDER)
             chart.value_axis.tick_labels.font.size = Pt(10 if compact else 11)
             # Signed format preserves minus signs on axis tick labels
             chart.value_axis.tick_labels.number_format = num_fmt
@@ -2195,6 +2206,13 @@ def _base_slide(presentation: Any, title: str, subtitle: str = "", *, background
 
     slide._ada_colors = getattr(presentation, "_ada_colors", {})
 
+    _style_content_header(slide, clean_title, clean_subtitle)
+    return slide
+
+
+def _style_content_header(slide: Any, title: str, subtitle: str) -> None:
+    """Reflow the template's Arial 32/18 header without moving its logo."""
+    from .text_capacity import wrap_copy
     title_ph = None
     sub_ph = None
     for ph in slide.placeholders:
@@ -2204,39 +2222,40 @@ def _base_slide(presentation: Any, title: str, subtitle: str = "", *, background
             sub_ph = ph
 
     if title_ph is not None:
-        title_ph.text = clean_title
+        title_ph.text = title
         title_ph.text_frame.word_wrap = True
-        title_len = len(clean_title)
-        if title_len <= 45:
-            title_size = 20.0
-            title_h = 0.48
-        elif title_len <= 80:
-            title_size = 17.5
-            title_h = 0.76
-        else:
-            title_size = 15.0
-            title_h = 0.98
-        update_geometry(title_ph, height=title_h)
+        lines = wrap_copy(title, 8.91, 32)
+        if len(lines) > 3:
+            raise ValueError("Presentation title exceeds readable capacity; shorten the planned title.")
+        update_geometry(title_ph, left=.30, top=.27, width=9.06,
+                        height=max(.50, len(lines) * 32 / 72 * 1.22 + .02))
+        title_ph.text_frame.margin_left = title_ph.text_frame.margin_right = Inches(.02)
+        title_ph.text_frame.margin_top = title_ph.text_frame.margin_bottom = Inches(.01)
         for p in title_ph.text_frame.paragraphs:
-            p.font.size = Pt(title_size)
+            p.font.name = FONT
+            p.font.size = Pt(32)
+            p.font.bold = True
+            p.font.color.rgb = _rgb(FOURIER_DARK)
 
     if sub_ph is not None:
-        if clean_subtitle:
-            sub_ph.text = clean_subtitle
+        if subtitle:
+            sub_ph.text = subtitle
             sub_ph.text_frame.word_wrap = True
+            lines = wrap_copy(subtitle, 8.91, 18)
+            if len(lines) > 3:
+                raise ValueError("Presentation subtitle exceeds readable capacity; move detail to commentary.")
+            sub_top = title_ph.top.inches + title_ph.height.inches + .08 if title_ph is not None else .84
+            update_geometry(sub_ph, left=.30, top=sub_top, width=9.07,
+                            height=max(.33, len(lines) * 18 / 72 * 1.22 + .02))
+            sub_ph.text_frame.margin_left = sub_ph.text_frame.margin_right = Inches(.02)
+            sub_ph.text_frame.margin_top = sub_ph.text_frame.margin_bottom = Inches(.01)
             for p in sub_ph.text_frame.paragraphs:
-                p.font.size = Pt(11.0)
-            sub_h = 0.50 if len(clean_subtitle) > 85 else None
-            if title_ph is not None:
-                title_top = title_ph.top.inches if hasattr(title_ph.top, "inches") else float(title_ph.top) / 914400.0
-                title_h_in = title_ph.height.inches if hasattr(title_ph.height, "inches") else float(title_ph.height) / 914400.0
-                sub_top = title_top + title_h_in + 0.08
-                update_geometry(sub_ph, top=sub_top, height=sub_h)
-            elif sub_h is not None:
-                update_geometry(sub_ph, height=sub_h)
+                p.font.name = FONT
+                p.font.size = Pt(18)
+                p.font.bold = False
+                p.font.color.rgb = _rgb(FOURIER_PURPLE)
         else:
             sub_ph.text = ""
-    return slide
 
 
 def _text(

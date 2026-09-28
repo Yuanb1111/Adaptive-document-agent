@@ -13,6 +13,7 @@ def add_single_metric_slide(presentation, plan: ChartPlan, analysis: SingleMetri
         _text, _unit_label, FOURIER_BG_CARD, FOURIER_DARK, FOURIER_MUTED, FOURIER_PURPLE,
     )
 
+    original_title, original_narrative = title, narrative
     series = analysis.observations
     first, last = series[0], series[-1]
     if first.parent_section or first.dimensions.get("section"):
@@ -31,8 +32,16 @@ def add_single_metric_slide(presentation, plan: ChartPlan, analysis: SingleMetri
 
     if not narrative.strip():
         narrative = f"{display_metric_name(first)} moved from {value(first.value)} to {value(last.value)} {unit} between {first.period} and {last.period}."
-    from .slide_compositor import _base
+    from .slide_compositor import _base, _lines
+    if len(_lines(title, 8.91, 32)) > 2:
+        # Use the existing metric label for the title role, retaining the full
+        # analytical claim below it and the original narrative in notes.
+        title, narrative = display_metric_name(first), title
     slide, top = _base(presentation, title, narrative)
+    import json
+    slide.notes_slide.notes_text_frame.text = json.dumps({
+        "planned_title": original_title, "narrative": original_narrative,
+    }, ensure_ascii=False)
     slide.name = "single_metric_hero"
     height = 6.25 - top
     _text(slide, f"{display_metric_name(first)} ({unit})", 0.60, top, 11.35, 0.24,

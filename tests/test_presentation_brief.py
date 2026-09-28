@@ -140,7 +140,7 @@ def test_chinese_brief_preserves_complete_text_at_readable_size():
     assert text in visible(deck.slides[0])
     bodies = [s for s in deck.slides[0].shapes if s.name == "brief:body"]
     assert bodies
-    assert all(p.font.size.pt == 18 for s in bodies for p in s.text_frame.paragraphs)
+    assert all(p.font.size.pt == 16 for s in bodies for p in s.text_frame.paragraphs)
 
 
 def test_planned_text_summary_is_also_one_page_with_all_bullets_in_notes():

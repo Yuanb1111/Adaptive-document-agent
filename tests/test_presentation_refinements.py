@@ -325,6 +325,10 @@ def test_long_title_dynamic_layout_and_preflight() -> None:
     assert sub_ph is not None
     # Subtitle must start strictly below title bottom
     assert sub_ph.top.inches >= title_ph.top.inches + title_ph.height.inches - 0.01
+    assert sub_ph.text == long_title
+    assert title_ph.text_frame.paragraphs[0].font.size.pt == 32
+    assert sub_ph.text_frame.paragraphs[0].font.size.pt == 18
+    assert "Substantial improvements" in slide.notes_slide.notes_text_frame.text
 
     # Check that preflight detects zero fatal collisions
     preflight = PresentationPreflight(deck)

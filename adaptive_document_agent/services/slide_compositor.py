@@ -14,8 +14,8 @@ from adaptive_document_agent.models import ChartPlan, PipelineResult, Presentati
 
 from .presentation_style import CHART_TITLE_PT, DARK, FONT, FOOTNOTE_PT, GUTTER, MUTED, PURPLE
 
-COMMENTARY_PT = 18
-COMMENTARY_LINE_PT = 22
+COMMENTARY_PT = 16
+COMMENTARY_LINE_PT = 20
 
 
 @dataclass(frozen=True)
@@ -39,11 +39,11 @@ class CompositionGeometry:
 
 def compose_geometry(width: float, height: float, top: float, chart_count: int, *,
                      layout: str, has_support: bool, has_commentary: bool,
-                     commentary_text: str = "") -> CompositionGeometry:
+                     commentary_text: str = "", bottom_reserve: float = 0) -> CompositionGeometry:
     """Partition the content zone into non-overlapping slots with a common baseline."""
     left, total = 0.55, width - 1.1
     # Reserve the template's copyright/page-number band separately from sources.
-    bottom = height - 1.02
+    bottom = height - 1.02 - bottom_reserve
     footer = Rect(left, height - 0.82, total, 0.20)
     support = commentary = None
     chart_bottom = bottom
@@ -73,7 +73,7 @@ def compose_geometry(width: float, height: float, top: float, chart_count: int, 
             # Preserve content with the established overflow/continuation path.
             return compose_geometry(width, height, support.y, chart_count,
                 layout="two_up", has_support=has_support, has_commentary=has_commentary,
-                commentary_text=commentary_text)
+                commentary_text=commentary_text, bottom_reserve=bottom_reserve)
         return CompositionGeometry(charts, support, commentary, footer)
     side = chart_count == 1 and (has_support or has_commentary)
     if side:
@@ -159,46 +159,10 @@ def _put_commentary(slide, text: str, rect: Rect) -> str:
 
 
 def _base(presentation, title, message):
-    from .pptx_export import _base_slide, _content_zone, _rule, _rgb
-    from pptx.util import Inches, Pt
+    from .pptx_export import _base_slide, _content_zone, _style_content_header
     slide = _base_slide(presentation, title, message)
-    # Preserve complete planned copy. The legacy helper intentionally truncates
-    # strings, which is inappropriate for the new composition contract.
-    for ph in slide.placeholders:
-        idx = ph.placeholder_format.idx
-        if idx in (14, 15) and ph.has_text_frame:
-            ph.left = Inches(.55)
-            ph.top = Inches(.52)
-            ph.width = Inches(presentation.slide_width.inches - 1.1)
-            ph.text_frame.margin_left = ph.text_frame.margin_right = Inches(.02)
-            ph.text_frame.margin_top = ph.text_frame.margin_bottom = Inches(.01)
-            lines = _lines(title, ph.width.inches - 0.15, 24)
-            if len(lines) > 3:
-                raise ValueError("Presentation title exceeds readable capacity; shorten the planned title.")
-            ph.text = title
-            ph.height = Inches(max(0.45, len(lines) * 0.38))
-            for p in ph.text_frame.paragraphs:
-                p.font.size = Pt(24)
-                p.font.bold = True
-                p.font.color.rgb = _rgb(DARK)
-        if idx == 16 and ph.has_text_frame:
-            title_bottom = max((s.top.inches + s.height.inches for s in slide.placeholders if s.placeholder_format.idx in (14, 15)), default=1.0)
-            ph.text = message
-            ph.left = Inches(.55)
-            ph.top = Inches(title_bottom + 0.20)
-            ph.width = Inches(presentation.slide_width.inches - 1.1)
-            lines = _lines(message, ph.width.inches - 0.15, 11)
-            if len(lines) > 3:
-                raise ValueError("Presentation subtitle exceeds readable capacity; move supporting details to commentary.")
-            # Separate paragraphs inherit spacing from the supplied template.
-            ph.height = Inches(max(0.24, len(lines) * 0.19 + message.count("\n") * .12))
-            for p in ph.text_frame.paragraphs:
-                p.font.size = Pt(11)
-                p.font.color.rgb = _rgb(MUTED)
-    title_bottom = max((s.top.inches + s.height.inches for s in slide.placeholders if s.placeholder_format.idx in (14, 15)), default=1.0)
-    _rule(slide, .55, title_bottom + .07, 1.35, .035, PURPLE)
-    slide.shapes[-1].name = "decoration:title_rule"
-    slide._ada_colors = getattr(presentation, "_ada_colors", {})
+    # Reflow the complete planned copy, retaining the template's header roles.
+    _style_content_header(slide, title, message)
     return slide, _content_zone(slide)[0]
 
 
@@ -255,7 +219,22 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
     from .presentation_conventions import signed_expense_note, signed_expense_display
     convention = signed_expense_note(support + [index.get(oid) for oid in chart_obs if index.get(oid)])
     subtitle = "\n".join(part for part in (slide_plan.message, convention) if part)
-    slide, top = _base(presentation, slide_plan.title, subtitle)
+    heading = slide_plan.title
+    # A complete analytical claim may not fit the template's 32 pt title role.
+    # Reuse the planner's own section heading and display the entire claim as
+    # the 18 pt subtitle; do not shrink, truncate or rewrite its meaning.
+    if (len(_lines(heading, 8.91, 32)) > 2 and slide_plan.section_title
+            and len(_lines(slide_plan.section_title, 8.91, 32)) <= 2):
+        heading = slide_plan.section_title
+        if slide_plan.title.endswith(" (continued)"):
+            heading += " (continued)"
+        subtitle = "\n".join(part for part in (slide_plan.title, convention) if part)
+    convention_h = 0.0
+    if len(_lines(subtitle, 8.91, 18)) > 3 and convention:
+        subtitle = subtitle.removesuffix("\n" + convention)
+        convention_h = len(_lines(convention, presentation.slide_width.inches - 1.1, 12)) * 12 / 72 * 1.22 + .12
+    page_title = heading
+    slide, top = _base(presentation, page_title, subtitle)
     slide.name = f"composed_{slide_plan.layout}"
     reference_ids = set(slide_plan.observation_ids) | chart_obs | set(support_ids)
     reference_ids.update(oid for b in slide_plan.visual_blocks for oid in b.observation_ids)
@@ -264,12 +243,18 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
     # turning supporting references into duplicate audience-facing pages.
     slide.notes_slide.notes_text_frame.text = json.dumps({
         "slide_id": slide_plan.id,
+        "planned_title": slide_plan.title,
+        "analytical_question": slide_plan.message,
         "observations": [index.get(oid).model_dump(mode="json") for oid in sorted(reference_ids) if index.get(oid)],
         "insights": [insight_map[i].model_dump(mode="json") for i in insight_ids if i in insight_map],
         "source_pages": pages,
     }, ensure_ascii=False, indent=2)
     geometry = compose_geometry(presentation.slide_width.inches, presentation.slide_height.inches, top, len(charts),
-        layout=slide_plan.layout, has_support=bool(support), has_commentary=bool(text), commentary_text=text)
+        layout=slide_plan.layout, has_support=bool(support), has_commentary=bool(text), commentary_text=text,
+        bottom_reserve=convention_h)
+    if convention_h:
+        _put_text(slide, convention, Rect(.55, presentation.slide_height.inches - 1.02 - convention_h + .06,
+                  presentation.slide_width.inches - 1.1, convention_h - .06), size=12, color=MUTED)
     headings = []
     for chart in charts:
         heading = next((b.title for b in slide_plan.visual_blocks if b.chart_ids == [chart.id] and b.title), chart.title)
@@ -279,7 +264,7 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
             heading = next(iter(qualified))
         heading = re.sub(r"(?i)^Adjusted for Adjusted\b", "Adjusted", heading)
         headings.append(re.sub(r"(?i)\b(margin|ratio|share)\s+\1\b", r"\1", heading))
-    shared_heading_h = max([.28] + [len(_lines(t, r.w, CHART_TITLE_PT)) * .23
+    shared_heading_h = max([.28] + [len(_lines(t, r.w, CHART_TITLE_PT)) * CHART_TITLE_PT / 72 * 1.22
                                       for t, r in zip(headings, geometry.charts)])
     for chart, rect, title in zip(charts, geometry.charts, headings):
         values = [index.get(oid) for oid in chart.observation_ids if index.get(oid)]
@@ -293,7 +278,7 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
         if len(title_lines) > 3:
             raise ValueError(f"Chart title exceeds readable capacity: {chart.id}")
         heading_h = shared_heading_h
-        _put_text(slide, title, Rect(rect.x, rect.y, rect.w, heading_h), size=CHART_TITLE_PT, bold=True)
+        _put_text(slide, title, Rect(rect.x, rect.y, rect.w, heading_h), size=CHART_TITLE_PT)
         totals = [index.get(oid) for oid in chart.total_observation_ids if index.get(oid)]
         bounds = (rect.x, rect.y + heading_h + 0.22, rect.w, rect.h - heading_h - 0.22)
         if bounds[3] < 1.25:
@@ -469,8 +454,8 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
             if len(_lines(name, w - .14, 11)) > 2 or len(_lines(value, w - .14, 20)) > 1:
                 return items[i:]  # Preserve long-label facts on a continuation table.
             from .pptx_export import _rule
-            from .presentation_style import semantic_color
-            accent = getattr(presentation, "_ada_colors", {}).get(name, semantic_color(name))
+            from .presentation_style import chart_color
+            accent = chart_color(name, getattr(presentation, "_ada_colors", {}))
             _rule(owner, x, y, .035, .88, accent)
             _put_text(owner, name, Rect(x + .14, y, w - .14, 0.35), size=11, color=MUTED)
             shape = _put_text(owner, value, Rect(x + .14, y + 0.37, w - .14, 0.34), size=20, bold=True, color=accent)
@@ -514,7 +499,7 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
     _put_text(slide, footnote, geometry.footer, size=FOOTNOTE_PT, color=MUTED)
     slides = [slide]
     while overflow or remaining:
-        continuation, ctop = _base(presentation, slide_plan.title + " (continued)", convention)
+        continuation, ctop = _base(presentation, page_title + " (continued)", convention)
         continuation.name = "composed_continuation"
         bottom = presentation.slide_height.inches - 1.02
         full = Rect(0.55, ctop, presentation.slide_width.inches - 1.1, bottom - ctop)

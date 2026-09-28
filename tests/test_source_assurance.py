@@ -112,7 +112,7 @@ def test_profile_paginates_all_supported_facts_at_readable_size():
     assert len(deck.slides) > 1
     all_text = "\n".join(visible(s) for s in deck.slides)
     assert all(i.text in all_text for i in items)
-    assert all(p.font.size.pt >= 18 for s in deck.slides for shape in s.shapes if shape.name == "brief:body" for p in shape.text_frame.paragraphs)
+    assert all(p.font.size.pt == 16 for s in deck.slides for shape in s.shapes if shape.name == "brief:body" for p in shape.text_frame.paragraphs)
 
 
 def test_oversized_company_fact_paginates_without_losing_source_copy():
@@ -125,7 +125,7 @@ def test_oversized_company_fact_paginates_without_losing_source_copy():
     bodies = [shape.text for slide in deck.slides for shape in slide.shapes if shape.name == "brief:body"]
     assert len(deck.slides) > 1
     assert "".join(bodies) == detail
-    assert all(p.font.size.pt == 18 for slide in deck.slides for shape in slide.shapes
+    assert all(p.font.size.pt == 16 for slide in deck.slides for shape in slide.shapes
                if shape.name == "brief:body" for p in shape.text_frame.paragraphs)
     assert all("p. 7" in visible(slide) for slide in deck.slides)
 
@@ -215,7 +215,7 @@ def test_no_chart_kpis_keep_commentary_and_readable_font():
     deck = Presentation(io.BytesIO(build_presentation(result)))
     assert plan.bullets[0] in "\n".join(visible(s) for s in deck.slides)
     shape = next(sh for s in deck.slides for sh in s.shapes if sh.has_text_frame and plan.bullets[0] in sh.text)
-    assert all(p.font.size.pt >= 18 for p in shape.text_frame.paragraphs)
+    assert all(p.font.size.pt == 16 for p in shape.text_frame.paragraphs)
 
 
 def test_three_period_kpis_fit_same_page_as_chart():

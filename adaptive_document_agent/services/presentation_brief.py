@@ -8,6 +8,10 @@ from dataclasses import dataclass, field
 import re
 from typing import Any
 
+BODY_PT = 16
+HEADING_PT = 18
+LINE_HEIGHT_FACTOR = 1.25
+
 
 @dataclass(frozen=True)
 class BriefItem:
@@ -25,19 +29,28 @@ def is_technical_copy(text: str) -> bool:
         r"(?:calculation|result)\b|\d+\.\d{6,}|[{}]", text, re.I))
 
 
-def fits_brief(item: BriefItem, width: float, row_height: float, *, size: int = 18) -> bool:
+def _copy_height(text: str, width: float, size: int) -> float:
     from .slide_compositor import _lines
-    heading_lines = len(_lines("00  " + item.title, width, 19)) if item.title else 0
-    heading_h = .34 * heading_lines
+    return len(_lines(text, width, size)) * size * LINE_HEIGHT_FACTOR / 72
+
+
+def _heading_height(text: str, width: float) -> float:
+    return _copy_height(text, width, HEADING_PT) + .04 if text else 0
+
+
+def fits_brief(item: BriefItem, width: float, row_height: float, *, size: int = BODY_PT) -> bool:
+    from .slide_compositor import _lines
+    heading_lines = len(_lines("00  " + item.title, width, HEADING_PT)) if item.title else 0
+    heading_h = _heading_height("00  " + item.title, width) if item.title else 0
     return heading_lines <= 2 and (
-        len(_lines(item.text if item.title else "00  " + item.text, width, size)) * size * 1.25 / 72
-        <= row_height - heading_h - .16)
+        _copy_height(item.text if item.title else "00  " + item.text, width, size)
+        <= row_height - heading_h - .18)
 
 
 def _item_height(item: BriefItem, width: float) -> float:
-    from .slide_compositor import _lines
     text = item.text if item.title else "00  " + item.text
-    return (.34 * len(_lines("00  " + item.title, width, 19)) if item.title else 0) + len(_lines(text, width, 18)) * 18 * 1.25 / 72 + .18
+    heading_h = _heading_height("00  " + item.title, width) if item.title else 0
+    return heading_h + _copy_height(text, width, BODY_PT) + .18
 
 
 def overview_items(profile: Any) -> tuple[list[BriefItem], str]:
@@ -83,20 +96,19 @@ def render_brief(presentation: Any, title: str, items: list[BriefItem], *,
     y = top
     for i, item in enumerate(selected):
         row_h = _item_height(item, width)
-        from .slide_compositor import _lines
-        heading_h = .34 * len(_lines("00  " + item.title, width, 19)) if item.title else 0
+        heading_h = _heading_height("00  " + item.title, width) if item.title else 0
         if item.title:
             heading = _text(slide, f"{i + 1:02d}  {item.title}", left, y, width, heading_h,
-                            size=19, bold=True, color=FOURIER_PURPLE)
+                            size=HEADING_PT, bold=True, color=FOURIER_PURPLE)
             heading.name = "brief:heading"
         text = item.text if item.title else f"{i + 1:02d}  {item.text}"
         body = _text(slide, text, left, y + heading_h, width, row_h - heading_h - .16,
-                     size=18, color=FOURIER_DARK)
+                     size=BODY_PT, color=FOURIER_DARK)
         body.name = "brief:body"
         y += row_h + gap
     if not selected:
         _text(slide, "See the evidence pages for supported findings and scope.",
-              .75, top, presentation.slide_width.inches - 1.5, 1, size=20, color=FOURIER_MUTED)
+              .75, top, presentation.slide_width.inches - 1.5, 1, size=BODY_PT, color=FOURIER_MUTED)
     if excerpt or len(selected) < len(items):
         _text(slide, "Selected points; full context in speaker notes.", .55, bottom + .08,
               presentation.slide_width.inches - 1.1, .20, size=9, color=FOURIER_MUTED)
@@ -117,8 +129,11 @@ def render_profile(presentation: Any, title: str, items: list[BriefItem], *, not
             return [compact_page]
     width = presentation.slide_width.inches - 1.3
     from .slide_compositor import _lines
-    # Reserve the space required by a continuation title on every page.
-    top = max(1.45, .52 + .38 * len(_lines(title + " (continued)", width, 24)) + .15)
+    # Reserve the template's 32-point continuation title on every page. Header
+    # width excludes the original right-hand logo; body copy uses the full width.
+    header_width = min(9.06, presentation.slide_width.inches - .60) - .15
+    header_lines = len(_lines(title + " (continued)", header_width, 32))
+    top = max(1.45, .27 + header_lines * (32 / 72 * 1.22) + .15 + .12)
     capacity = presentation.slide_height.inches - 1.28 - top
     expanded = []
     for item in items:
@@ -184,11 +199,10 @@ def _render_profile_grid(presentation: Any, title: str, items: list[BriefItem], 
     row_height = (bottom - top - gap_y * (rows - 1)) / rows
     layouts = []
     for item in items:
-        heading_lines = len(_lines(item.title, col_width, 18))
-        body_lines = len(_lines(item.text, col_width, 18))
-        heading_h = max(.34, heading_lines * .31)
-        body_h = body_lines * 18 * 1.25 / 72 + .08
-        if heading_lines > 2 or heading_h + body_h > row_height:
+        heading_lines = len(_lines(item.title, col_width, HEADING_PT))
+        heading_h = _heading_height(item.title, col_width)
+        body_h = _copy_height(item.text, col_width, BODY_PT) + .08
+        if heading_lines > 2 or heading_h + .06 + body_h > row_height:
             slide_id = presentation.slides._sldIdLst[-1]
             presentation.part.drop_rel(slide_id.rId)
             presentation.slides._sldIdLst.remove(slide_id)
@@ -201,10 +215,10 @@ def _render_profile_grid(presentation: Any, title: str, items: list[BriefItem], 
         x = left + column * (col_width + gap_x)
         y = top + row * (row_height + gap_y)
         heading = _text(slide, item.title, x, y, col_width, heading_h,
-                        size=18, bold=True, color=FOURIER_PURPLE)
+                        size=HEADING_PT, bold=True, color=FOURIER_PURPLE)
         heading.name = "brief:heading"
         body = _text(slide, item.text, x, y + heading_h + .06, col_width,
-                     body_h, size=18, color=FOURIER_DARK)
+                     body_h, size=BODY_PT, color=FOURIER_DARK)
         body.name = "brief:body"
 
     pages = sorted({page for item in items for page in item.pages})
@@ -223,7 +237,7 @@ def render_summary(presentation: Any, title: str, items: list[BriefItem], *, not
     """
     if len(items) <= 3:
         return render_brief(presentation, title, items, notes=notes)
-    from .slide_compositor import _base, _lines
+    from .slide_compositor import _base
     from .pptx_export import _source_footer, _text, FOURIER_DARK, FOURIER_MUTED, FOURIER_PURPLE
     slide, top = _base(presentation, title, "")
     bottom = presentation.slide_height.inches - 1.02
@@ -233,20 +247,20 @@ def render_summary(presentation: Any, title: str, items: list[BriefItem], *, not
     layouts = []
     for item in items[:4]:
         heading_text = item.title
-        heading_h = len(_lines(heading_text, width, 18)) * .31 + .04
-        body_h = len(_lines(item.text, width, 17)) * 17 * 1.25 / 72 + .08
+        heading_h = _heading_height(heading_text, width)
+        body_h = _copy_height(item.text, width, BODY_PT) + .08
         if heading_h + body_h > row_height and item.short_title:
             heading_text = item.short_title
-            heading_h = len(_lines(heading_text, width, 18)) * .31 + .04
+            heading_h = _heading_height(heading_text, width)
         if heading_h + body_h > row_height or is_technical_copy(item.text):
             return _summary_full_width_fallback(presentation, slide, title, items, notes)
         layouts.append((item, heading_text, heading_h, body_h))
     for i, (item, heading_text, heading_h, body_h) in enumerate(layouts):
         x = .65 + (i % 2) * (width + .30)
         y = top + (i // 2) * (row_height + .10)
-        heading = _text(slide, heading_text, x, y, width, heading_h, size=18, bold=True, color=FOURIER_PURPLE)
+        heading = _text(slide, heading_text, x, y, width, heading_h, size=HEADING_PT, bold=True, color=FOURIER_PURPLE)
         heading.name = "brief:heading"
-        body = _text(slide, item.text, x, y + heading_h, width, body_h, size=17, color=FOURIER_DARK)
+        body = _text(slide, item.text, x, y + heading_h, width, body_h, size=BODY_PT, color=FOURIER_DARK)
         body.name = "brief:body"
         shown.append(item)
     pages = sorted({p for item in shown for p in item.pages})

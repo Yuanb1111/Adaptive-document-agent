@@ -200,7 +200,7 @@ def test_company_overview_unresolved_name_snapshot_layout():
     assert "Markets and listing" in all_profile_text
     bodies = [shape for sl in profile_slides for shape in sl.shapes if shape.name == "brief:body"]
     assert len(bodies) >= 3
-    assert all(p.font.size.pt == 18 for s in bodies for p in s.text_frame.paragraphs)
+    assert all(p.font.size.pt == 16 for s in bodies for p in s.text_frame.paragraphs)
     assert company_slide.notes_slide.notes_text_frame.text
     assert "ISSUER PROFILE & IDENTITY" not in slide_text
 
