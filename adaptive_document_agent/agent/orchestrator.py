@@ -56,7 +56,10 @@ class DocumentOrchestrator:
     ) -> PipelineResult:
         del settings  # Configuration is enforced when constructing the gateway.
         notify = progress or (lambda _: None)
+        from time import perf_counter
+        pipeline_started = perf_counter()
         timings: dict[str, int] = {}
+        details: dict[str, int] = {}
         raw = bytes(file) if isinstance(file, (bytes, bytearray)) else file.read()
         digest = sha256_bytes(raw)
 
@@ -162,6 +165,7 @@ class DocumentOrchestrator:
         notify("Generating insights and dynamic report")
         with record_timing(timings, "reporting"):
             reporting = self._generate_report(document, profile, index, plan, results, issues, notify, analysis_focus)
+            details.update(reporting.stage_details_ms)
             insights, report_plan = reporting.insights, reporting.report_plan
             topic_selection, charts = reporting.presentation_topics, reporting.charts
             markdown, issues = reporting.report_markdown, reporting.validation_warnings
@@ -234,6 +238,7 @@ class DocumentOrchestrator:
                         reporting = self._generate_report(
                             document, profile, index, plan, results, issues, notify, analysis_focus,
                         )
+                        details.update({f"recovery_{name}": value for name, value in reporting.stage_details_ms.items()})
                         insights, report_plan = reporting.insights, reporting.report_plan
                         topic_selection, charts = reporting.presentation_topics, reporting.charts
                         markdown, issues = reporting.report_markdown, reporting.validation_warnings
@@ -274,7 +279,8 @@ class DocumentOrchestrator:
                 from .company_introduction import prepare_company_introduction
                 with prepare_company_introduction(self.gateway, planning_result) as attach_introduction:
                     try:
-                        presentation_plan = PresentationPlanner(self.gateway).plan(planning_result)
+                        with record_timing(details, "slide_plan"):
+                            presentation_plan = PresentationPlanner(self.gateway).plan(planning_result)
                     except (LLMResponseError, ValueError) as exc:
                         detail = " ".join(str(exc).split())[:1_400]
                         issues.append(
@@ -323,7 +329,8 @@ class DocumentOrchestrator:
 
                     if presentation_plan:
                         try:
-                            attach_introduction(presentation_plan)
+                            with record_timing(details, "company_introduction_wait"):
+                                attach_introduction(presentation_plan)
                         except (LLMResponseError, ValueError) as exc:
                             from adaptive_document_agent.models.presentation import CompanyProfile
                             presentation_plan.company = CompanyProfile(
@@ -383,6 +390,8 @@ class DocumentOrchestrator:
             validation_warnings=issues,
             llm_usage=list(self.gateway.usage) if self.gateway else [],
             timings_ms=timings,
+            stage_details_ms=details,
+            pipeline_total_ms=int((perf_counter() - pipeline_started) * 1000),
         )
 
     @staticmethod
@@ -411,13 +420,15 @@ class DocumentOrchestrator:
         from .output_planning import plan_outputs
 
         issues = list(issues)
-        insights = InsightGenerator(self.gateway).generate(results, index.observations)
+        details: dict[str, int] = {}
+        with record_timing(details, "insights"):
+            insights = InsightGenerator(self.gateway).generate(results, index.observations)
         notify("Selecting presentation questions before chart generation")
         output = PipelineResult(
             document=document, profile=profile, observations=index.observations,
             analysis_plan=plan, analysis_results=results, insights=insights,
         )
-        report_plan, topic_selection, topic_error = plan_outputs(self.gateway, output)
+        report_plan, topic_selection, topic_error = plan_outputs(self.gateway, output, timings=details)
         requested_series = []
         if topic_selection is not None:
             _, series_by_id = series_directory(output)
@@ -447,6 +458,7 @@ class DocumentOrchestrator:
         output.charts = charts
         output.report_markdown = markdown
         output.validation_warnings = issues
+        output.stage_details_ms = details
         return output
 
     def preview_scope(

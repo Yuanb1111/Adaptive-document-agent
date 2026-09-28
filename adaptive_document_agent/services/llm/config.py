@@ -3,6 +3,7 @@
 import os
 from enum import StrEnum
 from urllib.parse import urlparse
+from typing import Literal
 
 from pydantic import BaseModel, Field, SecretStr, field_validator
 
@@ -33,6 +34,11 @@ class LLMSettings(BaseModel):
     privacy_mode: PrivacyMode = PrivacyMode.AUTO
     stage_models: dict[str, str] = Field(default_factory=dict)
     discovery_workers: int = Field(default=4, ge=1, le=4)
+    discovery_chunk_tokens: int = Field(default=12000, ge=2000, le=24000)
+    semantic_batch_size: int = Field(default=96, ge=24, le=128)
+    discovery_thinking: Literal["disabled", "enabled", "provider_default"] = "disabled"
+    # A range avoids guessing the provider's holiday / peak-time billing band.
+    deepseek_price_band: Literal["range", "peak", "off_peak"] = "range"
 
     @field_validator("base_url")
     @classmethod
@@ -76,6 +82,10 @@ class LLMSettings(BaseModel):
             privacy_mode=PrivacyMode(privacy_raw),
             stage_models=stage_models,
             discovery_workers=int(os.getenv("LLM_DISCOVERY_WORKERS", "4")),
+            discovery_chunk_tokens=int(os.getenv("LLM_DISCOVERY_CHUNK_TOKENS", "12000")),
+            semantic_batch_size=int(os.getenv("LLM_SEMANTIC_BATCH_SIZE", "96")),
+            discovery_thinking=os.getenv("LLM_DISCOVERY_THINKING", "disabled"),
+            deepseek_price_band=os.getenv("LLM_DEEPSEEK_PRICE_BAND", "range"),
         )
 
     def model_for(self, stage: str) -> str:

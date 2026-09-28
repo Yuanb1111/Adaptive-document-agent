@@ -61,3 +61,6 @@ class PipelineResult(BaseModel):
     validation_warnings: list[ValidationIssue] = Field(default_factory=list)
     llm_usage: list[dict[str, object]] = Field(default_factory=list)
     timings_ms: dict[str, int] = Field(default_factory=dict)
+    stage_details_ms: dict[str, int] = Field(default_factory=dict)
+    pipeline_total_ms: int | None = None
+    export_timings_ms: dict[str, int] = Field(default_factory=dict)

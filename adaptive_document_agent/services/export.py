@@ -3,6 +3,7 @@
 import csv
 import io
 import hashlib
+import json
 from collections.abc import Callable
 from time import perf_counter
 
@@ -19,7 +20,10 @@ def export_markdown(result: PipelineResult) -> bytes:
 
 
 def export_json(result: PipelineResult) -> bytes:
-    return result.model_dump_json(indent=2).encode("utf-8")
+    from .llm.costs import summarize_usage
+    data = result.model_dump(mode="json")
+    data["llm_cost_summary"] = summarize_usage(result.llm_usage)
+    return json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
 
 
 def export_csv(result: PipelineResult) -> bytes:
@@ -135,7 +139,7 @@ def _build_cache_key(result: PipelineResult, template_digest: str, artwork: byte
                      source_pdf: bytes | None = None) -> tuple[str, str, str]:
     # Bump the version when generation rules change. All facts, source evidence,
     # narrative, charts, warnings and plan fields participate in invalidation.
-    content = result.model_dump_json(exclude={"llm_usage", "timings_ms"}).encode()
+    content = result.model_dump_json(exclude={"llm_usage", "timings_ms", "stage_details_ms", "pipeline_total_ms", "export_timings_ms"}).encode()
     from adaptive_document_agent.utils.pipeline_version import PIPELINE_VERSION
     image_digest = hashlib.sha256(source_pdf).digest() if source_pdf is not None else b""
     return (f"ppt-build-v3:{PIPELINE_VERSION}", template_digest,

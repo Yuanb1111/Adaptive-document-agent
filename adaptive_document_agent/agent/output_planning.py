@@ -9,17 +9,21 @@ from .presentation_topic_selector import PresentationTopicSelector
 
 
 def plan_outputs(
-    gateway: LLMGateway | None, result: PipelineResult,
+    gateway: LLMGateway | None, result: PipelineResult, *, timings: dict[str, int] | None = None,
 ) -> tuple[ReportPlan, PresentationTopicSelection | None, Exception | None]:
     """Keep local/stateful clients serial; never invoke UI callbacks in workers."""
+    from adaptive_document_agent.utils.timing import record_timing
+    timings = timings if timings is not None else {}
     def report() -> ReportPlan:
-        return DynamicReportPlanner(gateway).plan(result.profile, result.insights)
+        with record_timing(timings, "report_outline"):
+            return DynamicReportPlanner(gateway).plan(result.profile, result.insights)
 
     def topics() -> tuple[PresentationTopicSelection | None, Exception | None]:
         if gateway is None:
             return None, None
         try:
-            return PresentationTopicSelector(gateway).select(result), None
+            with record_timing(timings, "topic_selection"):
+                return PresentationTopicSelector(gateway).select(result), None
         except Exception as exc:
             return None, exc
 

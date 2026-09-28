@@ -46,9 +46,9 @@ def test_recovery_refreshes_analysis_validation_insights_topics_and_report(monke
     monkeypatch.setattr(orchestrator.CalculationValidator, "validate", track_validation)
 
     planning = output_planning.plan_outputs
-    def track_topics(gateway, result):
+    def track_topics(gateway, result, **kwargs):
         topic_snapshots.append(result.model_copy(deep=True))
-        report, _, _ = planning(gateway, result)
+        report, _, _ = planning(gateway, result, **kwargs)
         directory, _ = series_directory(result)
         selection = PresentationTopicSelection(topics=[PresentationTopic(
             id="revenue", title="Revenue", question="How did revenue change?", rationale="Reported series",

@@ -18,6 +18,12 @@ class PresentationPlanner:
         self.gateway = gateway
 
     def plan(self, result: PipelineResult) -> PresentationPlan:
+        if result.presentation_topics and result.presentation_topics.topics:
+            # The model has already chosen questions, order, takeaways, source
+            # series and omissions. Compile these decisions once instead of
+            # asking it to copy hundreds of IDs into a second full slide plan.
+            from .topic_plan_compiler import compile_topic_plan
+            return compile_topic_plan(result)
         from adaptive_document_agent.services.presentation_evidence import build_evidence_catalog, observation_record
         # Keep the semantic planning context focused. Large PDFs can contain
         # thousands of observations; an oversized catalogue makes it harder

@@ -139,7 +139,7 @@ class FinancialNormalizer:
         lower_metric = f"{metric_orig} {metric_canon}".strip().casefold()
         current_unit = (obs.unit or "").strip().casefold()
 
-        is_explicit_ratio = any(k in lower_metric for k in ("margin", "%", "share of", "ratio", "proportion", "growth rate", "cagr", "rate", "利润率", "占比", "比例", "增长率"))
+        is_explicit_ratio = bool(re.search(r"\b(?:margin|share of|ratio|proportion|growth rate|cagr|rate)\b|%|利润率|占比|比例|增长率", lower_metric))
         # Intrinsic units take precedence over financial-statement keywords.  For
         # example, "inventory turnover days" contains "inventory", but is not a
         # monetary balance-sheet amount.
@@ -171,7 +171,7 @@ class FinancialNormalizer:
             obs.display_unit = obs.currency or ""
             obs.semantic_type = "monetary_amount"
         elif current_unit in {"", "unknown", "none", "null"} or obs.unit is None:
-            if any(k in lower_metric for k in ("margin", "%", "share of", "ratio", "proportion", "growth rate", "cagr", "rate")):
+            if is_explicit_ratio:
                 obs.unit = "percent"
                 obs.unit_family = "percentage"
                 obs.display_unit = "%"

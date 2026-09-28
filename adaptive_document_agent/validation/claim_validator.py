@@ -1306,6 +1306,9 @@ def extract_metric_aliases(
 
     combined = f"{canonical_name or ''} {metric_name} {pres_label or ''}".casefold()
 
+    if re.search(r"\basp\b|\baverage selling price\b", combined):
+        aliases.update(["ASP", "average selling price", "average selling prices"])
+
     # Inflection must not hide a contradictory claim (inventories vs inventory).
     # Keep the complete metric phrase: turnover days is not revenue/turnover.
     for alias in list(aliases):
@@ -1431,6 +1434,16 @@ def _associate_clause_direction_spans(
     is_only_metric: bool = False, only_metric_name: str | None = None,
 ) -> list[tuple[str, str, int, int]]:
     """Find directional claims in a local clause and associate each only with its specific metric."""
+    # Independently predicated conjuncts have independent subjects, even when
+    # one subject has no known alias. Do not lend that predicate to the other
+    # metric. Preserve joint subjects such as 'volume and price increased'.
+    direction_pattern = r"\b(?:" + "|".join(map(re.escape, _ALL_DIRECTIONAL_WORDS)) + r")\b"
+    for boundary in re.finditer(r"\band\b", clause, re.I):
+        left, right = clause[:boundary.start()], clause[boundary.end():]
+        if re.search(direction_pattern, left, re.I) and re.search(direction_pattern, right, re.I):
+            a = _associate_clause_direction_spans(left, metric_aliases_map, metric_values_map)
+            b = _associate_clause_direction_spans(right, metric_aliases_map, metric_values_map)
+            return a + [(metric, word, s + boundary.end(), e + boundary.end()) for metric, word, s, e in b]
     all_alias_pairs: list[tuple[int, str, str]] = []
     for m_name, aliases in metric_aliases_map.items():
         for alias in aliases:

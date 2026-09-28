@@ -31,7 +31,7 @@ class PresentationPlanRecovery:
         """Prune unsupported material and align citations via PresentationPlanRepairer."""
         return PresentationPlanRepairer().repair(plan, result)
 
-    def from_selected_topics(self, result: PipelineResult) -> PresentationPlan:
+    def from_selected_topics(self, result: PipelineResult, *, origin: str = "topic_recovery") -> PresentationPlan:
         """Retain model-selected questions if final slide writing fails validation.
 
         The model has decided semantic relationships. This recovery only binds
@@ -103,7 +103,7 @@ class PresentationPlanRecovery:
                 oid for chart in result.charts if chart.id in chart_ids
                 for oid in chart.observation_ids
             }
-            supporting_ids = [oid for oid in members if oid not in charted_ids][:12]
+            supporting_ids = [oid for oid in members if oid not in charted_ids]
             referenced_ids = set(supporting_ids) | charted_ids
             allowed_numbers = PresentationPlanValidator._numbers(" ".join(
                 str(value) for oid in referenced_ids if oid in observations
@@ -137,7 +137,7 @@ class PresentationPlanRecovery:
                 )
                 if series_items:
                     visible_support_ids.extend(item.id for item in series_items)
-            visible_support_ids = list(dict.fromkeys(visible_support_ids))[:12]
+            visible_support_ids = list(dict.fromkeys(visible_support_ids))
             theme = PresentationTheme(
                 id=topic.id, title=topic.title, question=topic.question,
                 rationale=topic.rationale, chart_ids=chart_ids,
@@ -150,8 +150,8 @@ class PresentationPlanRecovery:
                 section_id=topic.id, section_title=topic.title,
                 slide_role="overview", layout=layout, message=safe_question,
                 chart_ids=chart_ids, observation_ids=supporting_ids,
-                visual_blocks=[PresentationVisualBlock(role="table", observation_ids=visible_support_ids)]
-                if visible_support_ids else [],
+                visual_blocks=[PresentationVisualBlock(role="table", observation_ids=visible_support_ids[start:start + 12])
+                               for start in range(0, len(visible_support_ids), 12)],
                 theme_id=topic.id, analytical_question=safe_question,
                 selection_reason=safe_reason, comparison_mode="parallel" if len(chart_ids) > 1 else "context",
                 source_pages=pages,
@@ -249,7 +249,7 @@ class PresentationPlanRecovery:
             *(slide for slide in base.slides if slide.slide_type in {"data_quality", "appendix"}),
         ]
         from adaptive_document_agent.services.presentation_editorial import stamp_editorial_review
-        return stamp_editorial_review(PresentationPlanValidator().validate(base, result), result, origin="topic_recovery")
+        return stamp_editorial_review(PresentationPlanValidator().validate(base, result), result, origin=origin)
 
     def fallback(self, result: PipelineResult, *, validate: bool = True) -> PresentationPlan:
         """Build a modern, evidence-only deck when no AI plan can be validated.

@@ -85,6 +85,35 @@ def test_discovery_workers_config_is_bounded(monkeypatch):
         LLMSettings(discovery_workers=100)
 
 
+@pytest.mark.parametrize("local,concurrent,context,expected", [
+    (False, True, 64000, 12000), (False, True, 16000, 8000),
+    (True, True, 64000, 6000), (False, False, 64000, 6000),
+])
+def test_chunk_budget_respects_local_stateful_and_declared_context(local, concurrent, context, expected):
+    from adaptive_document_agent.services.llm.capabilities import ModelCapabilities
+    client = MockLLMClient(capabilities=ModelCapabilities(max_context_tokens=context))
+    client.supports_concurrent_requests = concurrent
+    settings = LLMSettings(provider=ProviderName.OLLAMA if local else ProviderName.OPENAI)
+    gateway = LLMGateway(client, settings)
+    assert DocumentDiscovery(gateway).target_tokens == expected
+    assert DocumentDiscovery(gateway, target_tokens=4000).target_tokens == 4000
+
+
+def test_confirmed_scope_is_not_sampled_to_thirty_two_chunks(monkeypatch):
+    from adaptive_document_agent.models import ParsedDocument, DocumentPage, AnalysisPageRange, DocumentProfile
+    pages = [DocumentPage(page_number=i, text=f"Unique evidence {i}") for i in range(1, 71)]
+    document = ParsedDocument(document_id="synthetic", sha256="synthetic", safe_filename="test.pdf", page_count=70, pages=pages)
+    gateway = SimpleNamespace(discovery_workers=1, generate_structured=lambda *a, **k: DocumentProfile())
+    discovery = DocumentDiscovery(gateway, target_tokens=1)
+    captured = []
+    def collect(chunks, notify):
+        captured.extend(chunks)
+        return [ChunkDiscovery(summary=c.text) for c in chunks]
+    monkeypatch.setattr(discovery, "_discover_chunks", collect)
+    discovery.discover(document, routed_ranges=[AnalysisPageRange(start_page=1, end_page=70, title="Confirmed scope", reason="User selection")])
+    assert [c.start_page for c in captured] == list(range(1, 71))
+
+
 def test_successful_chunk_checkpoint_survives_retry_without_new_model_calls(tmp_path):
     cache = DiskCache(tmp_path)
     settings = LLMSettings(provider=ProviderName.MOCK, model="mock")

@@ -182,7 +182,7 @@ def test_failed_slide_writing_can_retain_selected_question() -> None:
     PresentationPlanValidator().validate(plan, result)
 
 
-def test_topic_recovery_uses_neutral_title_when_endpoint_is_not_on_slide() -> None:
+def test_topic_recovery_retains_all_support_beyond_the_first_twelve_cells() -> None:
     result = _result()
     prototype = result.observations[0]
     result.observations = []
@@ -197,7 +197,7 @@ def test_topic_recovery_uses_neutral_title_when_endpoint_is_not_on_slide() -> No
     result.presentation_topics = PresentationTopicSelection(topics=[PresentationTopic(
         id="growth", title="Revenue movement", question="How did revenue move?",
         rationale="The reported series spans several years.",
-        takeaway="Revenue peaked in 2033", series_ids=[series_id],
+        takeaway="Revenue includes reported values for 2033", series_ids=[series_id],
     )])
     chart = result.charts[0]
     chart.observation_ids = ["revenue-2034", "revenue-2035"]
@@ -205,8 +205,10 @@ def test_topic_recovery_uses_neutral_title_when_endpoint_is_not_on_slide() -> No
     plan = PresentationPlanRecovery().from_selected_topics(result)
     slide = next(item for item in plan.slides if item.theme_id == "growth")
 
-    assert slide.title == "Revenue movement"
-    assert "revenue-2033" not in slide.observation_ids
+    assert slide.title == "Revenue includes reported values for 2033"
+    assert "revenue-2033" in slide.observation_ids
+    assert {o.id for o in result.observations} == set(slide.observation_ids) | set(chart.observation_ids)
+    assert all(len(block.observation_ids) <= 12 for block in slide.visual_blocks)
     PresentationPlanValidator().validate(plan, result)
 
 
@@ -314,11 +316,11 @@ def test_selected_topics_avoid_a_second_full_slide_plan_request() -> None:
             return response_model(title="Invalid empty slide draft")
 
     gateway = Gateway()
-    try:
-        PresentationPlanner(gateway).plan(result)
-    except ValueError:
-        pass  # The orchestrator retains the model-selected questions.
-    assert gateway.calls == 1
+    plan = PresentationPlanner(gateway).plan(result)
+    assert gateway.calls == 0
+    assert plan.planning_origin == "topic_compilation"
+    assert plan.themes[0].id == "growth"
+    PresentationPlanValidator().validate(plan, result)
 
 
 def test_thematic_appendix_keeps_selected_evidence_without_unrelated_conflicts() -> None:

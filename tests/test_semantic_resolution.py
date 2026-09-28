@@ -26,7 +26,7 @@ def test_empty_metrics_do_not_call_model():
 
 
 def test_parallel_batches_keep_order_vocabulary_context_and_all_terms():
-    names = [f"Metric {i}" for i in range(120)]
+    names = [f"Metric {i}" for i in range(240)]
     barrier, lock = Barrier(3), Lock()
     active = peak = 0
 
@@ -37,7 +37,7 @@ def test_parallel_batches_keep_order_vocabulary_context_and_all_terms():
         assert all(name in text for name in names)
         assert kwargs["stage"] == "semantic"
         assigned = [line[2:] for line in text.splitlines() if line.startswith("- Metric ")]
-        assert len(assigned) <= 48
+        assert len(assigned) <= 96
         with lock:
             active += 1
             peak = max(peak, active)

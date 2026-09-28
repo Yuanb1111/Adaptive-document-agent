@@ -487,7 +487,7 @@ def _add_planned_contents(
         label = ("Data Index" if item.slide_type == "appendix" else item.section_title or defaults[item.slide_type]).strip()
         # Clean section label: show section names only, not long slide titles
         if len(label) > 36:
-            label = label.split(":", 1)[0].split("—", 1)[0].split("-", 1)[0].strip()
+            label = re.split(r"\s+[—–-]\s+|:\s+", label, maxsplit=1)[0].strip()
         key = label.casefold()
         if key not in seen:
             seen.add(key)
@@ -1973,25 +1973,34 @@ def _add_evidence_table_slides(
         active_themes = [t for t in theme_set if t in metrics_by_theme]
         if not active_themes:
             continue
-        group_periods = sorted(
-            {p for t in active_themes for m in metrics_by_theme[t].values() for p in m["periods"]},
-            key=period_sort_key,
-        )
-        if not group_periods:
-            continue
-        period_groups: dict[str, list[str]] = {}
-        for period in group_periods:
-            period_groups.setdefault(extract_period_basis(period), []).append(period)
-        p_chunks = [periods[i:i + 6] for periods in period_groups.values() for i in range(0, len(periods), 6)]
-        for p_chunk in p_chunks:
-            from .appendix_layout import paginate_themes
-            compatible_themes = []
-            for theme in active_themes:
-                theme_metrics = {name: entry for name, entry in metrics_by_theme[theme].items()
-                                 if any(p in entry["periods"] for p in p_chunk)}
-                if theme_metrics:
-                    compatible_themes.append((theme, theme_metrics))
-            slide_specs.extend((p_chunk, bundle, is_bs) for bundle in paginate_themes(compatible_themes))
+        # Shared duration alone does not justify stretching every row across
+        # unrelated years. Keep exact period sets in separate native tables.
+        period_tables = {}
+        for theme in active_themes:
+            for identity, entry in metrics_by_theme[theme].items():
+                period_groups = {}
+                for period in sorted(entry["periods"], key=period_sort_key):
+                    period_groups.setdefault(extract_period_basis(period), []).append(period)
+                for periods in period_groups.values():
+                    for start in range(0, len(periods), 6):
+                        key = tuple(periods[start:start + 6])
+                        period_tables.setdefault(key, {}).setdefault(theme, {})[identity] = entry
+        from .appendix_layout import paginate_themes
+        for p_chunk, themes in period_tables.items():
+            from .text_capacity import wrap_copy
+            metric_w = max(2.80, min(3.80, 11.70 - 1.10 - len(p_chunk) * 1.15))
+            widths = [metric_w, 1.10] + [(11.70 - metric_w - 1.10) / len(p_chunk)] * len(p_chunk)
+            def row_height(values):
+                return max(.38, max(len(wrap_copy(str(v), w - .16, 10.5))
+                                    for v, w in zip(values, widths)) * .16 + .13)
+            def metric_height(entry):
+                return row_height([entry["label"], entry["unit"],
+                                   *[entry["periods"].get(p, "—") for p in p_chunk]])
+            header_height = row_height(["Financial Metric", "Unit", *p_chunk])
+            slide_specs.extend((list(p_chunk), bundle, is_bs)
+                               for bundle in paginate_themes(list(themes.items()), capacity=4.10 - header_height,
+                                   row_cost=metric_height,
+                                   heading_cost=lambda theme: row_height([f"■ {theme.upper()}", "", *[""] * len(p_chunk)])))
 
     if not slide_specs:
         sorted_periods = sorted(all_periods_set, key=period_sort_key) or ["Reported"]
@@ -2001,15 +2010,12 @@ def _add_evidence_table_slides(
     if max_pages is not None:
         slide_specs = slide_specs[:max_pages]
 
-    total_specs = len(slide_specs)
-    for spec_index, (p_chunk, theme_entries, is_bs) in enumerate(slide_specs, start=1):
+    appendix_slides = []
+    for p_chunk, theme_entries, is_bs in slide_specs:
         generic_section = bool(thematic_labels) or all(t == "Reported Measures" for t, _ in theme_entries)
-        basis = extract_period_basis(p_chunk[0]) if p_chunk else "generic"
-        group_type_str = "Point-in-time measures" if basis == "point_in_time" else "Annual measures" if basis == "FY" else "Interim measures" if basis != "generic" else "Reported measures"
-        slide_subtitle = subtitle or f"{group_type_str} across reported periods, with source provenance"
-        if total_specs > 1:
-            slide_subtitle += f" | Appendix {spec_index} of {total_specs}"
+        slide_subtitle = subtitle or "Reported values with separate period headers and source provenance"
         slide = _base_slide(presentation, title, slide_subtitle)
+        appendix_slides.append(slide)
         source_notes = []
         page_observations = []
         for _, entries in theme_entries:
@@ -2055,6 +2061,7 @@ def _add_evidence_table_slides(
         num_rows = len(table_rows) + 1
         num_cols = len(formatted_headers)
         table_shape = slide.shapes.add_table(num_rows, num_cols, Inches(0.45), Inches(table_top), Inches(11.70), Inches(table_h))
+        table_shape.name = "evidence:packable"
         table = table_shape.table
 
         num_p = len(active_p_chunk)
@@ -2109,9 +2116,20 @@ def _add_evidence_table_slides(
                     cell.vertical_anchor = MSO_ANCHOR.MIDDLE
                     cell.text_frame.paragraphs[0].alignment = PP_ALIGN.RIGHT
 
-        row_height = min(0.38, 4.40 / max(num_rows, 1))
+        from .text_capacity import wrap_copy
+        from copy import deepcopy
         for row in table.rows:
-            row.height = Inches(row_height)
+            lines = []
+            for cell, col in zip(row.cells, table.columns):
+                wrapped = wrap_copy(cell.text, col.width.inches - .16, 10.5)
+                properties = deepcopy(cell.text_frame.paragraphs[0]._p.pPr)
+                cell.text = "\n".join(wrapped)
+                if properties is not None:
+                    for paragraph in cell.text_frame.paragraphs:
+                        paragraph._p.insert(0, deepcopy(properties))
+                cell.text_frame.word_wrap = True
+                lines.append(len(wrapped))
+            row.height = Inches(max(.38, max(lines) * .16 + .13))
 
         has_unaudited = any("*" in h for h in formatted_headers[1:])
         star_note = " | * Unaudited" if has_unaudited else ""
@@ -2120,8 +2138,10 @@ def _add_evidence_table_slides(
         from .presentation_conventions import signed_expense_note
         convention = signed_expense_note(page_observations)
         if convention:
-            _text(slide, convention, 0.45, 5.90, 11.70, 0.28, size=10, color=FOURIER_MUTED)
-        _text(slide, footnote, 0.45, 6.22, 11.70, 0.25, size=9.0, color=FOURIER_MUTED)
+            _text(slide, convention, 0.45, max(5.90, table_shape.top.inches + table_shape.height.inches + .08), 11.70, 0.28, size=10, color=FOURIER_MUTED).name = "evidence:convention"
+        _text(slide, footnote, 0.45, 6.22, 11.70, 0.25, size=9.0, color=FOURIER_MUTED).name = "evidence:footer"
+    from .evidence_page_packing import pack_evidence_pages
+    pack_evidence_pages(presentation, appendix_slides)
 
 
 def update_geometry(

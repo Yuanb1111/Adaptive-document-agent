@@ -199,14 +199,14 @@ class PresentationPreflight:
                 text = shape.text
                 text_lower = text.casefold()
                 for phrase in BANNED_PHRASES:
-                    if phrase in text_lower:
+                    if re.search(r"(?<!\w)" + re.escape(phrase) + r"(?!\w)", text_lower):
                         self.issues.append(PreflightIssue(idx, "banned_phrase", f"Found banned phrase '{phrase}' in text"))
                         # Sanitize in place if possible
                         self._sanitize_text_frame(shape.text_frame, phrase)
 
     @staticmethod
     def _sanitize_text_frame(frame: Any, phrase: str) -> None:
-        pattern = re.compile(re.escape(phrase), re.IGNORECASE)
+        pattern = re.compile(r"(?<!\w)" + re.escape(phrase) + r"(?!\w)", re.IGNORECASE)
         for p in frame.paragraphs:
             if pattern.search(p.text):
                 # Clean professional rephrasing

@@ -312,9 +312,9 @@ def extract_period_basis(period: str | None) -> str:
     p = str(period).strip()
     if m := re.search(r"(?i)\b([0-9]{1,2})M(?:\d{2,4})?\b", p):
         return f"{m.group(1)}M".upper()
-    if re.search(r"(?i)\b(?:1H|2H|H1|H2)\b", p):
+    if re.search(r"(?i)\b(?:1H|2H|H1|H2)(?:\s*(?:19|20)\d{2})?\b", p):
         return "6M"
-    if re.search(r"(?i)\b(?:Q[1-4]|[1-4]Q)\b", p):
+    if re.search(r"(?i)\b(?:Q[1-4]|[1-4]Q)(?:\s*(?:19|20)\d{2})?\b", p):
         return "3M"
     if re.search(r"(?i)six\s*months?\s*ended", p) or "六个月" in p:
         return "6M"

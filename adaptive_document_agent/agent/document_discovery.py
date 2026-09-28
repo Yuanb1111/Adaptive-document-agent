@@ -30,6 +30,22 @@ class ChunkDiscovery(BaseModel):
     data_quality_notes: list[str] = Field(default_factory=list)
 
 
+class DiscoveryOverview(BaseModel):
+    """Only semantic synthesis is generated again; inventories stay in Python."""
+
+    document_type: str = "Unknown document"
+    document_purpose: str = "Not yet determined"
+    overview_title: str = "Document overview"
+    document_summary: str = ""
+    document_summary_pages: list[int] = Field(default_factory=list)
+    overview_points: list[str] = Field(default_factory=list)
+    language: str | None = None
+    important_sections: list[str] = Field(default_factory=list)
+    important_tables: list[str] = Field(default_factory=list)
+    important_figures: list[str] = Field(default_factory=list)
+    data_quality_notes: list[str] = Field(default_factory=list)
+
+
 class DocumentRoute(BaseModel):
     selected_page_ranges: list[AnalysisPageRange] = Field(default_factory=list)
 
@@ -41,9 +57,16 @@ class RouteBudgetSelection(BaseModel):
 
 
 class DocumentDiscovery:
-    def __init__(self, gateway: LLMGateway | None = None, *, target_tokens: int = 6_000, cache: DiskCache | None = None) -> None:
+    def __init__(self, gateway: LLMGateway | None = None, *, target_tokens: int | None = None, cache: DiskCache | None = None) -> None:
         self.gateway = gateway
-        self.target_tokens = target_tokens
+        self.target_tokens = target_tokens or 6000
+        if target_tokens is None and isinstance(gateway, LLMGateway) and gateway.discovery_workers > 1:
+            self.target_tokens = gateway.settings.discovery_chunk_tokens
+            context = gateway.client.capabilities.max_context_tokens
+            if context is not None:
+                # Reserve half the declared context for schema, response and
+                # token-estimation error. Local/stateful clients keep 6k chunks.
+                self.target_tokens = min(self.target_tokens, max(1000, context // 2))
         self.cache = cache
 
     def discover(
@@ -75,7 +98,8 @@ class DocumentDiscovery:
                     target_tokens=self.target_tokens,
                 )
             ]
-            chunks = self._select_chunks(chunks, routed_ranges)
+            # All pages in the confirmed scope remain covered. Larger bounded
+            # chunks reduce request waves without sampling away late evidence.
         else:
             chunks = semantic_chunks(document.pages, target_tokens=self.target_tokens)
         discoveries = self._discover_chunks(chunks, notify)
@@ -83,7 +107,13 @@ class DocumentDiscovery:
         compact = compact_discoveries(chunks, discoveries)
         notify("Merging selected sections into the global document profile")
         messages = [
-                {"role": "system", "content": load_prompt("document_discovery.txt")},
+                {"role": "system", "content": load_prompt("document_discovery.txt") + (
+                    "\nSynthesize only the requested overview and important sections/tables/figures. "
+                    "Keep document_summary within 120 words (240 Chinese characters). "
+                    "Do not reproduce metric, unit, period, currency, entity or dimension inventories: "
+                    "the complete exact-term catalog is merged by Python after this call. "
+                    "Return new cross-chunk quality notes only; existing notes are retained automatically."
+                )},
         ]
         if analysis_focus and analysis_focus.strip():
             messages.append(
@@ -93,11 +123,12 @@ class DocumentDiscovery:
                 }
             )
         messages.append(untrusted_document_message(compact))
-        profile = self.gateway.generate_structured(
+        overview = self.gateway.generate_structured(
             messages,
-            DocumentProfile,
+            DiscoveryOverview,
             stage="discovery",
         )
+        profile = DocumentProfile.model_validate(overview.model_dump())
         reviewed_pages = {
             page
             for chunk in chunks
@@ -244,12 +275,12 @@ class DocumentDiscovery:
         return [chunks[min(int(index * step), len(chunks) - 1)] for index in range(maximum)]
 
     def _discover_chunk(self, chunk: DocumentChunk) -> ChunkDiscovery:
-        prompt = load_prompt("document_discovery.txt")
+        prompt = load_prompt("chunk_discovery.txt")
         cache_key = None
         if self.cache is not None and self.gateway is not None and self.gateway.cache_enabled:
             settings = self.gateway.settings
             identity = {
-                "version": "chunk-discovery-v1",
+                "version": "chunk-discovery-v2",
                 "prompt": prompt,
                 "schema": ChunkDiscovery.model_json_schema(),
                 "chunk": chunk.model_dump(mode="json"),
@@ -258,11 +289,13 @@ class DocumentDiscovery:
                 "endpoint": settings.base_url,
                 "privacy_mode": settings.privacy_mode.value,
                 "temperature": settings.temperature,
+                "discovery_thinking": settings.discovery_thinking,
             }
             # Only the hash is used as a filename. No API keys are persisted.
             cache_key = "chunk-discovery-" + sha256_bytes(json.dumps(identity, sort_keys=True).encode())
             cached = self.cache.get_model(cache_key, ChunkDiscovery)
             if cached is not None:
+                self.gateway.record_cache_hit(stage="discovery", operation="ChunkDiscovery")
                 return cached
         discovery = self.gateway.generate_structured(  # type: ignore[union-attr]
             [

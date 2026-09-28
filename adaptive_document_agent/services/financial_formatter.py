@@ -199,7 +199,8 @@ def is_expense_ratio_metric(name: str) -> bool:
     """Check if metric represents an expense ratio where positive indicates cost intensity."""
     lower = name.casefold()
     return any(k in lower for k in _EXPENSE_RATIO_KEYWORDS) and any(
-        s in lower for s in ("ratio", "share", "%", "margin", "/ revenue", "比例", "占比")
+        bool(re.search(r"(?<!\w)" + re.escape(s) + r"(?!\w)", lower)) if s.isascii() and s.isalpha() else s in lower
+        for s in ("ratio", "share", "%", "margin", "/ revenue", "比例", "占比")
     )
 
 

@@ -101,8 +101,8 @@ def test_appendix_keeps_unknown_period_cells_separate():
     _add_evidence_table_slides(deck, result, [])
     rows = [cell.text for slide in deck.slides for shape in slide.shapes if shape.has_table
             for row in shape.table.rows for cell in row.cells]
-    assert any("column_2; period unspecified" in text for text in rows)
-    assert any("column_3; period unspecified" in text for text in rows)
+    assert any("column_2; period unspecified" in " ".join(text.split()) for text in rows)
+    assert any("column_3; period unspecified" in " ".join(text.split()) for text in rows)
     assert any("4.8" in text for text in rows)
     assert any("1.5" in text for text in rows)
 

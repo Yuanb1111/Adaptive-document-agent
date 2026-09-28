@@ -1,6 +1,7 @@
 """Abstract interface implemented by all model providers."""
 
 from abc import ABC, abstractmethod
+from contextlib import nullcontext
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -21,6 +22,10 @@ class LLMResponse(BaseModel):
 class LLMClient(ABC):
     # Stateful/custom adapters remain serial unless they explicitly opt in.
     supports_concurrent_requests: bool = False
+
+    def request_context(self, *, stage: str):
+        """Optional per-call policy scope; custom adapters retain their API."""
+        return nullcontext()
 
     @abstractmethod
     def generate_text(

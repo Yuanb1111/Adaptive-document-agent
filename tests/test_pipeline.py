@@ -141,27 +141,7 @@ def test_complete_pipeline_with_mock_llm_controls_semantic_selection() -> None:
         {"title": "Revenue Performance Analysis", "sections": [{"title": "Revenue Performance", "purpose": "Explain the validated change.", "insight_ids": ["insight_mock"]}]},
         {"topics": [{"id": "revenue", "title": "Revenue movement", "question": "How did revenue change?",
                      "rationale": "The document contains one comparable series.", "series_ids": [topic_series_id]}]},
-        {
-            "title": "Revenue Performance Review",
-            "report_type": "Performance analysis",
-            "themes": [{"id": "revenue", "title": "Revenue movement", "question": "How did revenue change?",
-                        "rationale": "The document contains one comparable series.",
-                        "chart_ids": [topic_chart_id], "insight_ids": ["insight_mock"], "source_pages": [1]}],
-            "company": {
-                "name": "Revenue document",
-                "one_line_description": "A source document reporting a three-year revenue series.",
-                "document_type": "Revenue performance report",
-                "source_pages": [1],
-            },
-            "slides": [
-                {"id": "cover", "slide_type": "cover", "title": "Revenue Performance Review", "message": "Three-year evidence review"},
-                {"id": "overview", "slide_type": "company_overview", "title": "Document at a Glance", "source_pages": [1]},
-                {"id": "summary", "slide_type": "executive_summary", "title": "Revenue changed across the reported period", "insight_ids": ["insight_mock"], "source_pages": [1]},
-                {"id": "analysis", "slide_type": "analysis", "title": "Revenue rose across all reported years", "section_title": "Financial Performance", "message": "The reported series shows sustained growth.", "chart_ids": [topic_chart_id], "insight_ids": ["insight_mock"], "source_pages": [1], "theme_id": "revenue", "analytical_question": "How did revenue change?", "selection_reason": "Revenue is the only comparable series in this document."},
-                {"id": "quality", "slide_type": "data_quality", "title": "Data quality and methodology"},
-                {"id": "appendix", "slide_type": "appendix", "title": "Source data"},
-            ],
-        },
+        {"pages": []},  # No introductory source pages in this synthetic document.
     ]
     client = MockLLMClient(responses)
     settings = LLMSettings(provider=ProviderName.MOCK, model="mock")
@@ -173,7 +153,10 @@ def test_complete_pipeline_with_mock_llm_controls_semantic_selection() -> None:
     assert result.presentation_plan is not None
     assert result.presentation_plan.slides[1].title == "Document at a Glance"
     assert "## Revenue overview" in result.report_markdown
-    assert len(client.calls) == 9  # Includes independent introduction-page selection.
+    assert len(client.calls) == 8  # Topics compile locally; only introduction selection follows.
+    assert result.presentation_plan.planning_origin == "topic_compilation"
+    assert result.pipeline_total_ms >= max(result.timings_ms.values())
+    assert {"insights", "report_outline", "topic_selection", "slide_plan"} <= result.stage_details_ms.keys()
 
 
 def test_presentation_plan_failure_does_not_discard_completed_analysis(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -73,6 +73,7 @@ def render(st, result: PipelineResult, raw_pdf: bytes, progress) -> None:
         pptx_bytes = verified.payload
         visual_report = verified.report
         export_timings = verified.timings_ms
+        result.export_timings_ms = dict(export_timings)
         progress.finish()
         st.caption(
             f"PowerPoint export: {verified.timings_ms['ppt_export_total'] / 1000:.1f}s; "

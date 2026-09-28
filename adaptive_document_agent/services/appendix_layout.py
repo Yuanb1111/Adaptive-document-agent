@@ -1,20 +1,23 @@
 """Balance contiguous appendix rows without changing their evidence or periods."""
 
 
-def paginate_themes(themes: list[tuple[str, dict]], *, capacity: int = 10) -> list[list[tuple[str, dict]]]:
+def paginate_themes(themes: list[tuple[str, dict]], *, capacity: float = 10,
+                    row_cost=None, heading_cost=None) -> list[list[tuple[str, dict]]]:
     """Minimize pages, then unused space, counting each repeated section header.
 
     Call separately for each compatible period group. Topics keep their order;
     a topic may continue onto the next page instead of leaving a sparse tail.
     """
     rows = [(theme, key, entry) for theme, entries in themes for key, entry in entries.items()]
+    row_cost = row_cost or (lambda entry: 1)
+    heading_cost = heading_cost or (lambda theme: 1)
     best = [(0, 0, [])] + [None] * len(rows)
     for end in range(1, len(rows) + 1):
-        headers = 0
+        used = 0
         for start in range(end - 1, -1, -1):
             if start == end - 1 or rows[start][0] != rows[start + 1][0]:
-                headers += 1
-            used = end - start + headers
+                used += heading_cost(rows[start][0])
+            used += row_cost(rows[start][2])
             if used > capacity:
                 break
             previous = best[start]

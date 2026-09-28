@@ -351,9 +351,45 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
                             p.font.name, p.font.size = FONT, Pt(14)
                 return []
         if table:
+            # Several complete series on the same periods share one matrix.
+            # Do not join unknown, conflicting or incompatible period groups.
+            groups = evidence_groups(items)
+            period_sets = [tuple(format_observation_period(o) for o in group) for group in groups]
+            if (horizontal and len(groups) > 1 and period_sets
+                    and all(p == period_sets[0] for p in period_sets)
+                    and all(period_sets[0]) and len(set(period_sets[0])) == len(period_sets[0])
+                    and len(period_sets[0]) <= 6):
+                widths = [rect.w * .48] + [rect.w * .52 / len(period_sets[0])] * len(period_sets[0])
+                cells = [["Metric", *period_sets[0]]]
+                for group in groups:
+                    name = display_metric_name(group[0])
+                    values = []
+                    for o in group:
+                        semantic = classify_metric(name, unit=o.unit, raw_unit=o.raw_unit, value=o.value)
+                        value = format_metric_display_value(o.raw_value, o.value, semantic,
+                            raw_unit=_display_source_unit(o), currency=o.currency, compact=True)
+                        values.append(signed_expense_display(o, value))
+                    cells.append([name, *values])
+                wrapped = [["\n".join(_lines(v, w - .30, 14)) for v, w in zip(row, widths)] for row in cells]
+                heights = [max(.4, max(len(v.splitlines()) for v in row) * .24 + .14) for row in wrapped]
+                if sum(heights) <= rect.h:
+                    shape = owner.shapes.add_table(len(cells), len(widths), Inches(rect.x), Inches(rect.y), Inches(rect.w), Inches(sum(heights)))
+                    shape.name = "table:" + ",".join(o.id for o in items)
+                    for j, w in enumerate(widths):
+                        shape.table.columns[j].width = Inches(w)
+                    for i, row in enumerate(wrapped):
+                        shape.table.rows[i].height = Inches(heights[i])
+                        for j, value in enumerate(row):
+                            cell = shape.table.cell(i, j)
+                            cell.text = value
+                            cell.text_frame.word_wrap = True
+                            for p in cell.text_frame.paragraphs:
+                                p.font.name, p.font.size = FONT, Pt(14)
+                    return []
             # A short single-series support band shows ALL periods horizontally,
             # rather than losing intermediate changes or creating a near-empty continuation.
-            if horizontal and 1 < len(items) <= 6 and len(evidence_groups(items)) == 1:
+            if (horizontal and 1 < len(items) <= 6 and len(evidence_groups(items)) == 1
+                    and all(format_observation_period(o) for o in items)):
                 name = display_metric_name(items[0])
                 name = re.sub(r"(?i)^Adjusted for Adjusted\b", "Adjusted", name)
                 cells = [["Metric", *[format_observation_period(o) for o in items]], [name]]
@@ -363,18 +399,20 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
                         raw_unit=_display_source_unit(o), currency=o.currency, compact=True)
                     cells[1].append(signed_expense_display(o, display))
                 widths = [rect.w * .34] + [rect.w * .66 / len(items)] * len(items)
-                heights = [max(.4, max(len(_lines(v, w - .15, 14)) for v, w in zip(row, widths)) * .24 + .1)
-                           for row in cells]
+                wrapped = [["\n".join(_lines(v, w - .30, 14)) for v, w in zip(row, widths)] for row in cells]
+                heights = [max(.4, max(len(v.splitlines()) for v in row) * .24 + .14)
+                           for row in wrapped]
                 if sum(heights) <= rect.h:
                     shape = owner.shapes.add_table(2, len(items) + 1, Inches(rect.x), Inches(rect.y), Inches(rect.w), Inches(sum(heights)))
                     shape.name = "table:" + ",".join(o.id for o in items)
                     for j, w in enumerate(widths):
                         shape.table.columns[j].width = Inches(w)
-                    for i, row in enumerate(cells):
+                    for i, row in enumerate(wrapped):
                         shape.table.rows[i].height = Inches(heights[i])
                         for j, value in enumerate(row):
                             cell = shape.table.cell(i, j)
                             cell.text = value
+                            cell.text_frame.word_wrap = True
                             for p in cell.text_frame.paragraphs:
                                 p.font.name, p.font.size = FONT, Pt(14)
                     return []
@@ -389,7 +427,8 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
                     column = next((e.column_label for e in o.evidence if e.column_label), "")
                     period_label = "Unspecified" + (f" ({column})" if column else "")
                 cells = (name, period_label, display)
-                row_h = max(0.4, max(len(_lines(v, rect.w * w - 0.15, 14)) for v, w in zip(cells, (0.50, 0.20, 0.30))) * 0.24 + 0.10)
+                cells = tuple("\n".join(_lines(v, rect.w * w - .30, 14)) for v, w in zip(cells, (.50, .20, .30)))
+                row_h = max(0.4, max(len(v.splitlines()) for v in cells) * 0.24 + 0.14)
                 if sum(heights) + row_h > rect.h:
                     break
                 rows.append(cells)
@@ -413,6 +452,7 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
             for row, h in zip(table_obj.rows, heights):
                 row.height = Inches(h)
                 for cell in row.cells:
+                    cell.text_frame.word_wrap = True
                     for p in cell.text_frame.paragraphs:
                         p.font.name = FONT
                         p.font.size = Pt(14)

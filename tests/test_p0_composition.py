@@ -225,7 +225,7 @@ def test_explicit_table_keeps_all_rows_and_long_labels():
     result.presentation_plan.slides[3].visual_blocks[-1] = PresentationVisualBlock(role="table", observation_ids=[o.id for o in support])
     deck = Presentation(io.BytesIO(export_pptx(result)))
     cells = [cell.text for sl in deck.slides if sl.name.startswith("composed_") for shape in sl.shapes if shape.has_table for row in shape.table.rows for cell in row.cells]
-    assert all(o.metric_original in cells for o in support)
+    assert all(o.metric_original in [" ".join(c.split()) for c in cells] for o in support)
 
 
 def test_explicit_chart_type_override_is_not_lost_by_deduplication():

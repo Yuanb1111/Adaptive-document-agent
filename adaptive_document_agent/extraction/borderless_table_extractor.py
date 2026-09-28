@@ -14,6 +14,7 @@ from .period_header_geometry import geometric_periods
 
 _VALUE = re.compile(r"(?<![A-Za-z0-9])(?:\(?[+-]?(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)\)?[%％]?|[—–]|-(?!\S))")
 _YEAR = re.compile(r"\b(?:19|20)\d{2}\b")
+_PERIOD_TOKEN = re.compile(r"\b(?:(?:FY|CY|H[12]|[12]H|Q[1-4])\s*)?(?:19|20)\d{2}(?:\s*(?:H[12]|[12]H|Q[1-4]))?\b", re.I)
 _WORD = re.compile(r"[%A-Za-z][%A-Za-z/-]*")
 
 
@@ -54,7 +55,7 @@ class BorderlessTableExtractor:
             if not years and not has_dot_leaders:
                 continue
             periods = self._expand_periods(years, maximum_values, lines, year_index)
-            if year_index is not None:
+            if year_index is not None and all(_YEAR.fullmatch(year) for year in years):
                 resolved = geometric_periods(sources[max(0, year_index-4):year_index], sources[year_index], maximum_values)
                 if resolved:
                     periods = resolved
@@ -194,9 +195,14 @@ class BorderlessTableExtractor:
 
     @staticmethod
     def _nearest_year_header(lines: list[str], first_row: int) -> tuple[int | None, list[str]]:
-        for index in range(first_row - 1, max(-1, first_row - 16), -1):
-            years = _YEAR.findall(lines[index])
-            if len(years) >= 2:
+        for index in range(first_row - 1, max(-1, first_row - 40), -1):
+            matches = list(_PERIOD_TOKEN.finditer(lines[index]))
+            years = [m.group().replace(" ", "") for m in matches]
+            # A contiguous header tier, not dates scattered through prose.
+            if (len(years) >= 2 and not lines[index][matches[-1].end():].strip()
+                    and all(not lines[index][a.end():b.start()].strip() for a,b in zip(matches,matches[1:]))):
+                years = [re.sub(r"^((?:19|20)\d{2})(H[12]|[12]H|Q[1-4])$", r"\2\1", y, flags=re.I) for y in years]
+                years = [re.sub(r"^H([12])", r"\1H", y, flags=re.I) for y in years]
                 return index, years
         return None, []
 
@@ -204,6 +210,8 @@ class BorderlessTableExtractor:
     def _expand_periods(years: list[str], width: int, lines: list[str], year_index: int | None) -> list[str | None]:
         if not years or width % len(years):
             return [None] * width
+        if any(not _YEAR.fullmatch(year) for year in years):
+            return [year for year in years for _ in range(width // len(years))]
         context = " ".join(lines[max(0, (year_index or 0) - 3) : (year_index or 0) + 1]).casefold()
         labels = list(years)
         duplicate_at = next((index for index, year in enumerate(years) if year in years[:index]), None)
@@ -340,7 +348,10 @@ class BorderlessTableExtractor:
             between = [line for line in between if not BorderlessTableExtractor._period_from_line(line)
                        and sum(bool(re.search(r"\d", m.group())) for m in _VALUE.finditer(line)) < 2]
             label = row.label
-            if row is group[0] and first_prefix:
+            wrapped = BorderlessTableExtractor._parenthetical_label(lines, row.line_index, label)
+            if wrapped:
+                label = wrapped
+            elif row is group[0] and first_prefix:
                 label = re.sub(r"^[–—•-]\s+", "", first_prefix) + " " + label
             elif (between and sources and row.line_index > 0
                   and between[-1] == lines[row.line_index-1].strip(" .:")
@@ -363,6 +374,32 @@ class BorderlessTableExtractor:
             output.append(([label, *values], row_periods, ambiguous))
             previous_index = row.line_index
         return output
+
+    @staticmethod
+    def _parenthetical_label(lines: list[str], index: int, label: str) -> str | None:
+        """Join a demonstrably open parenthetical label, never adjacent prose."""
+        balance = label.count(")") - label.count("(")
+        if balance <= 0:
+            return None
+        parts = [label]
+        for i in range(index - 1, max(-1, index - 12), -1):
+            line = lines[i].strip()
+            if not line or len(line) > 110 or BorderlessTableExtractor._parse_row(i, line):
+                return None
+            parts.insert(0, line)
+            balance += line.count(")") - line.count("(")
+            if balance <= 0:
+                if balance != 0:
+                    return None
+                # A parenthetical qualifier may follow the main label on its
+                # own line. Keep that exact source label as well.
+                if i > 0:
+                    prefix = lines[i-1].strip()
+                    if (prefix and len(prefix) < 90 and not re.search(r"\d|[():.]", prefix)
+                            and not BorderlessTableExtractor._parse_row(i-1, prefix)):
+                        parts.insert(0, prefix)
+                return " ".join(parts)
+        return None
 
     @staticmethod
     def _period_from_line(line: str) -> str | None:

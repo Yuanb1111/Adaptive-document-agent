@@ -233,7 +233,7 @@ def is_financial_statement_metric(name: str) -> bool:
     lower = name.strip().casefold()
     if any(k in lower for k in _MARGIN_KEYWORDS) or any(k in lower for k in _SHARE_KEYWORDS):
         return False
-    if any(k in lower for k in ("%", "margin", "ratio", "multiple", "days", "turnover", "dso", "dio", "dpo")):
+    if "%" in lower or re.search(r"\b(?:margin|ratio|multiple|days|turnover|dso|dio|dpo)\b", lower):
         return False
     return any(k in lower for k in _FINANCIAL_STATEMENT_KEYWORDS) or any(k in lower for k in _CURRENCY_KEYWORDS)
 
@@ -570,7 +570,7 @@ def sanitize_metric_label(name: str) -> str:
         clean,
     ) or (
         re.search(r"(?i)research(?:\s+and\s+|\s*&\s*)development", clean)
-        and any(k in clean.casefold() for k in ("share of revenue", "% of revenue", "/ revenue", "ratio"))
+        and (any(k in clean.casefold() for k in ("share of revenue", "% of revenue", "/ revenue")) or re.search(r"(?i)\bratio\b", clean))
     ):
         return "R&D / revenue"
     if re.search(r"(?i)(?:selling\s+(?:and|&)\s+(?:distribution|marketing)|sales\s+(?:and|&)\s+marketing)(?:\s+expenses?)?\s*(?::\s*share\s+of\s+revenue|\s*as\s*%\s*of\s*revenue|\s*/\s*revenue|\s*ratio)", clean):

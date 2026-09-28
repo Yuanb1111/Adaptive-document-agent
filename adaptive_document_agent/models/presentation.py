@@ -175,7 +175,7 @@ class PresentationPlan(BaseModel):
     title: str
     report_type: str = "Document analysis"
     company: CompanyProfile = Field(default_factory=CompanyProfile)
-    planning_origin: Literal["model", "repaired", "topic_recovery", "fallback", "legacy"] = "legacy"
+    planning_origin: Literal["model", "repaired", "topic_compilation", "topic_recovery", "fallback", "legacy"] = "legacy"
     editorial_status: Literal["unreviewed", "ready", "needs_review", "degraded"] = "unreviewed"
     editorial_notes: list[str] = Field(default_factory=list)
     coverage_notes: list[str] = Field(default_factory=list, max_length=12)

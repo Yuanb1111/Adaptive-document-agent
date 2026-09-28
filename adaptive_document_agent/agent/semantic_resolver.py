@@ -26,11 +26,12 @@ class SemanticResolver:
         if not self.gateway:
             return [SemanticMapping(original_name=name, canonical_name=None, confidence=0.5, reason="No semantic model configured; original preserved.") for name in unique]
         workers = getattr(self.gateway, "discovery_workers", 1)
-        if workers > 1 and len(unique) > 48:
+        batch_size = self.gateway.settings.semantic_batch_size if isinstance(self.gateway, LLMGateway) else 96
+        if workers > 1 and len(unique) > batch_size:
             # Every request sees the complete vocabulary and the same evidence
             # context, but emits mappings only for its assigned terms. Bound
             # both concurrency and response size without dropping any terms.
-            batches = [unique[start:start + 48] for start in range(0, len(unique), 48)]
+            batches = [unique[start:start + batch_size] for start in range(0, len(unique), batch_size)]
             vocabulary = "\n".join(unique)
             with ThreadPoolExecutor(max_workers=min(workers, len(batches)), thread_name_prefix="semantic") as pool:
                 responses = list(pool.map(
@@ -40,14 +41,18 @@ class SemanticResolver:
         return self._resolve_batch(unique, context=context)
 
     def _resolve_batch(self, unique: list[str], *, context: str, vocabulary: str = "") -> list[SemanticMapping]:
-        payload = "Metric names:\n" + "\n".join(f"- {name}" for name in unique) + "\nContext:\n" + context[:12_000]
+        # Stable shared prefix before the changing batch lets provider prefix
+        # caching reuse the context. Every batch still sees all source terms.
+        payload = "Context:\n" + context[:12_000]
         if vocabulary:
             payload += "\nComplete document metric vocabulary (reference only):\n" + vocabulary
+        payload += "\nMetric names:\n" + "\n".join(f"- {name}" for name in unique)
         response = self.gateway.generate_structured(
             [
                 {"role": "system", "content": load_prompt("semantic_resolution.txt") + (
                     "\nReturn mappings only for the assigned Metric names. Use the complete vocabulary "
-                    "to distinguish related terms; do not merge distinct meanings. Keep reasons concise."
+                    "to distinguish related terms; do not merge distinct meanings. Reasons: at most one short sentence. "
+                    "Do not repeat source context or the whole vocabulary in your answer."
                     if vocabulary else ""
                 )},
                 untrusted_document_message(payload),

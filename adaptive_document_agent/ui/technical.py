@@ -48,10 +48,17 @@ def _expander(st, label: str):
 
 
 def render(st, result: PipelineResult) -> None:
+    from adaptive_document_agent.services.llm.costs import summarize_usage
+    cost_summary = summarize_usage(result.llm_usage)
+    from .llm_costs import render as render_costs
+    render_costs(st, result.llm_usage)
     st.caption(f"Result pipeline version: {result.pipeline_version or 'unknown (older export)'}")
+    if result.pipeline_total_ms is not None:
+        st.caption(f"Analysis wall time: {result.pipeline_total_ms / 1000:.1f}s. Stage details may overlap and must not be added to the total.")
     st.caption(
         f"Candidates: {len(result.candidate_scores)} · Planned analyses: {len(result.analysis_plan)} · "
-        f"Executed results: {len(result.analysis_results)} · Model calls: {len(result.llm_usage)}"
+        f"Executed results: {len(result.analysis_results)} · Model requests: {sum(not row.get('cache_hit') for row in result.llm_usage)} · "
+        f"App cache hits: {sum(bool(row.get('cache_hit')) for row in result.llm_usage)}"
     )
     presentation_failure = next(
         (issue for issue in result.validation_warnings if issue.code == "presentation_plan_failed"),
@@ -97,12 +104,15 @@ def render(st, result: PipelineResult) -> None:
                 st.json([item.model_dump(mode="json") for item in result.presentation_topics.omissions])
 
     sections = (
+        ("LLM cost by stage and currency (estimates, not billing)", cost_summary),
         ("Document profile", result.profile.model_dump(mode="json")),
         ("Candidate scores", [item.model_dump(mode="json") for item in result.candidate_scores]),
         ("Analysis plan", [item.model_dump(mode="json") for item in result.analysis_plan]),
         ("Executed tools and results", [item.model_dump(mode="json") for item in result.analysis_results]),
         ("LLM usage", result.llm_usage),
         ("Pipeline timing (ms)", result.timings_ms),
+        ("Stage details (ms, may overlap)", result.stage_details_ms),
+        ("PowerPoint export timing (ms)", result.export_timings_ms),
     )
     for title, payload in sections:
         with _expander(st, title):

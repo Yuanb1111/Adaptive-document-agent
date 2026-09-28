@@ -18,6 +18,7 @@ def _analyse_upload(st, raw_pdf, *, scope_key, analysis_focus, settings, cache, 
     if not force and st.session_state.get("analysis_result_key") == scope_key:
         cached = st.session_state.get("analysis_result")
         if cached is not None:
+            st.session_state["analysis_result_reused"] = True
             if progress:
                 progress.update("Complete")
             return cached
@@ -25,6 +26,7 @@ def _analyse_upload(st, raw_pdf, *, scope_key, analysis_focus, settings, cache, 
         from adaptive_document_agent.models import PipelineResult
         cached = cache.get_model(f"analysis-result-{scope_key}", PipelineResult)
         if cached is not None:
+            st.session_state["analysis_result_reused"] = True
             st.session_state["analysis_result"] = cached
             st.session_state["analysis_result_key"] = scope_key
             if progress:
@@ -38,8 +40,13 @@ def _analyse_upload(st, raw_pdf, *, scope_key, analysis_focus, settings, cache, 
     if progress:
         progress.reset()
     status = None
+    gateway = None
     try:
         gateway = LLMGateway(create_llm_client(settings), settings, cache_enabled=not force)
+        pending_scope = st.session_state.get("analysis_scope_usage_pending")
+        if scope is not None and pending_scope and pending_scope["key"] == scope_key:
+            gateway.usage.extend(pending_scope["records"])
+            del st.session_state["analysis_scope_usage_pending"]
         status = st.status("Analysing PDF and preparing presentation…", expanded=True)
 
         def update(stage: str) -> None:
@@ -54,6 +61,7 @@ def _analyse_upload(st, raw_pdf, *, scope_key, analysis_focus, settings, cache, 
             scope=scope,
         )
         st.session_state["analysis_result"] = result
+        st.session_state["analysis_result_reused"] = False
         st.session_state["analysis_result_key"] = scope_key
         if cache is not None:
             cache.set_model(f"analysis-result-{scope_key}", result)
@@ -65,6 +73,13 @@ def _analyse_upload(st, raw_pdf, *, scope_key, analysis_focus, settings, cache, 
         if progress:
             progress.fail("Analysis could not be completed")
         st.error(f"Analysis could not be completed: {exc}")
+        usage = list(getattr(gateway, "usage", []))
+        if usage:
+            # A failed run can still have paid successful requests. Keep its
+            # ledger separate from the next run instead of silently losing it.
+            st.session_state["failed_llm_usage"] = usage
+            from .llm_costs import render as render_costs
+            render_costs(st, usage)
         return None
 
 
@@ -125,6 +140,10 @@ def run_app() -> None:
                 settings.privacy_mode.value,
                 str(sorted(settings.stage_models.items())),
                 str(settings.temperature),
+                str(settings.discovery_thinking),
+                str(settings.discovery_chunk_tokens),
+                str(settings.semantic_batch_size),
+                str(settings.deepseek_price_band),
             )
         ).encode("utf-8")
     )
@@ -153,10 +172,20 @@ def run_app() -> None:
                 )
                 st.session_state["analysis_scope"] = preview
                 st.session_state["analysis_scope_key"] = scope_key
+                pending = st.session_state.get("analysis_scope_usage_pending", {})
+                previous = pending.get("records", []) if pending.get("key") == scope_key else []
+                st.session_state["analysis_scope_usage_pending"] = {
+                    "key": scope_key, "records": [*previous, *gateway.usage],
+                }
                 status.update(label="Analysis scope ready", state="complete", expanded=False)
             except Exception as exc:
                 progress.fail("Analysis scope could not be prepared")
                 st.error(f"Analysis scope could not be prepared: {exc}")
+                usage = list(gateway.usage) if "gateway" in locals() else []
+                if usage:
+                    st.session_state["failed_llm_usage"] = usage
+                    from .llm_costs import render as render_costs
+                    render_costs(st, usage)
                 return
         preview = st.session_state.get("analysis_scope") if st.session_state.get("analysis_scope_key") == scope_key else None
         if preview:
@@ -256,4 +285,6 @@ def run_app() -> None:
     with tab_quality:
         quality.render(st, result)
     with tab_technical:
+        if st.session_state.get("analysis_result_reused"):
+            st.caption("Reused analysis result: the ledger below records its original generation, not new model charges for this view.")
         technical.render(st, result)

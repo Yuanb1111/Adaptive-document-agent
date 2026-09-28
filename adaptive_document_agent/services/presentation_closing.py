@@ -120,15 +120,18 @@ def _append_evidence_pages(presentation, slides, tables, notes):
     from .closing_evidence import render_evidence_table
     from .slide_compositor import _base
     from .pptx_export import _text, _source_footer, FOURIER_MUTED
+    evidence_slides = []
     for key, rows in tables:
         for start in range(0, len(rows), 6):
             shown = rows[start:start + 6]
             slide, top = _base(presentation, "Evidence supporting the conclusions", "Reported values with source references")
-            render_evidence_table(slide, (key, shown), x=.55, y=top, width=presentation.slide_width.inches - 1.1)
+            render_evidence_table(slide, (key, shown), x=.55, y=top, width=presentation.slide_width.inches - 1.1).name = "evidence:packable"
             pages = sorted({page for _, _, source_pages in shown for page in source_pages})
             note = " | * Unaudited" if any("*" in period for period in key[0]) else ""
             _text(slide, _source_footer(pages) + note, .55, presentation.slide_height.inches - .82,
-                  presentation.slide_width.inches - 1.1, .2, size=9, color=FOURIER_MUTED)
+                  presentation.slide_width.inches - 1.1, .2, size=9, color=FOURIER_MUTED).name = "evidence:footer"
             slide.notes_slide.notes_text_frame.text = notes
-            slides.append(slide)
+            evidence_slides.append(slide)
+    from .evidence_page_packing import pack_evidence_pages
+    slides.extend(pack_evidence_pages(presentation, evidence_slides))
     return slides

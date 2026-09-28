@@ -60,9 +60,11 @@ def test_appendix_separates_annual_and_interim_periods():
     result.observations[-1].period = "6M2024"
     presentation = deck()
     _add_evidence_table_slides(presentation, result, [])
-    assert len(presentation.slides) == 2
-    for slide in presentation.slides:
-        headers = [cell.text for shape in slide.shapes if shape.has_table for cell in shape.table.rows[0].cells]
+    assert len(presentation.slides) == 1
+    tables = [shape.table for slide in presentation.slides for shape in slide.shapes if shape.has_table]
+    assert len(tables) == 2
+    for table in tables:
+        headers = [cell.text for cell in table.rows[0].cells]
         assert not (any("FY" in h for h in headers) and any("6M" in h for h in headers))
 
 
