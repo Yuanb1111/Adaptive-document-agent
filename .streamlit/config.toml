@@ -3,3 +3,12 @@
 [server]
 fileWatcherType = "none"
 runOnSave = false
+
+# FOURIER Visual Identity Guidelines V1.0, June 2024.
+[theme]
+base = "light"
+primaryColor = "#7A24FD"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F6F7F7"
+textColor = "#000000"
+font = "sans serif"

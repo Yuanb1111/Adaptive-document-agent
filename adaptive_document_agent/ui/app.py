@@ -7,7 +7,7 @@ from adaptive_document_agent.services.llm.routing import create_llm_client
 from adaptive_document_agent.utils.hashing import sha256_bytes
 from adaptive_document_agent.utils.pipeline_version import PIPELINE_VERSION, ANALYSIS_VERSION, EXTRACTION_VERSION
 
-from . import analysis, data, deliverables, overview, quality, sources, technical
+from . import analysis, branding, data, deliverables, overview, quality, sources, technical
 from .charts import chart_rows, render_chart
 from .deployment import cache_for_session, is_public_deployment
 from .sidebar import render_sidebar
@@ -140,40 +140,52 @@ def run_app() -> None:
     except ImportError as exc:
         raise RuntimeError("Streamlit is not installed. Install requirements.txt.") from exc
 
-    st.set_page_config(page_title="Adaptive Document Intelligence Agent", page_icon="📄", layout="wide")
-    st.title("Adaptive Document Intelligence Agent")
-    st.caption(f"Running pipeline: {PIPELINE_VERSION}")
-    st.markdown(
-        "Upload a PDF and the Agent will understand the document, discover useful data, "
-        "run deterministic calculations, validate results, and preserve page-level evidence."
-    )
+    st.set_page_config(page_title="FOURIER | Document Intelligence", page_icon="📄", layout="wide")
+    branding.apply_theme(st)
+    branding.header(st)
     public_deployment = is_public_deployment()
-    if public_deployment:
-        if st.get_option("server.fileWatcherType") == "none":
-            st.caption("Source reload: disabled (restart required for code updates)")
-        else:
-            st.warning(
-                "Source reload is enabled. For stable production imports, set "
-                "server.fileWatcherType to 'none' and reboot the app."
-            )
     settings = render_sidebar(st, public_deployment=public_deployment)
     from adaptive_document_agent.services.export_readiness import check_export_readiness
     readiness = check_export_readiness(st.session_state.setdefault("ppt_readiness_cache", {}))
-    if readiness["ready"]:
-        st.caption(f"PowerPoint export environment ready: {readiness['backend']}")
-    else:
+    with st.sidebar:
+        with st.expander("Application status", expanded=False):
+            st.caption(f"Running pipeline: {PIPELINE_VERSION}")
+            if public_deployment:
+                if st.get_option("server.fileWatcherType") == "none":
+                    st.caption("Source reload: disabled (restart required for code updates)")
+                else:
+                    st.warning(
+                        "Source reload is enabled. For stable production imports, set "
+                        "server.fileWatcherType to 'none' and reboot the app."
+                    )
+            if readiness["ready"]:
+                st.caption(f"PowerPoint export environment ready: {readiness['backend']}")
+    if not readiness["ready"]:
         st.warning("PowerPoint export environment is not ready. " + readiness["message"])
         st.caption("Analysis and other formats remain available. Fix the renderer before expecting a verified PowerPoint download.")
     cache = cache_for_session(st.session_state, public_deployment=public_deployment)
-    analysis_focus = st.text_area(
-        "Analysis focus (optional)",
-        placeholder="Describe what you want the Agent to find and analyse. Leave blank for automatic discovery.",
-        height=90,
-    )
-    review_scope = st.toggle("Review page scope before analysis (optional)", value=False)
-    uploaded = st.file_uploader("Upload one PDF", type=["pdf"], accept_multiple_files=False)
+    upload_column, guide_column = st.columns([1.55, 1], gap="large")
+    with upload_column:
+        with st.container(border=True):
+            branding.section_label(st, "01", "Start with your document")
+            st.caption("Choose a model in the sidebar, set an optional focus, then upload your PDF.")
+            analysis_focus = st.text_area(
+                "Analysis focus (optional)",
+                placeholder="e.g. Explain the business model, compare reported financial performance, and highlight disclosed risks.",
+                height=110,
+                help="Leave blank for automatic discovery. Changing the focus or model after upload starts a new analysis.",
+            )
+            review_scope = st.toggle(
+                "Review page scope before analysis (optional)", value=False,
+                help="Review and confirm selected page ranges before deep analysis begins.",
+            )
+            uploaded = st.file_uploader("Upload one PDF", type=["pdf"], accept_multiple_files=False)
+            st.caption("Analysis starts automatically after upload unless page-scope review is enabled.")
+    with guide_column:
+        with st.container(border=True):
+            branding.output_guide(st)
     if not uploaded:
-        st.info("Upload a PDF to begin. You do not need to choose a document type.")
+        branding.empty_workspace(st)
         return
     raw_pdf = uploaded.getvalue()
     scope_key = _analysis_scope_key(raw_pdf, analysis_focus, settings)
@@ -270,24 +282,28 @@ def run_app() -> None:
         if _analysis_failure(st, scope_key) and not retry_button_shown:
             _retry_analysis_button(st, scope_key)
         return
-    if st.button("Reanalyse PDF (ignore model cache)"):
-        result = _analyse_upload(
-            st, raw_pdf, scope_key=scope_key, analysis_focus=analysis_focus,
-            settings=settings, cache=cache, force=True, progress=progress,
-            scope=st.session_state.get("analysis_scope") if review_scope else None,
-        )
-        if result is None:
-            if not retry_button_shown:
-                _retry_analysis_button(st, scope_key)
-            return
-    if st.button("Regenerate PowerPoint only"):
-        st.session_state["ppt_build_cache"] = {}
-        st.session_state["ppt_visual_cache"] = {}
-        st.caption("Reusing the existing analysis; rebuilding PowerPoint and rerunning export checks.")
+    branding.result_heading(st, result)
+    with st.expander("Rerun analysis or rebuild presentation", expanded=False):
+        st.caption("Reanalysis makes new model requests. Rebuilding PowerPoint reuses the existing analysis.")
+        if st.button("Reanalyse PDF (ignore model cache)"):
+            result = _analyse_upload(
+                st, raw_pdf, scope_key=scope_key, analysis_focus=analysis_focus,
+                settings=settings, cache=cache, force=True, progress=progress,
+                scope=st.session_state.get("analysis_scope") if review_scope else None,
+            )
+            if result is None:
+                if not retry_button_shown:
+                    _retry_analysis_button(st, scope_key)
+                return
+        if st.button("Regenerate PowerPoint only"):
+            st.session_state["ppt_build_cache"] = {}
+            st.session_state["ppt_visual_cache"] = {}
+            st.caption("Reusing the existing analysis; rebuilding PowerPoint and rerunning export checks.")
 
     deliverables.render(st, result, raw_pdf, progress)
     st.divider()
-    st.subheader("Explore the analysis")
+    branding.section_label(st, "03", "Explore the evidence")
+    st.caption("Read the findings, inspect the exact chart data, and trace each conclusion back to its source.")
     tab_overview, tab_analysis, tab_charts, tab_data, tab_sources, tab_quality, tab_technical = st.tabs(["Overview", "Analysis", "Charts", "Extracted Data", "Sources", "Data Quality", "Technical Details"])
     with tab_overview:
         overview.render(st, result)

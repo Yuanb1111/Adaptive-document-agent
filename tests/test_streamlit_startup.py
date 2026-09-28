@@ -31,7 +31,9 @@ def test_production_config_and_secrets_ignore_contract():
     assert config["server"]["fileWatcherType"] == "none"
     assert config["server"]["runOnSave"] is False
     # No security settings or secrets should be bundled with this fix.
-    assert set(config) == {"server"}
+    assert set(config) == {"server", "theme"}
+    assert config["theme"]["primaryColor"] == "#7A24FD"
+    assert config["theme"]["base"] == "light"
     for path, ignored in ((".streamlit/secrets.toml", True), (".streamlit/config.toml", False)):
         result = subprocess.run(
             ["git", "check-ignore", "--no-index", "-q", path], cwd=ROOT,

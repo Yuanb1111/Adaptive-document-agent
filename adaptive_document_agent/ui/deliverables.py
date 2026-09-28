@@ -12,8 +12,8 @@ from .exports import render_report_downloads
 
 def render(st, result: PipelineResult, raw_pdf: bytes, progress) -> None:
     """Render all deliverables before the long result tabs."""
-    st.subheader("Downloads")
-    st.caption("The main deliverables stay here at the top of the results page.")
+    st.subheader("Your presentation")
+    st.caption("Download PowerPoint here, then explore the analysis and supporting evidence below.")
 
     from adaptive_document_agent.services.presentation_editorial import review_presentation
 
@@ -75,10 +75,7 @@ def render(st, result: PipelineResult, raw_pdf: bytes, progress) -> None:
         export_timings = verified.timings_ms
         result.export_timings_ms = dict(export_timings)
         progress.finish()
-        st.caption(
-            f"PowerPoint export: {verified.timings_ms['ppt_export_total'] / 1000:.1f}s; "
-            f"build reused: {verified.build_cache_hit}; rendered QA reused: {visual_report.cache_hit}"
-        )
+
     except VisualQAError as exc:
         qa_error = exc
         visual_report = exc.report
@@ -91,37 +88,47 @@ def render(st, result: PipelineResult, raw_pdf: bytes, progress) -> None:
             f"PowerPoint generation failed ({type(exc).__name__}). No verified file was produced."
         )
 
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        if pptx_bytes:
-            label = (
-                "Download legacy draft (.pptx)"
-                if legacy
-                else "Download evidence-only draft (.pptx)"
-                if degraded
-                else "Download presentation (.pptx)"
-            )
-            st.download_button(
-                label,
-                pptx_bytes,
-                "analysis_presentation.pptx",
-                "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                type="primary",
-                use_container_width=True,
-            )
-        else:
-            st.button(
-                "Download presentation (.pptx)",
-                disabled=True,
-                use_container_width=True,
-                help="Export blocked by Critical QA",
-            )
-    render_report_downloads(
-        st,
-        result,
-        (col2, col3, col4),
-        pdf_cache=st.session_state.setdefault("pdf_export_cache", {}),
-    )
+    with st.container(border=True):
+        summary_column, download_column = st.columns([1.65, 1], gap="large")
+        with summary_column:
+            st.caption("POWERPOINT · PRIMARY OUTPUT")
+            st.write(result.presentation_plan.title if result.presentation_plan else result.report_plan.title)
+            if pptx_bytes:
+                st.caption("Export checks completed. Review the findings and any limitations before sharing.")
+            else:
+                st.caption("A verified presentation is not available. See the export details below.")
+        with download_column:
+            if pptx_bytes:
+                label = (
+                    "Download legacy draft (.pptx)"
+                    if legacy
+                    else "Download evidence-only draft (.pptx)"
+                    if degraded
+                    else "Download presentation (.pptx)"
+                )
+                st.download_button(
+                    label,
+                    pptx_bytes,
+                    "analysis_presentation.pptx",
+                    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                    type="primary",
+                    use_container_width=True,
+                )
+            else:
+                st.button(
+                    "Download presentation (.pptx)",
+                    disabled=True,
+                    use_container_width=True,
+                    help="Export blocked by Critical QA",
+                )
+    with st.expander("Other formats · Markdown, PDF, CSV & JSON", expanded=False):
+        st.caption("Read the report separately or work with the extracted data and source evidence.")
+        render_report_downloads(
+            st,
+            result,
+            tuple(st.columns(3)),
+            pdf_cache=st.session_state.setdefault("pdf_export_cache", {}),
+        )
 
     if qa_error:
         progress.fail("PowerPoint export blocked")
@@ -163,4 +170,8 @@ def render(st, result: PipelineResult, raw_pdf: bytes, progress) -> None:
 
     if export_timings:
         with st.expander("Export timing", expanded=False):
+            st.caption(
+                f"PowerPoint export: {export_timings['ppt_export_total'] / 1000:.1f}s; "
+                f"build reused: {verified.build_cache_hit}; rendered QA reused: {visual_report.cache_hit}"
+            )
             st.json(export_timings)
