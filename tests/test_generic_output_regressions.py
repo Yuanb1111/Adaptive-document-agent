@@ -145,12 +145,12 @@ def test_packing_middle_slides_then_appending_does_not_duplicate_package_parts()
         shape = slide.shapes.add_table(2, 2, Inches(.5), Inches(1), Inches(8), Inches(1))
         shape.name = "evidence:packable"
         shape.table.cell(0, 0).text = f"Raw record {i}"
-    assert len(pack_evidence_pages(deck, slides)) == 2
+    assert len(pack_evidence_pages(deck, slides)) == 1
     deck.slides.add_slide(deck.slide_layouts[6])
     stream = io.BytesIO(); deck.save(stream)
     with zipfile.ZipFile(stream) as archive:
         assert len(archive.namelist()) == len(set(archive.namelist()))
     reopened = Presentation(io.BytesIO(stream.getvalue()))
-    assert len(reopened.slides) == 3
+    assert len(reopened.slides) == 2
     labels = [s.table.cell(0, 0).text for slide in reopened.slides for s in slide.shapes if s.has_table]
     assert labels == [f"Raw record {i}" for i in range(4)]

@@ -340,6 +340,14 @@ class DocumentOrchestrator:
                                 code="company_introduction_unavailable", severity="warning", stage="presentation",
                                 message="The independent company introduction could not be verified: " + str(exc)[:500],
                             ))
+                # Pydantic owns a separate warning list on this snapshot. Keep
+                # local recovery's original drafts and evidence decisions in
+                # the final JSON instead of losing them after planning.
+                recorded_issues = {issue.model_dump_json() for issue in issues}
+                for issue in planning_result.validation_warnings:
+                    if issue.model_dump_json() not in recorded_issues:
+                        issues.append(issue)
+                        recorded_issues.add(issue.model_dump_json())
                 if presentation_plan:
                     from adaptive_document_agent.validation.claim_validator import repair_presentation_plan
                     from adaptive_document_agent.validation.cross_slide_validator import CrossSlideValidator
@@ -429,6 +437,9 @@ class DocumentOrchestrator:
             analysis_plan=plan, analysis_results=results, insights=insights,
         )
         report_plan, topic_selection, topic_error = plan_outputs(self.gateway, output, timings=details)
+        # Scoped topic corrections retain their complete rejected drafts and
+        # validation errors on the reporting snapshot, including partial success.
+        issues.extend(output.validation_warnings)
         requested_series = []
         if topic_selection is not None:
             _, series_by_id = series_directory(output)

@@ -433,8 +433,23 @@ observations. Repairs target the exact direction token, including repeated
 words, and retain the other metric clauses and raw evidence. Ambiguous pivots,
 missing periods and unqualified mixed-period sequences require clarification
 instead of a guessed rewrite. This local validation adds no model call; the
-v48 pipeline contract invalidates stale result/export caches while retaining
+v49 pipeline contract invalidates stale result/export caches while retaining
 the existing extraction and analysis request caches.
+
+Presentation labels retain the source-defined category scope, including charts
+with a single hidden legend. Selected text summary findings all remain visible;
+long summaries continue on another page at the normal template font sizes.
+Evidence pages pack tables by measured capacity, preserving separate period
+headers, source notes, and conflicting records.
+
+Topic validation keeps valid model-selected topics and makes at most one bounded
+correction request for rejected topics and their own evidence. Failed topic
+planning reuses supported, task-linked model findings rather than starting a
+second full presentation-planning pipeline. Cached generic slide wording can
+also reuse those findings locally after numeric and direction validation.
+Rejected drafts and validation errors remain in the JSON audit. These changes
+reduce repeated context and model requests; actual runtime and token cost still
+depend on the document and provider.
 
 For a local visual regression preview with synthetic, clearly labelled data,
 install development dependencies and configure the normal local renderer, then run

@@ -1,9 +1,9 @@
 """Native, editable hero chart layout using the application's existing template."""
 
-from adaptive_document_agent.document_model import display_metric_name
 from adaptive_document_agent.models import ChartPlan
 
 from .single_metric_analysis import SingleMetricAnalysis
+from .presentation_labels import qualified_metric_name, qualify_heading
 
 
 def add_single_metric_slide(presentation, plan: ChartPlan, analysis: SingleMetricAnalysis, *, title: str, narrative: str):
@@ -16,10 +16,12 @@ def add_single_metric_slide(presentation, plan: ChartPlan, analysis: SingleMetri
     original_title, original_narrative = title, narrative
     series = analysis.observations
     first, last = series[0], series[-1]
+    metric_label = qualified_metric_name(first)
     if first.parent_section or first.dimensions.get("section"):
-        qualified = display_metric_name(first)
+        qualified = metric_label
         if (first.parent_section or first.dimensions.get("section", "")).casefold() not in title.casefold():
             title = qualified
+    title = qualify_heading(title, series)
     scale, scale_label = _display_scale(series, max(abs(o.value) for o in series))
     unit = _unit_label(series, scale_label)
     if (first.unit_family == "currency" or first.unit == "currency") and not first.currency:
@@ -31,12 +33,12 @@ def add_single_metric_slide(presentation, plan: ChartPlan, analysis: SingleMetri
         return f"{number / scale:+,.1f}" if signed else f"{number / scale:,.1f}"
 
     if not narrative.strip():
-        narrative = f"{display_metric_name(first)} moved from {value(first.value)} to {value(last.value)} {unit} between {first.period} and {last.period}."
+        narrative = f"{metric_label} moved from {value(first.value)} to {value(last.value)} {unit} between {first.period} and {last.period}."
     from .slide_compositor import _base, _lines
     if len(_lines(title, 8.91, 32)) > 2:
         # Use the existing metric label for the title role, retaining the full
         # analytical claim below it and the original narrative in notes.
-        title, narrative = display_metric_name(first), title
+        title, narrative = metric_label, title
     slide, top = _base(presentation, title, narrative)
     import json
     slide.notes_slide.notes_text_frame.text = json.dumps({
@@ -44,11 +46,11 @@ def add_single_metric_slide(presentation, plan: ChartPlan, analysis: SingleMetri
     }, ensure_ascii=False)
     slide.name = "single_metric_hero"
     height = 6.25 - top
-    _text(slide, f"{display_metric_name(first)} ({unit})", 0.60, top, 11.35, 0.24,
+    _text(slide, f"{metric_label} ({unit})", 0.60, top, 11.35, 0.24,
           size=10, color=FOURIER_MUTED)
     # Leave dedicated slots for four KPIs, annotations and evidence footer.
     chart_height = height - 2.03
-    hero = plan.model_copy(update={"chart_type": "line" if len(series) >= 3 else "bar", "title": display_metric_name(first)})
+    hero = plan.model_copy(update={"chart_type": "line" if len(series) >= 3 else "bar", "title": metric_label})
     _add_native_chart(slide, hero, series, (0.60, top + 0.26, 11.35, chart_height))
     chart_shape = next(shape for shape in slide.shapes if shape.has_chart)
     chart_shape.name = "single_metric_hero_chart"

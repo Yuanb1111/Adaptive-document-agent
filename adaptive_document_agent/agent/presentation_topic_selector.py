@@ -116,22 +116,8 @@ class PresentationTopicSelector:
             PresentationTopicSelection,
             stage="presentation",
         )
-        try:
-            self._validate(selection, lookup, primary_pages=primary_pages)
-        except ValueError as exc:
-            selection = self.gateway.generate_structured(
-                [
-                    *messages,
-                    {"role": "system", "content": "Revise the topic selection to satisfy this evidence check. "
-                     "Keep only exact supplied series IDs and do not add numbers. Reason: " + str(exc)},
-                    untrusted_document_message(selection.model_dump_json()),
-                ],
-                PresentationTopicSelection,
-                stage="presentation",
-                allow_repair=False,
-            )
-            self._validate(selection, lookup, primary_pages=primary_pages)
-        return selection
+        from .topic_selection_repair import retain_valid_topics
+        return retain_valid_topics(selection, lookup, primary_pages, result, self.gateway, self._validate)
 
     @staticmethod
     def _validate(
@@ -159,8 +145,8 @@ class PresentationTopicSelector:
                 for sid in topic.series_ids
             ):
                 raise ValueError(f"Topic {topic.id} uses a metric outside the primary analysis scope")
-            allowed = PresentationPlanValidator._numbers(" ".join(
-                str(value) for sid in topic.series_ids for item in lookup[sid]
+            allowed = set().union(*(PresentationPlanValidator._numbers(str(value))
+                for sid in topic.series_ids for item in lookup[sid]
                 for value in (item.raw_value, item.value, item.period)
                 if value is not None
             ))
@@ -168,7 +154,7 @@ class PresentationTopicSelector:
                 (topic.title, topic.question, topic.rationale, topic.takeaway, *topic.caveats)
             ))
             if claimed - allowed:
-                raise ValueError(f"Topic {topic.id} contains unsupported numeric claims")
+                raise ValueError(f"Topic {topic.id} contains unsupported numeric claims: {sorted(claimed - allowed)}")
             selected.update(topic.series_ids)
         for omission in selection.omissions:
             if omission.series_id not in lookup or omission.series_id in selected or not omission.reason.strip():

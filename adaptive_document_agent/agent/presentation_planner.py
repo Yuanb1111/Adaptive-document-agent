@@ -24,6 +24,12 @@ class PresentationPlanner:
             # asking it to copy hundreds of IDs into a second full slide plan.
             from .topic_plan_compiler import compile_topic_plan
             return compile_topic_plan(result)
+        if any(issue.code == "presentation_topic_selection_failed" for issue in result.validation_warnings):
+            # The semantic selection already exhausted its bounded correction.
+            # Reuse validated model findings rather than two full-plan requests
+            # with a much larger copy of the same document evidence.
+            from .presentation_insight_recovery import plan_from_retained_insights
+            return plan_from_retained_insights(result)
         from adaptive_document_agent.services.presentation_evidence import build_evidence_catalog, observation_record
         # Keep the semantic planning context focused. Large PDFs can contain
         # thousands of observations; an oversized catalogue makes it harder

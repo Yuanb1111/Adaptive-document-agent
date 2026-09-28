@@ -6,7 +6,7 @@ from adaptive_document_agent.agent.orchestrator import DocumentOrchestrator
 from adaptive_document_agent.agent.presentation_planner import PresentationPlanner
 from adaptive_document_agent.agent.presentation_topic_selector import series_directory
 from adaptive_document_agent.document_model import DocumentIndex
-from adaptive_document_agent.models import AnalysisTask, Observation
+from adaptive_document_agent.models import AnalysisTask, Observation, ValidationIssue
 from adaptive_document_agent.services.llm import LLMGateway, LLMSettings, MockLLMClient, ProviderName
 from adaptive_document_agent.utils.ids import stable_id
 
@@ -180,6 +180,10 @@ def test_presentation_plan_failure_does_not_discard_completed_analysis(monkeypat
     gateway = LLMGateway(client, LLMSettings(provider=ProviderName.MOCK, model="mock"))
 
     def fail_plan(self: PresentationPlanner, result: object) -> None:
+        result.validation_warnings.append(ValidationIssue(
+            code="presentation_insight_recovery_rejected", stage="presentation",
+            message="Original draft and evidence-scope rejection must survive the planning snapshot.",
+        ))
         raise ValueError("invalid presentation plan")
 
     monkeypatch.setattr(PresentationPlanner, "plan", fail_plan)
@@ -189,3 +193,4 @@ def test_presentation_plan_failure_does_not_discard_completed_analysis(monkeypat
     assert result.report_markdown
     assert any(issue.code == "presentation_plan_failed" for issue in result.validation_warnings)
     assert any(issue.code == "presentation_plan_fallback" for issue in result.validation_warnings)
+    assert sum(issue.code == "presentation_insight_recovery_rejected" for issue in result.validation_warnings) == 1

@@ -174,6 +174,8 @@ def prepare_presentation_claims(result: PipelineResult, plan: PresentationPlan |
     plan = plan or result.presentation_plan
     if plan is None:
         return []
+    from adaptive_document_agent.agent.presentation_insight_recovery import recover_insight_narrative
+    recover_insight_narrative(result, plan)
     reconcile_presentation_identity(plan, result)
     ambiguous = ambiguous_source_table_ids(result)
     eligible = [item for item in result.observations if item.value is not None and isfinite(item.value)

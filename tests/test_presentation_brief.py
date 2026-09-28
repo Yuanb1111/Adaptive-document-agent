@@ -143,14 +143,14 @@ def test_chinese_brief_preserves_complete_text_at_readable_size():
     assert all(p.font.size.pt == 16 for s in bodies for p in s.text_frame.paragraphs)
 
 
-def test_planned_text_summary_is_also_one_page_with_all_bullets_in_notes():
+def test_planned_text_summary_keeps_all_five_bullets_visible_and_in_notes():
     result = result_fixture()
     plan = PresentationSlide(id="s", slide_type="executive_summary", title="Summary",
         bullets=[f"Finding {i}: The disclosed scope remains unchanged." for i in range(5)], source_pages=[1])
     deck = blank_deck()
     _add_planned_summary(deck, result, plan, DocumentIndex(result.observations))
     assert len(deck.slides) == 1
-    assert "Finding 4" not in visible(deck.slides[0])
+    assert all(f"Finding {i}" in visible(deck.slides[0]) for i in range(5))
     assert "Finding 4" in deck.slides[0].notes_slide.notes_text_frame.text
 
 

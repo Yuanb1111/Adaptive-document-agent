@@ -13,6 +13,7 @@ from adaptive_document_agent.document_model import display_metric_name
 from adaptive_document_agent.models import ChartPlan, PipelineResult, PresentationSlide
 
 from .presentation_style import CHART_TITLE_PT, DARK, FONT, FOOTNOTE_PT, GUTTER, MUTED, PURPLE
+from .presentation_labels import qualify_heading
 
 COMMENTARY_PT = 16
 COMMENTARY_LINE_PT = 20
@@ -262,6 +263,7 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
         qualified = {display_metric_name(o) for o in values}
         if len(qualified) == 1 and not any(o.category_dimensions for o in values) and any(o.parent_section or o.dimensions.get("section") for o in values):
             heading = next(iter(qualified))
+        heading = qualify_heading(heading, values)
         heading = re.sub(r"(?i)^Adjusted for Adjusted\b", "Adjusted", heading)
         headings.append(re.sub(r"(?i)\b(margin|ratio|share)\s+\1\b", r"\1", heading))
     shared_heading_h = max([.28] + [len(_lines(t, r.w, CHART_TITLE_PT)) * CHART_TITLE_PT / 72 * 1.22

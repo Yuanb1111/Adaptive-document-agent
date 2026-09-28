@@ -345,6 +345,16 @@ class PresentationPlanValidator:
                     if cid in calculations:
                         calc = calculations[cid]
                         allowed_numbers.update(self._numbers(str(calc["value"]) + " " + calc["display"]))
+                        # A bound signed change may be described as a positive
+                        # magnitude ("declined by 1.3 pp" for a -1.3 pp delta).
+                        # Preserve its signed value; directional validation below
+                        # still checks the wording against the same input series.
+                        if calc["kind"] in {"absolute_change", "yoy_absolute_change", "percentage_change", "yoy_percentage_change"}:
+                            for token in self._numbers(calc["display"]):
+                                magnitude = token.lstrip("-")
+                                allowed_numbers.add(magnitude)
+                                suffix = "%" if magnitude.endswith("%") else ""
+                                allowed_numbers.add(f"{float(magnitude.rstrip('%')):g}{suffix}")
                 block_titles = [re.sub(r"(?i)^(?:block|chart|panel)\s+\d+$", "", b.title.strip()) for b in slide.visual_blocks]
                 claimed_numbers = self._numbers(" ".join((slide.title, slide.message, slide.analytical_question, slide.selection_reason, *slide.bullets, *block_titles)))
                 unsupported_numbers = claimed_numbers - allowed_numbers
@@ -355,7 +365,7 @@ class PresentationPlanValidator:
                 errors.extend(scoped_value_errors(slide, selected_observations, result.observations))
                 from .claim_validator import ClaimValidator
                 errors.extend(issue.message for issue in ClaimValidator().validate_slide(slide, selected_observations)
-                              if issue.code == "non_monotonic_claim")
+                              if issue.code == "non_monotonic_claim" or slide.calculation_ids)
 
         summaries = [slide for slide in plan.slides if slide.slide_type == "executive_summary"]
         risks = [slide for slide in plan.slides if slide.slide_type == "risks"]

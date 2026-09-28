@@ -357,7 +357,8 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
             if re.search(r"(?i)evidence.backed comparison|retained reported values|selected observations", slide_plan.message):
                 # Mechanical fallback copy carries no supported takeaway. Name
                 # the actual plotted subjects instead of an over-broad heading.
-                labels = list(dict.fromkeys(display_metric_name(o) for o in linked.values()))
+                from .presentation_labels import qualified_metric_name
+                labels = list(dict.fromkeys(qualified_metric_name(o) for o in linked.values()))
                 evidence_title = " and ".join(labels)
                 slide_plan = slide_plan.model_copy(update={
                     "title": evidence_title if 0 < len(evidence_title) <= 150 else "Reported measures",
@@ -799,7 +800,8 @@ def _add_planned_summary(
         ]
         fallback_pages = {p for item in fallback_findings for p in item.get("pages", [])}
     from .presentation_editorial import distinct_findings
-    from .presentation_brief import BriefItem, render_brief, render_summary
+    from .presentation_brief import BriefItem
+    from .presentation_summary import render_complete_summary
     if (result.presentation_plan and result.presentation_plan.planning_origin == "topic_recovery"
             and slide_plan.bullets
             and all(not _is_calc_artifact(b) for b in slide_plan.bullets)):
@@ -808,23 +810,24 @@ def _add_planned_summary(
         items = [BriefItem("", _sanitize_investor_narrative(bullet), slide_plan.source_pages)
                  for bullet in slide_plan.bullets]
         notes = "\n\n".join(f"{title}\n{body}" for title, body in raw_findings)
-        render_brief(presentation, slide_plan.title, items, notes=notes, max_items=4)
+        render_complete_summary(presentation, slide_plan.title, items, notes=notes)
         return
-    # The summary is a short entry point. Explicit KPI/chart plans above remain
-    # authoritative; full prose and caveats are retained in the speaker notes.
+    # Keep every selected finding visible; overflow continues on another page.
     pages = sorted(set(slide_plan.source_pages) | fallback_pages | {
         e.page for identifier in slide_plan.insight_ids if identifier in insight_by_id
         for e in insight_by_id[identifier].evidence})
     notes = "\n\n".join(f"{t}\n{n}" for t, n in raw_findings)
     notes += "\n\n" + "\n".join(slide_plan.bullets)
-    finding_pages = {(str(f["title"]), str(f["narrative"])): list(f["pages"]) for f in recovered}
-    short_titles = {(str(f["title"]), str(f["narrative"])): str(f.get("short_title", "")) for f in recovered}
-    items = [BriefItem(label, narrative, finding_pages.get((label, narrative), pages), short_titles.get((label, narrative), ""))
+    finding_key = lambda title, body: (" ".join(title.casefold().split()), " ".join(body.casefold().split()))
+    finding_pages, short_titles = {}, {}
+    for finding in recovered:
+        key = finding_key(str(finding["title"]), str(finding["narrative"]))
+        finding_pages.setdefault(key, set()).update(finding["pages"])
+        short_titles.setdefault(key, str(finding.get("short_title", "")))
+    items = [BriefItem(label, narrative, sorted(finding_pages.get(finding_key(label, narrative), pages)),
+                       short_titles.get(finding_key(label, narrative), ""))
              for label, narrative in distinct_findings(findings)]
-    if recovered:
-        render_summary(presentation, slide_plan.title, items, notes=notes)
-    else:
-        render_brief(presentation, slide_plan.title, items, notes=notes)
+    render_complete_summary(presentation, slide_plan.title, items, notes=notes)
 
 
 from adaptive_document_agent.document_model.topic_matcher import (
@@ -2452,7 +2455,8 @@ def _series_rows(plan: ChartPlan, observations: list[Observation], *, is_balance
     best: dict[tuple[str, str, tuple[tuple[str, str], ...]], Observation] = {}
     for item in sorted(observations, key=lambda value: period_sort_key(value.period)):
         axis_dimension = plan.x_dimension
-        label = item.dimensions.get(axis_dimension) if axis_dimension else None
+        source_dimensions = {**item.dimensions, **item.category_dimensions}
+        label = source_dimensions.get(axis_dimension) if axis_dimension else None
         if not label and item.period:
             label = item.period
         if not label and item.dimensions:
@@ -2480,7 +2484,7 @@ def _series_rows(plan: ChartPlan, observations: list[Observation], *, is_balance
                     key,
                     str(value).strip(),
                 )
-                for key, value in item.dimensions.items()
+                for key, value in source_dimensions.items()
                 if key not in ignored_dimensions
                 and str(value).strip()
                 and str(value).strip().casefold() not in repeated_values
@@ -2497,7 +2501,8 @@ def _series_rows(plan: ChartPlan, observations: list[Observation], *, is_balance
 
 
 def _presentation_chart_title(title: str, observations: list[Observation]) -> str:
-    series_names = {display_metric_name(item) for item in observations}
+    from .presentation_labels import qualified_metric_name
+    series_names = {qualified_metric_name(item) for item in observations}
     if len(series_names) == 1:
         single = next(iter(series_names))
         # A source section or task question may mention an unplotted metric.
