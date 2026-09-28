@@ -3,6 +3,8 @@
 from html import escape
 import re
 
+from .branding import PURPLE
+
 
 # These are workflow weights, not a prediction of remaining time. A model
 # request can stay at one milestone for as long as it actually takes.
@@ -70,12 +72,12 @@ class ProcessingProgress:
         self.render()
 
     def render(self) -> None:
-        color = {"running": "#6D28D9", "complete": "#15803D", "error": "#B91C1C"}[self.state]
+        color = {"running": PURPLE, "complete": "#15803D", "error": "#B91C1C"}[self.state]
         note = ("Completed" if self.state == "complete" else
                 "Stopped at this stage; see details below." if self.state == "error" else
                 "Estimated workflow progress, not a remaining-time estimate.")
         self.placeholder.markdown(
-            f'<div style="display:flex;align-items:center;gap:20px;margin:12px 0 22px;">'
+            f'<div class="fourier-progress">'
             f'<div role="progressbar" aria-label="Document to PowerPoint progress" '
             f'aria-valuemin="0" aria-valuemax="100" aria-valuenow="{self.percent}" '
             f'aria-valuetext="{self.percent}%: {escape(self.label, quote=True)}" '

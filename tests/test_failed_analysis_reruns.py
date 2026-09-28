@@ -31,6 +31,9 @@ class MemoryCache:
 def flow(monkeypatch):
     st = Mock()
     st.session_state = {}
+    st.sidebar = nullcontext()
+    st.container.side_effect = lambda *args, **kwargs: nullcontext()
+    st.columns.side_effect = lambda spec, **kwargs: [nullcontext() for _ in range(spec if isinstance(spec, int) else len(spec))]
     st.expander.side_effect = lambda *args, **kwargs: nullcontext()
     st.tabs.side_effect = lambda labels: [nullcontext() for _ in labels]
     st.text_area.return_value = ""

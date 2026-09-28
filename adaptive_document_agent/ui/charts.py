@@ -6,6 +6,7 @@ from typing import Any
 
 from adaptive_document_agent.document_model import DocumentIndex, paired_observations, period_sort_key
 from adaptive_document_agent.models import ChartPlan, ChartType, Observation
+from .branding import CHART_COLORS, style_chart
 
 
 def chart_rows(plan: ChartPlan, index: DocumentIndex) -> list[dict[str, Any]]:
@@ -93,25 +94,26 @@ def render_chart(
         figure.update_layout(title=plan.title, font_family="Arial")
         figure.add_annotation(text="Source pages: " + ", ".join(map(str, matrix.source_pages)),
             xref="paper", yref="paper", x=0, y=-0.2, showarrow=False)
-        return figure
+        return style_chart(figure)
     rows = chart_rows(plan, index)
     labels_enabled = plan.show_data_labels if show_data_labels is None else show_data_labels
     if not rows:
-        return go.Figure().update_layout(title=plan.title)
+        return style_chart(go.Figure().update_layout(title=plan.title))
     if selected == "table":
         columns = list(rows[0])
         figure = go.Figure(
             data=[
                 go.Table(
-                    header={"values": [f"<b>{column}</b>" for column in columns], "fill_color": "#E8EEF7", "align": "left"},
+                    header={"values": [f"<b>{column}</b>" for column in columns], "fill_color": "#F6F7F7", "align": "left"},
                     cells={"values": [[row[column] for row in rows] for column in columns], "align": "left"},
                 )
             ]
         )
-        return figure.update_layout(title=plan.title, margin={"l": 20, "r": 20, "t": 70, "b": 20})
+        return style_chart(figure.update_layout(title=plan.title, margin={"l": 20, "r": 20, "t": 70, "b": 20}))
     if selected == "scatter":
         figure = px.scatter(
             rows,
+            color_discrete_sequence=CHART_COLORS,
             x="X Value",
             y="Y Value",
             text="Label" if labels_enabled else None,
@@ -132,6 +134,7 @@ def render_chart(
     color = "Series" if any(row["Series"] for row in rows) and len({row["Series"] for row in rows}) > 1 else None
     text = "Display" if labels_enabled else None
     common = {
+        "color_discrete_sequence": CHART_COLORS,
         "data_frame": rows,
         "x": "Label",
         "y": "Value",
@@ -153,7 +156,7 @@ def render_chart(
         figure = px.bar(**horizontal)
         figure.update_traces(textposition="outside")
     elif selected == "pie":
-        figure = px.pie(rows, names="Label", values="Value", title=plan.title, custom_data=["Display", "Source pages"])
+        figure = px.pie(rows, names="Label", values="Value", title=plan.title, custom_data=["Display", "Source pages"], color_discrete_sequence=CHART_COLORS)
         figure.update_traces(textinfo="label+percent+value" if labels_enabled else "percent", textposition="auto")
     else:
         figure = px.bar(**common, barmode="group")
@@ -172,7 +175,7 @@ def _finish(figure, plan: ChartPlan, *, categorical: bool = False):
     )
     if categorical:
         figure.update_xaxes(type="category")
-    return figure
+    return style_chart(figure)
 
 
 def _context_label(item: Observation) -> str:

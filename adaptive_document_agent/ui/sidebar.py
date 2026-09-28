@@ -14,6 +14,7 @@ from adaptive_document_agent.services.llm.model_catalog import (
 )
 
 from .deployment import is_public_deployment
+from .branding import sidebar_brand
 
 
 _MANUAL_MODEL = "Enter a model ID manually…"
@@ -82,9 +83,10 @@ def render_sidebar(st, *, public_deployment: bool | None = None) -> LLMSettings:
         PrivacyMode.LOCAL_ONLY: "Local Only",
     }[defaults.privacy_mode]
     with st.sidebar:
-        st.header("Model Settings")
+        sidebar_brand(st)
+        st.header("Model connection")
         if public_deployment:
-            st.info("Public hosted mode: use your own cloud-provider API key.")
+            st.caption("Connect your model to begin. This hosted app uses your own provider API key.")
         mode_label = st.selectbox("Execution Mode", mode_labels, index=mode_labels.index(default_mode))
         default_provider_label = label_by_provider.get(defaults.provider, "DeepSeek")
         if default_provider_label not in provider_labels:
@@ -194,11 +196,13 @@ def render_sidebar(st, *, public_deployment: bool | None = None) -> LLMSettings:
             timeout_seconds=defaults.timeout_seconds,
             temperature=defaults.temperature,
         )
+        st.divider()
+        st.markdown("**Document privacy**")
         if settings.is_local:
-            st.success("🖥 Local model")
+            st.success("Local model")
             if privacy == PrivacyMode.LOCAL_ONLY:
                 st.caption("LLM processing remains on a loopback local endpoint. No cloud fallback is allowed.")
         else:
-            st.warning("☁ Cloud model")
+            st.info("Cloud model")
             st.caption("Relevant document content is sent to the configured provider.")
         return settings
