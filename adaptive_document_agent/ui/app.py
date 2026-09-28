@@ -38,16 +38,40 @@ def _analysis_scope_key(raw_pdf: bytes, analysis_focus: str, settings) -> str:
     )
 
 
-def _analyse_upload(st, raw_pdf, *, scope_key, analysis_focus, settings, cache, scope=None, force=False, progress=None):
+def _analysis_failure(st, scope_key):
+    failure = st.session_state.get("analysis_failure")
+    return failure if failure and failure["scope_key"] == scope_key else None
+
+
+def _render_analysis_failure(st, failure, progress=None):
+    if progress:
+        progress.fail("Analysis could not be completed")
+    st.error(failure["message"])
+    if failure["usage"]:
+        from .llm_costs import render as render_costs
+        render_costs(st, failure["usage"])
+
+
+def _retry_analysis_button(st, scope_key):
+    return st.button("Retry analysis (reuse successful cache)", key=f"retry_analysis_{scope_key}")
+
+
+def _analyse_upload(st, raw_pdf, *, scope_key, analysis_focus, settings, cache, scope=None, force=False, retry=False, progress=None):
     """Run one upload through discovery and analysis, reusing it on widget reruns."""
-    if not force and st.session_state.get("analysis_result_key") == scope_key:
+    failure = _analysis_failure(st, scope_key)
+    if failure and not (force or retry):
+        _render_analysis_failure(st, failure, progress)
+        return None
+    # An explicit retry starts a new attempt, retaining successful model caches
+    # rather than returning an older complete result from before the failure.
+    if not (force or retry) and st.session_state.get("analysis_result_key") == scope_key:
         cached = st.session_state.get("analysis_result")
         if cached is not None:
             st.session_state["analysis_result_reused"] = True
             if progress:
                 progress.update("Complete")
             return cached
-    if not force and cache is not None:
+    if not (force or retry) and cache is not None:
         from adaptive_document_agent.models import PipelineResult
         cached = cache.get_model(f"analysis-result-{scope_key}", PipelineResult)
         if cached is not None:
@@ -90,21 +114,21 @@ def _analyse_upload(st, raw_pdf, *, scope_key, analysis_focus, settings, cache, 
         st.session_state["analysis_result_key"] = scope_key
         if cache is not None:
             cache.set_model(f"analysis-result-{scope_key}", result)
+        if _analysis_failure(st, scope_key):
+            del st.session_state["analysis_failure"]
         status.update(label="Analysis complete", state="complete", expanded=False)
         return result
     except Exception as exc:
         if status is not None:
             status.update(label="Analysis failed", state="error", expanded=True)
-        if progress:
-            progress.fail("Analysis could not be completed")
-        st.error(f"Analysis could not be completed: {exc}")
         usage = list(getattr(gateway, "usage", []))
-        if usage:
-            # A failed run can still have paid successful requests. Keep its
-            # ledger separate from the next run instead of silently losing it.
-            st.session_state["failed_llm_usage"] = usage
-            from .llm_costs import render as render_costs
-            render_costs(st, usage)
+        # Replace this attempt's ledger; widget reruns only display it and must
+        # never add its paid requests to another attempt's costs.
+        st.session_state["failed_llm_usage"] = usage
+        failure = {"scope_key": scope_key, "scope": scope,
+                   "message": f"Analysis could not be completed: {exc}", "usage": usage}
+        st.session_state["analysis_failure"] = failure
+        _render_analysis_failure(st, failure, progress)
         return None
 
 
@@ -158,7 +182,18 @@ def run_app() -> None:
     progress = ProcessingProgress(st.empty())
     if result is not None:
         progress.update("Complete")
-    if review_scope:
+    failure = _analysis_failure(st, scope_key)
+    retry_button_shown = failure is not None
+    retry_requested = _retry_analysis_button(st, scope_key) if retry_button_shown else False
+    analysis_attempted = False
+    if retry_requested:
+        analysis_attempted = True
+        result = _analyse_upload(
+            st, raw_pdf, scope_key=scope_key, analysis_focus=analysis_focus,
+            settings=settings, cache=cache, scope=failure["scope"], retry=True,
+            progress=progress,
+        )
+    elif review_scope:
         if st.button("Review analysis scope"):
             if not settings.model:
                 st.error("Configure a model before analysis.")
@@ -213,23 +248,27 @@ def run_app() -> None:
             st.caption(f"Selected {preview.selected_page_count} of {preview.page_count} pages. Confirm to replace the automatic analysis with these ranges.")
             confirmed = st.checkbox("I confirm these page ranges for deep analysis", key=f"confirm_{scope_key}")
             if st.button("Analyse selected pages", type="primary", disabled=not confirmed):
-                updated = _analyse_upload(
+                analysis_attempted = True
+                result = _analyse_upload(
                     st, raw_pdf, scope_key=scope_key, analysis_focus=analysis_focus,
                     settings=settings, cache=cache, scope=preview, force=True,
                     progress=progress,
                 )
-                if updated is None:
-                    return
-                result = updated
         elif result is None:
             st.info("Review and confirm the page scope before starting deep analysis, or turn off this optional review to run automatically.")
     else:
+        analysis_attempted = True
         result = _analyse_upload(
             st, raw_pdf, scope_key=scope_key, analysis_focus=analysis_focus,
             settings=settings, cache=cache,
             progress=progress,
         )
+    if not analysis_attempted and failure:
+        _render_analysis_failure(st, failure, progress)
+        result = None
     if result is None:
+        if _analysis_failure(st, scope_key) and not retry_button_shown:
+            _retry_analysis_button(st, scope_key)
         return
     if st.button("Reanalyse PDF (ignore model cache)"):
         result = _analyse_upload(
@@ -238,6 +277,8 @@ def run_app() -> None:
             scope=st.session_state.get("analysis_scope") if review_scope else None,
         )
         if result is None:
+            if not retry_button_shown:
+                _retry_analysis_button(st, scope_key)
             return
     if st.button("Regenerate PowerPoint only"):
         st.session_state["ppt_build_cache"] = {}

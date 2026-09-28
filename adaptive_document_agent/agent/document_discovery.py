@@ -67,6 +67,7 @@ class DocumentDiscovery:
                 # token-estimation error. Local/stateful clients keep 6k chunks.
                 self.target_tokens = min(self.target_tokens, max(1000, context // 2))
         self.cache = cache
+        self._source_pages = []
 
     def discover(
         self,
@@ -77,6 +78,9 @@ class DocumentDiscovery:
         routed_ranges: list[AnalysisPageRange] | None = None,
     ) -> DocumentProfile:
         notify = progress or (lambda _: None)
+        # Replace on every document, including reused discovery instances.
+        # Recovery obtains physical page boundaries here, never from PDF text.
+        self._source_pages = list(document.pages)
         if not self.gateway:
             chunks = semantic_chunks(document.pages, target_tokens=self.target_tokens)
             profile = self._deterministic_profile(document, chunks)
@@ -347,8 +351,11 @@ class DocumentDiscovery:
 
     def _discover_chunk(self, chunk: DocumentChunk) -> ChunkDiscovery:
         prompt = load_prompt("chunk_discovery.txt")
+        metadata = {"chunk_id": chunk.chunk_id, "source_page_start": chunk.start_page,
+                    "source_page_end": chunk.end_page}
+        cache = self.cache or getattr(self.gateway, "cache", None)
         cache_key = None
-        if self.cache is not None and self.gateway is not None and self.gateway.cache_enabled:
+        if cache is not None and self.gateway is not None and self.gateway.cache_enabled:
             settings = self.gateway.settings
             identity = {
                 "version": "chunk-discovery-v2",
@@ -364,20 +371,36 @@ class DocumentDiscovery:
             }
             # Only the hash is used as a filename. No API keys are persisted.
             cache_key = "chunk-discovery-" + sha256_bytes(json.dumps(identity, sort_keys=True).encode())
-            cached = self.cache.get_model(cache_key, ChunkDiscovery)
+            cached = cache.get_model(cache_key, ChunkDiscovery)
             if cached is not None:
-                self.gateway.record_cache_hit(stage="discovery", operation="ChunkDiscovery")
+                self.gateway.record_cache_hit(stage="discovery", operation="ChunkDiscovery", request_metadata=metadata)
                 return cached
-        discovery = self.gateway.generate_structured(  # type: ignore[union-attr]
-            [
-                {"role": "system", "content": prompt},
-                untrusted_document_message(chunk.text),
-            ],
-            ChunkDiscovery,
-            stage="discovery",
-        )
-        if cache_key is not None:
-            self.cache.set_model(cache_key, discovery)
+        from .chunk_discovery_recovery import ChunkDiscoveryRecovery
+        recovery = ChunkDiscoveryRecovery(self.gateway, cache, chunk, self._source_pages, ChunkDiscovery, cache_key)
+        cached_recovery = recovery.cached_root()
+        if cached_recovery is not None:
+            return cached_recovery
+        recovered = False
+        if recovery.checkpoint() is not None:
+            discovery = recovery.recover()
+            recovered = True
+        else:
+            try:
+                discovery = self.gateway.generate_structured(  # type: ignore[union-attr]
+                    [{"role": "system", "content": prompt}, untrusted_document_message(chunk.text)],
+                    ChunkDiscovery, stage="discovery", request_metadata=metadata,
+                )
+            except LLMStructuredOutputError as exc:
+                if not exc.response.usage or exc.response.usage.finish_reason != "length":
+                    raise
+                recovery.mark_truncated(exc)
+                try:
+                    discovery = recovery.recover()
+                    recovered = True
+                except Exception as failure:
+                    raise failure from exc
+        if cache_key is not None and not recovered:
+            cache.set_model(cache_key, discovery)
         return discovery
 
     def _deterministic_profile(self, document: ParsedDocument, chunks: list[DocumentChunk]) -> DocumentProfile:

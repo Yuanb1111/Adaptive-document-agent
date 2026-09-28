@@ -17,6 +17,14 @@ from .structured import validate_structured_text
 T = TypeVar("T", bound=BaseModel)
 
 
+def _request_metadata(values: dict[str, str | int] | None) -> dict[str, str | int]:
+    """Keep source locators in the ledger, never in model requests or cost fields."""
+    allowed = {"chunk_id", "source_page_start", "source_page_end", "parent_chunk_id",
+               "fragment_index", "fragment_count", "recovery_depth"}
+    return {key: value for key, value in (values or {}).items()
+            if key in allowed and (isinstance(value, str) or type(value) is int)}
+
+
 class LLMGateway:
     def __init__(self, client: LLMClient, settings: LLMSettings, *, cache: DiskCache | None = None, cache_enabled: bool = True) -> None:
         self.client = client
@@ -57,8 +65,10 @@ class LLMGateway:
         *,
         stage: str,
         allow_repair: bool = True,
+        request_metadata: dict[str, str | int] | None = None,
     ) -> T:
         model_name = self.settings.model_for(stage)
+        metadata = _request_metadata(request_metadata)
         # Full prompt + schema + routing/privacy identity. No API key on disk.
         key = sha256_bytes(json.dumps({
             "version": ANALYSIS_VERSION, "stage": stage, "model": model_name,
@@ -70,7 +80,7 @@ class LLMGateway:
         if self.cache and self.cache_enabled:
             cached = self.cache.get_model(f"llm-{key}", response_model)
             if cached is not None:
-                self.record_cache_hit(stage=stage, operation=response_model.__name__)
+                self.record_cache_hit(stage=stage, operation=response_model.__name__, request_metadata=metadata)
                 return cached
         try:
             with self.client.request_context(stage=stage):
@@ -80,30 +90,37 @@ class LLMGateway:
                     temperature=self.settings.temperature,
                     model=model_name,
                 )
-            self._record(response, stage=stage, operation=response_model.__name__)
+            self._record(response, stage=stage, operation=response_model.__name__, request_metadata=metadata)
         except LLMStructuredOutputError as exc:
             truncated = bool(exc.response.usage and exc.response.usage.finish_reason == "length")
-            self._record(exc.response, stage=stage, status="truncated" if truncated else "invalid_format", operation=response_model.__name__)
+            self._record(exc.response, stage=stage, status="truncated" if truncated else "invalid_format",
+                         operation=response_model.__name__, request_metadata=metadata)
             if truncated:
                 output_tokens = exc.response.usage.output_tokens
                 token_detail = "unknown" if output_tokens is None else str(output_tokens)
+                location = ""
+                if "source_page_start" in metadata and "source_page_end" in metadata:
+                    location = f", source pages: {metadata['source_page_start']}-{metadata['source_page_end']}"
+                if "chunk_id" in metadata:
+                    location += f", chunk: {metadata['chunk_id']}"
                 raise LLMStructuredOutputError(
                     "Structured response was truncated by the model output limit "
                     f"(stage '{stage}', operation '{response_model.__name__}', "
-                    f"model '{model_name}', output tokens: {token_detail}).",
+                    f"model '{model_name}', output tokens: {token_detail}{location}).",
                     response=exc.response,
                 ) from exc
             if not allow_repair:
                 raise
-            value = self._repair_structured(exc.response.text, response_model, stage=stage)
+            value = self._repair_structured(exc.response.text, response_model, stage=stage, request_metadata=metadata)
         except LLMTransportError as exc:
-            self._record_failure(exc, stage, operation=response_model.__name__)
+            self._record_failure(exc, stage, operation=response_model.__name__, request_metadata=metadata)
             raise
         if self.cache and self.cache_enabled:
             self.cache.set_model(f"llm-{key}", value)
         return value
 
-    def _repair_structured(self, invalid_text: str, response_model: type[T], *, stage: str) -> T:
+    def _repair_structured(self, invalid_text: str, response_model: type[T], *, stage: str,
+                          request_metadata: dict[str, str | int] | None = None) -> T:
         schema = json.dumps(response_model.model_json_schema(), separators=(",", ":"))
         repair_messages = [
             {
@@ -125,12 +142,13 @@ class LLMGateway:
                     max_tokens=8_000 if stage == "presentation" else None,
                     model=self.settings.model_for(stage),
                 )
-            self._record(response, stage=stage, status="format_repair", operation=response_model.__name__)
+            self._record(response, stage=stage, status="format_repair", operation=response_model.__name__,
+                         request_metadata=request_metadata)
             if response.usage and response.usage.finish_reason == "length":
                 raise LLMResponseError("Format repair output was truncated; missing facts cannot be recovered by reformatting.")
             return validate_structured_text(response.text, response_model)
         except LLMTransportError as exc:
-            self._record_failure(exc, stage, operation=response_model.__name__)
+            self._record_failure(exc, stage, operation=response_model.__name__, request_metadata=request_metadata)
             raise
         except (LLMResponseError, ValueError, TypeError) as exc:
             detail = type(exc).__name__
@@ -138,27 +156,30 @@ class LLMGateway:
                 f"Structured response for stage '{stage}' remained invalid after one repair attempt ({detail})."
             ) from exc
 
-    def _record_failure(self, exc: LLMTransportError, stage: str, *, operation: str = "text") -> None:
+    def _record_failure(self, exc: LLMTransportError, stage: str, *, operation: str = "text",
+                        request_metadata: dict[str, str | int] | None = None) -> None:
         with self._usage_lock:
-            self.usage.append({"stage": stage, "provider": self.settings.provider.value,
+            self.usage.append({**_request_metadata(request_metadata), "stage": stage, "provider": self.settings.provider.value,
                                "operation": operation, "input_tokens": None, "output_tokens": None,
                                "estimated_cost": None,
                                "model": self.settings.model_for(stage), "status": "request_failed",
                                "attempts": exc.attempts})
 
-    def record_cache_hit(self, *, stage: str, operation: str) -> None:
+    def record_cache_hit(self, *, stage: str, operation: str,
+                         request_metadata: dict[str, str | int] | None = None) -> None:
         with self._usage_lock:
-            self.usage.append({"stage": stage, "operation": operation,
+            self.usage.append({**_request_metadata(request_metadata), "stage": stage, "operation": operation,
                                "model": self.settings.model_for(stage), "provider": self.settings.provider.value,
                                "cache_hit": True, "status": "app_cache_hit", "input_tokens": 0,
                                "output_tokens": 0, "latency_ms": 0, "estimated_cost": 0,
                                "cost_details": {"status": "no_request", "estimated_cost_min": 0, "estimated_cost_max": 0}})
 
-    def _record(self, response: LLMResponse, *, stage: str, status: str = "success", operation: str = "text") -> None:
+    def _record(self, response: LLMResponse, *, stage: str, status: str = "success", operation: str = "text",
+                request_metadata: dict[str, str | int] | None = None) -> None:
         metadata = response.usage.model_dump() if response.usage else {
             "provider": self.settings.provider.value, "model": self.settings.model_for(stage),
             "input_tokens": None, "output_tokens": None, "estimated_cost": None,
         }
         with self._usage_lock:
-            self.usage.append({**metadata, "stage": stage, "operation": operation,
+            self.usage.append({**metadata, **_request_metadata(request_metadata), "stage": stage, "operation": operation,
                                "status": status, "attempts": response.attempts})

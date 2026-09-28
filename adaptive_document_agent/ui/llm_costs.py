@@ -21,4 +21,5 @@ def render(st, records: list[dict]) -> None:
         st.dataframe(summary["by_stage"], use_container_width=True)
         st.dataframe(usage_rows(records), use_container_width=True)
         st.download_button("Download model cost details (.csv)", export_usage_csv(records),
-                           "llm_cost_details.csv", "text/csv", key="download_llm_cost_details")
+                           "llm_cost_details.csv", "text/csv", key="download_llm_cost_details",
+                           on_click="ignore")

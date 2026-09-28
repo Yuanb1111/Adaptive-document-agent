@@ -473,6 +473,17 @@ Discovery chunks use a short inventory prompt (summary target: 60 words / 120 Ch
 
 For direct DeepSeek Flash / V4 Pro routes, `LLM_DISCOVERY_THINKING=disabled` explicitly selects [non-thinking mode](https://api-docs.deepseek.com/zh-cn/guides/thinking_mode/) for discovery only, including routing and overview synthesis. Set `enabled` or `provider_default` to override. Other providers, custom endpoints and analysis/planning stages retain their existing settings. This changes model behavior and needs live quality/cost comparison on representative inputs; offline mocks cannot prove monetary savings. Output-limit truncation is recorded without a format-only repair that could fabricate missing facts. From v45, invalid or truncated overview synthesis gets at most one compact regeneration from the original source-summary context; it never completes truncated JSON or repeats the completed chunk calls. A second failure stops visibly. Structured truncation errors include stage, operation, configured model and reported output tokens (or unknown). Changes to generation policy invalidate the appropriate caches. Restart the app and run fresh analysis to measure this release; old JSON exports cannot acquire counters the provider never recorded.
 
+## Recovering truncated chunk discovery (v46)
+
+For output-limit failures during page-chunk understanding, v46 adds bounded
+subdivision of only the failed chunk. Successful chunks and recovery fragments
+remain reusable; all original source text, page references and complete
+inventories are retained. Recovery never completes truncated JSON or accepts
+an incomplete profile. Per-call cost details now include chunk/page locators.
+Failed automatic analysis waits for an explicit cache-preserving retry, and
+downloading the cost CSV does not restart analysis. See
+[the v46 recovery details](docs/DISCOVERY_CHUNK_RECOVERY_V46.md).
+
 ## Recovering large-document scope selection (v43)
 
 Automatic deep analysis has a 160-distinct-page budget. Overlapping ranges count

@@ -7,6 +7,8 @@ import json
 
 def usage_rows(records: list[dict]) -> list[dict]:
     fields = ("stage", "operation", "provider", "model", "resolved_model", "status", "cache_hit",
+              "chunk_id", "source_page_start", "source_page_end", "parent_chunk_id",
+              "fragment_index", "fragment_count", "recovery_depth",
               "started_at", "completed_at", "latency_ms", "thinking_mode", "finish_reason",
               "input_tokens", "cached_input_tokens", "uncached_input_tokens", "output_tokens",
               "reasoning_tokens", "total_tokens", "request_chars", "response_chars",
