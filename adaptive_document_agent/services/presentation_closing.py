@@ -14,7 +14,8 @@ def render_closing(presentation, result, plan):
         FOURIER_DARK, FOURIER_MUTED, FOURIER_PURPLE,
     )
     from .slide_compositor import _base
-    from .closing_evidence import closing_evidence, render_evidence_table
+    from .closing_evidence import closing_evidence
+    from adaptive_document_agent.validation.presentation_provenance import insight_inputs
 
     evidence_tables, records = closing_evidence(result, plan)
 
@@ -23,8 +24,12 @@ def render_closing(presentation, result, plan):
     watch_copy = {normalize(item.watch_item) for item in insights if item.watch_item}
     texts = plan.bullets or [item.narrative for item in insights if item.narrative]
     groups = [[], []]
+    linked_groups = {}
+    links = insight_inputs(result)
+    available = {o.id for o in records}
+    all_copy_linked = True
     seen = set()
-    for text in texts:
+    for position, text in enumerate(texts):
         key = normalize(text)
         if not key or key in seen:
             continue
@@ -34,39 +39,30 @@ def render_closing(presentation, result, plan):
         }]
         pages = sorted({e.page for item in matches for e in item.evidence}) or plan.source_pages
         label = matches[0].metric if len(matches) == 1 and matches[0].metric else ""
-        groups[int(key in watch_copy)].append(BriefItem(label, _sanitize_investor_narrative(text), pages))
+        column = int(key in watch_copy)
+        item = BriefItem(label, _sanitize_investor_narrative(text), pages)
+        groups[column].append(item)
+        explicit = plan.bullet_observation_ids[position] if position < len(plan.bullet_observation_ids) else []
+        observation_ids = set(explicit) if explicit else {
+            oid for insight in matches for oid in links.get(insight.id, [])
+        }
+        # Only explicit plan/analysis links can bind copy to values. An unmatched
+        # bullet is not assigned evidence merely because its source page matches.
+        if not observation_ids or not observation_ids <= available:
+            all_copy_linked = False
+            continue
+        identity = tuple(sorted(observation_ids))
+        if identity not in linked_groups:
+            subtitle = matches[0].title if len(matches) == 1 else "Reported values supporting the conclusions"
+            linked_groups[identity] = ([[], []], subtitle)
+        linked_groups[identity][0][column].append(item)
 
     notes = "\n\n".join(texts) + "\n\n" + json.dumps(
         {"observations": [o.model_dump(mode="json") for o in records]}, ensure_ascii=False)
-    # A compact endpoint table makes the linked facts visible beside the
-    # interpretation. Different period/unit groups get separate evidence pages.
-    if all(groups) and len(evidence_tables) == 1 and len(evidence_tables[0][1]) <= 6:
-        from .text_capacity import wrap_copy
-        slide, top = _base(presentation, plan.title, "First and latest reported values supporting the conclusions")
-        full_width = presentation.slide_width.inches - 1.1
-        table_width = full_width * .55
-        table = render_evidence_table(slide, evidence_tables[0], x=.55, y=top, width=table_width)
-        right, width = .55 + table_width + .3, full_width - table_width - .3
-        y = top
-        for heading, items in zip(("Conclusions", "Watch items"), groups):
-            _text(slide, heading, right, y, width, .3, size=17, bold=True, color=FOURIER_PURPLE)
-            y += .42
-            for item in items:
-                height = len(wrap_copy(item.text, width - .10, 16)) * .27 + .10
-                _text(slide, item.text, right, y, width, height, size=16, color=FOURIER_DARK)
-                y += height + .18
-        bottom = presentation.slide_height.inches - 1.05
-        if max(y, table.top.inches + table.height.inches) <= bottom:
-            pages = sorted({e.page for o in records for e in o.evidence})
-            note = " | * Unaudited" if any("*" in period for period in evidence_tables[0][0][0]) else ""
-            _text(slide, _source_footer(pages) + note, .55, presentation.slide_height.inches - .82,
-                  full_width, .2, size=9, color=FOURIER_MUTED)
-            slide.notes_slide.notes_text_frame.text = notes
-            return [slide]
-        # Reflow through the original pagination if combined content is too tall.
-        slide_id = presentation.slides._sldIdLst[-1]
-        presentation.part.drop_rel(slide_id.rId)
-        presentation.slides._sldIdLst.remove(slide_id)
+    if all_copy_linked and linked_groups:
+        combined = _render_linked_pages(presentation, result, plan, linked_groups, records, notes)
+        if combined is not None:
+            return combined
     if not all(groups):
         # Older plans may contain only conclusions. Keep their exact content
         # without relabelling every implication as a numbered watch item.
@@ -114,6 +110,80 @@ def render_closing(presentation, result, plan):
         slide.notes_slide.notes_text_frame.text = notes
         slides.append(slide)
     return _append_evidence_pages(presentation, slides, evidence_tables, notes)
+
+
+def _render_linked_pages(presentation, result, plan, groups, records, notes):
+    """Keep each linked conclusion beside complete, compatible endpoint tables.
+
+    Distinct units retain separate tables. Different period headers are never
+    joined or selected away to make a combined layout fit. If a linked bundle
+    is incompatible or too large, the original complete pagination takes over.
+    """
+    from .closing_evidence import closing_evidence
+
+    start_count = len(presentation.slides)
+    slides, shown_ids = [], set()
+    for identity, (copy, subtitle) in groups.items():
+        evidence_plan = plan.model_copy(update={"insight_ids": [], "observation_ids": list(identity)})
+        tables, _ = closing_evidence(result, evidence_plan)
+        if not tables or len({key[0] for key, _ in tables}) != 1:
+            break
+        slide = _render_linked_page(presentation, plan.title, subtitle, copy, tables, notes)
+        if slide is None:
+            break
+        slides.append(slide)
+        shown_ids.update(identity)
+    else:
+        # Explicit additional facts in the plan remain visible even if no bullet
+        # has a matching insight. All raw records also remain in speaker notes.
+        remaining = [o.id for o in records if o.id not in shown_ids]
+        evidence_plan = plan.model_copy(update={"insight_ids": [], "observation_ids": remaining})
+        tables, _ = closing_evidence(result, evidence_plan)
+        return _append_evidence_pages(presentation, slides, tables, notes)
+
+    while len(presentation.slides) > start_count:
+        slide_id = presentation.slides._sldIdLst[-1]
+        presentation.part.drop_rel(slide_id.rId)
+        presentation.slides._sldIdLst.remove(slide_id)
+    return None
+
+
+def _render_linked_page(presentation, title, subtitle, groups, tables, notes):
+    from .closing_evidence import render_evidence_table
+    from .pptx_export import _source_footer, _text, FOURIER_DARK, FOURIER_MUTED, FOURIER_PURPLE
+    from .slide_compositor import _base
+    from .text_capacity import wrap_copy
+
+    slide, top = _base(presentation, title, subtitle)
+    full_width = presentation.slide_width.inches - 1.1
+    table_width = full_width * .55
+    table_y = top
+    for table in tables:
+        shape = render_evidence_table(slide, table, x=.55, y=table_y, width=table_width)
+        # Artifact import renumbers native tables; unique names let rendered QA
+        # bind each visible table back to its original editable object.
+        shape.name = f"closing:evidence:{shape.shape_id}"
+        table_y += shape.height.inches + .28
+    right, width = .55 + table_width + .3, full_width - table_width - .3
+    y = top
+    for heading, items in zip(("Conclusions", "Watch items"), groups):
+        if not items:
+            continue
+        _text(slide, heading, right, y, width, .3, size=17, bold=True, color=FOURIER_PURPLE)
+        y += .42
+        for item in items:
+            height = len(wrap_copy(item.text, width - .10, 16)) * .28 + .10
+            _text(slide, item.text, right, y, width, height, size=16, color=FOURIER_DARK).name = "closing:body"
+            y += height + .18
+    if max(y, table_y - .28) > presentation.slide_height.inches - 1.05:
+        return None
+    pages = sorted({page for _, rows in tables for _, _, sources in rows for page in sources}
+                   | {page for items in groups for item in items for page in item.pages})
+    note = " | * Unaudited" if any("*" in period for key, _ in tables for period in key[0]) else ""
+    _text(slide, _source_footer(pages) + note, .55, presentation.slide_height.inches - .82,
+          full_width, .2, size=9, color=FOURIER_MUTED)
+    slide.notes_slide.notes_text_frame.text = notes
+    return slide
 
 
 def _append_evidence_pages(presentation, slides, tables, notes):

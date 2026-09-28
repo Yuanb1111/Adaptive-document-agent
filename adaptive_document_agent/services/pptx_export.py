@@ -143,6 +143,8 @@ def build_presentation(result: PipelineResult, template_path: str | Path | None 
     except ImportError as exc:  # pragma: no cover - deployment configuration failure
         raise RuntimeError("PowerPoint export requires python-pptx.") from exc
 
+    from .presentation_claim_evidence import prepare_presentation_claims
+    prepare_presentation_claims(result)
     resolved_path = _resolve_template_path(template_path)
     from .presentation_artwork import validate_artwork
     artwork = validate_artwork(artwork)
@@ -153,7 +155,7 @@ def build_presentation(result: PipelineResult, template_path: str | Path | None 
 
     presentation._ada_artwork = artwork
     presentation._ada_source_visual = None
-    if source_pdf is not None and artwork is None:
+    if source_pdf is not None:
         from .presentation_source_visual import select_company_source_visual
         presentation._ada_source_visual = select_company_source_visual(source_pdf, result)
     # Remove template sample slides while retaining master and layouts
@@ -241,7 +243,7 @@ def _build_legacy_presentation(presentation: Any, result: PipelineResult) -> Non
     # Standard order: 1. Cover, 2. Contents, 3. Overview, 4. Analysis at a glance, 5. Findings
     _add_cover(presentation, result)
     _add_contents(presentation, result, chart_groups)
-    if result.profile.document_summary.strip():
+    if result.profile.document_summary.strip() or getattr(presentation, "_ada_source_visual", None):
         _add_document_overview(presentation, result)
     _add_findings_slide(presentation, result, presentation_charts, index)
     if chart_groups:
@@ -309,11 +311,8 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
     _add_planned_contents(presentation, contents_slides)
     _add_company_at_a_glance(presentation, result, slides_by_type["company_overview"])
     _add_planned_summary(presentation, result, slides_by_type["executive_summary"], index)
-    quality_notes = list(dict.fromkeys([
-        *result.profile.data_quality_notes,
-        *(warning.message for warning in result.validation_warnings
-          if warning.severity in {"error", "warning"}),
-    ]))
+    from .presentation_identity import presentation_quality_notes
+    quality_notes = presentation_quality_notes(result)
     if quality_notes:
         notes = presentation.slides[-1].notes_slide.notes_text_frame
         notes.text += "\n\nSource scope and data-quality notes:\n" + "\n".join(quality_notes)
@@ -553,9 +552,16 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
 
     if any(issue.code == "company_introduction_unavailable" for issue in result.validation_warnings):
         from .presentation_brief import BriefItem, render_profile
-        render_profile(presentation, "Company introduction unavailable", [BriefItem(
+        items = [BriefItem(
             "Evidence limitation", "A source-verified company introduction could not be generated in this run.", []
-        )], notes="See company_introduction_unavailable in the analysis diagnostics.")
+        )]
+        source_visual = getattr(presentation, "_ada_source_visual", None)
+        if source_visual:
+            from .presentation_source_visual import render_profile_with_source
+            render_profile_with_source(presentation, "Document overview", items, source_visual)
+        else:
+            render_profile(presentation, "Company introduction unavailable", items,
+                           notes="See company_introduction_unavailable in the analysis diagnostics.")
         return
 
     if plan.company.summary_overview and plan.company.summary_business:
@@ -575,10 +581,13 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
                 first = items[0]
                 items[0] = BriefItem(first.title, first.text, sorted(set(first.pages) | set(identity_pages)))
                 notes += "\n\nCompany identity: " + company_name + "\n" + _source_footer(identity_pages)
-            rendered = render_profile(
-                presentation, title, items, notes=notes,
-            )
-            if len(rendered) != 1:
+            source_visual = getattr(presentation, "_ada_source_visual", None)
+            if page_index == 0 and source_visual:
+                from .presentation_source_visual import render_profile_with_source
+                rendered = render_profile_with_source(presentation, title, items, source_visual, notes=notes)
+            else:
+                rendered = render_profile(presentation, title, items, notes=notes)
+            if len(rendered) != 1 and not (page_index == 0 and source_visual):
                 raise ValueError("Company Summary copy exceeds its one-page budget; shorten the introduction.")
         return
 
@@ -603,7 +612,7 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
         if source_visual:
             pages = sorted(set(pages) | {source_visual.page})
         add_picture_profile(presentation, company, slide_title, pages,
-                            artwork or source_visual.payload,
+                            source_visual.payload if source_visual else artwork,
                             source_page=source_visual.page if source_visual else None)
         return
     from .presentation_brief import BriefItem, overview_items, render_profile
@@ -1179,8 +1188,13 @@ def _add_evidence_overview(presentation: Any, result: PipelineResult) -> None:
 def _add_document_overview(presentation: Any, result: PipelineResult) -> None:
     from .presentation_brief import overview_items, render_brief
     items, notes = overview_items(result.profile)
-    render_brief(presentation, result.profile.overview_title.strip() or "Document overview",
-                 items, notes=notes, excerpt=not bool(result.profile.overview_points))
+    title = result.profile.overview_title.strip() or "Document overview"
+    source_visual = getattr(presentation, "_ada_source_visual", None)
+    if source_visual:
+        from .presentation_source_visual import render_profile_with_source
+        render_profile_with_source(presentation, title, items, source_visual, notes=notes)
+    else:
+        render_brief(presentation, title, items, notes=notes, excerpt=not bool(result.profile.overview_points))
 
 
 def _add_text_pages(presentation: Any, title: str, body: str, pages, *, subtitle: str = "") -> None:
@@ -1584,7 +1598,7 @@ def _add_native_chart(
         # Position legend at TOP so it never collides with panel footers or explanatory text
         chart.legend.position = XL_LEGEND_POSITION.TOP
         chart.legend.font.name = FONT
-        chart.legend.font.size = Pt(8.0 if (compact or chart_width < 5.5) else 9.5)
+        chart.legend.font.size = Pt(8.0 if (compact or bounds[2] < 5.5) else 9.5)
         chart.legend.font.color.rgb = _rgb(FOURIER_DARK)
     chart.chart_style = None
     chart.font.name = FONT
@@ -1631,8 +1645,12 @@ def _add_native_chart(
             # Zero-crossing bar labels: use compact size to prevent crowding x-axis
             labels.font.size = Pt(9 if compact else 10.5)
             # If vertical space is too cramped (< 2.2 in), hide labels to prevent collision with x-axis
-            if chart_height < 2.2:
+            if bounds[3] < 2.2:
                 chart.plots[0].has_data_labels = False
+        elif chart.chart_type == XL_CHART_TYPE.COLUMN_CLUSTERED and len(chart.series) >= 3:
+            # Neighboring categories with similar heights need labels that fit
+            # individual columns, not the single-series headline font.
+            labels.font.size = Pt(9.5 if bounds[2] < 7 else 11)
         else:
             labels.font.size = Pt(12 if compact else 14)
         labels.font.bold = True
@@ -1781,10 +1799,8 @@ def _add_findings_slide(
 def _add_quality_slide(presentation: Any, result: PipelineResult, *, title: str = "Limits that affect interpretation") -> None:
     slide = _base_slide(presentation, title, "Data quality notes and validation warnings")
     content_top, content_h = _content_zone(slide)
-    raw_messages = list(dict.fromkeys([
-        *result.profile.data_quality_notes,
-        *(warning.message for warning in result.validation_warnings if warning.severity in {"error", "warning"}),
-    ]))[:5]
+    from .presentation_identity import presentation_quality_notes
+    raw_messages = presentation_quality_notes(result)[:5]
 
     from adaptive_document_agent.services.company_extractor import is_company_identity_resolved
 
@@ -1815,7 +1831,7 @@ def _add_quality_slide(presentation: Any, result: PipelineResult, *, title: str 
         else:
             messages.append(msg)
 
-    slide.notes_slide.notes_text_frame.text = "Original source/discovery notes (not independently verified):\n" + "\n".join(raw_messages)
+    slide.notes_slide.notes_text_frame.text = "Source scope and data-quality notes:\n" + "\n".join(raw_messages)
     messages = list(dict.fromkeys(messages))
 
     if not messages:
@@ -2428,7 +2444,7 @@ def _series_rows(plan: ChartPlan, observations: list[Observation], *, is_balance
             label = format_period_label(label, is_balance_sheet=is_balance_sheet)
 
         base_series = str(item.entity or display_metric_name(item))
-        ignored_dimensions = {axis_dimension, "table_context", "period_basis"}
+        ignored_dimensions = {axis_dimension, "table_context", "period_basis", "column_role"}
         repeated_values = {
             str(value).strip().casefold()
             for value in (label, item.period, item.entity, base_series)

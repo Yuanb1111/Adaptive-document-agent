@@ -355,7 +355,16 @@ def run_comprehensive_qa(result: PipelineResult, auto_repair: bool = True) -> QA
                 message="Enriched comparable single-metric evidence with a hero chart and deterministic period statistics."))
 
     # 1. Resolve company identity contradictions
-    identity_fixes = sanitize_company_identity_contradictions(result)
+    # Identity repair applies to presentation copy. Retain the original
+    # discovery/validation records for JSON and future evidence review; the
+    # presentation view filters superseded identity limitations separately.
+    source_notes = list(result.profile.data_quality_notes)
+    source_warnings = list(result.validation_warnings)
+    try:
+        identity_fixes = sanitize_company_identity_contradictions(result)
+    finally:
+        result.profile.data_quality_notes = source_notes
+        result.validation_warnings = source_warnings
     report.info.extend(identity_fixes)
 
     # 2. Check 1000x magnitude and unit scale errors

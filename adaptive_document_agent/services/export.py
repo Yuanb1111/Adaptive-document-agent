@@ -95,6 +95,8 @@ def export_pptx_with_report(
     started = perf_counter()
     notify = progress or (lambda _: None)
     notify("Checking PowerPoint evidence")
+    from .presentation_claim_evidence import prepare_presentation_claims
+    prepare_presentation_claims(result)
     qa = run_comprehensive_qa(result, auto_repair=True)
     qa_finished = perf_counter()
     if not force and qa.has_critical_errors:
@@ -142,7 +144,7 @@ def _build_cache_key(result: PipelineResult, template_digest: str, artwork: byte
     content = result.model_dump_json(exclude={"llm_usage", "timings_ms", "stage_details_ms", "pipeline_total_ms", "export_timings_ms"}).encode()
     from adaptive_document_agent.utils.pipeline_version import PIPELINE_VERSION
     image_digest = hashlib.sha256(source_pdf).digest() if source_pdf is not None else b""
-    return (f"ppt-build-v3:{PIPELINE_VERSION}", template_digest,
+    return (f"ppt-build-v4:{PIPELINE_VERSION}", template_digest,
             hashlib.sha256(content + b"\0" + (artwork or b"") + b"\0" + image_digest).hexdigest())
 
 

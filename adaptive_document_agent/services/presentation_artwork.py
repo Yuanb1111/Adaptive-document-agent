@@ -91,9 +91,6 @@ def add_picture_profile(presentation, company, title: str, pages: list[int], art
         picture = _picture(slide, artwork,
                            Rect(.83 + text_width, top, width - text_width - 1.38, height - 1.5 - top))
         picture.name = f"source_document_image:p{source_page}"
-        _put_text(slide, f"Image from source document, p. {source_page}",
-                  Rect(.83 + text_width, height - 1.29, width - text_width - 1.38, .20),
-                  size=8, color=MUTED)
         _put_text(slide, _source_footer(pages), Rect(.55, height - .82, width - 1.1, .20),
                   size=9, color=MUTED)
         slide.notes_slide.notes_text_frame.text = (

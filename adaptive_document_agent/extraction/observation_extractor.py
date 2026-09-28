@@ -24,6 +24,7 @@ from .numeric_parser import parse_number
 from .column_roles import explicit_percentage, intrinsic_percentage
 from .normalizer import infer_unit_defaults
 from .unit_evidence import cell_unit_defaults
+from .comparison_context import table_comparison_contexts, with_comparison_context
 
 _PERIOD = re.compile(r"(?i)^(?:FY\s*)?(?:19|20)\d{2}$|^Q[1-4]\s*(?:19|20)?\d{2}$")
 _GENERIC_LABELS = {"total", "current", "deferred", "other", "net", "subtotal", "amount", "value"}
@@ -64,6 +65,7 @@ class ObservationExtractor:
             if self._meaningful_header(header)
         ]
         column_metric_mode = len(set(meaningful_header_list)) >= 2
+        comparison_contexts = table_comparison_contexts(table)
         current_section: str | None = None
         for row_index, row in enumerate(table.rows):
             if row.alignment_status == "ambiguous":
@@ -164,7 +166,7 @@ class ObservationExtractor:
                     current_section=current_section,
                 )
                 if item:
-                    output.append(item)
+                    output.append(with_comparison_context(item, comparison_contexts))
             # An explicitly named group total closes that group. Subsequent
             # rows are independent until another source heading opens a group.
             # A subtotal does not close the parent: more components may follow.

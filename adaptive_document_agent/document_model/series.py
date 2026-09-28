@@ -172,11 +172,22 @@ def context_key(observation: Observation) -> tuple[object, ...]:
     return observation.period, observation.entity, tuple(sorted({**observation.dimensions, **observation.category_dimensions}.items())), source_context_key(observation)
 
 
+def _conflict_context_key(observation: Observation) -> tuple[object, ...]:
+    """Typography differences in a source heading do not excuse conflicting facts."""
+    dimensions = {**observation.dimensions, **observation.category_dimensions}
+    return (
+        observation.period,
+        observation.entity,
+        tuple(sorted((key, " ".join(value.split()).casefold()) for key, value in dimensions.items())),
+        source_context_key(observation),
+    )
+
+
 def conflicting_groups(observations: Iterable[Observation]) -> list[list[Observation]]:
     """Return same-context observations whose normalised values disagree."""
     groups: dict[tuple[object, ...], list[Observation]] = defaultdict(list)
     for item in observations:
-        groups[(metric_key(item), context_key(item), item.unit, item.currency)].append(item)
+        groups[(metric_key(item), _conflict_context_key(item), item.unit, item.currency)].append(item)
     return [items for items in groups.values() if _has_conflict(items)]
 
 
@@ -184,7 +195,7 @@ def presentation_sign_variant_groups(observations: Iterable[Observation]) -> lis
     """Return groups that differ only by source-table presentation sign."""
     groups: dict[tuple[object, ...], list[Observation]] = defaultdict(list)
     for item in observations:
-        groups[(metric_key(item), context_key(item), item.unit, item.currency)].append(item)
+        groups[(metric_key(item), _conflict_context_key(item), item.unit, item.currency)].append(item)
     return [items for items in groups.values() if _is_presentation_sign_variant(items)]
 
 

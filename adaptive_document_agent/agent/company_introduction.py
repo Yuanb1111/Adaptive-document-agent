@@ -131,6 +131,8 @@ def ensure_company_introduction(gateway, result, plan) -> None:
                                            for item in page.items for p in item.source_pages}
                                           | ({draft.name_page} if draft.name else set()))
             _apply_introduction(plan, company)
+            from adaptive_document_agent.services.presentation_identity import reconcile_presentation_identity
+            reconcile_presentation_identity(plan, result)
             return
         if attempt == 0:
             messages += [untrusted_document_message(draft.model_dump_json()),

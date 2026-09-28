@@ -408,6 +408,15 @@ LLM requests or the document evidence model. Choose artwork appropriate to the
 uploaded document. No photograph is fabricated or copied from another issuer.
 Changing or removing the artwork invalidates the native export cache.
 
+When the uploaded PDF is available, export prefers a substantial original image
+embedded on its first page, without separately typeset cover titles or captions.
+It places the image beside the introduction without cropping or distortion.
+Covers without suitable embedded artwork use a locally rendered first-page
+preview. No vision/model call is required. Long
+introductions keep all their copy and use a separate preview page when needed.
+The source PDF hash must match the analysed document; the preview is document
+context, not evidence for analytical claims.
+
 For a local visual regression preview with synthetic, clearly labelled data,
 install development dependencies and configure the normal local renderer, then run
 `python -m scripts.preview_presentation_layouts --output .tmp_ppt_review/preview --layout kpi_band`.
@@ -539,5 +548,10 @@ The highest-value next steps are:
 The existing package boundaries are intended to support later multi-PDF comparison, CSV/Excel/DOCX/PPTX input, persistence, batch analysis, and shared workspaces without rewriting the core evidence model.
 
 ## Engineering Specification
+
+The v47 presentation update joins conclusions to their linked evidence, filters
+superseded identity limitations from presentation copy, restores explicitly
+labelled comparison contexts, and binds comparative wording to visible values.
+See [the v47 evidence and source-preview notes](docs/PRESENTATION_EVIDENCE_V47.md).
 
 The authoritative specification is [docs/MASTER_PROMPT.md](docs/MASTER_PROMPT.md). Repository-specific working instructions are in [AGENTS.md](AGENTS.md).

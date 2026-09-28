@@ -248,6 +248,8 @@ class PresentationPlanRecovery:
             *([closing] if closing else []),
             *(slide for slide in base.slides if slide.slide_type in {"data_quality", "appendix"}),
         ]
+        from adaptive_document_agent.services.presentation_claim_evidence import prepare_presentation_claims
+        prepare_presentation_claims(result, base)
         from adaptive_document_agent.services.presentation_editorial import stamp_editorial_review
         return stamp_editorial_review(PresentationPlanValidator().validate(base, result), result, origin=origin)
 
