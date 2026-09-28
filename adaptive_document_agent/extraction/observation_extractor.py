@@ -6,6 +6,7 @@ from adaptive_document_agent.document_model.metric_semantic_classifier import (
     classify_metric,
     format_metric_display_value,
     is_days_metric,
+    is_explicit_count_metric,
     is_financial_statement_metric,
     is_margin_metric,
     is_multiple_metric,
@@ -21,6 +22,8 @@ from adaptive_document_agent.utils.ids import stable_id
 
 from .numeric_parser import parse_number
 from .column_roles import explicit_percentage, intrinsic_percentage
+from .normalizer import infer_unit_defaults
+from .unit_evidence import cell_unit_defaults
 
 _PERIOD = re.compile(r"(?i)^(?:FY\s*)?(?:19|20)\d{2}$|^Q[1-4]\s*(?:19|20)?\d{2}$")
 _GENERIC_LABELS = {"total", "current", "deferred", "other", "net", "subtotal", "amount", "value"}
@@ -194,6 +197,15 @@ class ObservationExtractor:
         scale = number.scale
         value = number.value
         col_type = table.column_types[column] if (column is not None and column < len(table.column_types)) else "unknown"
+        source_units = cell_unit_defaults(table, row_index, column_label)
+        row_units = infer_unit_defaults(table.rows[row_index].cells[0] or "")
+        column_units = infer_unit_defaults(column_label or "")
+        local_currency = number.currency or row_units.currency or column_units.currency
+        column_currency = (
+            table.column_currencies[column]
+            if source_units.allow_column_defaults and column is not None and column < len(table.column_currencies)
+            else None
+        )
 
         header_lower = (column_label or "").casefold()
         is_nonsensical_pct_header = bool(re.search(r"(?i)%\s*(?:of\s*)?(?:rmb|usd|cny|hkd|eur|\$|£|€)", header_lower))
@@ -209,9 +221,15 @@ class ObservationExtractor:
         is_monetary_item = is_financial_statement_metric(metric) and not is_explicit_pct
         column_scale = (
             table.column_scales[column]
-            if column is not None and column < len(table.column_scales) and col_type != "percentage"
+            if source_units.allow_column_defaults and column is not None and column < len(table.column_scales) and col_type != "percentage"
             else None
         )
+        # "amount" is also the table parser's fallback for an untyped numeric
+        # column. It is not evidence of currency. Explicit counts/volume outrank
+        # a table's monetary default, while a conflicting cell/row unit is kept.
+        count_metric = is_explicit_count_metric(metric) or classify_metric(metric).unit_family == "count"
+        is_count = count_metric or (col_type == "count" and not is_monetary_item)
+        monetary_evidence = is_monetary_item or bool(local_currency or column_currency or source_units.currency) or unit == "currency" or source_units.unit == "currency"
 
         if is_multiple_metric(metric) or col_type == "ratio" or unit == "multiple":
             unit, currency, scale = "multiple", None, 1.0
@@ -234,14 +252,27 @@ class ObservationExtractor:
             semantic_type = "days"
             unit_family = "days"
             display_unit = "days"
-        elif col_type == "amount" or is_monetary_item:
+        elif is_count and not local_currency:
+            unit, currency, scale = "count", None, number.scale
+            value = number.value
+            semantic_type, unit_family, display_unit = "count", "count", "units"
+            dimensions = {**(dimensions or {}), "column_role": "count"}
+        elif monetary_evidence:
             unit = "currency"
-            currency = (table.column_currencies[column] if column is not None and column < len(table.column_currencies) and table.column_currencies[column] else None) or table.default_currency
-            scale = column_scale or table.default_unit_scale or 1.0
-            value = number.value * scale if (number.value is not None and scale != 1.0) else number.value
+            currency = local_currency or column_currency or source_units.currency
+            if number.scale != 1.0:
+                scale = number.scale
+            elif row_units.currency or column_units.currency:
+                scale = row_units.scale or column_units.scale or 1.0
+            else:
+                scale = column_scale or source_units.scale or 1.0
+            value = number.value * scale if scale != 1.0 and number.scale == 1.0 else number.value
             semantic_type = "monetary_amount"
             unit_family = "currency"
-            display_unit = number.raw_unit or table.default_raw_unit or currency or "currency"
+            display_unit = number.raw_unit or source_units.raw_unit or currency or "currency"
+            if is_count:
+                validation_status = "suspicious_alignment"
+                anomaly_notes.append("Explicit count label conflicts with a source currency unit; source value and unit retained.")
             if "%" in raw and not is_monetary_item:
                 validation_status = "suspicious_alignment"
                 anomaly_notes.append(f"Amount column contains explicit '%' in raw cell: '{raw}'")
@@ -256,8 +287,8 @@ class ObservationExtractor:
             semantic = classify_metric(
                 metric,
                 value=number.value,
-                raw_unit=number.raw_unit or table.default_raw_unit,
-                unit=unit or table.default_unit,
+                raw_unit=number.raw_unit or source_units.raw_unit,
+                unit=unit or source_units.unit,
             )
             is_fin = is_financial_statement_metric(metric) or semantic.is_currency
             if not is_monetary_item and (semantic.is_percentage or (("%" in header_lower or "percent" in header_lower) and not is_nonsensical_pct_header)):
@@ -281,20 +312,20 @@ class ObservationExtractor:
                 unit, currency, scale = "count", None, 1.0
                 value = number.value
                 semantic_type, unit_family, display_unit = "count", "count", "units"
-            elif is_fin or unit == "currency" or table.default_unit == "currency" or table.default_currency:
+            elif is_fin or unit == "currency" or source_units.unit == "currency" or source_units.currency:
                 unit = "currency"
-                currency = currency or (table.column_currencies[column] if column is not None and column < len(table.column_currencies) and table.column_currencies[column] else None) or table.default_currency
-                scale = column_scale or table.default_unit_scale or 1.0
-                value = number.value * scale if (number.value is not None and scale != 1.0) else number.value
+                currency = currency or column_currency or source_units.currency
+                scale = number.scale if number.scale != 1.0 else column_scale or source_units.scale or 1.0
+                value = number.value * scale if scale != 1.0 and number.scale == 1.0 else number.value
                 semantic_type = "monetary_amount"
                 unit_family = "currency"
-                display_unit = number.raw_unit or table.default_raw_unit or currency or "currency"
+                display_unit = number.raw_unit or source_units.raw_unit or currency or "currency"
                 if "%" in raw:
                     validation_status = "suspicious_alignment"
                     anomaly_notes.append(f"Amount column contains explicit '%' in raw cell: '{raw}'")
             else:
-                unit = unit or table.default_unit or (semantic.metric_type if semantic.unit_family != "generic" else "unknown")
-                currency = currency or table.default_currency
+                unit = unit or source_units.unit or (semantic.metric_type if semantic.unit_family != "generic" else "unknown")
+                currency = currency or source_units.currency
                 value = number.value
                 semantic_type = semantic.semantic_type
                 unit_family = semantic.unit_family
@@ -317,9 +348,17 @@ class ObservationExtractor:
         period_sem = classify_period(period, is_balance_sheet=is_bs)
         pres_label = sanitize_metric_label(metric)
         disp_val = ""
-        effective_raw_unit = (number.raw_unit or "%") if unit_family == "percentage" else (number.raw_unit or table.default_raw_unit)
+        if unit_family == "percentage":
+            effective_raw_unit = number.raw_unit or "%"
+        elif unit_family in {"count", "days", "multiple"}:
+            effective_raw_unit = number.raw_unit
+        else:
+            effective_raw_unit = number.raw_unit or source_units.raw_unit
         if value is not None:
-            semantic_obj = classify_metric(metric, value=value, raw_unit=effective_raw_unit, unit=unit)
+            semantic_obj = classify_metric(
+                "" if is_count and local_currency else metric,
+                value=value, raw_unit=effective_raw_unit, unit=unit,
+            )
             disp_val = format_metric_display_value(
                 raw,
                 value,

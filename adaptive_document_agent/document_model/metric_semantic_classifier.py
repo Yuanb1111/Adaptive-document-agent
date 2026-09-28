@@ -231,11 +231,29 @@ def is_financial_statement_metric(name: str) -> bool:
     if not name:
         return False
     lower = name.strip().casefold()
+    if is_explicit_count_metric(name):
+        return False
     if any(k in lower for k in _MARGIN_KEYWORDS) or any(k in lower for k in _SHARE_KEYWORDS):
         return False
     if "%" in lower or re.search(r"\b(?:margin|ratio|multiple|days|turnover|dso|dio|dpo)\b", lower):
         return False
     return any(k in lower for k in _FINANCIAL_STATEMENT_KEYWORDS) or any(k in lower for k in _CURRENCY_KEYWORDS)
+
+
+def is_explicit_count_metric(name: str) -> bool:
+    """Recognize explicit counting syntax, without inferring a document domain."""
+    lower = name.strip().casefold()
+    # An alternative reporting window is not a measurement denominator.
+    # Keep actual count/time or count/total expressions excluded below.
+    time_word = r"(?:years?|periods?|months?|quarters?)"
+    lower = re.sub(rf"\b{time_word}\s*/\s*{time_word}\b", "reporting period", lower)
+    if re.search(r"%|/|\b(?:percentage|percent|ratio|rate|growth|margin|proportion|per)\b|占比|比例|增长率", lower):
+        return False
+    return bool(
+        re.match(r"(?:(?:total|average|weighted average)\s+)?(?:number|no\.)\s+of\s+\S", lower)
+        or re.search(r"\bcount(?:\s*\([^)]*\))?$", lower)
+        or re.search(r"(?:数量|人数|家数|次数)(?:[（(][^）)]*[）)])?$", lower)
+    )
 
 _DAYS_KEYWORDS = (
     "turnover days",
@@ -317,7 +335,11 @@ def classify_metric(
         bool(re.search(r"\b" + re.escape(k) + r"\b", lower)) if k.isascii() and k.isalnum() else k in lower
         for k in _VOLUME_KEYWORDS
     )
-    if volume_match and not is_fin and not is_asp and not any(k in lower for k in ("share", "%", "margin", "ratio", "revenue", "cost")):
+    explicit_count = is_explicit_count_metric(clean)
+    typed_count = unit in {"count", "units"} and not is_fin
+    if (explicit_count or typed_count or volume_match) and not is_fin and not is_asp and not any(k in lower for k in ("%", "margin", "ratio")) and (
+        explicit_count or typed_count or not any(k in lower for k in ("share", "revenue", "cost"))
+    ):
         return MetricSemantic(
             metric_type="count",
             unit_family="count",
@@ -564,24 +586,12 @@ def sanitize_metric_label(name: str) -> str:
     if not clean:
         return "Reported metric"
 
-    # Specific standard expense ratio mappings for presentation consistency
-    if re.search(
-        r"(?i)research(?:\s+and\s+|\s*&\s*)development(?:\s+expenses?)?\s*(?::\s*(?:share|as\s*%?|ratio)\s+(?:of\s+)?(?:total\s+)?revenue|\s*as\s*%\s*of\s*revenue|\s*/\s*revenue|\s*ratio|\s*\(.*?(?:share|%|ratio).*?revenue.*?\))",
-        clean,
-    ) or (
-        re.search(r"(?i)research(?:\s+and\s+|\s*&\s*)development", clean)
-        and (any(k in clean.casefold() for k in ("share of revenue", "% of revenue", "/ revenue")) or re.search(r"(?i)\bratio\b", clean))
-    ):
-        return "R&D / revenue"
-    if re.search(r"(?i)(?:selling\s+(?:and|&)\s+(?:distribution|marketing)|sales\s+(?:and|&)\s+marketing)(?:\s+expenses?)?\s*(?::\s*share\s+of\s+revenue|\s*as\s*%\s*of\s*revenue|\s*/\s*revenue|\s*ratio)", clean):
-        return "Selling & Marketing / Revenue" if "marketing" in clean.casefold() else "Selling & Distribution / Revenue"
-    if re.search(r"(?i)(?:sg&a|selling,?\s+(?:general\s+)?(?:and|&)\s+administrative)(?:\s+expenses?)?\s*(?::\s*share\s+of\s+revenue|\s*as\s*%\s*of\s*revenue|\s*/\s*revenue|\s*ratio)", clean):
-        return "SG&A / Revenue"
-    if re.search(r"(?i)administrative\s+expenses?\s*(?::\s*share\s+of\s+revenue|\s*as\s*%\s*of\s*revenue|\s*/\s*revenue|\s*ratio)", clean):
-        return "Admin / Revenue"
-    if re.search(r"(?i)cost\s+of\s+(?:sales|revenue)\s*(?::\s*share\s+of\s+revenue|\s*as\s*%\s*of\s*revenue|\s*/\s*revenue|\s*ratio)", clean):
-        return "Cost of Sales / Revenue"
+    # Share one denominator-aware mapping with all other display-label paths.
+    from adaptive_document_agent.services.language_qa import expense_revenue_label
 
+    revenue_label = expense_revenue_label(clean)
+    if revenue_label:
+        return "R&D / revenue" if revenue_label == "R&D / Revenue" else revenue_label
 
     # Normalize segment shares
     clean = re.sub(r"(?i)\s*%\s*of\s*total\s*revenue$", " share of revenue", clean)

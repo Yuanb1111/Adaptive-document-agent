@@ -13,6 +13,31 @@ from .deployment import cache_for_session, is_public_deployment
 from .sidebar import render_sidebar
 
 
+def _analysis_scope_key(raw_pdf: bytes, analysis_focus: str, settings) -> str:
+    """Invalidate finished outputs independently of reusable model/extraction caches."""
+    return sha256_bytes(
+        "|".join(
+            (
+                PIPELINE_VERSION,
+                ANALYSIS_VERSION,
+                EXTRACTION_VERSION,
+                sha256_bytes(raw_pdf),
+                analysis_focus.strip(),
+                settings.provider.value,
+                settings.model,
+                settings.base_url or "",
+                settings.privacy_mode.value,
+                str(sorted(settings.stage_models.items())),
+                str(settings.temperature),
+                str(settings.discovery_thinking),
+                str(settings.discovery_chunk_tokens),
+                str(settings.semantic_batch_size),
+                str(settings.deepseek_price_band),
+            )
+        ).encode("utf-8")
+    )
+
+
 def _analyse_upload(st, raw_pdf, *, scope_key, analysis_focus, settings, cache, scope=None, force=False, progress=None):
     """Run one upload through discovery and analysis, reusing it on widget reruns."""
     if not force and st.session_state.get("analysis_result_key") == scope_key:
@@ -127,26 +152,7 @@ def run_app() -> None:
         st.info("Upload a PDF to begin. You do not need to choose a document type.")
         return
     raw_pdf = uploaded.getvalue()
-    scope_key = sha256_bytes(
-        "|".join(
-            (
-                ANALYSIS_VERSION,
-                EXTRACTION_VERSION,
-                sha256_bytes(raw_pdf),
-                analysis_focus.strip(),
-                settings.provider.value,
-                settings.model,
-                settings.base_url or "",
-                settings.privacy_mode.value,
-                str(sorted(settings.stage_models.items())),
-                str(settings.temperature),
-                str(settings.discovery_thinking),
-                str(settings.discovery_chunk_tokens),
-                str(settings.semantic_batch_size),
-                str(settings.deepseek_price_band),
-            )
-        ).encode("utf-8")
-    )
+    scope_key = _analysis_scope_key(raw_pdf, analysis_focus, settings)
     result = st.session_state.get("analysis_result") if st.session_state.get("analysis_result_key") == scope_key else None
     from .processing_progress import ProcessingProgress
     progress = ProcessingProgress(st.empty())

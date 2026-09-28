@@ -142,7 +142,12 @@ def test_pptx_export_structure_ordering_and_gridlines() -> None:
         next((s.text.strip() for s in slide.shapes if s.has_text_frame and s.text.strip()), "")
         for slide in deck.slides
     ]
-    assert slide_titles[0] == "Institutional Review"
+    assert slide_titles[0] == "Test Corp"
+    # Resolved identity heads the cover; the original report topic remains
+    # visible in the subtitle instead of disappearing during title promotion.
+    cover_subtitle = next(shape for shape in deck.slides[0].placeholders
+                          if shape.placeholder_format.idx == 15)
+    assert cover_subtitle.text == "Institutional Review"
     assert slide_titles[1] == "Contents"
     assert slide_titles[2] == "Company at a Glance"
     assert slide_titles[3] == "Executive Summary"

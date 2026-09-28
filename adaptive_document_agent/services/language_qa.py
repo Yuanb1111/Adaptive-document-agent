@@ -110,6 +110,50 @@ def clean_presentation_text(text: str) -> str:
     return clean.strip()
 
 
+_EXPENSE_NUMERATORS: tuple[tuple[str, str], ...] = (
+    (r"(?:research\s+(?:and|&)\s+development|r\s*&\s*d)", "R&D"),
+    (r"(?:selling|sales)\s+(?:and|&)\s+marketing", "Selling & Marketing"),
+    (r"selling\s+(?:and|&)\s+distribution", "Selling & Distribution"),
+    (r"(?:sg\s*&\s*a|selling,?\s+(?:general\s+)?(?:and|&)\s+administrative)", "SG&A"),
+    (r"(?:administrative|admin)", "Admin"),
+    (r"cost\s+of\s+(?:sales|revenue|goods\s+sold)", "Cost of Sales"),
+    (r"warehouse\s+fulfillment(?:\s+solutions)?", "Warehouse Fulfillment"),
+)
+
+
+def expense_metric_family(name: str) -> str | None:
+    """Identify a known expense numerator for label repair, without inferring its denominator."""
+    for numerator, label in _EXPENSE_NUMERATORS:
+        if re.search(rf"\b(?:{numerator})\b", name, re.IGNORECASE):
+            return label
+    return None
+
+
+def expense_revenue_label(name: str) -> str | None:
+    """Shorten only a complete expense ratio with an explicit revenue denominator.
+
+    A bare 'ratio' supplies no denominator. Full matching also prevents a
+    revenue phrase belonging to another metric from changing this metric.
+    Qualified denominators such as net revenue or operating expenditure are
+    retained verbatim by the caller, rather than collapsed to revenue.
+    """
+    clean = " ".join(name.strip().split())
+    suffix = (
+        r"(?:/\s*(?:total\s+)?revenue|"
+        r"(?:as\s*)?(?:%|percentage|share|proportion)\s*of\s+(?:total\s+)?revenue|"
+        r"ratio\s+(?:of|to)\s+(?:total\s+)?revenue)"
+    )
+    for numerator, label in _EXPENSE_NUMERATORS:
+        if re.fullmatch(
+            rf"(?:{numerator})(?:\s+(?:expenses?|expenditure))?\s*"
+            rf"(?::\s*)?(?:{suffix}|\(\s*{suffix}\s*\))\s*%?",
+            clean,
+            re.IGNORECASE,
+        ):
+            return f"{label} / Revenue"
+    return None
+
+
 def clean_metric_label(name: str, max_length: int | None = None) -> str:
     """Format and shorten financial metric labels for presentation slides.
 
@@ -133,55 +177,10 @@ def clean_metric_label(name: str, max_length: int | None = None) -> str:
     # Remove nonsensical unit suffixes embedded in labels
     clean = re.sub(r"(?i)\s*%\s*of\s*(?:rmb|usd|cny|hkd|eur)\b", "", clean).strip()
 
-    # 1. Standard Expense Ratio mappings (R&D, S&M, Admin, Cost of Sales, SG&A)
-    # Check R&D ratio
-    if re.search(
-        r"(?i)research\s+(?:and|&)\s+development(?:\s+expenses?)?\s*(?::\s*(?:share|as\s*%?|ratio)\s+(?:of\s+)?(?:total\s+)?revenue|\s*as\s*%\s*of\s*revenue|\s*/\s*revenue|\s*ratio|\s*\(.*?(?:share|%|ratio).*?revenue.*?\))",
-        clean,
-    ) or (re.search(r"(?i)research\s+(?:and|&)\s+development", clean) and any(k in clean.casefold() for k in ("share of revenue", "% of revenue", "/ revenue"))):
-        return "R&D / Revenue"
-
-    # Check Selling & Marketing vs Selling & Distribution ratio
-    is_sm_ratio = bool(
-        re.search(
-            r"(?i)(?:selling\s+(?:and|&)\s+(?:distribution|marketing)|sales\s+(?:and|&)\s+marketing)(?:\s+expenses?)?\s*(?::\s*(?:share|as\s*%?|ratio)\s+(?:of\s+)?(?:total\s+)?revenue|\s*as\s*%\s*of\s*revenue|\s*/\s*revenue|\s*ratio|\s*\(.*?(?:share|%|ratio).*?revenue.*?\))",
-            clean,
-        )
-        or (
-            re.search(r"(?i)(?:selling|sales)\s+(?:and|&)\s+(?:distribution|marketing)", clean)
-            and any(k in clean.casefold() for k in ("share of revenue", "% of revenue", "/ revenue"))
-        )
-    )
-    if is_sm_ratio:
-        if "marketing" in clean.casefold():
-            return "Selling & Marketing / Revenue"
-        return "Selling & Distribution / Revenue"
-
-    # Check SG&A ratio
-    if re.search(
-        r"(?i)(?:sg&a|selling,?\s+(?:general\s+)?(?:and|&)\s+administrative)(?:\s+expenses?)?\s*(?::\s*(?:share|as\s*%?|ratio)\s+(?:of\s+)?(?:total\s+)?revenue|\s*as\s*%\s*of\s*revenue|\s*/\s*revenue|\s*ratio)",
-        clean,
-    ):
-        return "SG&A / Revenue"
-
-    # Check Administrative expenses ratio
-    if re.search(
-        r"(?i)administrative\s+expenses?\s*(?::\s*(?:share|as\s*%?|ratio)\s+(?:of\s+)?(?:total\s+)?revenue|\s*as\s*%\s*of\s*revenue|\s*/\s*revenue|\s*ratio|\s*\(.*?(?:share|%|ratio).*?revenue.*?\))",
-        clean,
-    ) or ("administrative" in clean.casefold() and any(k in clean.casefold() for k in ("share of revenue", "% of revenue", "/ revenue"))):
-        return "Admin / Revenue"
-
-
-    # Check Cost of Sales / Revenue ratio
-    if re.search(
-        r"(?i)cost\s+of\s+(?:sales|revenue|goods\s+sold)\s*(?::\s*(?:share|as\s*%?|ratio)\s+(?:of\s+)?(?:total\s+)?revenue|\s*as\s*%\s*of\s*revenue|\s*/\s*revenue|\s*ratio|\s*\(.*?(?:share|%|ratio).*?revenue.*?\))",
-        clean,
-    ) or ("cost of sales" in clean.casefold() and any(k in clean.casefold() for k in ("share of revenue", "% of revenue", "/ revenue"))):
-        return "Cost of Sales / Revenue"
-
-    # Check fulfillment ratio
-    if re.search(r"(?i)warehouse\s+fulfillment(?:\s+solutions)?(?:\s+expenses?)?\s*(?::\s*share\s+of\s+revenue|/ revenue)", clean):
-        return "Warehouse Fulfillment / Revenue"
+    # A ratio name must supply its denominator before it can be shortened.
+    revenue_label = expense_revenue_label(clean)
+    if revenue_label:
+        return revenue_label
 
     # 2. Standard Financial Item mappings (nominal / currency)
     if re.fullmatch(r"(?i)research\s+(?:and|&)\s+development(?:\s+expenses?)?", clean):

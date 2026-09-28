@@ -181,12 +181,16 @@ def test_pptx_export_renders_validated_ai_story_plan() -> None:
     ]
 
     assert titles[:5] == [
-        "AI planned review",
+        "Example Automation",
         "Contents",
         "Company at a Glance",
         "Executive Summary",
         "Revenue growth accelerated in the latest period",
     ]
+    cover_subtitle = next(
+        shape for shape in deck.slides[0].placeholders if shape.placeholder_format.idx == 15
+    )
+    assert cover_subtitle.text == "AI planned review"
     all_text = "\n".join(shape.text for slide in deck.slides for shape in slide.shapes if shape.has_text_frame)
     assert "Example Automation" in all_text
     assert "Revenue growth accelerated in the latest period" in all_text

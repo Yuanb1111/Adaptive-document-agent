@@ -183,7 +183,11 @@ def test_standard_deck_order_and_thank_you_slide() -> None:
         for slide in deck.slides
     ]
 
-    assert slide_titles[0] == "Institutional Financial Assessment"
+    assert slide_titles[0] == "Pioneer Robotics Ltd."
+    cover_subtitle = next(
+        shape for shape in deck.slides[0].placeholders if shape.placeholder_format.idx == 15
+    )
+    assert cover_subtitle.text == "Institutional Financial Assessment"
     assert slide_titles[1] == "Contents"
     assert slide_titles[2] == "Company at a Glance"
     summary_index = slide_titles.index("Executive Summary")

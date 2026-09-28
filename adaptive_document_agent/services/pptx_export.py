@@ -460,7 +460,6 @@ def _planned_observations(slide_plan: PresentationSlide, index: DocumentIndex) -
 def _add_planned_contents(
     presentation: Any, planned_slides: list[PresentationSlide], *, evidence_in_notes: bool = False,
 ) -> None:
-    slide = _base_slide(presentation, "Contents", "Presentation structure")
     entries: list[str] = []
     seen: set[str] = set()
     defaults = {
@@ -478,29 +477,73 @@ def _add_planned_contents(
         if evidence_in_notes and item.slide_type == "appendix":
             continue
         label = ("Data Index" if item.slide_type == "appendix" else item.section_title or defaults[item.slide_type]).strip()
-        # Clean section label: show section names only, not long slide titles
-        if len(label) > 36:
-            label = re.split(r"\s+[—–-]\s+|:\s+", label, maxsplit=1)[0].strip()
         key = label.casefold()
         if key not in seen:
             seen.add(key)
             entries.append(label)
 
-    # Balanced 2-column grid layout preventing overflow
-    total_count = len(entries)
-    items_per_col = max(1, (total_count + 1) // 2)
-    card_h = min(0.68, (4.60 - (items_per_col - 1) * 0.12) / items_per_col)
-    gap_y = 0.12
-    top_start = 1.50
+    _render_contents_entries(presentation, entries, "Presentation structure")
 
-    for index, label in enumerate(entries):
-        column = 0 if index < items_per_col else 1
-        row = index if column == 0 else index - items_per_col
-        left = 0.45 + column * 5.95
-        top = top_start + row * (card_h + gap_y)
-        _panel(slide, left, top, 5.65, card_h, fill=FOURIER_BG_CARD)
-        _text(slide, f"{index + 1:02d}", left + 0.20, top + 0.14, 0.58, card_h - 0.20, size=14, color=FOURIER_PURPLE, bold=True)
-        _text(slide, _summary_text(label, 42), left + 0.78, top + 0.14, 4.65, card_h - 0.20, size=13.5, color=FOURIER_DARK, bold=True)
+
+def _render_contents_entries(presentation: Any, entries: list[str], subtitle: str) -> None:
+    """Wrap complete section labels and continue the directory when needed."""
+    from .text_capacity import wrap_copy
+
+    top, gap = 1.50, .12
+    capacity = presentation.slide_height.inches - 1.0 - top
+    column_width = (presentation.slide_width.inches - 1.20) / 2
+    text_width = column_width - .94
+    line_height = 13.5 / 72 * 1.22
+    max_lines = max(1, int((capacity - .24) / line_height))
+    rows = []
+    for number, label in enumerate(entries, start=1):
+        lines = wrap_copy(label, text_width, 13.5)
+        for start in range(0, len(lines), max_lines):
+            part = lines[start:start + max_lines]
+            # Capacity wrapping retains characters; only page/column breaks
+            # split exceptionally long labels, never a character-count cap.
+            rows.append((number, "".join(part), max(.55, len(part) * line_height + .24)))
+
+    def height(items):
+        return sum(row[2] for row in items) + max(0, len(items) - 1) * gap
+
+    pages = 0
+    while rows or not pages:
+        best_count, best_cut = 0, 0
+        for count in range(1, len(rows) + 1):
+            cuts = [cut for cut in range(1, count + 1)
+                    if height(rows[:cut]) <= capacity and height(rows[cut:count]) <= capacity]
+            if not cuts:
+                break
+            best_count = count
+            best_cut = min(cuts, key=lambda cut: abs(height(rows[:cut]) - height(rows[cut:count])))
+        if rows and not best_count:
+            raise ValueError("Contents label exceeds readable page capacity.")
+        slide = _base_slide(presentation, "Contents" + (" (continued)" if pages else ""), subtitle)
+        selected, rows = rows[:best_count], rows[best_count:]
+        for column, items in enumerate((selected[:best_cut], selected[best_cut:])):
+            left = .45 + column * (column_width + .30)
+            y = top
+            for number, label, card_h in items:
+                _panel(slide, left, y, column_width, card_h, fill=FOURIER_BG_CARD)
+                _text(slide, f"{number:02d}", left + .20, y + .12, .58, card_h - .20,
+                      size=14, color=FOURIER_PURPLE, bold=True)
+                shape = _text(slide, label, left + .78, y + .12, text_width, card_h - .20,
+                              size=13.5, color=FOURIER_DARK, bold=True)
+                shape.name = f"contents:entry:{number}"
+                y += card_h + gap
+        pages += 1
+
+
+def _presentation_company_identity(result: PipelineResult) -> tuple[str, list[int]]:
+    """Reuse a resolved identity and its retained citations, without inferring one."""
+    from .company_extractor import is_company_identity_resolved
+
+    company = result.presentation_plan.company if result.presentation_plan else None
+    if not is_company_identity_resolved(company):
+        return "", []
+    pages = company.field_source_pages.get("name") or company.source_pages
+    return " ".join(company.name.split()), sorted(set(pages))
 
 
 def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_plan: PresentationSlide) -> None:
@@ -522,11 +565,18 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
         errors = validate_summary(plan.company, result)
         if errors:
             raise ValueError("Invalid company Summary introduction: " + "; ".join(errors))
-        for summary in (plan.company.summary_overview, plan.company.summary_business):
+        company_name, identity_pages = _presentation_company_identity(result)
+        for page_index, summary in enumerate((plan.company.summary_overview, plan.company.summary_business)):
+            items = [BriefItem(item.label, item.text, item.source_pages) for item in summary.items]
+            title = summary.title
+            notes = summary.model_dump_json(indent=2)
+            if page_index == 0 and company_name:
+                title = company_name
+                first = items[0]
+                items[0] = BriefItem(first.title, first.text, sorted(set(first.pages) | set(identity_pages)))
+                notes += "\n\nCompany identity: " + company_name + "\n" + _source_footer(identity_pages)
             rendered = render_profile(
-                presentation, summary.title,
-                [BriefItem(item.label, item.text, item.source_pages) for item in summary.items],
-                notes=summary.model_dump_json(indent=2),
+                presentation, title, items, notes=notes,
             )
             if len(rendered) != 1:
                 raise ValueError("Company Summary copy exceeds its one-page budget; shorten the introduction.")
@@ -986,30 +1036,14 @@ def _add_numbered_messages(
 
 
 def _add_contents(presentation: Any, result: PipelineResult, groups: list[list[ChartPlan]]) -> None:
-    slide = _base_slide(presentation, "Contents", "A structured path through the evidence")
-    sections: list[tuple[str, str]] = []
+    sections: list[str] = []
     if result.profile.document_summary.strip():
-        sections.append(("01", "Document overview"))
-    sections.append((f"{len(sections) + 1:02d}", "Key findings"))
+        sections.append("Document overview")
+    sections.append("Key findings")
     if groups:
-        sections.append((f"{len(sections) + 1:02d}", "Thematic analysis"))
-    sections.append((f"{len(sections) + 1:02d}", "Data quality and limitations"))
-    sections.append((f"{len(sections) + 1:02d}", "Evidence appendix"))
-
-    total_count = len(sections)
-    items_per_col = max(1, (total_count + 1) // 2)
-    card_h = min(0.68, (4.60 - (items_per_col - 1) * 0.12) / items_per_col)
-    gap_y = 0.12
-    top_start = 1.50
-
-    for index, (number, label) in enumerate(sections):
-        column = 0 if index < items_per_col else 1
-        row = index if column == 0 else index - items_per_col
-        left = 0.45 + column * 5.95
-        top = top_start + row * (card_h + gap_y)
-        _panel(slide, left, top, 5.65, card_h, fill=FOURIER_BG_CARD)
-        _text(slide, number, left + 0.20, top + 0.14, 0.58, card_h - 0.20, size=14, color=FOURIER_PURPLE, bold=True)
-        _text(slide, label, left + 0.78, top + 0.14, 4.65, card_h - 0.20, size=13.5, color=FOURIER_DARK, bold=True)
+        sections.append("Thematic analysis")
+    sections.extend(("Data quality and limitations", "Evidence appendix"))
+    _render_contents_entries(presentation, sections, "A structured path through the evidence")
 
 
 def _add_section_divider(presentation: Any, title: str, subtitle: str) -> None:
@@ -1034,17 +1068,12 @@ def _add_cover(
 ) -> None:
     from pptx.util import Inches, Pt
 
-    if getattr(presentation, "_ada_artwork", None):
-        from .presentation_artwork import add_picture_cover
-        add_picture_cover(presentation, title or result.report_plan.title or result.profile.overview_title,
-                          purpose or result.profile.document_purpose, presentation._ada_artwork)
-        return
-    slide = presentation.slides.add_slide(presentation.slide_layouts[0])
     cover_title = title or result.report_plan.title or result.profile.overview_title or "Adaptive Document Analysis"
     from .language_qa import clean_presentation_text
     from .slide_compositor import _lines
     clean_title = clean_presentation_text(cover_title)
     clean_purpose = clean_presentation_text(purpose or result.profile.document_purpose or result.profile.document_summary or "Intelligence derived from reported statements")
+    original_purpose = clean_purpose
     # A planner may append an analysis scope after a colon. The scope belongs
     # in the contents and body, while the cover needs a readable subject.
     if len(clean_title) > 70 and ":" in clean_title:
@@ -1052,6 +1081,25 @@ def _add_cover(
         if len(subject) >= 15:
             clean_title = subject
             clean_purpose = "Document analysis"
+
+    company_name, identity_pages = _presentation_company_identity(result)
+    if company_name and company_name.casefold() not in " ".join(clean_title.casefold().split()):
+        # Put the already-resolved subject first. Keep the planner's document
+        # topic as the subtitle, and its complete analytical scope in notes.
+        clean_purpose, clean_title = clean_title, company_name
+
+    import json
+    notes = json.dumps({
+        "planned_title": cover_title, "document_purpose": original_purpose,
+        "company_identity": {"name": company_name, "source_pages": identity_pages},
+    }, ensure_ascii=False, indent=2)
+    if getattr(presentation, "_ada_artwork", None):
+        from .presentation_artwork import add_picture_cover
+        slide = add_picture_cover(presentation, clean_title, clean_purpose, presentation._ada_artwork)
+        slide.notes_slide.notes_text_frame.text += "\n\n" + notes
+        return
+    slide = presentation.slides.add_slide(presentation.slide_layouts[0])
+    slide.notes_slide.notes_text_frame.text = notes
 
     # Retain the template's 36 pt cover title; reflow instead of shrinking it.
     title_font_size = 36
@@ -2840,7 +2888,10 @@ def _unit_label(observations: list[Observation], scale_label: str) -> str:
     raw_units = {item.raw_unit for item in observations if item.raw_unit}
     if currencies:
         base = normalize_currency_symbol(next(iter(currencies)))
-        return f"{base} {scale_label}" if scale_label else base
+        from .financial_formatter import split_unit_basis
+        bases = {split_unit_basis(item.raw_unit)[1] for item in observations}
+        suffix = f"/{next(iter(bases))}" if len(bases) == 1 and "" not in bases else ""
+        return (f"{base} {scale_label}" if scale_label else base) + suffix
     if raw_units:
         return normalize_raw_unit(next(iter(raw_units)))
     for item in observations:
@@ -2853,6 +2904,9 @@ def _unit_label(observations: list[Observation], scale_label: str) -> str:
 
 
 def _display_source_unit(item: Observation) -> str:
+    from .financial_formatter import split_unit_basis
+    if split_unit_basis(item.raw_unit)[1]:
+        return normalize_raw_unit(item.raw_unit, default_currency=item.currency)
     metric_name = display_metric_name(item)
     if is_days_metric(metric_name) or item.unit == "days" or getattr(item, "unit_family", "") == "days":
         return "days"
@@ -2888,6 +2942,9 @@ def _appendix_display_unit(item: Observation, semantic: Any) -> str:
     Exact source units and values remain on ``Observation`` and in the CSV export.
     The PPT appendix uses one readable monetary scale per row instead.
     """
+    from .financial_formatter import split_unit_basis
+    if split_unit_basis(item.raw_unit)[1]:
+        return normalize_raw_unit(item.raw_unit, default_currency=item.currency)
     if semantic.is_currency:
         from adaptive_document_agent.services.financial_formatter import currency_from_unit
 
@@ -2898,6 +2955,10 @@ def _appendix_display_unit(item: Observation, semantic: Any) -> str:
 
 def _appendix_display_value(item: Observation, semantic: Any) -> str:
     """Format an appendix cell from normalized numeric evidence when available."""
+    from .financial_formatter import split_unit_basis
+    if split_unit_basis(item.raw_unit)[1]:
+        # The unit keeps its reported scale, so use its corresponding raw cell.
+        return str(item.raw_value)
     if not semantic.is_currency or item.value is None:
         from .presentation_conventions import signed_expense_display
         return signed_expense_display(item, str(item.raw_value), with_unit=False)

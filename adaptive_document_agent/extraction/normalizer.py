@@ -64,6 +64,22 @@ def infer_unit_defaults(text: str) -> UnitDefaults:
     if currency and not declaration:
         currency_match = next((re.search(pattern, compact, re.I) for pattern, _ in _CURRENCIES if re.search(pattern, compact, re.I)), None)
         declaration = currency_match.group(0).strip() if currency_match else None
+        declaration_match = currency_match
+    if declaration and declaration_match:
+        # A denominator is part of the reported unit, not an optional display
+        # label. PDF text may join the following qualifier, e.g. /unitforASP.
+        suffix = re.match(
+            r"\s*(?:/\s*|(?i:per)\s+)[A-Za-z][A-Za-z0-9²³^-]*?"
+            r"(?:\s+[A-Za-z][A-Za-z0-9²³^-]*?)*?"
+            r"(?=\s*(?:[),;:.]|$)|(?i:for)[A-Z]|\s+\d|\s+(?i:"
+            r"for|in|at|on|during|as|with|except|excluding|including|and|while|"
+            r"which|that|the|our|its|was|were|is|are|has|have|had|"
+            r"increased|decreased|rose|fell|grew|declined|reached|represented"
+            r")\b)",
+            compact[declaration_match.end():],
+        )
+        if suffix:
+            declaration += suffix.group(0)
     if declaration:
         declaration = re.sub(r"(?i)\b(rmb|cny|hkd|hk\s*\$|usd|us\s*\$|eur|gbp)(?:in)?(thousands?|'000)\b", r"\1 in thousands", declaration)
         declaration = re.sub(r"(?i)\b(rmb|cny|hkd|hk\s*\$|usd|us\s*\$|eur|gbp)(?:in)?(millions?)\b", r"\1 in millions", declaration)

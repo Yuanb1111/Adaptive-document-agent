@@ -221,8 +221,36 @@ class FinancialNormalizer:
             obs.audited_status = "unaudited"
 
         # 5. Presentation label & display value
-        if not obs.presentation_label:
-            obs.presentation_label = sanitize_metric_label(obs.metric_canonical or obs.metric_original)
+        from adaptive_document_agent.services.language_qa import (
+            expense_metric_family,
+            expense_revenue_label,
+        )
+
+        label = obs.presentation_label or sanitize_metric_label(obs.metric_canonical or obs.metric_original)
+        # Older exports could invent a revenue denominator from a bare expense
+        # ratio. Rebuild that display label from the retained source name. A
+        # matching row plus its own column header may explicitly supply revenue;
+        # unrelated page prose and a derived canonical name cannot do so.
+        source_family = expense_metric_family(metric_orig)
+        if (
+            source_family
+            and source_family == expense_metric_family(label)
+            and expense_revenue_label(label)
+            and not expense_revenue_label(metric_orig)
+        ):
+            source_has_denominator = bool(re.search(
+                r"(?:%|\bshare|\bratio|\bproportion)\s*(?:of|to)\b|/\s*\w",
+                metric_orig,
+                re.IGNORECASE,
+            ))
+            header_support = not source_has_denominator and any(
+                expense_revenue_label(f"{ev.row_label or metric_orig}: {ev.column_label or ''}")
+                == f"{source_family} / Revenue"
+                for ev in obs.evidence
+            )
+            if not header_support:
+                label = sanitize_metric_label(metric_orig)
+        obs.presentation_label = label
 
         if not obs.display_value and obs.value is not None:
             obs.display_value = format_clean_number_string(obs.value)

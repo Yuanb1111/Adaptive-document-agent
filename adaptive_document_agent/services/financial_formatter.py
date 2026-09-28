@@ -81,6 +81,20 @@ def currency_from_unit(raw_unit: str | None) -> str:
     return normalize_currency_symbol(match.group(0)) if match else ""
 
 
+def split_unit_basis(raw_unit: str | None) -> tuple[str, str]:
+    """Separate an explicitly reported denominator without inventing one.
+
+    Retaining the source denominator distinguishes prices and rates from totals.
+    This only parses a unit field, never a metric name or narrative sentence.
+    """
+    text = " ".join((raw_unit or "").split())
+    match = re.search(r"(?i)(?:/\s*|\bper\s+)([\w²³][\w²³\s./^()-]*)$", text)
+    if not match:
+        return text, ""
+    numerator = text[:match.start()].strip()
+    return (numerator, match.group(1).strip()) if numerator else (text, "")
+
+
 def normalize_raw_unit(raw_unit: str | None, *, default_currency: str | None = None) -> str:
     """Normalize raw or corrupted unit tokens into institutional-grade presentation strings.
 
@@ -93,6 +107,10 @@ def normalize_raw_unit(raw_unit: str | None, *, default_currency: str | None = N
     # Normalize unicode quotes and non-breaking spaces
     text = re.sub(r"[\u2018\u2019\u0060\ufffd]", "'", text)
     text = " ".join(text.split())
+
+    numerator, basis = split_unit_basis(text)
+    if basis:
+        return f"{normalize_raw_unit(numerator, default_currency=default_currency)}/{basis}"
 
     lower = text.casefold()
 
@@ -185,6 +203,9 @@ def format_compact_currency(
         formatted = f"{curr} {abs_val:,.0f}"
 
     formatted = formatted.strip()
+    _, basis = split_unit_basis(raw_unit)
+    if basis:
+        formatted += f"/{basis}"
     return f"-{formatted}" if is_negative else formatted
 
 
