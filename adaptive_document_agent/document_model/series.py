@@ -112,6 +112,10 @@ def display_metric_name(observation: Observation) -> str:
     label = re.sub(r"(?i)^(?:adjustments?|reconciliation|sub-?total|total)\s*[:\-\u2013\u2014]\s*", "", label)
     label = _TRAILING_UNIT.sub("", label)
     label = " ".join(label.split()).strip(" :;,-")
+    # A repeated child heading can leak into the extracted metric name
+    # (for example, "gross profit margin margin"). Keep the raw label on
+    # the Observation; collapse only adjacent duplicate display words.
+    label = re.sub(r"(?i)\b(margin|ratio|share)\s+\1\b", r"\1", label)
 
     if is_generic_metric_label(label):
         sec = observation.source_section

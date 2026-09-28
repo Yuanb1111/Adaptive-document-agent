@@ -271,7 +271,6 @@ def verify_presentation(payload: bytes, *, renderer=None, max_repairs: int = 2, 
         report.renderer = renderer.identity
         if getattr(renderer, "coverage", None):
             report.coverage = tuple(renderer.coverage)
-        original_facts = package_digest(payload, exclude_positions=True)
         cache_key = (PIPELINE_VERSION, POLICY_VERSION, renderer.identity, max_repairs, package_digest(payload))
         if cache is not None and cache_key in cache:
             from copy import deepcopy
@@ -279,6 +278,7 @@ def verify_presentation(payload: bytes, *, renderer=None, max_repairs: int = 2, 
             hit.report.cache_hit = True
             hit.report.input_sha256 = report.input_sha256
             return hit
+        original_facts = package_digest(payload, exclude_positions=True)
         report.slide_count = len(Presentation(io.BytesIO(payload)).slides)
         if not 1 <= report.slide_count <= 150:
             raise RenderingError("Presentation exceeds the 150-slide rendering limit.")

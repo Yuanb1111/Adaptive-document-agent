@@ -66,12 +66,22 @@ _LIABILITY_KEYWORDS = (
 def normalize_currency_symbol(currency: str | None) -> str:
     """Map raw currency string to standardized presentation code/symbol."""
     if not currency:
-        return "RMB"
+        return ""
     clean = currency.strip().upper()
     return _CURRENCY_SYMBOLS.get(clean, clean)
 
 
-def normalize_raw_unit(raw_unit: str | None, *, default_currency: str = "RMB") -> str:
+def currency_from_unit(raw_unit: str | None) -> str:
+    """Read an explicit currency token; a scale or 'unaudited' is not a currency."""
+    match = re.search(
+        r"(?i)(?<![a-z])(?:rmb|cny|hk\$|hkd|us\$|usd|eur|gbp|sgd|s\$|jpy|aud|[€£])"
+        r"(?=$|[^a-z]|in(?:thousands|millions|billions)\b)",
+        raw_unit or "",
+    )
+    return normalize_currency_symbol(match.group(0)) if match else ""
+
+
+def normalize_raw_unit(raw_unit: str | None, *, default_currency: str | None = None) -> str:
     """Normalize raw or corrupted unit tokens into institutional-grade presentation strings.
 
     Bans internal unspaced tokens like 'RMBinthousands', 'cnymillions', 'RMB'000'.
@@ -108,11 +118,11 @@ def normalize_raw_unit(raw_unit: str | None, *, default_currency: str = "RMB") -
 
     # Scale extraction
     if re.search(r"(?i)(?:billions?|bn|十亿)", text):
-        return f"{curr_str} billion"
+        return f"{curr_str} billion".strip()
     if re.search(r"(?i)(?:millions?|mn|百万)", text):
-        return f"{curr_str} million"
+        return f"{curr_str} million".strip()
     if re.search(r"(?i)(?:thousands?|['’`]\s*000|千元|inthousands)", text):
-        return f"{curr_str} '000"
+        return f"{curr_str} '000".strip()
 
     # Generic cleanup: separate concatenated words like "RMBinthousands"
     cleaned = re.sub(r"(?i)\b(rmb|cny|hkd|usd)(?:in)?(thousands?|'000)\b", r"\1 '000", text)
@@ -126,7 +136,7 @@ def format_compact_currency(
     amount: float,
     *,
     raw_unit: str | None = None,
-    currency: str | None = "RMB",
+    currency: str | None = None,
     unit_scale: float | None = None,
     is_base_value: bool | None = None,
 ) -> str:
@@ -134,7 +144,7 @@ def format_compact_currency(
 
     Handles both already-scaled base amounts (e.g. 174,314,000.0) and unscaled thousands figures.
     """
-    curr = normalize_currency_symbol(currency)
+    curr = normalize_currency_symbol(currency) or currency_from_unit(raw_unit)
     val = float(amount)
 
     if is_base_value is True:
@@ -174,6 +184,7 @@ def format_compact_currency(
     else:
         formatted = f"{curr} {abs_val:,.0f}"
 
+    formatted = formatted.strip()
     return f"-{formatted}" if is_negative else formatted
 
 
@@ -199,7 +210,7 @@ def format_financial_movement(
     *,
     unit_family: str = "generic",
     scale: float = 1.0,
-    currency: str = "RMB",
+    currency: str = "",
 ) -> str:
     """Generate standard institutional financial phrasing for analytical movements using FinancialMovementFormatter."""
     from adaptive_document_agent.services.movement_formatter import FinancialMovementFormatter

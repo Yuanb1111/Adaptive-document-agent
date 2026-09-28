@@ -190,7 +190,8 @@ def _base(presentation, title, message):
             lines = _lines(message, ph.width.inches - 0.15, 11)
             if len(lines) > 3:
                 raise ValueError("Presentation subtitle exceeds readable capacity; move supporting details to commentary.")
-            ph.height = Inches(max(0.24, len(lines) * 0.19))
+            # Separate paragraphs inherit spacing from the supplied template.
+            ph.height = Inches(max(0.24, len(lines) * 0.19 + message.count("\n") * .12))
             for p in ph.text_frame.paragraphs:
                 p.font.size = Pt(11)
                 p.font.color.rgb = _rgb(MUTED)
@@ -251,7 +252,10 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
     pages = sorted(set(slide_plan.source_pages) | {e.page for o in support for e in o.evidence}
                    | {e.page for c in charts for oid in [*c.observation_ids, *c.total_observation_ids] if index.get(oid) for e in index.get(oid).evidence}
                    | {e.page for iid in insight_ids if iid in insight_map for e in insight_map[iid].evidence})
-    slide, top = _base(presentation, slide_plan.title, slide_plan.message)
+    from .presentation_conventions import signed_expense_note, signed_expense_display
+    convention = signed_expense_note(support + [index.get(oid) for oid in chart_obs if index.get(oid)])
+    subtitle = "\n".join(part for part in (slide_plan.message, convention) if part)
+    slide, top = _base(presentation, slide_plan.title, subtitle)
     slide.name = f"composed_{slide_plan.layout}"
     reference_ids = set(slide_plan.observation_ids) | chart_obs | set(support_ids)
     reference_ids.update(oid for b in slide_plan.visual_blocks for oid in b.observation_ids)
@@ -273,7 +277,8 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
         qualified = {display_metric_name(o) for o in values}
         if len(qualified) == 1 and not any(o.category_dimensions for o in values) and any(o.parent_section or o.dimensions.get("section") for o in values):
             heading = next(iter(qualified))
-        headings.append(re.sub(r"(?i)^Adjusted for Adjusted\b", "Adjusted", heading))
+        heading = re.sub(r"(?i)^Adjusted for Adjusted\b", "Adjusted", heading)
+        headings.append(re.sub(r"(?i)\b(margin|ratio|share)\s+\1\b", r"\1", heading))
     shared_heading_h = max([.28] + [len(_lines(t, r.w, CHART_TITLE_PT)) * .23
                                       for t, r in zip(headings, geometry.charts)])
     for chart, rect, title in zip(charts, geometry.charts, headings):
@@ -283,6 +288,7 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
         # label names only the child. Do not turn grants into expense metrics.
         if len(qualified) == 1 and not any(o.category_dimensions for o in values) and any(o.parent_section or o.dimensions.get("section") for o in values):
             title = re.sub(r"(?i)^Adjusted for Adjusted\b", "Adjusted", next(iter(qualified)))
+        title = re.sub(r"(?i)\b(margin|ratio|share)\s+\1\b", r"\1", title)
         title_lines = _lines(title, rect.w, CHART_TITLE_PT)
         if len(title_lines) > 3:
             raise ValueError(f"Chart title exceeds readable capacity: {chart.id}")
@@ -326,6 +332,7 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
             for o in items:
                 semantic = classify_metric(name, unit=o.unit, raw_unit=o.raw_unit, value=o.value)
                 value = format_metric_display_value(o.raw_value, o.value, semantic, raw_unit=_display_source_unit(o), currency=o.currency, compact=True)
+                value = signed_expense_display(o, value)
                 period = format_observation_period(o)
                 height = max(.38, max(len(_lines(period, rect.w * .34 - .15, 14)), len(_lines(value, rect.w * .66 - .15, 14))) * .24 + .12)
                 rows.append((period, value, height))
@@ -352,8 +359,9 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
                 cells = [["Metric", *[format_observation_period(o) for o in items]], [name]]
                 for o in items:
                     semantic = classify_metric(name, unit=o.unit, raw_unit=o.raw_unit, value=o.value)
-                    cells[1].append(format_metric_display_value(o.raw_value, o.value, semantic,
-                        raw_unit=_display_source_unit(o), currency=o.currency, compact=True))
+                    display = format_metric_display_value(o.raw_value, o.value, semantic,
+                        raw_unit=_display_source_unit(o), currency=o.currency, compact=True)
+                    cells[1].append(signed_expense_display(o, display))
                 widths = [rect.w * .34] + [rect.w * .66 / len(items)] * len(items)
                 heights = [max(.4, max(len(_lines(v, w - .15, 14)) for v, w in zip(row, widths)) * .24 + .1)
                            for row in cells]
@@ -375,6 +383,7 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
                 name = display_metric_name(o)
                 semantic = classify_metric(name, unit=o.unit, raw_unit=o.raw_unit, value=o.value)
                 display = format_metric_display_value(o.raw_value, o.value, semantic, raw_unit=_display_source_unit(o), currency=o.currency, compact=True)
+                display = signed_expense_display(o, display)
                 period_label = format_observation_period(o)
                 if not period_label:
                     column = next((e.column_label for e in o.evidence if e.column_label), "")
@@ -416,6 +425,7 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
             name = display_metric_name(o)
             semantic = classify_metric(name, unit=o.unit, raw_unit=o.raw_unit, value=o.value)
             value = format_metric_display_value(o.raw_value, o.value, semantic, raw_unit=_display_source_unit(o), currency=o.currency, compact=True)
+            value = signed_expense_display(o, value)
             if len(_lines(name, w - .14, 11)) > 2 or len(_lines(value, w - .14, 20)) > 1:
                 return items[i:]  # Preserve long-label facts on a continuation table.
             from .pptx_export import _rule
@@ -464,7 +474,7 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
     _put_text(slide, footnote, geometry.footer, size=FOOTNOTE_PT, color=MUTED)
     slides = [slide]
     while overflow or remaining:
-        continuation, ctop = _base(presentation, slide_plan.title + " (continued)", "")
+        continuation, ctop = _base(presentation, slide_plan.title + " (continued)", convention)
         continuation.name = "composed_continuation"
         bottom = presentation.slide_height.inches - 1.02
         full = Rect(0.55, ctop, presentation.slide_width.inches - 1.1, bottom - ctop)

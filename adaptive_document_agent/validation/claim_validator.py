@@ -1326,7 +1326,8 @@ def extract_metric_aliases(
     elif "cash" in combined and not any(k in combined for k in ("cash flow", "operating", "investing", "financing")):
         aliases.update(["cash and cash equivalents", "cash balance", "cash reserves", "cash", "现金及现金等价物", "现金余额", "现金"])
 
-    if "net loss" in combined or "net_loss" in combined:
+    if ("net loss" in combined or "net_loss" in combined
+            or re.search(r"\bloss\s+for\s+the\s+(?:year|period)(?:/period)?\b", combined)):
         if re.search(r"\badjusted\b|non[ -](?:ifrs|gaap)", combined):
             aliases.update(["adjusted net loss", "adjusted net losses"])
         else:
@@ -2280,6 +2281,29 @@ def repair_presentation_plan(
     before = plan.model_copy(deep=True)
     issues = validator.validate_plan(plan, observations, charts, insight_observation_ids=insight_observation_ids)
     repaired_plan, claim_repairs = repair_presentation_plan_from_issues(plan, issues)
+    # A directional claim such as "net declined" has lost the measure being
+    # discussed. It can emerge after editing a multi-metric sentence. Retain
+    # the complete earlier clauses, but never supply a guessed missing metric.
+    incomplete_net = re.compile(
+        r"(?i)\s*,?\s+(?:and|while|but)\s+net\s+"
+        r"(?:declined|decreased|increased|rose|fell|grew|widened|narrowed)\b.*$"
+    )
+    for slide in repaired_plan.slides:
+        for field in ("title", "message"):
+            original = getattr(slide, field)
+            if not incomplete_net.search(original):
+                continue
+            shortened = incomplete_net.sub("", original).rstrip(" ,;.")
+            if shortened != original and len(shortened.split()) >= 3:
+                setattr(slide, field, shortened + ".")
+                claim_repairs.append(f"Slide {slide.id} {field}: removed incomplete net movement clause")
+        for index, original in enumerate(slide.bullets):
+            if not incomplete_net.search(original):
+                continue
+            shortened = incomplete_net.sub("", original).rstrip(" ,;.")
+            if shortened != original and len(shortened.split()) >= 3:
+                slide.bullets[index] = shortened + "."
+                claim_repairs.append(f"Slide {slide.id} bullet #{index+1}: removed incomplete net movement clause")
     # Repairs are transactional: never retain a change introducing a new error.
     def issue_key(issue):
         return (getattr(issue, "slide_id", None), getattr(issue, "metric_name", None),

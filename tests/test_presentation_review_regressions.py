@@ -105,3 +105,30 @@ def test_appendix_keeps_unknown_period_cells_separate():
     assert any("column_3; period unspecified" in text for text in rows)
     assert any("4.8" in text for text in rows)
     assert any("1.5" in text for text in rows)
+
+
+def test_appendix_collapses_only_identical_multiperiod_source_variants():
+    from pptx import Presentation
+    from pptx.util import Inches
+    from adaptive_document_agent.services.pptx_export import _add_evidence_table_slides
+
+    result = sample()
+    result.presentation_plan = None
+    source_values = (("Statement A", [-41, -52, -103], 1),
+                     ("Statement B", [-41, -52, -103], 2),
+                     ("Statement C", [-41, -52, -120], 3))
+    result.observations = []
+    for context, values, page in source_values:
+        for item in observations("Loss for the year/period", values, "currency"):
+            item.id = f"{context}_{item.id}"
+            item.dimensions["table_context"] = context
+            item.evidence[0].page = page
+            result.observations.append(item)
+    deck = Presentation()
+    deck.slide_width, deck.slide_height = Inches(13.333), Inches(7.5)
+    _add_evidence_table_slides(deck, result, [])
+    labels = [row.cells[0].text for slide in deck.slides for shape in slide.shapes
+              if shape.has_table for row in shape.table.rows]
+    assert sum("Loss for the year/period" in label for label in labels) == 2
+    notes = "\n".join(slide.notes_slide.notes_text_frame.text for slide in deck.slides)
+    assert all(context.casefold() in notes for context, _, _ in source_values)

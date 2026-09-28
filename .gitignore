@@ -16,3 +16,9 @@ build/
 *.egg-info/
 pushrepo.git/
 .tmp_ppt_review/
+
+# Local review exports, source-derived data and test scratch directories.
+/output/
+/tmp/
+/.tmp_*/
+/.pytest-tmp*/

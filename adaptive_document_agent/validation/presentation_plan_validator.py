@@ -185,6 +185,12 @@ class PresentationPlanValidator:
                 )
 
         for slide in plan.slides:
+            # "Net declined" does not name a measure and can conceal a loss
+            # claim. Never allow the phrase to pass simply because another
+            # metric on the slide has a supported downward trend.
+            for text in (slide.title, slide.message, *slide.bullets):
+                if re.search(r"(?i)\bnet\s+(?:declined|decreased|increased|rose|fell|grew|widened|narrowed)\b", text):
+                    errors.append(f"slide {slide.id} contains an incomplete net movement claim")
             observation_ids = {
                 *slide.observation_ids,
                 *(identifier for block in slide.visual_blocks for identifier in block.observation_ids),

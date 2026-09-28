@@ -45,27 +45,41 @@ class PresentationPreflight:
 
     def validate_and_sanitize(self) -> list[PreflightIssue]:
         self.issues.clear()
-        for idx, slide in enumerate(self.presentation.slides):
-            self._check_geometry_invariants(idx, slide)
-            self._check_chart_gridlines(idx, slide)
-            self._check_chart_quality(idx, slide)
-            self._check_banned_phrases(idx, slide)
-            self._check_raw_unit_tokens(idx, slide)
-            self._check_layout_overflow_and_overlap(idx, slide)
-            self._check_unit_consistency(idx, slide)
-            self._check_impossible_percentages(idx, slide)
-            self._check_title_data_alignment(idx, slide)
-            self._check_truncated_fields(idx, slide)
-            self._check_empty_slides(idx, slide)
-            self._check_template_completeness(idx, slide)
-            self._check_duplicate_card_titles(idx, slide)
-            self._check_slide_title_quality(idx, slide)
-        self._check_thank_you_slide()
+        self._shape_snapshots = {}
+        try:
+            for idx, slide in enumerate(self.presentation.slides):
+                self._shape_snapshots[id(slide)] = tuple(slide.shapes)
+                self._check_geometry_invariants(idx, slide)
+                self._check_chart_gridlines(idx, slide)
+                self._check_chart_quality(idx, slide)
+                self._check_banned_phrases(idx, slide)
+                self._check_raw_unit_tokens(idx, slide)
+                self._check_layout_overflow_and_overlap(idx, slide)
+                self._check_unit_consistency(idx, slide)
+                self._check_impossible_percentages(idx, slide)
+                self._check_title_data_alignment(idx, slide)
+                self._check_truncated_fields(idx, slide)
+                self._check_empty_slides(idx, slide)
+                self._check_template_completeness(idx, slide)
+                self._check_duplicate_card_titles(idx, slide)
+                self._check_slide_title_quality(idx, slide)
+            self._check_thank_you_slide()
+        finally:
+            self._shape_snapshots.clear()
         return self.issues
+
+    def _shapes(self, slide: Any):
+        # Reuse live XML-backed shape objects across checks, never across runs.
+        cached = getattr(self, "_shape_snapshots", {}).get(id(slide))
+        return cached if cached is not None else slide.shapes
+
+    def _placeholders(self, slide: Any):
+        return sorted((shape for shape in self._shapes(slide) if shape.is_placeholder),
+                      key=lambda shape: shape.placeholder_format.idx)
 
     def _check_geometry_invariants(self, idx: int, slide: Any) -> None:
         from pptx.util import Inches
-        for shape in slide.shapes:
+        for shape in self._shapes(slide):
             try:
                 # Title placeholders must have generous horizontal width
                 if getattr(shape, "is_placeholder", False) and shape.placeholder_format.idx in (14, 15):
@@ -90,7 +104,7 @@ class PresentationPreflight:
                 pass
 
     def _check_chart_gridlines(self, idx: int, slide: Any) -> None:
-        for shape in slide.shapes:
+        for shape in self._shapes(slide):
             if shape.has_chart:
                 chart = shape.chart
                 # Enforce no horizontal background gridlines
@@ -105,7 +119,7 @@ class PresentationPreflight:
                     pass
 
     def _check_chart_quality(self, idx: int, slide: Any) -> None:
-        for shape in slide.shapes:
+        for shape in self._shapes(slide):
             if shape.has_chart:
                 chart = shape.chart
                 # Reject "Observed pairs"
@@ -148,7 +162,7 @@ class PresentationPreflight:
 
     def _check_raw_unit_tokens(self, idx: int, slide: Any) -> None:
         raw_token_pattern = re.compile(r"(?i)\b(rmb|cny|hkd|usd)(?:in)?(thousands?|millions?|billions?|'000)\b")
-        for shape in slide.shapes:
+        for shape in self._shapes(slide):
             if shape.has_text_frame:
                 for p in shape.text_frame.paragraphs:
                     if raw_token_pattern.search(p.text):
@@ -180,7 +194,7 @@ class PresentationPreflight:
 
 
     def _check_banned_phrases(self, idx: int, slide: Any) -> None:
-        for shape in slide.shapes:
+        for shape in self._shapes(slide):
             if shape.has_text_frame:
                 text = shape.text
                 text_lower = text.casefold()
@@ -213,7 +227,7 @@ class PresentationPreflight:
 
         title_ph = None
         sub_ph = None
-        for shape in slide.placeholders:
+        for shape in self._placeholders(slide):
             try:
                 if shape.placeholder_format.idx in (14, 15):
                     title_ph = shape
@@ -244,7 +258,7 @@ class PresentationPreflight:
         elif title_ph and title_ph.has_text_frame and title_ph.text.strip():
             content_min_top = max(content_min_top, title_ph.top.inches + title_ph.height.inches + 0.06)
 
-        for shape in slide.shapes:
+        for shape in self._shapes(slide):
             if (shape.name == "decoration:title_rule" and shape.height.inches <= .05
                     and not (shape.has_text_frame and shape.text.strip())):
                 continue  # Owned underline belongs inside the heading zone.
@@ -266,7 +280,7 @@ class PresentationPreflight:
                 )
 
     def _check_semantic_units(self, idx: int, slide: Any) -> None:
-        for shape in slide.shapes:
+        for shape in self._shapes(slide):
             if shape.has_text_frame:
                 text = shape.text
                 # Multiple metrics mistakenly formatted with %
@@ -336,7 +350,7 @@ class PresentationPreflight:
         monetary_terms = r"(?:revenue|sales|turnover(?! days)|gross profit|net profit|operating profit|ebitda|operating cash flow|total assets|total liabilities|total equity|cash and cash equivalents|cost of sales|capex)"
         pattern = re.compile(rf"(?i)\b({monetary_terms})\s*[:=]?\s*([0-9,]{{3,}}(?:\.[0-9]+)?)\s*%")
         extreme_pattern = re.compile(r"(?<![\w.])([0-9][0-9,]*(?:\.[0-9]+)?)\s*%")
-        for shape in slide.shapes:
+        for shape in self._shapes(slide):
             if shape.has_text_frame:
                 text = shape.text
                 monetary_spans = [match.span() for match in pattern.finditer(text)]
@@ -406,7 +420,7 @@ class PresentationPreflight:
     def _check_truncated_fields(self, idx: int, slide: Any) -> None:
         dangling_pattern = re.compile(r"(?i)\b(?:to|of|and|with|from|in|for|by|as|at|or|including|such\s+as)\s*$")
         broken_prefix_pattern = re.compile(r"^(?:[a-z]|ing|ed|tion|ment|ly|al|ic)\s+[a-z]{3,}")
-        for shape in slide.shapes:
+        for shape in self._shapes(slide):
             if shape.has_text_frame:
                 for p in shape.text_frame.paragraphs:
                     t = p.text.strip().rstrip(".,;:-–—")
@@ -435,7 +449,7 @@ class PresentationPreflight:
     def _check_empty_slide(self, idx: int, slide: Any) -> None:
         text_content: list[str] = []
         has_visual = False
-        for shape in slide.shapes:
+        for shape in self._shapes(slide):
             if getattr(shape, "has_chart", False) or getattr(shape, "has_table", False):
                 has_visual = True
             if shape.has_text_frame and shape.text.strip():
@@ -460,7 +474,7 @@ class PresentationPreflight:
     def _check_content_overflow(self, idx: int, slide: Any) -> None:
         slide_h = 7.5
         slide_w = 13.333
-        for shape in slide.shapes:
+        for shape in self._shapes(slide):
             try:
                 top = shape.top.inches if hasattr(shape, "top") else 0
                 height = shape.height.inches if hasattr(shape, "height") else 0
@@ -494,7 +508,7 @@ class PresentationPreflight:
 
         visual_shapes = [
             shape
-            for shape in slide.shapes
+            for shape in self._shapes(slide)
             if getattr(shape, "has_chart", False) or getattr(shape, "has_table", False)
         ]
         for left_index, first in enumerate(visual_shapes):
@@ -532,7 +546,7 @@ class PresentationPreflight:
         except Exception:
             pass
 
-        for shape in slide.shapes:
+        for shape in self._shapes(slide):
             if not getattr(shape, "has_chart", False):
                 continue
             chart = shape.chart
@@ -568,7 +582,7 @@ class PresentationPreflight:
                 )
 
     def _check_template_completeness(self, idx: int, slide: Any) -> None:
-        for shape in slide.shapes:
+        for shape in self._shapes(slide):
             if shape.has_text_frame:
                 for p in shape.text_frame.paragraphs:
                     orig_text = p.text
@@ -596,7 +610,7 @@ class PresentationPreflight:
 
     def _check_duplicate_card_titles(self, idx: int, slide: Any) -> None:
         titles: list[str] = []
-        for shape in slide.shapes:
+        for shape in self._shapes(slide):
             if shape.has_text_frame and shape.text.strip():
                 top = getattr(shape, "top", None)
                 if top and top.inches > 1.3:
@@ -618,7 +632,7 @@ class PresentationPreflight:
 
     def _check_slide_title_quality(self, idx: int, slide: Any) -> None:
         title = ""
-        for shape in slide.placeholders:
+        for shape in self._placeholders(slide):
             try:
                 if shape.placeholder_format.idx in (14, 15) and shape.has_text_frame:
                     title = shape.text.strip()
@@ -626,7 +640,7 @@ class PresentationPreflight:
             except Exception:
                 pass
         if not title and hasattr(slide, "shapes"):
-            first = next((s for s in slide.shapes if getattr(s, "has_text_frame", False) and s.text.strip()), None)
+            first = next((s for s in self._shapes(slide) if getattr(s, "has_text_frame", False) and s.text.strip()), None)
             if first:
                 title = first.text.strip()
 
@@ -652,7 +666,7 @@ class PresentationPreflight:
         if not self.presentation.slides:
             return
         last_slide = self.presentation.slides[-1]
-        text = " ".join(s.text for s in last_slide.shapes if s.has_text_frame).casefold()
+        text = " ".join(s.text for s in self._shapes(last_slide) if s.has_text_frame).casefold()
         layout_name = last_slide.slide_layout.name if hasattr(last_slide, "slide_layout") else ""
         if not ("thank you" in text or "thank" in layout_name.casefold()):
             self.issues.append(

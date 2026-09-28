@@ -2,7 +2,7 @@
 
 Transforms raw document observations into typed, validated, and normalized financial facts:
 - Stores metric name, value, currency, unit, period, source page, audited status, IFRS/non-IFRS status, and confidence.
-- Eliminates floating-point representation artifacts.
+- Formats display values without changing calculation precision or raw source units.
 - Infers missing units (e.g. turnover days -> days, ratios -> multiple/percent).
 - Distinguishes IFRS from Non-IFRS / Adjusted measures.
 - Classifies period duration bases (FY, 6M, 3M, point_in_time) and audited vs unaudited.
@@ -12,13 +12,9 @@ from __future__ import annotations
 
 import math
 import re
-from typing import Any
 
 from adaptive_document_agent.models import CanonicalFact, Observation
-from adaptive_document_agent.services.financial_formatter import (
-    normalize_currency_symbol,
-    normalize_raw_unit,
-)
+from adaptive_document_agent.services.financial_formatter import currency_from_unit, normalize_currency_symbol
 
 # Explicit keywords marking non-IFRS / adjusted measures
 _ADJUSTED_KEYWORDS = (
@@ -70,21 +66,12 @@ _MULTIPLE_METRIC_KEYWORDS = (
 
 
 def clean_float_artifacts(val: float | None) -> float | None:
-    """Eliminate floating point representation artifacts (e.g. 53.60000000000001 -> 53.6)."""
+    """Round display values only; never use this to replace calculation inputs."""
     if val is None:
         return None
     if math.isnan(val) or math.isinf(val):
         return None
-    # If it is effectively an integer
-    if abs(val - round(val)) < 1e-9:
-        return float(round(val))
-    # Round to 6 decimal places to discard IEEE 754 precision noise
-    rounded = round(val, 6)
-    if abs(rounded - round(val, 4)) < 1e-7:
-        return round(val, 4)
-    if abs(rounded - round(val, 2)) < 1e-5:
-        return round(val, 2)
-    return rounded
+    return float(format(val, ".12g"))
 
 
 def format_clean_number_string(val: float | None) -> str:
@@ -96,17 +83,17 @@ def format_clean_number_string(val: float | None) -> str:
         return ""
     if cleaned.is_integer():
         return f"{int(cleaned):,}"
-    # Format up to 2 decimal places if clean, otherwise strip trailing zeros
-    s = f"{cleaned:,.4f}".rstrip("0").rstrip(".")
-    return s
+    return format(cleaned, ",.15g")
 
 
 def classify_ifrs_status(metric_name: str, canonical_name: str | None = None) -> str:
-    """Classify if a metric is standard IFRS or an Adjusted / Non-IFRS measure."""
+    """Recognize explicit qualifiers; absence of 'adjusted' is not IFRS evidence."""
     combined = f"{canonical_name or ''} {metric_name}".casefold()
     if any(k in combined for k in _ADJUSTED_KEYWORDS):
         return "ADJUSTED"
-    return "IFRS"
+    if re.search(r"\bIFRS\b|国际财务报告准则", metric_name, re.IGNORECASE):
+        return "IFRS"
+    return "UNSPECIFIED"
 
 
 class FinancialNormalizer:
@@ -117,7 +104,7 @@ class FinancialNormalizer:
         cls,
         obs: Observation,
         *,
-        default_currency: str = "RMB",
+        default_currency: str | None = None,
     ) -> Observation:
         """Deterministically normalize an Observation in-place and return it."""
         from adaptive_document_agent.document_model.metric_semantic_classifier import (
@@ -133,13 +120,13 @@ class FinancialNormalizer:
             extract_period_basis,
         )
 
-        # 1. Floating-point cleanup
-        obs.value = clean_float_artifacts(obs.value)
-
-        # 2. Metric cleaning and IFRS classification
+        # Retain calculation precision and raw source fields. Only display values
+        # are rounded. A supplied default currency must come from source context.
         metric_orig = obs.metric_original or ""
         metric_canon = obs.metric_canonical or ""
-        obs.ifrs_status = classify_ifrs_status(metric_orig, metric_canon)
+        status = classify_ifrs_status(metric_orig, metric_canon)
+        if status != "UNSPECIFIED":
+            obs.ifrs_status = status
 
         # If metric is Adjusted / Non-IFRS, protect its canonical name from collapsing to unadjusted
         if obs.ifrs_status == "ADJUSTED" and metric_canon:
@@ -175,13 +162,13 @@ class FinancialNormalizer:
             obs.semantic_type = "margin"
             obs.currency = None
             if obs.value is not None and abs(obs.value) > 1000.0 and hasattr(obs, "unit_scale") and (obs.unit_scale or 1.0) > 1.0:
-                obs.value = clean_float_artifacts(obs.value / obs.unit_scale)
+                obs.value = obs.value / obs.unit_scale
                 obs.unit_scale = 1.0
         elif is_financial_statement_metric(lower_metric) and not is_explicit_ratio:
             obs.unit = "currency"
             obs.unit_family = "currency"
-            obs.currency = obs.currency or default_currency
-            obs.display_unit = obs.currency
+            obs.currency = obs.currency or currency_from_unit(obs.raw_unit) or default_currency
+            obs.display_unit = obs.currency or ""
             obs.semantic_type = "monetary_amount"
         elif current_unit in {"", "unknown", "none", "null"} or obs.unit is None:
             if any(k in lower_metric for k in ("margin", "%", "share of", "ratio", "proportion", "growth rate", "cagr", "rate")):
@@ -193,8 +180,8 @@ class FinancialNormalizer:
             elif is_financial_statement_metric(lower_metric):
                 obs.unit = "currency"
                 obs.unit_family = "currency"
-                obs.currency = obs.currency or default_currency
-                obs.display_unit = obs.currency
+                obs.currency = obs.currency or currency_from_unit(obs.raw_unit) or default_currency
+                obs.display_unit = obs.currency or ""
                 obs.semantic_type = "monetary_amount"
             else:
                 # Fallback to general classifier
@@ -215,10 +202,6 @@ class FinancialNormalizer:
             obs.currency = None
         elif obs.currency:
             obs.currency = normalize_currency_symbol(obs.currency)
-
-        # Normalize raw unit string if present
-        if obs.raw_unit:
-            obs.raw_unit = normalize_raw_unit(obs.raw_unit, default_currency=obs.currency or default_currency)
 
         # 4. Period Basis and Typing
         is_bs = obs.unit_family == "currency" and any(
@@ -255,7 +238,7 @@ class FinancialNormalizer:
         cls,
         observations: list[Observation],
         *,
-        default_currency: str = "RMB",
+        default_currency: str | None = None,
     ) -> list[Observation]:
         """Normalize a collection of observations in-place."""
         for obs in observations:

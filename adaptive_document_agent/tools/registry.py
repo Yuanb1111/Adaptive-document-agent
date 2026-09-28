@@ -50,7 +50,7 @@ def create_default_registry() -> ToolRegistry:
         ("absolute_change", comparison.absolute_change, 2, "start,end"),
         ("percentage_change", comparison.percentage_change, 2, "start,end"),
         ("growth_rate", growth.growth_rate, 2, "start,end"),
-        ("cagr", growth.cagr, 3, "start,end,periods"),
+        ("cagr", growth.cagr, 2, "start,end,periods"),
         ("ratio", ratios.ratio, 2, "numerator,denominator"),
         ("percentage_of_total", ratios.percentage_of_total, 2, "value,total"),
         ("contribution_share", ratios.contribution_share, 2, "values", "compatible", "series"),

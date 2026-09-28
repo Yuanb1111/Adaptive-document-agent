@@ -10,6 +10,7 @@ from adaptive_document_agent.document_model import (
     reconcile_observations,
 )
 from adaptive_document_agent.extraction.normalizer import UnitSignature, compatible_units
+from adaptive_document_agent.document_model.annual_periods import annual_period_year, annual_span
 from adaptive_document_agent.models import AnalysisResult, AnalysisTask, Observation
 from adaptive_document_agent.tools import ToolRegistry, create_default_registry
 from adaptive_document_agent.tools.safe_formula import evaluate_formula
@@ -62,7 +63,10 @@ class AnalysisExecutor:
 
     def _dispatch(self, task: AnalysisTask, observations: list[Observation]) -> object:
         name = task.tool_name or task.analysis_type
-        if name in {"absolute_change", "percentage_change", "growth_rate", "cagr", "linear_trend", "moving_average", "compare_periods"}:
+        if name == "cagr":
+            span = annual_span([item.period for item in observations])
+            ordered = sorted(observations, key=lambda item: annual_period_year(item.period))
+        elif name in {"absolute_change", "percentage_change", "growth_rate", "linear_trend", "moving_average", "compare_periods"}:
             ordered = sorted(observations, key=lambda item: item.period or "")
         else:
             ordered = observations
@@ -79,10 +83,15 @@ class AnalysisExecutor:
             return self.registry.execute(name, start=values[0], end=values[-1])
         if name == "cagr":
             if is_exp:
-                return self.registry.execute(name, start=values[0], end=values[-1], periods=len(values) - 1, is_expense=True)
-            return self.registry.execute(name, start=values[0], end=values[-1], periods=len(values) - 1)
+                return self.registry.execute(name, start=values[0], end=values[-1], periods=span, is_expense=True)
+            return self.registry.execute(name, start=values[0], end=values[-1], periods=span)
         if name in {"rank_values", "top_n", "bottom_n", "compare_categories"}:
-            labels = [next(iter(item.dimensions.values()), item.entity or item.period or item.id) for item in ordered]
+            dimension = next(iter(task.required_dimensions), None)
+            labels = [
+                item.dimensions.get(dimension, item.entity or item.period or item.id)
+                if dimension else next(iter(item.dimensions.values()), item.entity or item.period or item.id)
+                for item in ordered
+            ]
             return self.registry.execute(name, labels=labels, values=values)
         if name == "compare_periods":
             return self.registry.execute(name, labels=[item.period or item.id for item in ordered], values=values)

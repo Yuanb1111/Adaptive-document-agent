@@ -1,9 +1,13 @@
 """Recover an evidence-bound introduction independently of financial slide writing."""
 
 import json
+from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 
 from pydantic import BaseModel, Field
 
+from adaptive_document_agent.models import PipelineResult, PresentationPlan
 from adaptive_document_agent.models.presentation import CompanyProfile, CompanySummaryPage
 from adaptive_document_agent.services.company_summary import summary_excerpts, validate_summary
 from .prompting import untrusted_document_message
@@ -26,6 +30,39 @@ _RULES = (
     "Never invent names, values, units, periods, products, quotations or citations. "
     "Decide section meaning from content, not exact heading spelling or industry. "
 )
+
+
+@contextmanager
+def prepare_company_introduction(gateway, result: PipelineResult) -> Iterator[Callable[[PresentationPlan], None]]:
+    """Overlap independent cloud work; local and stateful clients remain serial.
+
+    The worker owns its draft and source snapshot. Only the caller may attach
+    its validated output to the final plan, including a recovered slide plan.
+    """
+    if gateway.discovery_workers <= 1:
+        yield lambda plan: ensure_company_introduction(gateway, result, plan)
+        return
+
+    source = PipelineResult(
+        document=result.document.model_copy(deep=True),
+        profile=result.profile.model_copy(deep=True),
+    )
+    draft = PresentationPlan(title="Introduction draft")
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="company-introduction") as pool:
+        future = pool.submit(ensure_company_introduction, gateway, source, draft)
+
+        def attach(plan: PresentationPlan) -> None:
+            if (plan.company.summary_overview and plan.company.summary_business
+                    and not validate_summary(plan.company, result)):
+                _shorten_cover(plan)
+                return
+            future.result()  # Propagate failure to the existing fail-safe handler.
+            errors = validate_summary(draft.company, result)
+            if errors:
+                raise ValueError("Prepared introduction no longer matches the source: " + "; ".join(errors))
+            _apply_introduction(plan, draft.company.model_copy(deep=True))
+
+        yield attach
 
 
 def ensure_company_introduction(gateway, result, plan) -> None:
@@ -93,20 +130,23 @@ def ensure_company_introduction(gateway, result, plan) -> None:
             company.source_pages = sorted({p for page in (draft.overview, draft.business)
                                            for item in page.items for p in item.source_pages}
                                           | ({draft.name_page} if draft.name else set()))
-            plan.company = company
-            if company.name:
-                for slide in plan.slides:
-                    if slide.slide_type == "cover":
-                        slide.title = company.name
-                        slide.message = "Document analysis"
-                    elif slide.slide_type == "company_overview":
-                        slide.title = draft.overview.title
-                        slide.section_title = draft.overview.title
+            _apply_introduction(plan, company)
             return
         if attempt == 0:
             messages += [untrusted_document_message(draft.model_dump_json()),
                          {"role": "system", "content": "Correct the following validation failures using only supplied evidence: " + "; ".join(errors)}]
     raise ValueError("Company introduction could not be verified: " + "; ".join(errors))
+
+
+def _apply_introduction(plan: PresentationPlan, company: CompanyProfile) -> None:
+    plan.company = company
+    if company.name:
+        _shorten_cover(plan)
+        if company.summary_overview:
+            for slide in plan.slides:
+                if slide.slide_type == "company_overview":
+                    slide.title = company.summary_overview.title
+                    slide.section_title = company.summary_overview.title
 
 
 def _shorten_cover(plan) -> None:

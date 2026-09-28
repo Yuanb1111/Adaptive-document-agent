@@ -15,7 +15,7 @@ import re
 from typing import Any
 
 from adaptive_document_agent.document_model.period_semantic_validator import format_observation_period
-from adaptive_document_agent.services.financial_formatter import format_compact_currency, shorten_metric_title
+from adaptive_document_agent.services.financial_formatter import currency_from_unit, format_compact_currency, shorten_metric_title
 from adaptive_document_agent.validation.claim_validator import (
     MetricSemanticFamily,
     classify_metric_semantic_family,
@@ -31,19 +31,17 @@ class FinancialMovementFormatter:
     def _format_diff_amount(
         cls,
         diff_abs: float,
-        currency: str = "RMB",
+        currency: str = "",
         scale: float = 1.0,
         parent_magnitude: float = 0.0,
     ) -> str:
         """Format an absolute difference amount compactly (e.g. 'RMB155m', 'RMB2.15bn', 'RMB0.74bn', '50.0')."""
-        if not currency:
-            diff_scaled = diff_abs / scale if scale and scale > 0 else diff_abs
-            return f"{diff_scaled:,.1f}"
-
         curr = currency
         # Numeric callers explicitly supply an input multiplier. Never infer
         # millions/billions from the magnitude of a number.
         effective_diff = diff_abs * scale
+        if not currency and effective_diff < 1000:
+            return f"{effective_diff:,.1f}"
         if parent_magnitude * scale >= 1_000_000_000:
             if effective_diff >= 10_000_000:
                 in_bn = effective_diff / 1_000_000_000.0
@@ -182,7 +180,7 @@ class FinancialMovementFormatter:
         end_val: float,
         *,
         canonical_name: str | None = None,
-        currency: str = "RMB",
+        currency: str = "",
         scale: float = 1.0,
         unit: str | None = None,
         raw_unit: str | None = None,
@@ -191,6 +189,7 @@ class FinancialMovementFormatter:
         values: list[float] | None = None,
     ) -> str:
         """Format changes; currency scale is an explicit input multiplier, default base units."""
+        currency = currency or currency_from_unit(raw_unit or unit)
         clean_name = shorten_metric_title(metric_name)
         lower_name = f"{canonical_name or ''} {clean_name}".casefold()
         family = classify_metric_semantic_family(clean_name, canonical_name=canonical_name)
@@ -405,7 +404,7 @@ class FinancialMovementFormatter:
         end_val: float,
         *,
         canonical_name: str | None = None,
-        currency: str = "RMB",
+        currency: str = "",
         scale: float = 1.0,
         unit: str | None = None,
         unit_family: str = "generic",
@@ -455,7 +454,7 @@ class FinancialMovementFormatter:
         unit_family: str = "generic",
         start_period: str | None = None,
         end_period: str | None = None,
-        currency: str = "RMB",
+        currency: str = "",
         scale: float = 1.0,
         values: list[float] | None = None,
         periods: list[str] | None = None,
@@ -467,6 +466,7 @@ class FinancialMovementFormatter:
         numeric inputs only and cannot override retained observation units.
         """
         if isinstance(first_obs, str):
+            currency = currency or currency_from_unit(unit)
             metric_name = first_obs
             canonical_name = None
             s_val = float(start_val if start_val is not None else (last_obs if isinstance(last_obs, (int, float)) else 0))

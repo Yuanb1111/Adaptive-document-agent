@@ -7,10 +7,14 @@ from adaptive_document_agent.models import AnalysisTask, CandidateScore
 class AnalysisPlanner:
     def plan(self, scores: list[CandidateScore], index: DocumentIndex) -> list[AnalysisTask]:
         tasks: list[AnalysisTask] = []
-        seen: set[tuple[str, str | None]] = set()
-        for score in scores:
+        seen: set[tuple[object, ...]] = set()
+        for score in sorted(scores, key=lambda item: item.score, reverse=True):
             candidate = score.candidate
-            key = candidate.analysis_type, candidate.metric
+            # Evidence IDs bind periods, entities, and category scope. Different
+            # questions over the same metric must not erase each other.
+            key = (candidate.analysis_type, candidate.metric,
+                   tuple(sorted(candidate.dimensions)),
+                   tuple(sorted(set(candidate.observation_ids))))
             if score.rejected or key in seen:
                 continue
             available = [index.get(identifier) for identifier in candidate.observation_ids]

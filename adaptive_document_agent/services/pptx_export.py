@@ -1052,6 +1052,13 @@ def _add_cover(
     from .slide_compositor import _lines
     clean_title = clean_presentation_text(cover_title)
     clean_purpose = clean_presentation_text(purpose or result.profile.document_purpose or result.profile.document_summary or "Intelligence derived from reported statements")
+    # A planner may append an analysis scope after a colon. The scope belongs
+    # in the contents and body, while the cover needs a readable subject.
+    if len(clean_title) > 70 and ":" in clean_title:
+        subject = clean_title.split(":", 1)[0].strip()
+        if len(subject) >= 15:
+            clean_title = subject
+            clean_purpose = "Document analysis"
 
     # Dynamic font scaling to prevent title overlap (max 2 lines)
     is_long_title = len(clean_title) > 36
@@ -1837,7 +1844,7 @@ def _add_evidence_table_slides(
     # Extract clean periods and metrics grouped by theme
     # theme -> metric_label -> {"periods": {period_str: val_str}, "pages": set()}
     metrics_by_theme: dict[str, dict[str, dict[str, Any]]] = {}
-    from adaptive_document_agent.document_model.series import metric_identity_key, source_context_key
+    from adaptive_document_agent.document_model.series import is_generic_metric_label, metric_identity_key, source_context_key
     name_contexts: dict[str, set[tuple[str, str]]] = {}
     for item in observations:
         name_contexts.setdefault(display_metric_name(item), set()).add(source_context_key(item))
@@ -1891,7 +1898,13 @@ def _add_evidence_table_slides(
             columns = list(dict.fromkeys(e.column_label for e in item.evidence if e.column_label))
             location = ", ".join(columns) or item.id
             metric_name += f" [{location}; period unspecified]"
-        metric_entry = theme_dict.setdefault(identity, {"label": metric_name, "unit": unit_str, "periods": {}, "values": {}, "pages": set()})
+        metric_entry = theme_dict.setdefault(identity, {"label": metric_name, "unit": unit_str,
+            "periods": {}, "values": {}, "raw_signatures": {}, "records": [], "pages": set()})
+        metric_entry["records"].append(item)
+        metric_entry["raw_signatures"].setdefault(period_key, set()).add((
+            item.raw_value, item.raw_unit, item.unit, item.unit_scale, item.currency,
+            item.period, item.period_basis, item.period_type, item.as_of_date, item.audited_status,
+        ))
 
         if period_key in metric_entry["values"] and item.value is not None and metric_entry["values"][period_key] is not None:
             from math import isclose
@@ -1903,6 +1916,35 @@ def _add_evidence_table_slides(
         for ev in item.evidence:
             if getattr(ev, "page", None):
                 metric_entry["pages"].add(ev.page)
+
+    # Two cited tables may contain the same complete series. Keep every raw
+    # observation and both page citations, but show that exact series once in
+    # the audience appendix. Different values or incomplete period sets stay
+    # separate so a disagreement remains visible.
+    for theme_entries in metrics_by_theme.values():
+        identical: dict[tuple[object, ...], tuple[object, ...]] = {}
+        for identity, entry in list(theme_entries.items()):
+            if len(identity) < 7 or len(entry["values"]) < 2:
+                continue
+            if is_generic_metric_label(str(identity[0])):
+                continue
+            comparison = (identity[0], identity[2:], entry["unit"],
+                          tuple(sorted(entry["values"].items())),
+                          frozenset((period, frozenset(values))
+                                    for period, values in entry["raw_signatures"].items()))
+            retained = identical.get(comparison)
+            if retained is None:
+                identical[comparison] = identity
+                continue
+            theme_entries[retained]["pages"].update(entry["pages"])
+            theme_entries[retained]["records"].extend(entry["records"])
+            del theme_entries[identity]
+        remaining_names = [re.sub(r" \[source \d+\]$", "", entry["label"])
+                           for entry in theme_entries.values()]
+        for entry in theme_entries.values():
+            plain = re.sub(r" \[source \d+\]$", "", entry["label"])
+            if remaining_names.count(plain) == 1:
+                entry["label"] = plain
 
     sorted_periods = sorted(all_periods_set, key=period_sort_key)
     if not sorted_periods:
@@ -1942,24 +1984,14 @@ def _add_evidence_table_slides(
             period_groups.setdefault(extract_period_basis(period), []).append(period)
         p_chunks = [periods[i:i + 6] for periods in period_groups.values() for i in range(0, len(periods), 6)]
         for p_chunk in p_chunks:
-            current_bundle: list[tuple[str, dict[str, dict[str, Any]]]] = []
-            current_rows = 0
+            from .appendix_layout import paginate_themes
+            compatible_themes = []
             for theme in active_themes:
                 theme_metrics = {name: entry for name, entry in metrics_by_theme[theme].items()
                                  if any(p in entry["periods"] for p in p_chunk)}
-                if not theme_metrics:
-                    continue
-                entries = list(theme_metrics.items())
-                for start in range(0, len(entries), 9):
-                    chunk = dict(entries[start:start + 9])
-                    needed_rows = 1 + len(chunk)
-                    if current_rows > 0 and current_rows + needed_rows > 10:
-                        slide_specs.append((p_chunk, current_bundle, is_bs))
-                        current_bundle, current_rows = [], 0
-                    current_bundle.append((theme, chunk))
-                    current_rows += needed_rows
-            if current_bundle:
-                slide_specs.append((p_chunk, current_bundle, is_bs))
+                if theme_metrics:
+                    compatible_themes.append((theme, theme_metrics))
+            slide_specs.extend((p_chunk, bundle, is_bs) for bundle in paginate_themes(compatible_themes))
 
     if not slide_specs:
         sorted_periods = sorted(all_periods_set, key=period_sort_key) or ["Reported"]
@@ -1979,14 +2011,16 @@ def _add_evidence_table_slides(
             slide_subtitle += f" | Appendix {spec_index} of {total_specs}"
         slide = _base_slide(presentation, title, slide_subtitle)
         source_notes = []
-        included_labels = {key: entry["label"] for _, entries in theme_entries for key, entry in entries.items()}
-        for item in observations:
-            if metric_identity_key(item) in included_labels:
-                source_notes.append(
-                    f"{included_labels[metric_identity_key(item)]}; period={item.period}; raw={item.raw_value}; "
-                    f"unit={item.raw_unit or item.unit}; context={source_context_key(item)}; "
-                    f"pages={sorted({e.page for e in item.evidence})}"
-                )
+        page_observations = []
+        for _, entries in theme_entries:
+            for entry in entries.values():
+                for item in entry["records"]:
+                    page_observations.append(item)
+                    source_notes.append(
+                        f"{entry['label']}; id={item.id}; period={item.period}; raw={item.raw_value}; "
+                        f"unit={item.raw_unit or item.unit}; context={source_context_key(item)}; "
+                        f"pages={sorted({e.page for e in item.evidence})}"
+                    )
         slide.notes_slide.notes_text_frame.text = "Data Index source records\n" + "\n".join(source_notes)
         content_top, content_h = _content_zone(slide)
 
@@ -2023,7 +2057,7 @@ def _add_evidence_table_slides(
         table_shape = slide.shapes.add_table(num_rows, num_cols, Inches(0.45), Inches(table_top), Inches(11.70), Inches(table_h))
         table = table_shape.table
 
-        num_p = len(p_chunk)
+        num_p = len(active_p_chunk)
         metric_w = max(2.80, min(3.80, 11.70 - 1.10 - num_p * 1.15))
         unit_w = 1.10
         period_w = (11.70 - metric_w - unit_w) / max(num_p, 1)
@@ -2083,6 +2117,10 @@ def _add_evidence_table_slides(
         star_note = " | * Unaudited" if has_unaudited else ""
         pages_str = _source_footer(slide_pages)
         footnote = f"{pages_str}{star_note} | Rounded display; — = no retained value. Source variants and exact values: CSV."
+        from .presentation_conventions import signed_expense_note
+        convention = signed_expense_note(page_observations)
+        if convention:
+            _text(slide, convention, 0.45, 5.90, 11.70, 0.28, size=10, color=FOURIER_MUTED)
         _text(slide, footnote, 0.45, 6.22, 11.70, 0.25, size=9.0, color=FOURIER_MUTED)
 
 
@@ -2771,7 +2809,7 @@ def _unit_label(observations: list[Observation], scale_label: str) -> str:
         if disp_u and disp_u not in ("unknown", "none", "null", ""):
             return disp_u
     if is_financial:
-        return scale_label or "RMB"
+        return scale_label or "currency unspecified"
     return scale_label or ""
 
 
@@ -2794,15 +2832,15 @@ def _display_source_unit(item: Observation) -> str:
     if is_financial:
         curr = item.currency or (item.raw_unit if item.raw_unit and item.raw_unit != "units" else None)
         if curr:
-            return normalize_raw_unit(curr, default_currency=item.currency or "RMB")
-        return item.currency or "RMB"
+            return normalize_raw_unit(curr, default_currency=item.currency)
+        return "currency unspecified"
     value = item.raw_unit or _unit_label([item], "")
     if not value or value in ("units", "unknown"):
         disp = getattr(item, "display_unit", None)
         if disp and disp not in ("unknown", "none", "null", ""):
             return disp
         return "units" if (semantic.is_volume or semantic.unit_family == "count") else ""
-    return normalize_raw_unit(value, default_currency=item.currency or "RMB")
+    return normalize_raw_unit(value, default_currency=item.currency)
 
 
 def _appendix_display_unit(item: Observation, semantic: Any) -> str:
@@ -2812,19 +2850,23 @@ def _appendix_display_unit(item: Observation, semantic: Any) -> str:
     The PPT appendix uses one readable monetary scale per row instead.
     """
     if semantic.is_currency:
-        return f"{normalize_currency_symbol(item.currency or 'RMB')} million"
+        from adaptive_document_agent.services.financial_formatter import currency_from_unit
+
+        currency = normalize_currency_symbol(item.currency) or currency_from_unit(item.raw_unit)
+        return f"{currency} million" if currency else "million (currency unspecified)"
     return _display_source_unit(item)
 
 
 def _appendix_display_value(item: Observation, semantic: Any) -> str:
     """Format an appendix cell from normalized numeric evidence when available."""
     if not semantic.is_currency or item.value is None:
-        return str(item.raw_value)
+        from .presentation_conventions import signed_expense_display
+        return signed_expense_display(item, str(item.raw_value), with_unit=False)
 
     if (item.unit_scale or 1.0) > 1.0:
         base_val = float(item.value)
     else:
-        source_unit = normalize_raw_unit(item.raw_unit, default_currency=item.currency or "RMB").casefold()
+        source_unit = normalize_raw_unit(item.raw_unit, default_currency=item.currency).casefold()
         scale = 1.0
         if "'000" in source_unit or "thousand" in source_unit:
             scale = 1_000.0

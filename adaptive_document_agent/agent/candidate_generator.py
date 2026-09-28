@@ -6,6 +6,7 @@ from itertools import combinations
 from pydantic import BaseModel, Field
 
 from adaptive_document_agent.document_model import DocumentIndex, best_period_series, paired_observations
+from adaptive_document_agent.document_model.annual_periods import annual_period_year, annual_span
 from adaptive_document_agent.models import AnalysisCandidate, DocumentProfile, Observation
 from adaptive_document_agent.services.llm import LLMGateway
 from adaptive_document_agent.utils.ids import stable_id
@@ -86,8 +87,12 @@ class AnalysisCandidateGenerator:
     def _period_candidates(self, metric: str, observations: list[Observation]) -> list[AnalysisCandidate]:
         ids = [item.id for item in observations]
         types = [("absolute_change", "Change"), ("percentage_change", "Growth"), ("linear_trend", "Trend")]
-        ordered = sorted(observations, key=lambda item: item.period or "")
-        if len(ordered) >= 3 and float(ordered[0].value or 0) > 0 and float(ordered[-1].value or 0) >= 0:
+        try:
+            annual_span([item.period for item in observations])
+            ordered = sorted(observations, key=lambda item: annual_period_year(item.period))
+        except ValueError:
+            ordered = []
+        if len(ordered) >= 2 and float(ordered[0].value or 0) > 0 and float(ordered[-1].value or 0) >= 0:
             types.append(("cagr", "CAGR"))
         return [
             AnalysisCandidate(

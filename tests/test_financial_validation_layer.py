@@ -85,7 +85,8 @@ def test_unit_normalization_and_float_cleanup() -> None:
     assert obs_days.unit == "days"
     assert obs_days.unit_family == "days"
     assert obs_days.display_unit == "days"
-    assert obs_days.value == 53.6
+    assert obs_days.value == 53.60000000000001
+    assert obs_days.display_value == "53.6"
 
     # 2. Turnover ratio with missing unit -> multiple
     obs_ratio = Observation(
@@ -101,7 +102,8 @@ def test_unit_normalization_and_float_cleanup() -> None:
     FinancialNormalizer.normalize_observation(obs_ratio)
     assert obs_ratio.unit == "multiple"
     assert obs_ratio.display_unit == "x"
-    assert obs_ratio.value == 1.5
+    assert obs_ratio.value == 1.50000000000002
+    assert obs_ratio.display_value == "1.5"
 
     # 3. Clean string formatting without float noise
     assert format_clean_number_string(53.60000000000001) == "53.6"
@@ -285,7 +287,7 @@ def test_ifrs_vs_adjusted_metric_separation() -> None:
     FinancialNormalizer.normalize_observation(obs_net_loss)
     FinancialNormalizer.normalize_observation(obs_adj_loss)
 
-    assert obs_net_loss.ifrs_status == "IFRS"
+    assert obs_net_loss.ifrs_status == "UNSPECIFIED"
     assert obs_adj_loss.ifrs_status == "ADJUSTED"
 
     # Partition keys must differ

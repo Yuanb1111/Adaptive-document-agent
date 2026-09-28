@@ -3,7 +3,7 @@
 import pytest
 
 from adaptive_document_agent.models import AnalysisResult, Insight, PresentationPlan, PresentationSlide
-from adaptive_document_agent.validation.claim_validator import ClaimValidator, repair_presentation_plan
+from adaptive_document_agent.validation.claim_validator import ClaimValidator, extract_metric_aliases, repair_presentation_plan
 from adaptive_document_agent.validation.presentation_provenance import insight_inputs
 from adaptive_document_agent.services.qa_reporter import run_comprehensive_qa
 from test_company_summary_pages import sample
@@ -49,6 +49,51 @@ def test_repair_rolls_back_slide_when_a_new_metric_error_is_introduced(monkeypat
     monkeypatch.setattr(claim_validator, 'repair_presentation_plan_from_issues', faulty_repair)
     repaired, messages = repair_presentation_plan(plan, obs)
     assert repaired.slides[0].title == original
+    assert not messages
+
+
+def test_incomplete_net_phrase_from_multimetric_slide_is_removed_and_rejected_if_left():
+    from adaptive_document_agent.agent.presentation_plan_recovery import PresentationPlanRecovery
+    from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
+    from tests.test_pptx_export import _result
+    result = _result()
+    original = 'Gross profit increased, but gross margin declined and net declined overall, with a partial rebound in the final year.'
+    slide = PresentationSlide(id='loss', slide_type='analysis', title=original,
+        bullets=[original], observation_ids=[o.id for o in margin_data()])
+    plan = PresentationPlan(title='Analysis', slides=[slide])
+    repaired, _ = repair_presentation_plan(plan, margin_data())
+    assert repaired.slides[0].title == 'Gross profit increased, but gross margin declined.'
+    assert repaired.slides[0].bullets == ['Gross profit increased, but gross margin declined.']
+    assert repaired.slides[0].title != original
+    complete = PresentationPlanRecovery().fallback(result)
+    summary = next(s for s in complete.slides if s.slide_type == 'executive_summary')
+    summary.bullets = ['Net declined overall.']
+    with pytest.raises(ValueError, match='incomplete net movement'):
+        PresentationPlanValidator().validate(complete, result)
+
+
+def test_repeated_metric_word_is_cleaned_only_for_display():
+    from adaptive_document_agent.document_model.series import display_metric_name
+    item = observations('Gross profit margin margin', [43.5], 'percent')[0]
+    assert display_metric_name(item) == 'Gross profit margin'
+    assert item.metric_original == 'Gross profit margin margin'
+
+
+def test_reported_period_loss_binds_net_loss_direction_separately_from_margin():
+    assert 'net loss' in extract_metric_aliases('Loss for the year/period')
+    groups = [observations('Gross profit', [88.08, 98.22, 124.84], 'currency'),
+              observations('Gross profit margin margin', [50.5, 40.8, 43.5], 'percent'),
+              observations('Loss for the year/period', [-41.8, -52.5, -103.3], 'currency')]
+    for index, group in enumerate(groups):
+        for item in group:
+            item.id = f'{index}_{item.id}'
+    facts = [item for group in groups for item in group]
+    correct = 'Gross profit increased, but gross margin declined and net loss widened.'
+    plan = PresentationPlan(title='Analysis', slides=[PresentationSlide(id='p8',
+        slide_type='analysis', title=correct, observation_ids=[item.id for item in facts])])
+    assert not ClaimValidator().validate_plan(plan, facts)
+    repaired, messages = repair_presentation_plan(plan, facts)
+    assert repaired.slides[0].title == correct
     assert not messages
 
 

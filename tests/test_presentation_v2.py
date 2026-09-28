@@ -99,17 +99,18 @@ def test_compact_currency_formatting() -> None:
     """Requirement 1: Formats amounts into compact institutional notation."""
     # 174,314 in thousands -> RMB 174.3m
     assert format_compact_currency(174_314.0, raw_unit="RMB in thousands") == "RMB 174.3m"
-    assert format_compact_currency(174_314_000.0) == "RMB 174.3m"
+    assert format_compact_currency(174_314_000.0, currency="RMB") == "RMB 174.3m"
 
     # 1,567,108 in thousands -> RMB 1.57bn
     assert format_compact_currency(1_567_108.0, raw_unit="RMB '000") == "RMB 1.57bn"
-    assert format_compact_currency(1_567_108_000.0) == "RMB 1.57bn"
+    assert format_compact_currency(1_567_108_000.0, currency="RMB") == "RMB 1.57bn"
 
-    # 450 in thousands -> RMB 450k
-    assert format_compact_currency(450.0, raw_unit="in thousands") == "RMB 450k"
+    # An explicit scale does not establish a currency.
+    assert format_compact_currency(450.0, raw_unit="in thousands") == "450k"
 
     # Negative currency (e.g. net loss)
-    assert format_compact_currency(-174_314_000.0) == "-RMB 174.3m"
+    assert format_compact_currency(-174_314_000.0, currency="RMB") == "-RMB 174.3m"
+    assert format_compact_currency(-174_314_000.0) == "-174.3m"
 
     # Foreign currency: HKD
     assert format_compact_currency(450_000_000.0, currency="HKD") == "HK$ 450m"

@@ -8,6 +8,8 @@ local renderer to measure actual verified export of the synthetic fixture.
 
 import json
 import argparse
+import io
+from statistics import median
 from time import perf_counter, sleep
 from types import SimpleNamespace
 
@@ -16,6 +18,40 @@ from adaptive_document_agent.services.export import export_pptx_with_report
 from adaptive_document_agent.utils.chunking import DocumentChunk
 from tests.ppt_render_stub import LocalRenderStub
 from tests.test_pptx_export import _result
+
+
+def benchmark_preflight(payload: bytes) -> dict[str, float]:
+    """Compare wrapper reuse on identical input while verifying every slide."""
+    from pptx import Presentation
+    from adaptive_document_agent.services.ppt_preflight import PresentationPreflight
+
+    class FreshWrappers(PresentationPreflight):
+        def _shapes(self, slide):
+            return slide.shapes
+
+        def _placeholders(self, slide):
+            return slide.placeholders
+
+    timings = {"fresh_wrappers": [], "reused_wrappers": []}
+    baseline = None
+    for run in range(11):
+        for label, checker in (("fresh_wrappers", FreshWrappers),
+                               ("reused_wrappers", PresentationPreflight)):
+            deck = Presentation(io.BytesIO(payload))
+            started = perf_counter()
+            issues = checker(deck).validate_and_sanitize()
+            elapsed = perf_counter() - started
+            if run:
+                timings[label].append(elapsed)
+            output = ([vars(issue) for issue in issues],
+                      [slide._element.xml for slide in deck.slides],
+                      [shape.chart._element.xml for slide in deck.slides
+                       for shape in slide.shapes if shape.has_chart])
+            if baseline is None:
+                baseline = output
+            assert output == baseline, "Preflight output changed with wrapper reuse"
+    return {f"preflight_{label}_median_ms": round(median(values) * 1000, 1)
+            for label, values in timings.items()}
 
 
 def main() -> None:
@@ -58,6 +94,7 @@ def main() -> None:
         payload = verified.payload
     if not args.real_renderer:
         measured["renderer_calls"] = renderer.calls
+    measured.update(benchmark_preflight(payload))
     print(json.dumps(measured, indent=2))
 
 

@@ -3,14 +3,14 @@
 from collections.abc import Callable
 from typing import BinaryIO
 
-from adaptive_document_agent.document_model import DocumentModelBuilder
+from adaptive_document_agent.document_model import DocumentIndex, DocumentModelBuilder
 from adaptive_document_agent.extraction.chart_extractor import ChartExtractor
 from adaptive_document_agent.extraction.observation_extractor import ObservationExtractor
 from adaptive_document_agent.extraction.pdf_parser import PDFParser
 from adaptive_document_agent.extraction.table_extractor import TableExtractor
 from adaptive_document_agent.extraction.table_reconstructor import TableReconstructor
 from adaptive_document_agent.extraction.vision_adapter import VisionAdapter
-from adaptive_document_agent.models import AnalysisScopePreview, Observation, ParsedDocument, PipelineResult, ValidationIssue
+from adaptive_document_agent.models import AnalysisResult, AnalysisScopePreview, AnalysisTask, DocumentProfile, Observation, ParsedDocument, PipelineResult, ValidationIssue
 from adaptive_document_agent.services.llm import LLMGateway
 from adaptive_document_agent.services.llm.exceptions import LLMResponseError
 from adaptive_document_agent.utils.caching import DiskCache
@@ -113,10 +113,7 @@ class DocumentOrchestrator:
         with record_timing(timings, "financial_normalization"):
             from adaptive_document_agent.services.financial_normalizer import FinancialNormalizer
 
-            observations = FinancialNormalizer.normalize_observations(
-                observations,
-                default_currency=getattr(profile, "currency", "RMB") or "RMB",
-            )
+            observations = FinancialNormalizer.normalize_observations(observations)
 
         notify("Building document model")
         with record_timing(timings, "document_model"):
@@ -147,16 +144,7 @@ class DocumentOrchestrator:
 
         notify("Checking consistency and validating results")
         with record_timing(timings, "validation"):
-            issues: list[ValidationIssue] = []
-            for validator, values in (
-                (ExtractionValidator(), observations),
-                (SemanticValidator(), observations),
-                (ConsistencyChecker(), observations),
-                (CoverageValidator(profile), observations),
-                (CalculationValidator(), results),
-                (EvidenceValidator(), results),
-            ):
-                issues.extend(validator.validate(values).issues)  # type: ignore[arg-type]
+            issues = self._validate_analysis(profile, observations, results)
 
         selected_pages = [
             page
@@ -171,51 +159,12 @@ class DocumentOrchestrator:
         elif candidates_images:
             profile.data_quality_notes.append("Chart candidates were detected; no vision model is configured.")
 
-        topic_selection = None
-        requested_series = []
         notify("Generating insights and dynamic report")
         with record_timing(timings, "reporting"):
-            insights = InsightGenerator(self.gateway).generate(results, observations)
-            notify("Selecting presentation questions before chart generation")
-            from .output_planning import plan_outputs
-            topic_result = PipelineResult(
-                document=document, profile=profile, observations=index.observations,
-                analysis_plan=plan, analysis_results=results, insights=insights,
-            )
-            report_plan, topic_selection, topic_error = plan_outputs(self.gateway, topic_result)
-            if topic_selection is not None:
-                _, series_by_id = series_directory(topic_result)
-                requested_series = [
-                    series_by_id[series_id]
-                    for topic in topic_selection.topics for series_id in topic.series_ids
-                ]
-            if topic_error is not None:
-                issues.append(ValidationIssue(
-                    code="presentation_topic_selection_failed",
-                    message="Question-first presentation selection was unavailable: "
-                            + " ".join(str(topic_error).split())[:800],
-                    severity="warning", stage="presentation",
-                ))
-            charts = ChartPlanner().plan(
-                plan,
-                results,
-                index,
-                preferred_metrics=profile.metrics,
-                insights=insights,
-                report_plan=report_plan,
-                analysis_focus=analysis_focus,
-                requested_series=requested_series,
-                only_requested=bool(topic_selection and topic_selection.topics),
-            )
-            markdown = ReportGenerator().generate(
-                profile,
-                report_plan,
-                insights,
-                issues,
-                observations=index.observations,
-                charts=charts,
-            )
-            issues.extend(ReportValidator().validate(markdown, results).issues)
+            reporting = self._generate_report(document, profile, index, plan, results, issues, notify, analysis_focus)
+            insights, report_plan = reporting.insights, reporting.report_plan
+            topic_selection, charts = reporting.presentation_topics, reporting.charts
+            markdown, issues = reporting.report_markdown, reporting.validation_warnings
 
             # Structured diagnostic metadata logging
             import logging
@@ -251,7 +200,7 @@ class DocumentOrchestrator:
 
                 # 1. Run multiple extraction strategies across relevant pages and select/merge best candidates
                 reconstructor = TableReconstructor()
-                for p in document.pages:
+                for p in selected_pages:
                     reconstructed = [reconstructor.reconstruct(t) for t in p.tables] if p.tables else []
                     borderless = BorderlessTableExtractor().extract(p, p.page_number)
                     borderless_reconstructed = [reconstructor.reconstruct(t) for t in borderless] if borderless else []
@@ -264,43 +213,30 @@ class DocumentOrchestrator:
                         p.tables = reconstructed
                 self._reconstruct_tables(document)
 
-                # 2. Re-extract observations across full document (includes deterministic vertical text fallback)
+                # 2. Re-extract the selected scope, including vertical text fallback.
                 recovered = extractor.extract(document, page_ranges=profile.analysis_page_ranges or None)
                 if recovered:
-                    recovered = FinancialNormalizer.normalize_observations(
-                        recovered,
-                        default_currency=getattr(profile, "currency", "RMB") or "RMB",
-                    )
-                    observations = self._merge_observations(observations, recovered)
-                    index = DocumentModelBuilder().build(observations)
-
-                    # 3. Regenerate candidate analyses and results if plan lacked depth or charts == 0
-                    if len(results) < 2 or not plan or not charts:
+                    recovered = FinancialNormalizer.normalize_observations(recovered)
+                    merged = self._merge_observations(observations, recovered)
+                    # No new evidence means no downstream state changed. Avoid
+                    # repeating paid semantic stages for identical recovery output.
+                    if len(merged) > len(observations):
+                        observations = merged
+                        index = DocumentModelBuilder().build(observations)
+                        notify("Recalculating and validating recovered evidence")
                         candidates = AnalysisCandidateGenerator().generate(index, profile)
                         scores = AnalysisValueScorer(self.gateway).score(candidates, index, profile)
                         plan = AnalysisPlanner().plan(scores, index)
                         results = AnalysisExecutor().execute(plan, index)
-
-                    charts = ChartPlanner().plan(
-                        plan,
-                        results,
-                        index,
-                        preferred_metrics=profile.metrics,
-                        insights=insights,
-                        report_plan=report_plan,
-                        analysis_focus=analysis_focus,
-                        requested_series=requested_series,
-                        only_requested=bool(topic_selection and topic_selection.topics),
-                    )
-                    if charts and report_plan:
-                        markdown = ReportGenerator().generate(
-                            profile,
-                            report_plan,
-                            insights,
-                            issues,
-                            observations=index.observations,
-                            charts=charts,
+                        # Replace stale validation and report artifacts together.
+                        # Fresh topic selection must bind to the rebuilt series.
+                        issues = self._validate_analysis(profile, observations, results)
+                        reporting = self._generate_report(
+                            document, profile, index, plan, results, issues, notify, analysis_focus,
                         )
+                        insights, report_plan = reporting.insights, reporting.report_plan
+                        topic_selection, charts = reporting.presentation_topics, reporting.charts
+                        markdown, issues = reporting.report_markdown, reporting.validation_warnings
 
             # 4. Diagnostics when charts == 0
             if not charts:
@@ -335,67 +271,69 @@ class DocumentOrchestrator:
                     presentation_topics=topic_selection,
                     validation_warnings=issues,
                 )
-                try:
-                    presentation_plan = PresentationPlanner(self.gateway).plan(planning_result)
-                except (LLMResponseError, ValueError) as exc:
-                    detail = " ".join(str(exc).split())[:1_400]
-                    issues.append(
-                        ValidationIssue(
-                            code="presentation_plan_failed",
-                            message=(
-                                "The AI presentation plan could not be retained. "
-                                f"Reason: {detail or 'No additional validation detail was available.'}"
-                            ),
-                            severity="warning",
-                            stage="presentation",
-                        )
-                    )
+                from .company_introduction import prepare_company_introduction
+                with prepare_company_introduction(self.gateway, planning_result) as attach_introduction:
                     try:
-                        recovery = PresentationPlanRecovery()
-                        if topic_selection and topic_selection.topics:
-                            try:
-                                presentation_plan = recovery.from_selected_topics(planning_result)
-                            except ValueError as topic_exc:
-                                issues.append(ValidationIssue(
-                                    code="presentation_topic_recovery_failed",
-                                    message="Selected questions could not form a validated presentation: "
-                                            + " ".join(str(topic_exc).split())[:800],
-                                    severity="warning", stage="presentation",
-                                ))
-                        if presentation_plan is None:
-                            presentation_plan = recovery.fallback(planning_result)
-                        issues.append(
-                            ValidationIssue(
-                                code="presentation_plan_fallback",
-                                message="A validated question-first or evidence-only presentation plan was generated in place of the invalid AI slide plan.",
-                                severity="info",
-                                stage="presentation",
-                            )
-                        )
-                    except Exception as fallback_exc:
-                        presentation_plan = None
-                        issues.append(
-                            ValidationIssue(
-                                code="presentation_plan_fallback_failed",
-                                message=f"Fallback presentation plan could not be generated: {fallback_exc}",
-                                severity="error",
-                                stage="presentation",
-                            )
-                        )
-
-                if presentation_plan:
-                    from .company_introduction import ensure_company_introduction
-                    try:
-                        ensure_company_introduction(self.gateway, planning_result, presentation_plan)
+                        presentation_plan = PresentationPlanner(self.gateway).plan(planning_result)
                     except (LLMResponseError, ValueError) as exc:
-                        from adaptive_document_agent.models.presentation import CompanyProfile
-                        presentation_plan.company = CompanyProfile(
-                            one_line_description="A source-verified company introduction is unavailable for this run."
+                        detail = " ".join(str(exc).split())[:1_400]
+                        issues.append(
+                            ValidationIssue(
+                                code="presentation_plan_failed",
+                                message=(
+                                    "The AI presentation plan could not be retained. "
+                                    f"Reason: {detail or 'No additional validation detail was available.'}"
+                                ),
+                                severity="warning",
+                                stage="presentation",
+                            )
                         )
-                        issues.append(ValidationIssue(
-                            code="company_introduction_unavailable", severity="warning", stage="presentation",
-                            message="The independent company introduction could not be verified: " + str(exc)[:500],
-                        ))
+                        try:
+                            recovery = PresentationPlanRecovery()
+                            if topic_selection and topic_selection.topics:
+                                try:
+                                    presentation_plan = recovery.from_selected_topics(planning_result)
+                                except ValueError as topic_exc:
+                                    issues.append(ValidationIssue(
+                                        code="presentation_topic_recovery_failed",
+                                        message="Selected questions could not form a validated presentation: "
+                                                + " ".join(str(topic_exc).split())[:800],
+                                        severity="warning", stage="presentation",
+                                    ))
+                            if presentation_plan is None:
+                                presentation_plan = recovery.fallback(planning_result)
+                            issues.append(
+                                ValidationIssue(
+                                    code="presentation_plan_fallback",
+                                    message="A validated question-first or evidence-only presentation plan was generated in place of the invalid AI slide plan.",
+                                    severity="info",
+                                    stage="presentation",
+                                )
+                            )
+                        except Exception as fallback_exc:
+                            presentation_plan = None
+                            issues.append(
+                                ValidationIssue(
+                                    code="presentation_plan_fallback_failed",
+                                    message=f"Fallback presentation plan could not be generated: {fallback_exc}",
+                                    severity="error",
+                                    stage="presentation",
+                                )
+                            )
+
+                    if presentation_plan:
+                        try:
+                            attach_introduction(presentation_plan)
+                        except (LLMResponseError, ValueError) as exc:
+                            from adaptive_document_agent.models.presentation import CompanyProfile
+                            presentation_plan.company = CompanyProfile(
+                                one_line_description="A source-verified company introduction is unavailable for this run."
+                            )
+                            issues.append(ValidationIssue(
+                                code="company_introduction_unavailable", severity="warning", stage="presentation",
+                                message="The independent company introduction could not be verified: " + str(exc)[:500],
+                            ))
+                if presentation_plan:
                     from adaptive_document_agent.validation.claim_validator import repair_presentation_plan
                     from adaptive_document_agent.validation.cross_slide_validator import CrossSlideValidator
 
@@ -446,6 +384,70 @@ class DocumentOrchestrator:
             llm_usage=list(self.gateway.usage) if self.gateway else [],
             timings_ms=timings,
         )
+
+    @staticmethod
+    def _validate_analysis(
+        profile: DocumentProfile, observations: list[Observation], results: list[AnalysisResult],
+    ) -> list[ValidationIssue]:
+        """Validate the current snapshot, including evidence recovered after a first pass."""
+        issues: list[ValidationIssue] = []
+        for validator, values in (
+            (ExtractionValidator(), observations),
+            (SemanticValidator(), observations),
+            (ConsistencyChecker(), observations),
+            (CoverageValidator(profile), observations),
+            (CalculationValidator(), results),
+            (EvidenceValidator(), results),
+        ):
+            issues.extend(validator.validate(values).issues)  # type: ignore[arg-type]
+        return issues
+
+    def _generate_report(
+        self, document: ParsedDocument, profile: DocumentProfile, index: DocumentIndex,
+        plan: list[AnalysisTask], results: list[AnalysisResult], issues: list[ValidationIssue],
+        notify: ProgressCallback, analysis_focus: str | None,
+    ) -> PipelineResult:
+        """Build all reporting artifacts from one validated analysis snapshot."""
+        from .output_planning import plan_outputs
+
+        issues = list(issues)
+        insights = InsightGenerator(self.gateway).generate(results, index.observations)
+        notify("Selecting presentation questions before chart generation")
+        output = PipelineResult(
+            document=document, profile=profile, observations=index.observations,
+            analysis_plan=plan, analysis_results=results, insights=insights,
+        )
+        report_plan, topic_selection, topic_error = plan_outputs(self.gateway, output)
+        requested_series = []
+        if topic_selection is not None:
+            _, series_by_id = series_directory(output)
+            requested_series = [
+                series_by_id[series_id]
+                for topic in topic_selection.topics for series_id in topic.series_ids
+            ]
+        if topic_error is not None:
+            issues.append(ValidationIssue(
+                code="presentation_topic_selection_failed",
+                message="Question-first presentation selection was unavailable: "
+                        + " ".join(str(topic_error).split())[:800],
+                severity="warning", stage="presentation",
+            ))
+        charts = ChartPlanner().plan(
+            plan, results, index, preferred_metrics=profile.metrics, insights=insights,
+            report_plan=report_plan, analysis_focus=analysis_focus,
+            requested_series=requested_series,
+            only_requested=bool(topic_selection and topic_selection.topics),
+        )
+        markdown = ReportGenerator().generate(
+            profile, report_plan, insights, issues, observations=index.observations, charts=charts,
+        )
+        issues.extend(ReportValidator().validate(markdown, results).issues)
+        output.report_plan = report_plan
+        output.presentation_topics = topic_selection
+        output.charts = charts
+        output.report_markdown = markdown
+        output.validation_warnings = issues
+        return output
 
     def preview_scope(
         self,

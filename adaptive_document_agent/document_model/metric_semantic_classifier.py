@@ -531,7 +531,7 @@ def format_metric_display_value(
             and (abs(num_val) > 100 or "%" not in str(raw_val))
             and not any(k in semantic.clean_name.casefold() for k in ("margin", "%", "share of", "as %", "growth", "cagr", "rate", "proportion", "利润率", "占比"))
         ):
-            norm_unit = normalize_raw_unit(raw_unit, default_currency=currency or "RMB")
+            norm_unit = normalize_raw_unit(raw_unit, default_currency=currency)
             if compact:
                 return format_compact_currency(num_val, raw_unit=raw_unit, currency=currency, is_base_value=True)
             unit_label = norm_unit or currency or "currency"
@@ -542,7 +542,7 @@ def format_metric_display_value(
     if semantic.is_volume or semantic.unit_family == "count":
         return f"{raw_val}  units".strip()
     if semantic.is_currency:
-        norm_unit = normalize_raw_unit(raw_unit, default_currency=currency or "RMB")
+        norm_unit = normalize_raw_unit(raw_unit, default_currency=currency)
         if compact and num_val is not None:
             return format_compact_currency(num_val, raw_unit=raw_unit, currency=currency, is_base_value=True)
         if norm_unit and any(s in norm_unit.lower() for s in ("'000", "000", "thousand", "million", "billion")):
