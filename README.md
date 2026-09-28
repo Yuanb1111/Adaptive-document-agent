@@ -473,6 +473,28 @@ Discovery chunks use a short inventory prompt (summary target: 60 words / 120 Ch
 
 For direct DeepSeek Flash / V4 Pro routes, `LLM_DISCOVERY_THINKING=disabled` explicitly selects [non-thinking mode](https://api-docs.deepseek.com/zh-cn/guides/thinking_mode/) for discovery only, including routing and overview synthesis. Set `enabled` or `provider_default` to override. Other providers, custom endpoints and analysis/planning stages retain their existing settings. This changes model behavior and needs live quality/cost comparison on representative inputs; offline mocks cannot prove monetary savings. Output-limit truncation is recorded and fails visibly without an expensive format-only retry that could fabricate missing facts. Changes to generation policy invalidate the appropriate caches. Restart the app and run fresh analysis to measure this release; old JSON exports cannot acquire counters the provider never recorded.
 
+## Recovering large-document scope selection (v43)
+
+Automatic deep analysis has a 160-distinct-page budget. Overlapping ranges count
+once and their pages are understood once; original range titles, reasons and
+page evidence remain available. The model ranks complete evidence ranges and
+Python packs them in that priority order, without cutting off the first 160 pages
+or assuming any document type. Scope reasons identify when lower-priority ranges
+do not fit.
+
+A broad chapter can be refined by the model into complete contained subsections
+using a compact page map. Empty, invalid or still-oversized budget responses get
+at most one further selection request through `LLMGateway`, with nested format
+repair disabled. Unresolvable selections stop before deep analysis and ask for
+a narrower focus or scope; they never silently fall back to reading the full PDF.
+These limits concern logical model requests; provider transport retries retain
+their existing bounded policy and usage records.
+
+Updated routing prompts and schemas invalidate their own cached responses while
+retaining unrelated valid model/extraction caches. Restart the app and analyse
+the PDF again to use the new routing behavior. The cost caption after a failure
+describes requests already made, not the cause of the failure or provider billing.
+
 ## Known Limitations
 
 Borderless-table extraction preserves multi-line header fragments and uses local PDF word coordinates to align sparse rows, including blank percentage cells beside reported amounts. A nearby `%` or an `except percentages` unit note is not evidence that every column is a percentage. Numeric candidates must form discrete cells with no trailing or interleaved prose: wrapped date sentences are retained in page text, not appended as table rows. Unresolved sparse data rows retain their raw values, are excluded from numeric observations, and block verified export with `ambiguous_table_alignment`; implausible percentages still block export. After updating from the older extractor, restart the app, review the analysis scope and run analysis again (table cache version `tables-v10`). Exporting an old in-memory result does not re-extract its tables.

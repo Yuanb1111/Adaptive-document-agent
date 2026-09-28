@@ -1,7 +1,5 @@
 """Large-document routing must protect late primary evidence from early-page truncation."""
 
-import pytest
-
 from adaptive_document_agent.agent.document_discovery import DocumentDiscovery
 from adaptive_document_agent.models import AnalysisPageRange, DocumentPage, ParsedDocument
 from adaptive_document_agent.services.llm import LLMGateway, LLMSettings, MockLLMClient, ProviderName
@@ -29,7 +27,7 @@ def test_overbroad_route_requires_model_ranked_primary_scope() -> None:
     assert "Primary evidence" in client.calls[1][-1]["content"]
 
 
-def test_overbroad_route_rejects_budget_violation() -> None:
+def test_overbroad_route_packs_complete_ranges_in_model_priority_order() -> None:
     document = ParsedDocument(
         document_id="large", sha256="0" * 64, safe_filename="large.pdf", page_count=240,
         pages=[DocumentPage(page_number=page, text=f"Page {page}") for page in range(1, 241)],
@@ -42,8 +40,10 @@ def test_overbroad_route_rejects_budget_violation() -> None:
         {"primary_range_indexes": [0, 1]},
     ])
     gateway = LLMGateway(client, LLMSettings(provider=ProviderName.MOCK, model="mock"))
-    with pytest.raises(ValueError, match="page budget"):
-        DocumentDiscovery(gateway)._route_large_document(document, None)
+    selected = DocumentDiscovery(gateway)._route_large_document(document, None)
+    assert [(item.start_page, item.end_page) for item in selected] == [(1, 100)]
+    assert "lower-priority" in selected[0].reason
+    assert len(client.calls) == 2
 
 
 def test_chunk_cap_samples_late_selected_pages() -> None:

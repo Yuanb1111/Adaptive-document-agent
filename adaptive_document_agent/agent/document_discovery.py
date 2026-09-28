@@ -14,6 +14,10 @@ from adaptive_document_agent.utils.caching import DiskCache
 from adaptive_document_agent.utils.hashing import sha256_bytes
 
 from .prompting import load_prompt, untrusted_document_message
+from .route_budget import (
+    DEEP_ANALYSIS_PAGE_BUDGET, RouteBudgetSelection, contiguous_spans,
+    covered_pages, fit_ranked_ranges, ranked_ranges,
+)
 
 
 class ChunkDiscovery(BaseModel):
@@ -48,12 +52,6 @@ class DiscoveryOverview(BaseModel):
 
 class DocumentRoute(BaseModel):
     selected_page_ranges: list[AnalysisPageRange] = Field(default_factory=list)
-
-
-class RouteBudgetSelection(BaseModel):
-    """Model-ranked primary ranges when initial routing is too broad."""
-
-    primary_range_indexes: list[int] = Field(default_factory=list, min_length=1, max_length=4)
 
 
 class DocumentDiscovery:
@@ -92,9 +90,9 @@ class DocumentDiscovery:
             # page-preserving document remains available for background facts.
             chunks = [
                 chunk
-                for item in routed_ranges
+                for start, end in contiguous_spans(covered_pages(routed_ranges))
                 for chunk in semantic_chunks(
-                    [page for page in document.pages if item.start_page <= page.page_number <= item.end_page],
+                    [page for page in document.pages if start <= page.page_number <= end],
                     target_tokens=self.target_tokens,
                 )
             ]
@@ -214,15 +212,16 @@ class DocumentDiscovery:
             DocumentRoute,
             stage="discovery",
         )
-        maximum_page = len(document.pages)
+        available_pages = {page.page_number for page in document.pages}
+        maximum_page = max(available_pages, default=0)
         output: list[AnalysisPageRange] = []
         for item in route.selected_page_ranges[:12]:
             start, end = max(1, item.start_page), min(maximum_page, item.end_page)
-            if start <= end:
+            if start <= end and set(range(start, end + 1)) <= available_pages:
                 output.append(item.model_copy(update={"start_page": start, "end_page": end}))
         if not output:
             raise ValueError("No valid evidence-bearing page range was selected for deep analysis")
-        if sum(item.end_page - item.start_page + 1 for item in output) > 160:
+        if len(covered_pages(output)) > DEEP_ANALYSIS_PAGE_BUDGET:
             excerpts = []
             for index, item in enumerate(output):
                 sample_pages = {item.start_page, (item.start_page + item.end_page) // 2, item.end_page}
@@ -231,29 +230,63 @@ class DocumentDiscovery:
                     "title": item.title,
                     "start_page": item.start_page,
                     "end_page": item.end_page,
+                    "page_count": item.end_page - item.start_page + 1,
                     "reason": item.reason,
                     "page_excerpts": [
                         {"page": page.page_number, "text": " ".join(page.text.split())[:350]}
                         for page in document.pages if page.page_number in sample_pages
                     ],
                 })
-            narrowed = self.gateway.generate_structured(  # type: ignore[union-attr]
-                [
-                    {"role": "system", "content": load_prompt("document_route_budget.txt")},
-                    {"role": "user", "content": "User analysis focus: " + (analysis_focus.strip() if analysis_focus else "Automatic discovery")},
-                    untrusted_document_message(json.dumps(excerpts, ensure_ascii=False)),
-                ],
-                RouteBudgetSelection,
-                stage="discovery",
-            )
-            indices = narrowed.primary_range_indexes
-            if len(indices) != len(set(indices)) or any(index < 0 or index >= len(output) for index in indices):
-                raise ValueError("The primary section selection contains invalid range indexes")
-            primary = [output[index] for index in indices]
-            if sum(item.end_page - item.start_page + 1 for item in primary) > 160:
-                raise ValueError("The primary section selection exceeds the deep-analysis page budget")
-            output = sorted(primary, key=lambda item: item.start_page)
+                if item.end_page - item.start_page + 1 > DEEP_ANALYSIS_PAGE_BUDGET:
+                    # Only an oversized candidate needs a denser boundary map.
+                    # The model, not Python, chooses its complete subsections.
+                    excerpts[-1]["page_map"] = [
+                        {"page": page.page_number, "preview": " ".join(page.text.split())[:120]}
+                        for page in document.pages if item.start_page <= page.page_number <= item.end_page
+                    ]
+            output = self._budget_route(output, excerpts, analysis_focus)
         return output
+
+    def _budget_route(self, candidates: list[AnalysisPageRange], excerpts: list[dict],
+                      analysis_focus: str | None) -> list[AnalysisPageRange]:
+        from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
+        # Overlapping broad candidates must not duplicate the same boundary
+        # context in the request. The full page text remains in the document.
+        boundary_pages = {page["page"]: page for item in excerpts for page in item.get("page_map", [])}
+        payload = {"ranges": [{key: value for key, value in item.items() if key != "page_map"}
+                              for item in excerpts]}
+        if boundary_pages:
+            payload["oversized_range_page_map"] = [boundary_pages[page] for page in sorted(boundary_pages)]
+        feedback = None
+        for _ in range(2):
+            messages = [
+                {"role": "system", "content": load_prompt("document_route_budget.txt")},
+                {"role": "user", "content": "User analysis focus: " + (analysis_focus.strip() if analysis_focus else "Automatic discovery")},
+                untrusted_document_message(json.dumps(payload, ensure_ascii=False, separators=(",", ":"))),
+            ]
+            if feedback:
+                messages.append({"role": "user", "content": feedback})
+            try:
+                narrowed = self.gateway.generate_structured(  # type: ignore[union-attr]
+                    messages, RouteBudgetSelection, stage="discovery", allow_repair=False,
+                )
+                return fit_ranked_ranges(ranked_ranges(narrowed, candidates))
+            except (ValueError, LLMStructuredOutputError):
+                # One compact semantic retry, with no nested format-repair call.
+                # Never silently truncate an oversized section or fall back to
+                # analysing the whole document after an empty/invalid response.
+                feedback = (
+                    "The previous selection was empty, invalid, or retained an oversized primary range. "
+                    "Return distinct valid indexes. For every selected range longer than 160 pages, "
+                    "use refined_ranges to identify complete evidence subsections from its page map, "
+                    "inside the original boundaries and within the 160-page budget. "
+                    "Do not choose a prefix merely to meet the limit."
+                )
+        raise ValueError(
+            "Could not select complete evidence sections within the 160-page deep-analysis budget "
+            "after one refinement attempt. Narrow the analysis focus or confirm smaller complete "
+            "sections; no partial section or full-document fallback was analysed."
+        )
 
     @staticmethod
     def _select_chunks(chunks: list[DocumentChunk], ranges: list[AnalysisPageRange], *, maximum: int = 32) -> list[DocumentChunk]:
