@@ -130,17 +130,27 @@ def test_policy_does_not_send_unsupported_thinking_options(settings, monkeypatch
     assert "extra_body" not in complete.call_args.kwargs
 
 
-def test_truncated_even_valid_json_is_metered_but_never_repaired_or_cached(monkeypatch, tmp_path):
+@pytest.mark.parametrize("output_tokens", [50, 8192, None])
+def test_truncated_even_valid_json_is_metered_but_never_repaired_or_cached(monkeypatch, tmp_path, output_tokens):
     from adaptive_document_agent.utils.caching import DiskCache
     settings = LLMSettings()
     provider = LiteLLMProvider(settings)
-    complete = Mock(return_value=raw_response(finish="length"))
+    response = raw_response(finish="length")
+    response.usage.completion_tokens = output_tokens
+    complete = Mock(return_value=response)
     monkeypatch.setattr(provider, "_completion", complete)
     gateway = LLMGateway(provider, settings, cache=DiskCache(tmp_path))
-    with pytest.raises(LLMStructuredOutputError, match="truncated"):
+    with pytest.raises(LLMStructuredOutputError, match="truncated") as failure:
         gateway.generate_structured([], Answer, stage="discovery")
     assert complete.call_count == 1 and not list(tmp_path.glob("*.json"))
-    assert gateway.usage[0]["status"] == "truncated" and gateway.usage[0]["output_tokens"] == 50
+    assert len(gateway.usage) == 1
+    assert gateway.usage[0]["status"] == "truncated" and gateway.usage[0]["output_tokens"] == output_tokens
+    assert "stage 'discovery'" in str(failure.value) and "operation 'Answer'" in str(failure.value)
+    assert "model 'deepseek-flash'" in str(failure.value)
+    token_detail = "unknown" if output_tokens is None else str(output_tokens)
+    assert f"output tokens: {token_detail}" in str(failure.value)
+    assert failure.value.response.usage.output_tokens == output_tokens
+    assert failure.value.response.text not in str(failure.value)
 
 
 def test_request_without_usage_is_recorded_as_unknown():

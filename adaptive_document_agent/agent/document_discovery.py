@@ -4,11 +4,13 @@ import re
 import json
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Annotated
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
 
 from adaptive_document_agent.models import AnalysisPageRange, DocumentProfile, ParsedDocument
 from adaptive_document_agent.services.llm import LLMGateway
+from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
 from adaptive_document_agent.utils.chunking import DocumentChunk, semantic_chunks
 from adaptive_document_agent.utils.caching import DiskCache
 from adaptive_document_agent.utils.hashing import sha256_bytes
@@ -37,17 +39,16 @@ class ChunkDiscovery(BaseModel):
 class DiscoveryOverview(BaseModel):
     """Only semantic synthesis is generated again; inventories stay in Python."""
 
-    document_type: str = "Unknown document"
-    document_purpose: str = "Not yet determined"
-    overview_title: str = "Document overview"
-    document_summary: str = ""
-    document_summary_pages: list[int] = Field(default_factory=list)
-    overview_points: list[str] = Field(default_factory=list)
-    language: str | None = None
-    important_sections: list[str] = Field(default_factory=list)
-    important_tables: list[str] = Field(default_factory=list)
-    important_figures: list[str] = Field(default_factory=list)
-    data_quality_notes: list[str] = Field(default_factory=list)
+    model_config = ConfigDict(extra="forbid")
+
+    document_type: str = Field(default="Unknown document", max_length=120)
+    document_purpose: str = Field(default="Not yet determined", max_length=400)
+    overview_title: str = Field(default="Document overview", max_length=160)
+    document_summary: str = Field(default="", max_length=1200)
+    document_summary_pages: list[Annotated[StrictInt, Field(ge=1)]] = Field(default_factory=list, max_length=24)
+    overview_points: list[Annotated[str, Field(max_length=220)]] = Field(default_factory=list, max_length=3)
+    language: str | None = Field(default=None, max_length=40)
+    data_quality_notes: list[Annotated[str, Field(max_length=240)]] = Field(default_factory=list, max_length=4)
 
 
 class DocumentRoute(BaseModel):
@@ -101,31 +102,8 @@ class DocumentDiscovery:
         else:
             chunks = semantic_chunks(document.pages, target_tokens=self.target_tokens)
         discoveries = self._discover_chunks(chunks, notify)
-        from .discovery_compaction import compact_discoveries
-        compact = compact_discoveries(chunks, discoveries)
         notify("Merging selected sections into the global document profile")
-        messages = [
-                {"role": "system", "content": load_prompt("document_discovery.txt") + (
-                    "\nSynthesize only the requested overview and important sections/tables/figures. "
-                    "Keep document_summary within 120 words (240 Chinese characters). "
-                    "Do not reproduce metric, unit, period, currency, entity or dimension inventories: "
-                    "the complete exact-term catalog is merged by Python after this call. "
-                    "Return new cross-chunk quality notes only; existing notes are retained automatically."
-                )},
-        ]
-        if analysis_focus and analysis_focus.strip():
-            messages.append(
-                {
-                    "role": "user",
-                    "content": "Use this user-supplied analysis focus to prioritise the profile's metrics and dimensions, without inventing absent data: " + analysis_focus.strip(),
-                }
-            )
-        messages.append(untrusted_document_message(compact))
-        overview = self.gateway.generate_structured(
-            messages,
-            DiscoveryOverview,
-            stage="discovery",
-        )
+        overview = self._synthesize_overview(chunks, discoveries, analysis_focus)
         profile = DocumentProfile.model_validate(overview.model_dump())
         reviewed_pages = {
             page
@@ -141,7 +119,10 @@ class DocumentDiscovery:
             for field, source in (("metrics", "metrics"), ("detected_units", "units"),
                                   ("detected_time_periods", "time_periods"),
                                   ("detected_currencies", "currencies"), ("entities", "entities"),
-                                  ("dimensions", "dimensions"), ("data_quality_notes", "data_quality_notes")):
+                                  ("dimensions", "dimensions"), ("data_quality_notes", "data_quality_notes"),
+                                  ("important_sections", "important_sections"),
+                                  ("important_tables", "important_tables"),
+                                  ("important_figures", "important_figures")):
                 target = getattr(profile, field)
                 target.extend(value for value in getattr(discovery, source) if value not in target)
         profile.analysis_page_ranges = [(item.start_page, item.end_page) for item in routed_ranges]
@@ -149,6 +130,63 @@ class DocumentDiscovery:
             if item.title not in profile.important_sections:
                 profile.important_sections.append(item.title)
         return profile
+
+    def _synthesize_overview(
+        self, chunks: list[DocumentChunk], discoveries: list[ChunkDiscovery],
+        analysis_focus: str | None,
+    ) -> DiscoveryOverview:
+        """Generate bounded prose, retrying only this synthesis once if invalid."""
+        from .discovery_compaction import overview_context
+
+        messages = [{"role": "system", "content": load_prompt("discovery_overview.txt")}]
+        if analysis_focus and analysis_focus.strip():
+            messages.append({"role": "user", "content":
+                "Use this user-supplied analysis focus to prioritise supported overview evidence only: " + analysis_focus.strip()})
+        messages.append(untrusted_document_message(overview_context(chunks, discoveries)))
+
+        # A successful compact retry must also satisfy the next ordinary run.
+        # Gateway message caches alone use different keys for the two attempts.
+        cache = self.cache or getattr(self.gateway, "cache", None)
+        cache_key = None
+        if cache is not None and isinstance(self.gateway, LLMGateway) and self.gateway.cache_enabled:
+            settings = self.gateway.settings
+            identity = {
+                "version": "discovery-overview-v1", "messages": messages,
+                "schema": DiscoveryOverview.model_json_schema(),
+                "provider": settings.provider.value, "model": settings.model_for("discovery"),
+                "endpoint": settings.base_url, "privacy_mode": settings.privacy_mode.value,
+                "temperature": settings.temperature, "discovery_thinking": settings.discovery_thinking,
+            }
+            cache_key = "discovery-overview-" + sha256_bytes(
+                json.dumps(identity, ensure_ascii=False, sort_keys=True).encode("utf-8"))
+            cached = cache.get_model(cache_key, DiscoveryOverview)
+            if cached is not None:
+                self.gateway.record_cache_hit(stage="discovery", operation="DiscoveryOverview")
+                return cached
+
+        for attempt in range(2):
+            request = messages
+            if attempt:
+                request = [*messages, {"role": "user", "content": (
+                    "The previous overview was incomplete or did not match the bounded schema. "
+                    "Regenerate one compact, complete JSON overview from the supplied source summaries. "
+                    "Use at most 80 words for document_summary and at most two short overview_points. "
+                    "Return no inventories or repeated section/table/figure labels. "
+                    "Use empty data_quality_notes unless a new cross-section limitation is essential. "
+                    "Do not complete or guess missing text from a previous answer; use source evidence only."
+                )}]
+            try:
+                overview = self.gateway.generate_structured(  # type: ignore[union-attr]
+                    request, DiscoveryOverview, stage="discovery", allow_repair=False,
+                )
+            except (LLMStructuredOutputError, ValidationError):
+                if attempt:
+                    raise
+                continue
+            if cache_key is not None:
+                cache.set_model(cache_key, overview)
+            return overview
+        raise AssertionError("Overview recovery attempts exhausted without a result or exception")
 
     def _discover_chunks(self, chunks: list[DocumentChunk], notify: Callable[[str], None]) -> list[ChunkDiscovery]:
         workers = min(getattr(self.gateway, "discovery_workers", 1), len(chunks))

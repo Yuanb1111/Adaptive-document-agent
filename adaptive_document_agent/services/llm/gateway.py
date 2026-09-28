@@ -84,7 +84,16 @@ class LLMGateway:
         except LLMStructuredOutputError as exc:
             truncated = bool(exc.response.usage and exc.response.usage.finish_reason == "length")
             self._record(exc.response, stage=stage, status="truncated" if truncated else "invalid_format", operation=response_model.__name__)
-            if truncated or not allow_repair:
+            if truncated:
+                output_tokens = exc.response.usage.output_tokens
+                token_detail = "unknown" if output_tokens is None else str(output_tokens)
+                raise LLMStructuredOutputError(
+                    "Structured response was truncated by the model output limit "
+                    f"(stage '{stage}', operation '{response_model.__name__}', "
+                    f"model '{model_name}', output tokens: {token_detail}).",
+                    response=exc.response,
+                ) from exc
+            if not allow_repair:
                 raise
             value = self._repair_structured(exc.response.text, response_model, stage=stage)
         except LLMTransportError as exc:

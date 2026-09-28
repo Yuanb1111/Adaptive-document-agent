@@ -33,7 +33,8 @@ def test_overview_excludes_repeated_inventory_but_profile_preserves_all_terms_an
     assert profile.dimensions == chunk.dimensions and profile.data_quality_notes == chunk.data_quality_notes
     assert profile.document_summary_pages == [1] and document.model_dump() == before
     assert "metrics" not in DiscoveryOverview.model_json_schema()["properties"]
-    assert all(name in client.calls[-1][-1]["content"] for name in metrics)
+    assert all(name not in client.calls[-1][-1]["content"] for name in metrics)
+    assert chunk.summary in client.calls[-1][-1]["content"]
 
 
 def test_thinking_policy_change_invalidates_both_chunk_and_gateway_caches(tmp_path):
