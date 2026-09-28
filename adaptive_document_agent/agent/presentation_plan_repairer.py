@@ -124,7 +124,10 @@ class PresentationPlanRepairer:
                         slide.section_title = "Appendix"
             title = polish_slide_title(title)
             message = slide.message.strip()
-            bullets = [item.strip() for item in slide.bullets if item.strip()]
+            scoped_bullets = len(slide.bullet_observation_ids) == len(slide.bullets) and bool(slide.bullets)
+            bullet_items = [(item.strip(), self._unique([
+                oid for oid in slide.bullet_observation_ids[position] if oid in observation_ids
+            ]) if scoped_bullets else []) for position, item in enumerate(slide.bullets) if item.strip()]
 
             if slide.slide_type in {"executive_summary", "analysis", "risks"}:
                 allowed_numbers = self._allowed_numbers(
@@ -133,7 +136,12 @@ class PresentationPlanRepairer:
                 if not self._numbers_supported(title, allowed_numbers):
                     title = self._default_title(slide.slide_type, ordinal)
                 message = self._clean_sentences(message, allowed_numbers)
-                bullets = [item for item in bullets if self._numbers_supported(item, allowed_numbers)]
+                bullet_items = [(item, ids) for item, ids in bullet_items
+                                if (not scoped_bullets or ids) and self._numbers_supported(item,
+                                    self._allowed_numbers([], ids, [], [], observations, insights, charts)
+                                    if scoped_bullets else allowed_numbers)]
+            bullets = [item for item, _ in bullet_items]
+            bullet_observation_ids = [ids for _, ids in bullet_items] if scoped_bullets else []
 
             # Drop analysis/risks slides that have zero valid evidence references
             if slide.slide_type in {"analysis", "risks"} and not (
@@ -230,7 +238,9 @@ class PresentationPlanRepairer:
                     slide_role=slide.slide_role,
                     layout=layout,
                     message=message,
-                    bullets=bullets[:5],
+                    bullets=bullets if slide.slide_type == "executive_summary" else bullets[:5],
+                    bullet_observation_ids=(bullet_observation_ids
+                        if slide.slide_type == "executive_summary" else []),
                     chart_ids=chart_ids,
                     observation_ids=observation_ids,
                     insight_ids=insight_ids,

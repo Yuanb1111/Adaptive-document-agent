@@ -45,6 +45,9 @@ def review_presentation(plan: PresentationPlan | None, result: PipelineResult) -
     if plan is None:
         return [EditorialFinding("presentation_legacy", "Legacy evidence export: no analytical presentation plan is available.")]
     findings = []
+    from .presentation_period_scope import review_presentation_period_scope
+    findings.extend(EditorialFinding("presentation_period_scope_unresolved", reason, slide_id)
+                    for slide_id, reason in review_presentation_period_scope(result, plan))
     if plan.planning_origin == "topic_recovery":
         findings.append(EditorialFinding("presentation_degraded", "Question-first recovery: the model-selected analytical questions were retained, but the final slide wording needs editorial review."))
     elif plan.planning_origin == "fallback" or any(i.code == "presentation_plan_fallback" for i in result.validation_warnings):
@@ -111,5 +114,22 @@ def stamp_editorial_review(plan: PresentationPlan, result: PipelineResult, *, or
     plan.planning_origin = origin
     findings = review_presentation(plan, result)
     plan.editorial_status = "degraded" if origin in {"fallback", "topic_recovery"} else "needs_review" if findings else "ready"
-    plan.editorial_notes = [f"{f.slide_id + ': ' if f.slide_id else ''}{f.message}" for f in findings]
+    # Repair history is durable; review findings describe only the current plan.
+    # Recognise the previous untagged review format for cached exports as well.
+    review_prefixes = (
+        "Legacy evidence export:", "Question-first recovery:", "Evidence-only fallback:",
+        "More recent evidence exists for '", "Analysis pages have no explicit theme plan.",
+        "The title only names the metric.", "Replace the generic subtitle with the actual scope,",
+        "The title appears to be a source period-header fragment.",
+        "Most analysis pages contain one chart.", "Repeated findings add no analytical information.",
+        "Risk bullets only name metrics.", "Editorial revision could not be retained;",
+    )
+    def old_review(note):
+        if note.startswith("[review:"):
+            return True
+        body = re.sub(r"^[^:\n]+: ", "", note, count=1)
+        return note.startswith(review_prefixes) or body.startswith(review_prefixes)
+    audit = [note for note in plan.editorial_notes if not old_review(note)]
+    current = [f"[review:{f.code}] {f.slide_id + ': ' if f.slide_id else ''}{f.message}" for f in findings]
+    plan.editorial_notes = list(dict.fromkeys([*audit, *current]))
     return plan

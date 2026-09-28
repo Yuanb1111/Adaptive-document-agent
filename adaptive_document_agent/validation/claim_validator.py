@@ -1561,6 +1561,7 @@ class ClaimValidator:
         observations: list[Observation],
         charts: list[ChartPlan] | None = None,
         *, insight_observation_ids: dict[str, list[str]] | None = None,
+        evidence_plan: PresentationPlan | None = None,
     ) -> list[ValidationIssue]:
         """Validate entire presentation plan and return structured ValidationIssues."""
         issues: list[ValidationIssue] = []
@@ -1613,7 +1614,8 @@ class ClaimValidator:
                 if not has_claim:
                     continue
 
-            slide_issues = self.validate_slide(slide, slide_obs)
+            from .presentation_direction_evidence import validate_displayed_claims
+            slide_issues = validate_displayed_claims(self, slide, slide_obs, evidence_plan or plan, chart_by_id)
             issues.extend(slide_issues)
 
         return issues
@@ -2337,6 +2339,7 @@ def repair_presentation_plan(
     observations: list[Observation],
     charts: list[ChartPlan] | None = None,
     *, insight_observation_ids: dict[str, list[str]] | None = None,
+    evidence_plan: PresentationPlan | None = None,
 ) -> tuple[PresentationPlan, list[str]]:
     """Execute claim repairs across all slides using structured validation issues."""
     from .presentation_evidence_alignment import align_redundant_slide_evidence
@@ -2354,7 +2357,8 @@ def repair_presentation_plan(
                     alignment_repairs.append(f"Slide {slide.id}: removed duplicate period bounds in {field}")
     validator = ClaimValidator()
     before = plan.model_copy(deep=True)
-    issues = validator.validate_plan(plan, observations, charts, insight_observation_ids=insight_observation_ids)
+    issues = validator.validate_plan(plan, observations, charts, insight_observation_ids=insight_observation_ids,
+                                     evidence_plan=evidence_plan)
     repaired_plan, claim_repairs = repair_presentation_plan_from_issues(plan, issues)
     # A directional claim such as "net declined" has lost the measure being
     # discussed. It can emerge after editing a multi-metric sentence. Retain
@@ -2385,7 +2389,8 @@ def repair_presentation_plan(
                 issue.code, getattr(issue, "target_component", None), getattr(issue, "bullet_index", None),
                 getattr(issue, "expected_direction", None))
     original_keys = {issue_key(i) for i in issues}
-    after = validator.validate_plan(repaired_plan, observations, charts, insight_observation_ids=insight_observation_ids)
+    after = validator.validate_plan(repaired_plan, observations, charts, insight_observation_ids=insight_observation_ids,
+                                    evidence_plan=evidence_plan)
     unsafe = {getattr(i, "slide_id", None) for i in after if issue_key(i) not in original_keys}
     if unsafe:
         original_slides = {s.id: s for s in before.slides}

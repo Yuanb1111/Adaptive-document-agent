@@ -18,6 +18,8 @@ def series_directory(result: PipelineResult) -> tuple[list[dict[str, object]], d
     """Expose every extracted metric scope, without truncating to a chart quota."""
     directory: list[dict[str, object]] = []
     lookup: dict[str, list] = {}
+    from adaptive_document_agent.services.presentation_ratio_definitions import ratio_definitions
+    definitions = ratio_definitions(result)
     ambiguous_tables = ambiguous_source_table_ids(result)
     eligible = [
         item for item in result.observations
@@ -57,6 +59,11 @@ def series_directory(result: PipelineResult) -> tuple[list[dict[str, object]], d
             "first_reported_value": group[0].raw_value,
             "last_reported_value": group[-1].raw_value,
             "evidence_status": "complete" if all(item.value is not None and item.evidence and item.validation_status == "valid" for item in group) else "qualified",
+            "ratio_definitions": [
+                {key: value for key, value in definition.items() if key != "observation_ids"}
+                for definition in definitions
+                if set(definition["observation_ids"]).intersection(item.id for item in group)
+            ],
         })
     return directory, lookup
 
@@ -98,6 +105,10 @@ class PresentationTopicSelector:
             "important_sections": result.profile.important_sections,
             "series_columns": columns,
             "all_extracted_series": [[item[column] for column in columns] for item in directory],
+            "ratio_definitions": [
+                {"series_id": item["id"], "definitions": item["ratio_definitions"]}
+                for item in directory if item["ratio_definitions"]
+            ],
             "validated_insights": [
                 {"id": item.id, "title": item.title, "narrative": item.narrative,
                  "importance": item.importance,

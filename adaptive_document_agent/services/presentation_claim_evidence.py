@@ -17,19 +17,24 @@ from adaptive_document_agent.utils.ids import stable_id
 from adaptive_document_agent.validation.narrative_plan_validator import expanded_observation_ids
 from .presentation_evidence import ambiguous_source_table_ids, observation_uses_ambiguous_table
 from .presentation_identity import reconcile_presentation_identity
+from .presentation_share_claims import (
+    SHARE_WORD as _SHARE, source_row as _row,
+    row_position as _position, reported_denominator, share_claims,
+    share_direction_supported, source_total_denominators, denominator_matches,
+)
 
 _RANK = re.compile(r"\b(largest|smallest|highest|lowest)\b", re.I)
-_SHARE = re.compile(r"\b(?:shares?|proportions?|percentage of (?:the )?total)\b", re.I)
 _META = {"column_role", "table_context", "section", "period_basis"}
+_NARROW_REASON = "The retained records support these reported values; the broader comparison was omitted."
 
 
-def _normalized(text):
-    return " ".join(re.findall(r"[^\W_]+", text.casefold()))
-
-
-def _row(item):
-    labels = {e.row_label.strip() for e in item.evidence if e.row_label and e.row_label.strip()}
-    return next(iter(labels)) if len(labels) == 1 else ""
+def visible_observation_ids(slide, charts):
+    """Visible measures exclude provenance-only references for other periods."""
+    chart_ids = [*slide.chart_ids, *(cid for block in slide.visual_blocks for cid in block.chart_ids)]
+    return list(dict.fromkeys([
+        *(oid for cid in chart_ids if cid in charts for oid in charts[cid].observation_ids),
+        *(oid for block in slide.visual_blocks if block.role in {"table", "kpi"} for oid in block.observation_ids),
+    ]))
 
 
 def _scope(item):
@@ -39,18 +44,9 @@ def _scope(item):
 
 
 def _share(item):
-    if item.unit not in {"percent", "percentage", "%"}:
-        return False
-    labels = " ".join(e.column_label or "" for e in item.evidence)
     # ratio_share also covers expense/revenue and other unrelated denominators.
     # Even a coincidental sum of 100 cannot establish a common population.
-    return bool(re.search(r"(?i)(?:%|percentage|share)\s*of\s*(?:the\s*)?total\b", labels))
-
-
-def _position(item, text):
-    label = re.sub(r"(?i)^subtotal\s+of\s+|\s+markets?$", "", _row(item))
-    key = _normalized(label)
-    return _normalized(text).find(key) if key else -1
+    return reported_denominator(item) == "total"
 
 
 def _unique_periods(items, periods):
@@ -86,9 +82,9 @@ def _claim_subject(selected, text, *, ranking=False):
     return next(iter(subjects)) if len(subjects) == 1 else ""
 
 
-def _reported_shares(selected, eligible, text, *, ranking=False):
+def _reported_shares(selected, eligible, text, *, ranking=False, subject=None, denominator="", totals=None):
     """Require the selected row, source table and periods, rather than label similarity."""
-    subject = _claim_subject(selected, text, ranking=ranking)
+    subject = subject or _claim_subject(selected, text, ranking=ranking)
     anchors = sorted((item for item in selected if item.effective_table_id and _row(item) == subject),
                      key=lambda item: (not _share(item), item.id)) if subject else []
     for anchor in anchors:
@@ -96,8 +92,17 @@ def _reported_shares(selected, eligible, text, *, ranking=False):
                    and _row(item) == _row(anchor)}
         if len(periods) < 2:
             continue
-        matches = [item for item in eligible if _share(item) and _scope(item) == _scope(anchor)
-                   and _row(item) == _row(anchor)]
+        matches = [item for item in eligible if reported_denominator(item)
+                   and _scope(item) == _scope(anchor) and _row(item) == _row(anchor)]
+        wanted = "total" if ranking else denominator
+        denominators = {reported_denominator(item) for item in matches}
+        if not wanted:
+            # A bare share can use a unique reported denominator; it cannot
+            # choose between percentages of revenue, units or another total.
+            if len(denominators) != 1:
+                continue
+            wanted = next(iter(denominators))
+        matches = [item for item in matches if denominator_matches(item, wanted, totals or {})]
         shares = _unique_periods(matches, periods)
         if shares:
             return shares
@@ -137,20 +142,6 @@ def _ranking_peers(shares, eligible, text):
     return [item for group in groups for item in group]
 
 
-def _share_motion(text):
-    clauses = [part for part in re.split(r"[,;.]|\bwhile\b|\bwhereas\b", text, flags=re.I)
-               if _SHARE.search(part)]
-    up = any(re.search(r"(?i)\b(?:increas\w*|rais\w*|rose|rising|grew|growing|higher)\b", part) for part in clauses)
-    down = any(re.search(r"(?i)\b(?:decreas\w*|declin\w*|fell|falling|lower|shr\w*)\b", part) for part in clauses)
-    return up, down
-
-
-def _share_direction_supported(shares, text):
-    up, down = _share_motion(text)
-    change = float(shares[-1].value) - float(shares[0].value)
-    return not ((up and change <= 0) or (down and change >= 0))
-
-
 def _narrow(slide, replacements):
     old = slide.title
     old_message = slide.message
@@ -163,7 +154,7 @@ def _narrow(slide, replacements):
         retained = [part for part in clauses if not (_RANK.search(part) or _SHARE.search(part))]
         slide.message = " ".join(retained).strip() or "Reported values across the cited periods."
     slide.analytical_question = "How do the reported values vary across the cited periods?"
-    slide.selection_reason = "The retained records support these reported values; the broader comparison was omitted."
+    slide.selection_reason = _NARROW_REASON
     replacements[old] = slide.title
     if old_message and old_message != slide.message:
         replacements[old_message] = slide.message
@@ -176,6 +167,9 @@ def prepare_presentation_claims(result: PipelineResult, plan: PresentationPlan |
         return []
     from adaptive_document_agent.agent.presentation_insight_recovery import recover_insight_narrative
     recover_insight_narrative(result, plan)
+    if plan.planning_origin in {"topic_compilation", "topic_recovery"}:
+        from adaptive_document_agent.agent.presentation_summary_selection import rebuild_selected_topic_summary
+        rebuild_selected_topic_summary(result, plan)
     reconcile_presentation_identity(plan, result)
     ambiguous = ambiguous_source_table_ids(result)
     eligible = [item for item in result.observations if item.value is not None and isfinite(item.value)
@@ -184,29 +178,53 @@ def prepare_presentation_claims(result: PipelineResult, plan: PresentationPlan |
     by_id = {item.id: item for item in result.observations}
     charts = {chart.id: chart for chart in result.charts}
     themes = {theme.id: theme for theme in plan.themes}
-    notes, replacements = [], {}
+    topics = {topic.id: topic for topic in result.presentation_topics.topics} if result.presentation_topics else {}
+    totals = source_total_denominators(result)
+    notes, replacements, restored_titles = [], {}, defaultdict(set)
     for slide in plan.slides:
         if slide.slide_type != "analysis":
             continue
+        # Cached plans may have been narrowed by the old one-subject / Total-only
+        # check. Reconsider only that exact repair, using the retained model claim
+        # and all current evidence checks. Never reset other repaired wording.
+        restoring = topics.get(slide.theme_id) if slide.selection_reason == _NARROW_REASON else None
+        narrowed_title = slide.title
+        if restoring and (_SHARE.search(restoring.takeaway) or _RANK.search(restoring.takeaway)):
+            slide.title = restoring.takeaway
+        else:
+            restoring = None
         text = slide.title + " " + slide.message
         if not (_RANK.search(text) or _SHARE.search(text)):
             continue
         ids = expanded_observation_ids(slide, charts)
         selected = [by_id[oid] for oid in ids if oid in by_id]
+        displayed = [by_id[oid] for oid in visible_observation_ids(slide, charts) if oid in by_id]
         ranking = bool(_RANK.search(text))
-        pattern = _RANK if ranking else _SHARE
-        claim_text = slide.title if pattern.search(slide.title) else slide.message
-        shares = _reported_shares(selected, eligible, claim_text, ranking=ranking)
-        share_text = slide.title if _SHARE.search(slide.title) else slide.message
-        share_subject = _claim_subject(selected, share_text) if _SHARE.search(share_text) else ""
-        if (not shares or not _share_direction_supported(shares, share_text)
-                or (ranking and any(_share_motion(share_text)) and share_subject != _row(shares[0]))):
+        clauses = [share_claims(selected, copy) for copy in (slide.title, slide.message)]
+        theme = themes.get(slide.theme_id)
+        qualifications = [slide.message, *(theme.caveats if theme else [])]
+        shares, unsupported = [], any(group is None for group in clauses)
+        for claim in [claim for group in clauses if group is not None for claim in group]:
+            scoped = displayed if any(_row(item) == claim.subject for item in displayed) else selected
+            bound = _reported_shares(scoped, eligible, claim.text, subject=claim.subject,
+                                     denominator=claim.denominator, totals=totals)
+            if not bound or not share_direction_supported(bound, claim.text, qualifications):
+                unsupported = True
+                break
+            shares.extend(bound)
+        ranked = []
+        if ranking:
+            claim_text = slide.title if _RANK.search(slide.title) else slide.message
+            ranked = _reported_shares(displayed or selected, eligible, claim_text, ranking=True)
+            unsupported = unsupported or not ranked
+        if unsupported:
             _narrow(slide, replacements)
             notes.append(f"Slide {slide.id}: narrowed comparative wording without compatible reported shares")
             continue
+        shares = list({item.id: item for item in shares}.values())
         added = shares
-        if _RANK.search(text):
-            peers = _ranking_peers(shares, eligible, text)
+        if ranking:
+            peers = _ranking_peers(ranked, eligible, text)
             if not peers:
                 _narrow(slide, replacements)
                 notes.append(f"Slide {slide.id}: narrowed ranking without a complete, consistent category comparison")
@@ -215,8 +233,8 @@ def prepare_presentation_claims(result: PipelineResult, plan: PresentationPlan |
                 _narrow(slide, replacements)
                 notes.append(f"Slide {slide.id}: narrowed ranking whose complete evidence exceeds page capacity")
                 continue
-            added = peers
-            share_ids = {item.id for item in shares}
+            added = list({item.id: item for item in [*shares, *peers]}.values())
+            share_ids = {item.id for item in ranked}
             peer_ids = {item.id for item in peers}
             already_bound = next((cid for cid in slide.chart_ids if peer_ids <= set(charts[cid].observation_ids)), None)
             replaced = next((cid for cid in slide.chart_ids if set(charts[cid].observation_ids) <= share_ids), None)
@@ -238,18 +256,16 @@ def prepare_presentation_claims(result: PipelineResult, plan: PresentationPlan |
             for block in slide.visual_blocks:
                 block.chart_ids = [chart_id if cid == replaced else cid for cid in block.chart_ids]
             notes.append(f"Slide {slide.id}: bound category ranking to all reconciled reported shares")
-        else:
-            visible = {oid for cid in slide.chart_ids for oid in charts[cid].observation_ids}
-            visible.update(oid for block in slide.visual_blocks for oid in block.observation_ids)
-            missing = [item.id for item in shares if item.id not in visible]
-            if missing:
-                if (len(slide.visual_blocks) >= 4 or len(missing) > 12
-                        or len(set(slide.observation_ids) | {item.id for item in shares}) > 40):
-                    _narrow(slide, replacements)
-                    notes.append(f"Slide {slide.id}: narrowed share wording without room for its evidence")
-                    continue
-                slide.visual_blocks.insert(0, PresentationVisualBlock(role="table", observation_ids=missing))
-                notes.append(f"Slide {slide.id}: added reported share values from the same source row")
+        visible = set(visible_observation_ids(slide, charts))
+        missing = [item.id for item in shares if item.id not in visible]
+        if missing:
+            if (len(slide.visual_blocks) >= 4 or len(missing) > 12
+                    or len(set(slide.observation_ids) | {item.id for item in shares}) > 40):
+                _narrow(slide, replacements)
+                notes.append(f"Slide {slide.id}: narrowed share wording without room for its evidence")
+                continue
+            slide.visual_blocks.insert(0, PresentationVisualBlock(role="table", observation_ids=missing))
+            notes.append(f"Slide {slide.id}: added reported share values from the same source row")
         slide.observation_ids = list(dict.fromkeys([*slide.observation_ids, *(item.id for item in added)]))
         slide.source_pages = sorted(set(slide.source_pages) | {e.page for item in added for e in item.evidence})
         theme = themes.get(slide.theme_id)
@@ -257,7 +273,22 @@ def prepare_presentation_claims(result: PipelineResult, plan: PresentationPlan |
             theme.observation_ids = list(dict.fromkeys([*theme.observation_ids, *(item.id for item in added)]))
             theme.chart_ids = list(dict.fromkeys([*theme.chart_ids, *slide.chart_ids]))
             theme.source_pages = sorted(set(theme.source_pages) | set(slide.source_pages))
+        if restoring:
+            slide.analytical_question = restoring.question
+            slide.selection_reason = restoring.rationale
+            restored_titles[narrowed_title].add(slide.title)
+            notes.append(f"Slide {slide.id}: restored the selected takeaway after source-bound share validation")
+    replacements.update({old: next(iter(titles)) for old, titles in restored_titles.items() if len(titles) == 1})
     for slide in plan.slides:
         slide.bullets = [replacements.get(text, text) for text in slide.bullets]
+    from .presentation_summary_claims import prepare_summary_claims
+    notes.extend(prepare_summary_claims(plan, eligible, by_id, charts, totals))
     plan.editorial_notes = list(dict.fromkeys([*plan.editorial_notes, *notes]))
+    from .presentation_ratio_definitions import prepare_presentation_ratio_definitions
+    from .presentation_period_scope import prepare_presentation_period_scope
+    notes.extend(prepare_presentation_ratio_definitions(result, plan))
+    prepare_presentation_period_scope(result, plan)
+    if plan.planning_origin in {"topic_compilation", "topic_recovery"}:
+        from adaptive_document_agent.agent.presentation_summary_selection import sync_selected_topic_summary_evidence
+        sync_selected_topic_summary_evidence(result, plan)
     return notes

@@ -364,7 +364,9 @@ class PresentationPlanValidator:
                 selected_observations = [observation_by_id[oid] for oid in referenced_observation_ids if oid in observation_by_id]
                 errors.extend(scoped_value_errors(slide, selected_observations, result.observations))
                 from .claim_validator import ClaimValidator
-                errors.extend(issue.message for issue in ClaimValidator().validate_slide(slide, selected_observations)
+                from .presentation_direction_evidence import validate_displayed_claims
+                errors.extend(issue.message for issue in validate_displayed_claims(
+                    ClaimValidator(), slide, selected_observations, plan, chart_by_id)
                               if issue.code == "non_monotonic_claim" or slide.calculation_ids)
 
         summaries = [slide for slide in plan.slides if slide.slide_type == "executive_summary"]

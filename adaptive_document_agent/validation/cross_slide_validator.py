@@ -323,14 +323,16 @@ class CrossSlideValidator:
         summaries = [s for s in self.plan.slides if s.slide_type == "executive_summary"]
         summary_plan = PresentationPlan(title=self.plan.title, slides=summaries)
         validator = ClaimValidator()
-        found = validator.validate_plan(summary_plan, self.observations, self.charts, insight_observation_ids=self.insight_observation_ids)
+        found = validator.validate_plan(summary_plan, self.observations, self.charts,
+            insight_observation_ids=self.insight_observation_ids, evidence_plan=self.plan)
         repairs = []
         if auto_repair:
             summary_plan, repairs = repair_presentation_plan(summary_plan, self.observations, self.charts,
-                insight_observation_ids=self.insight_observation_ids)
+                insight_observation_ids=self.insight_observation_ids, evidence_plan=self.plan)
             updated = {s.id: s for s in summary_plan.slides}
             self.plan.slides = [updated.get(s.id, s) for s in self.plan.slides]
-            found = validator.validate_plan(summary_plan, self.observations, self.charts, insight_observation_ids=self.insight_observation_ids)
+            found = validator.validate_plan(summary_plan, self.observations, self.charts,
+                insight_observation_ids=self.insight_observation_ids, evidence_plan=self.plan)
         return [
             *[_qa_item("summary_detail_contradiction_repaired", "INFO", message) for message in repairs],
             *[_qa_item("summary_detail_contradiction", "CRITICAL", issue.message, getattr(issue, "slide_id", None))

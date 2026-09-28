@@ -802,13 +802,17 @@ def _add_planned_summary(
     from .presentation_editorial import distinct_findings
     from .presentation_brief import BriefItem
     from .presentation_summary import render_complete_summary
-    if (result.presentation_plan and result.presentation_plan.planning_origin == "topic_recovery"
+    if (result.presentation_plan and result.presentation_plan.planning_origin in {"topic_recovery", "topic_compilation"}
             and slide_plan.bullets
             and all(not _is_calc_artifact(b) for b in slide_plan.bullets)):
         # Render the validated/repaired summary, not the pre-repair insight
         # narrative. Full analytical prose stays in notes and subsequent pages.
-        items = [BriefItem("", _sanitize_investor_narrative(bullet), slide_plan.source_pages)
-                 for bullet in slide_plan.bullets]
+        scoped = len(slide_plan.bullet_observation_ids) == len(slide_plan.bullets)
+        items = [BriefItem("", _sanitize_investor_narrative(bullet),
+                           sorted({e.page for oid in slide_plan.bullet_observation_ids[position]
+                                   if index.get(oid) for e in index.get(oid).evidence})
+                           if scoped else slide_plan.source_pages)
+                 for position, bullet in enumerate(slide_plan.bullets)]
         notes = "\n\n".join(f"{title}\n{body}" for title, body in raw_findings)
         render_complete_summary(presentation, slide_plan.title, items, notes=notes)
         return
@@ -2089,6 +2093,8 @@ def _add_evidence_table_slides(
                         period_tables.setdefault(key, {}).setdefault(theme, {})[identity] = entry
         from .appendix_layout import paginate_themes
         for p_chunk, themes in period_tables.items():
+            from .appendix_source_deduplication import deduplicate_period_entries
+            themes = deduplicate_period_entries(themes, p_chunk)
             from .text_capacity import wrap_copy
             metric_w = max(2.80, min(3.80, 11.70 - 1.10 - len(p_chunk) * 1.15))
             widths = [metric_w, 1.10] + [(11.70 - metric_w - 1.10) / len(p_chunk)] * len(p_chunk)

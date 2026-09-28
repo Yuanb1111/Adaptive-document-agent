@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .chart import ChartType
 
@@ -115,11 +115,13 @@ class PresentationSlide(BaseModel):
     slide_role: PresentationSlideRole = "overview"
     layout: PresentationLayout = "auto"
     message: str = ""
-    bullets: list[str] = Field(default_factory=list, max_length=5)
-    bullet_observation_ids: list[list[str]] = Field(default_factory=list, max_length=5)
+    # A summary is a logical section which the renderer can paginate. Its
+    # evidence capacity must not select or discard the model's chosen topics.
+    bullets: list[str] = Field(default_factory=list, max_length=8)
+    bullet_observation_ids: list[list[str]] = Field(default_factory=list, max_length=8)
     chart_ids: list[str] = Field(default_factory=list, max_length=3)
-    observation_ids: list[str] = Field(default_factory=list, max_length=40)
-    insight_ids: list[str] = Field(default_factory=list, max_length=6)
+    observation_ids: list[str] = Field(default_factory=list, max_length=1440)
+    insight_ids: list[str] = Field(default_factory=list, max_length=8)
     visual_blocks: list[PresentationVisualBlock] = Field(default_factory=list, max_length=4)
     source_pages: list[int] = Field(default_factory=list)
     theme_id: str = ""
@@ -127,6 +129,18 @@ class PresentationSlide(BaseModel):
     selection_reason: str = ""
     comparison_mode: Literal["context", "parallel", "like_for_like"] = "context"
     calculation_ids: list[str] = Field(default_factory=list, max_length=12)
+
+    @model_validator(mode="after")
+    def validate_single_page_capacity(self) -> "PresentationSlide":
+        """Only the paginated summary can exceed the ordinary slide limits."""
+        if self.slide_type != "executive_summary":
+            if len(self.bullets) > 5 or len(self.bullet_observation_ids) > 5:
+                raise ValueError("A non-summary slide supports at most five bullets")
+            if len(self.observation_ids) > 40:
+                raise ValueError("A non-summary slide supports at most forty observations")
+            if len(self.insight_ids) > 6:
+                raise ValueError("A non-summary slide supports at most six insights")
+        return self
 
 
 class PresentationTheme(BaseModel):

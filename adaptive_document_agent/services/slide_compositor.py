@@ -127,6 +127,30 @@ def _lines(text: str, width: float, size: float) -> list[str]:
     return wrap_copy(text, width, size)
 
 
+def _period_table_layout(cells: list[list[str]], width: float, label_fraction: float):
+    """Fit complete period columns by measured copy, before creating overflow.
+
+    A fixed label fraction can add a whole line to a metric even while adjacent
+    period columns have spare width. Search the bounded column allocations at
+    the same readable font size; never shorten a label, period or value.
+    """
+    columns = len(cells[0]) - 1
+    candidates = []
+    for fraction in {label_fraction, *(step / 100 for step in range(20, 71))}:
+        widths = [width * fraction] + [width * (1 - fraction) / columns] * columns
+        wrapped = [["\n".join(_lines(value, cell_width - .30, 14))
+                    for value, cell_width in zip(row, widths)] for row in cells]
+        heights = [max(.4, max(len(value.splitlines()) for value in row) * .24 + .14)
+                   for row in wrapped]
+        # When total heights tie, preserve intact period headings, then prefer
+        # the established proportions to avoid gratuitous layout changes.
+        score = (round(sum(heights), 6), sum(len(value.splitlines()) for value in wrapped[0][1:]),
+                 abs(fraction - label_fraction), fraction)
+        candidates.append((score, widths, wrapped, heights))
+    _, widths, wrapped, heights = min(candidates, key=lambda candidate: candidate[0])
+    return widths, wrapped, heights
+
+
 def _put_text(slide, text: str, rect: Rect, *, size=12, bold=False, color=DARK):
     from .pptx_export import _text
     shape = _text(slide, text, *rect.tuple(), size=size, bold=bold, color=color)
@@ -346,7 +370,6 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
                     and all(p == period_sets[0] for p in period_sets)
                     and all(period_sets[0]) and len(set(period_sets[0])) == len(period_sets[0])
                     and len(period_sets[0]) <= 6):
-                widths = [rect.w * .48] + [rect.w * .52 / len(period_sets[0])] * len(period_sets[0])
                 cells = [["Metric", *period_sets[0]]]
                 for group in groups:
                     name = display_metric_name(group[0])
@@ -357,8 +380,7 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
                             raw_unit=_display_source_unit(o), currency=o.currency, compact=True)
                         values.append(signed_expense_display(o, value))
                     cells.append([name, *values])
-                wrapped = [["\n".join(_lines(v, w - .30, 14)) for v, w in zip(row, widths)] for row in cells]
-                heights = [max(.4, max(len(v.splitlines()) for v in row) * .24 + .14) for row in wrapped]
+                widths, wrapped, heights = _period_table_layout(cells, rect.w, .48)
                 if sum(heights) <= rect.h:
                     shape = owner.shapes.add_table(len(cells), len(widths), Inches(rect.x), Inches(rect.y), Inches(rect.w), Inches(sum(heights)))
                     shape.name = "table:" + ",".join(o.id for o in items)
@@ -385,10 +407,7 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
                     display = format_metric_display_value(o.raw_value, o.value, semantic,
                         raw_unit=_display_source_unit(o), currency=o.currency, compact=True)
                     cells[1].append(signed_expense_display(o, display))
-                widths = [rect.w * .34] + [rect.w * .66 / len(items)] * len(items)
-                wrapped = [["\n".join(_lines(v, w - .30, 14)) for v, w in zip(row, widths)] for row in cells]
-                heights = [max(.4, max(len(v.splitlines()) for v in row) * .24 + .14)
-                           for row in wrapped]
+                widths, wrapped, heights = _period_table_layout(cells, rect.w, .34)
                 if sum(heights) <= rect.h:
                     shape = owner.shapes.add_table(2, len(items) + 1, Inches(rect.x), Inches(rect.y), Inches(rect.w), Inches(sum(heights)))
                     shape.name = "table:" + ",".join(o.id for o in items)
