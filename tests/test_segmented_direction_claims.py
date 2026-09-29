@@ -205,6 +205,38 @@ def test_question_range_does_not_rescue_unsupported_endpoint_claim() -> None:
                for issue in ClaimValidator().validate_plan(repaired, observations))
 
 
+@pytest.mark.parametrize(("text", "supported"), [
+    ("Net current assets rose from year-end 2023 to 2025.", True),
+    ("Net current assets rose from end of the year 2023 to 2025.", True),
+    ("Net current assets rose from 2023 to 2025.", False),
+    ("Net current assets rose from year-end 2023 to FY2025.", False),
+    ("Net current assets rose from year-end 2025 to 2023.", False),
+])
+def test_explicit_year_end_range_binds_only_matching_balance_sheet_dates(
+    text: str, supported: bool,
+) -> None:
+    observations = _series("Net current assets", [262, 241, 311], years=(2023, 2024, 2025))
+    for item in observations:
+        item.period = f"{item.period[-4:]}-12-31"
+        item.period_type = "balance_sheet_date"
+    issues = ClaimValidator().validate_slide(_slide(text, observations), observations)
+    if supported:
+        assert not issues
+    else:
+        assert any(issue.code == "direction_scope_ambiguous" for issue in issues)
+
+
+def test_year_end_wording_does_not_turn_interim_dates_into_annual_dates() -> None:
+    observations = _series("Net current assets", [262, 241, 311], years=(2023, 2024, 2025))
+    for item in observations:
+        item.period = f"{item.period[-4:]}-06-30"
+        item.period_type = "balance_sheet_date"
+    issues = ClaimValidator().validate_slide(
+        _slide("Net current assets rose from year-end 2023 to 2025.", observations), observations,
+    )
+    assert any(issue.code == "direction_scope_ambiguous" for issue in issues)
+
+
 def test_preposed_period_range_belongs_to_its_independent_metric() -> None:
     observations = _series("Revenue", [100, 200, 150]) + _series("Net loss", [-100, -160, -125])
     text = "Revenue increased and from FY2024 to FY2025 net loss narrowed."

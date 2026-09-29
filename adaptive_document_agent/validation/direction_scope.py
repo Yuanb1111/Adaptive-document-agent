@@ -57,13 +57,19 @@ def has_temporal_sequence(clause: str, associations: list[DirectionSpan], metric
                for a, b in zip(associations, associations[1:]))
 
 
-def _period_index(label: str, observations: list[Observation]) -> int | None:
+def _period_index(label: str, observations: list[Observation], *, year_end: bool = False) -> int | None:
     normalized = re.sub(r"\s+", "", label).casefold()
     matches = []
     for index, obs in enumerate(observations):
         period = re.sub(r"\s+", "", obs.period or "").casefold()
         # A bare year can identify an annual observation, never an interim one.
         if period == normalized or period.removeprefix("fy") == normalized.removeprefix("fy"):
+            matches.append(index)
+        elif (year_end and re.fullmatch(_YEAR, normalized)
+              and obs.period_type in {"balance_sheet_date", "point_in_time"}
+              and period == f"{normalized}-12-31"):
+            # An explicit year-end qualifier can identify a sourced 31 Dec
+            # balance-sheet date. A bare year alone cannot do so.
             matches.append(index)
     return matches[0] if len(matches) == 1 else None
 
@@ -157,8 +163,10 @@ def resolve_direction_scope(
         if len(ranges) != 1:
             return DirectionScope(error="Several period ranges qualify the same direction word")
         match = ranges[0]
-        first = _period_index(match['start'], observations)
-        last = _period_index(match['end'], observations)
+        prefix = local_text[:match.start()]
+        year_end = bool(re.search(r"(?i)\b(?:year[- ]end(?:\s+of)?|end\s+of\s+(?:the\s+)?year(?:\s+of)?)\s*$", prefix))
+        first = _period_index(match['start'], observations, year_end=year_end)
+        last = _period_index(match['end'], observations, year_end=year_end)
         if first is None or last is None or first >= last:
             return DirectionScope(error="The stated period range is missing or not chronological")
         return DirectionScope(observations[first:last + 1])
