@@ -352,6 +352,12 @@ python -m pytest
 
 Coverage includes PDF validation and routing, OCR detection, bordered and borderless tables, table reconstruction, numeric parsing, semantic conservatism, observation indexing, planners and tools, structured-output recovery, privacy and public deployment, financial fact normalization, period and sign semantics, claim repair, cross-slide consistency, chart selection, PowerPoint layout/preflight, PDF/PPTX exports, and end-to-end pipeline and presentation regressions.
 
+### Shared executive briefing
+
+After analysis, the configured LLM selects material source pages and writes 3–7 concise, labelled findings for both the web Overview and PowerPoint Executive Summary. Numbers retain their source currency, magnitude and period; explanations and caveats stay alongside the fact they qualify. Topics follow the document rather than a fixed financial checklist, and narrative constraints may be included without a chart.
+
+Each finding retains literal quotes and page numbers in JSON and slide notes. Generation allows one evidence-repair attempt. Cached web/PPT copies are checked again for quote location, item-level numeric support and explicit currency/magnitude changes; these deterministic checks do not prove semantic entailment. Failure retains the prior document context and an `executive_brief_unavailable` warning. Old JSON files without this field remain readable; a new analysis is required to generate the new briefing. Calls use `LLMGateway` with the existing provider, cache and Local Only policy. Large documents add one bounded page-selection call before synthesis; small documents use synthesis directly.
+
 ### Evidence-driven presentation composition (P0)
 
 - Planned chart pages now render hero/supporting chart roles, exact-value KPI cards, tables, commentary and a source footer. Hero and peer layouts use distinct proportions. Long commentary and table rows continue onto additional pages without repeating charts or discarding evidence.

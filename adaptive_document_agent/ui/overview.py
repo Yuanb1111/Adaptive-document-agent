@@ -1,10 +1,46 @@
 """Overview result tab."""
 
+import re
+
 from adaptive_document_agent.models import PipelineResult
 from .branding import insight_card
 
 
 def render(st, result: PipelineResult) -> None:
+    from adaptive_document_agent.services.executive_brief import brief_items
+    try:
+        items = brief_items(result)
+    except ValueError:
+        items = []
+        st.warning("The saved executive briefing failed its source checks. Showing document context instead.")
+    if items:
+        st.subheader(_literal(result.executive_brief.title))
+        for item in items:
+            st.markdown(f"**{_literal(item.title)}** — {_literal(item.text)}")
+            st.caption("Source pages: " + ", ".join(map(str, item.pages)))
+        with st.expander("Document context and analysis coverage", expanded=False):
+            _context(st, result)
+    else:
+        if any(w.code == "executive_brief_unavailable" for w in result.validation_warnings):
+            st.caption("The final briefing is unavailable for this run. Document context is shown below.")
+        _context(st, result)
+    if result.profile.data_quality_notes:
+        notes = list(dict.fromkeys(result.profile.data_quality_notes))
+        st.warning(
+            f"{len(notes)} data-quality note(s) may affect interpretation. "
+            "Open the details below or use the Data Quality tab for the full audit."
+        )
+        with st.expander("Data-quality notes", expanded=False):
+            for note in notes:
+                st.markdown(f"- {note}")
+    if result.insights and not items:
+        st.subheader("Key findings")
+        st.caption("The first findings in report order. Open Analysis for the full narrative and Sources for the evidence.")
+        for number, insight in enumerate(result.insights[:3], start=1):
+            insight_card(st, insight, number)
+
+
+def _context(st, result: PipelineResult) -> None:
     left, middle, right = st.columns(3)
     left.metric("Pages", result.document.page_count)
     middle.metric("Observations", len(result.observations))
@@ -20,17 +56,8 @@ def render(st, result: PipelineResult) -> None:
     if result.profile.important_sections:
         st.markdown("**Important sections**")
         st.write(" · ".join(result.profile.important_sections))
-    if result.profile.data_quality_notes:
-        notes = list(dict.fromkeys(result.profile.data_quality_notes))
-        st.warning(
-            f"{len(notes)} data-quality note(s) may affect interpretation. "
-            "Open the details below or use the Data Quality tab for the full audit."
-        )
-        with st.expander("Data-quality notes", expanded=False):
-            for note in notes:
-                st.markdown(f"- {note}")
-    if result.insights:
-        st.subheader("Key findings")
-        st.caption("The first findings in report order. Open Analysis for the full narrative and Sources for the evidence.")
-        for number, insight in enumerate(result.insights[:3], start=1):
-            insight_card(st, insight, number)
+
+
+def _literal(text: str) -> str:
+    """Display source-derived prose as text, without loading Markdown media."""
+    return re.sub(r"([\\`*_{}\[\]()#+.!|<>$])", lambda match: "\\" + match.group(0), text)

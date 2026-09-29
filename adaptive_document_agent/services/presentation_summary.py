@@ -69,7 +69,7 @@ def _split_item(item: BriefItem, width: float, capacity: float) -> tuple[BriefIt
 
 
 def render_complete_summary(presentation: Any, title: str, items: list[BriefItem], *,
-                            notes: str = "") -> list[Any]:
+                            notes: str = "", single_column: bool = False) -> list[Any]:
     """Keep every selected finding visible at the template's readable text sizes.
 
     Layout depends only on copy length and available space. Five concise findings
@@ -93,7 +93,7 @@ def render_complete_summary(presentation: Any, title: str, items: list[BriefItem
         # Bound the geometric search, not the content: remaining findings always
         # continue on another page. Eight short findings can use four paired rows.
         for count in range(min(8, len(remaining)), 0, -1):
-            for columns in ((2, 1) if count >= 4 else (1, 2)):
+            for columns in ((1,) if single_column else ((2, 1) if count >= 4 else (1, 2))):
                 candidate = _rows(remaining[:count], width, columns)
                 if _height(candidate) <= capacity:
                     rows, selected_count = candidate, count

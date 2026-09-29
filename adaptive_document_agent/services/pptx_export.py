@@ -244,7 +244,7 @@ def _build_legacy_presentation(presentation: Any, result: PipelineResult) -> Non
     # Standard order: 1. Cover, 2. Contents, 3. Overview, 4. Analysis at a glance, 5. Findings
     _add_cover(presentation, result)
     _add_contents(presentation, result, chart_groups)
-    if result.profile.document_summary.strip() or getattr(presentation, "_ada_source_visual", None):
+    if result.executive_brief or result.profile.document_summary.strip() or getattr(presentation, "_ada_source_visual", None):
         _add_document_overview(presentation, result)
     _add_findings_slide(presentation, result, presentation_charts, index)
     if chart_groups:
@@ -300,7 +300,7 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
     slides_by_type = {slide.slide_type: slide for slide in plan.slides}
     from .presentation_brief import omit_redundant_summary
     summary = slides_by_type["executive_summary"]
-    omit_summary = omit_redundant_summary(plan, summary)
+    omit_summary = not result.executive_brief and omit_redundant_summary(plan, summary)
 
     # Standard order: 1. Cover, 2. Contents, 3. Company at a Glance, 4. Executive Summary
     cover = slides_by_type["cover"]
@@ -745,6 +745,12 @@ def _add_planned_summary(
     slide_plan: PresentationSlide,
     index: DocumentIndex,
 ) -> None:
+    if result.executive_brief:
+        from .executive_brief import brief_items
+        from .presentation_summary import render_complete_summary
+        render_complete_summary(presentation, result.executive_brief.title, brief_items(result),
+                                notes=result.executive_brief.model_dump_json(indent=2), single_column=True)
+        return
     if _planned_chart_requests(slide_plan) or any(b.role in {"kpi", "table"} and b.observation_ids for b in slide_plan.visual_blocks):
         from .slide_compositor import render_composed_slide
         by_id = {c.id: c for c in _usable_charts(result)}
@@ -1218,6 +1224,12 @@ def _add_evidence_overview(presentation: Any, result: PipelineResult) -> None:
 
 
 def _add_document_overview(presentation: Any, result: PipelineResult) -> None:
+    if result.executive_brief:
+        from .executive_brief import brief_items
+        from .presentation_summary import render_complete_summary
+        render_complete_summary(presentation, result.executive_brief.title, brief_items(result),
+                                notes=result.executive_brief.model_dump_json(indent=2), single_column=True)
+        return
     from .presentation_brief import overview_items, render_brief
     items, notes = overview_items(result.profile)
     title = result.profile.overview_title.strip() or "Document overview"

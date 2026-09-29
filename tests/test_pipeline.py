@@ -140,6 +140,9 @@ def test_complete_pipeline_with_mock_llm_controls_semantic_selection() -> None:
         {"topics": [{"id": "revenue", "title": "Revenue movement", "question": "How did revenue change?",
                      "rationale": "The document contains one comparable series.", "series_ids": [topic_series_id]}]},
         {"pages": []},  # No introductory source pages in this synthetic document.
+        {"title": "Key takeaways", "items": [{"label": "Revenue",
+            "text": "Revenue was 150 in 2025, compared with 100 in 2023.",
+            "evidence": [{"page": 1, "text": baseline.document.pages[0].text}]}]},
     ]
     client = MockLLMClient(responses)
     settings = LLMSettings(provider=ProviderName.MOCK, model="mock")
@@ -151,7 +154,8 @@ def test_complete_pipeline_with_mock_llm_controls_semantic_selection() -> None:
     assert result.presentation_plan is not None
     assert result.presentation_plan.slides[1].title == "Document at a Glance"
     assert "## Revenue overview" in result.report_markdown
-    assert len(client.calls) == 8  # Topics compile locally; only introduction selection follows.
+    assert len(client.calls) == 9  # Topics compile locally; final brief uses one source-bound call.
+    assert result.executive_brief.items[0].label == "Revenue"
     assert result.presentation_plan.planning_origin == "topic_compilation"
     assert result.pipeline_total_ms >= max(result.timings_ms.values())
     assert {"insights", "report_outline", "topic_selection", "slide_plan"} <= result.stage_details_ms.keys()

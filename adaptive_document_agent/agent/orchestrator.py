@@ -378,10 +378,25 @@ class DocumentOrchestrator:
                             )
                         )
 
+        executive_brief = None
+        if self.gateway:
+            notify("Writing the evidence-bound executive briefing")
+            from .executive_brief import ExecutiveBriefWriter
+            with record_timing(timings, "executive_brief"):
+                snapshot = PipelineResult(document=document, profile=profile,
+                    observations=index.observations, insights=insights, analysis_results=results,
+                    presentation_plan=presentation_plan, presentation_topics=topic_selection)
+                try:
+                    executive_brief = ExecutiveBriefWriter(self.gateway).generate(snapshot)
+                except (LLMResponseError, ValueError) as exc:
+                    issues.append(ValidationIssue(code="executive_brief_unavailable", stage="report",
+                        severity="warning", message="The final briefing could not be source-checked: " + str(exc)[:500]))
+
         notify("Complete")
         from adaptive_document_agent.utils.pipeline_version import PIPELINE_VERSION
         return PipelineResult(
             pipeline_version=PIPELINE_VERSION,
+            executive_brief=executive_brief,
             document=document,
             profile=profile,
             observations=index.observations,

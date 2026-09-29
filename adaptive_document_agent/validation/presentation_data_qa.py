@@ -12,6 +12,10 @@ def validate_presentation_data(result: PipelineResult):
     from adaptive_document_agent.services.qa_reporter import QAItem
 
     issues = []
+    if result.executive_brief:
+        from adaptive_document_agent.services.executive_brief import validate_executive_brief
+        issues.extend(QAItem(code="invalid_executive_brief", severity="CRITICAL", message=error)
+                      for error in validate_executive_brief(result.executive_brief, result))
     scoped_ids = _presentation_evidence_ids(result)
     selected_tables = {
         table_id
