@@ -313,7 +313,7 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
         unit = "Share (%)" if chart.chart_type == "stacked_percent" else _unit_label(values, scale_label)
         if chart.chart_type == "line" and any(o.as_of_date or o.period_basis == "point_in_time" for o in values):
             unit += " | Dates shown as equally spaced categories"
-        if chart.chart_type == "doughnut":
+        if chart.chart_type in {"doughnut", "pie"}:
             unit = f"{values[0].period} | {unit}"
         _put_text(slide, unit, Rect(rect.x, rect.y + heading_h, rect.w, 0.20), size=FOOTNOTE_PT, color=MUTED)
         list(s for s in slide.shapes if s.has_chart)[-1].name = f"chart:{chart.id}"

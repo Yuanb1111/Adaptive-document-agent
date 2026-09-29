@@ -48,7 +48,7 @@ def add_composition_chart(slide, plan, observations, bounds, *, totals=None, com
     scale, scale_label = _display_scale(observations, max(v for row in matrix.values for v in row))
     data = CategoryChartData()
     share = plan.chart_type == "stacked_percent"
-    doughnut = plan.chart_type == "doughnut"
+    doughnut = plan.chart_type in {"doughnut", "pie"}
     if doughnut:
         data.categories = matrix.categories
         data.add_series(plan.title, [row[0] / scale for row in matrix.values])
@@ -59,6 +59,7 @@ def add_composition_chart(slide, plan, observations, bounds, *, totals=None, com
             data.add_series(name, [v / sums[i] if share else v / scale for i, v in enumerate(row)])
     chart_type = {"stacked_bar": XL_CHART_TYPE.COLUMN_STACKED,
                   "stacked_percent": XL_CHART_TYPE.COLUMN_STACKED_100,
+                  "pie": XL_CHART_TYPE.PIE,
                   "doughnut": XL_CHART_TYPE.DOUGHNUT}[plan.chart_type]
     chart = slide.shapes.add_chart(chart_type, *(Inches(v) for v in bounds), data).chart
     _normalize_axis_ids(chart)
@@ -75,7 +76,8 @@ def add_composition_chart(slide, plan, observations, bounds, *, totals=None, com
     chart.legend.font.color.rgb = _rgb(MUTED)
     colors = _composition_colors(slide, matrix.categories)
     if doughnut:
-        chart.plots[0].hole_size = 62
+        if plan.chart_type == "doughnut":
+            chart.plots[0].hole_size = 62
         series = chart.series[0]
         series.format.fill.solid()
         series.format.fill.fore_color.rgb = _rgb(chart_color(matrix.categories[0], colors))
@@ -102,23 +104,51 @@ def add_composition_chart(slide, plan, observations, bounds, *, totals=None, com
             axis.format.line.color.rgb = _rgb(BORDER)
             axis.has_major_gridlines = False
     plot = chart.plots[0]
-    # Thin slices cannot hold legible labels. Exact values remain in the native
-    # workbook and evidence appendix; do not squeeze overlapping text into them.
+    # Thin pie slices use outside labels. For stacked charts, hide only labels
+    # that cannot fit their segment; all source values remain in the workbook.
     column_totals = [sum(row[i] for row in matrix.values) for i in range(len(matrix.periods))]
     labels_fit = all(v / column_totals[i] >= .06 for row in matrix.values for i, v in enumerate(row))
-    plot.has_data_labels = plan.show_data_labels and labels_fit
+    outside = doughnut and not labels_fit
+    plot.has_data_labels = plan.show_data_labels
     if plot.has_data_labels:
         _style_labels(plot.data_labels, share=share, doughnut=doughnut, compact=compact, color=TEXT)
         for series, name in zip(chart.series, matrix.categories):
             _style_labels(series.data_labels, share=share, doughnut=doughnut, compact=compact,
                           color=label_color(chart_color(name, colors)))
+        if outside:
+            plot.data_labels.position = XL_DATA_LABEL_POSITION.OUTSIDE_END
+            chart.series[0].data_labels.position = XL_DATA_LABEL_POSITION.OUTSIDE_END
+            if not compact:
+                chart.legend.position = XL_LEGEND_POSITION.RIGHT
+        if not doughnut and not labels_fit:
+            for series, row in zip(chart.series, matrix.values):
+                for i, value in enumerate(row):
+                    if value / column_totals[i] < .06:
+                        label = series.points[i].data_label
+                        element = OxmlElement("c:delete")
+                        element.set("val", "1")
+                        label._get_or_add_dLbl().insert(1, element)
+                        # Some local renderers ignore c:delete but honour the
+                        # explicit label-content switches.
+                        for tag in ("showVal", "showPercent", "showCatName", "showSerName"):
+                            flags = label._dLbl.xpath(f"c:{tag}")
+                            flag = flags[0] if flags else OxmlElement(f"c:{tag}")
+                            flag.set("val", "0")
+                            if not flags:
+                                label._dLbl.append(flag)
         if doughnut:
             for point, name in zip(chart.series[0].points, matrix.categories):
                 label = point.data_label
                 label.font.name = FONT
                 label.font.size = Pt(10 if compact else 11)
                 label.font.bold = True
-                label.font.color.rgb = _rgb(label_color(chart_color(name, colors)))
+                label.font.color.rgb = _rgb(TEXT if outside else label_color(chart_color(name, colors)))
+                if outside:
+                    label.position = XL_DATA_LABEL_POSITION.OUTSIDE_END
+                number_format = OxmlElement("c:numFmt")
+                number_format.set("formatCode", "0.0%")
+                number_format.set("sourceLinked", "0")
+                label._dLbl.insert(1, number_format)
                 # Custom point labels default to values in python-pptx. Keep
                 # the percentage semantics of the editable doughnut chart.
                 for tag, value in (("showVal", "0"), ("showPercent", "1")):

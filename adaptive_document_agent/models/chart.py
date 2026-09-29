@@ -21,6 +21,8 @@ class ChartPlan(BaseModel):
     y_metric: str | None = None
     x_dimension: str | None = None
     series_dimension: str | None = None
+    # Explicit evidence table whose row/column labels define a composition view.
+    composition_table_id: str | None = None
     # A part-to-whole chart needs a known denominator. Monetary compositions
     # must reference retained totals; reported percentage shares must sum to 100.
     total_observation_ids: list[str] = Field(default_factory=list)

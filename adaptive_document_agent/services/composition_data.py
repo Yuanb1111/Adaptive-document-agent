@@ -13,6 +13,10 @@ COMPOSITION_TYPES = {"stacked_bar", "stacked_percent", "doughnut"}
 _META = {"table_context", "section", "period_basis", "column_role"}
 
 
+def uses_composition_data(plan: ChartPlan) -> bool:
+    return plan.chart_type in COMPOSITION_TYPES or (plan.chart_type == "pie" and bool(plan.series_dimension))
+
+
 def is_aggregate_category(label: str) -> bool:
     """Explicit aggregate labels, including qualified totals, are not parts."""
     return bool(re.match(r"^(?:(?:grand\s+total|sub[ -]?total|total|aggregate)(?:\b|[:：])|(?:合计|总计|小计))", label.strip(), re.I)) or label.strip().casefold() == "all"
@@ -34,6 +38,12 @@ def composition_data(plan: ChartPlan, observations: list[Observation], totals: l
     would misrepresent its coverage, so amount shares require reconciled totals.
     """
     dimension = plan.series_dimension or plan.x_dimension
+    if plan.composition_table_id:
+        from .source_row_composition import SOURCE_ROW, source_row_views
+        if dimension != SOURCE_ROW:
+            raise ValueError("Source-table composition must use its explicit row labels.")
+        observations = source_row_views(observations, plan.composition_table_id)
+        totals = source_row_views(totals, plan.composition_table_id) if totals else []
     if not dimension or len(observations) < 2:
         raise ValueError("Composition charts require an explicit category dimension and retained values.")
     if {o.id for o in observations} != set(plan.observation_ids):
@@ -69,9 +79,9 @@ def composition_data(plan: ChartPlan, observations: list[Observation], totals: l
     categories = sorted({c for _, c in points}, key=str.casefold)
     if not 2 <= len(categories) <= 8:
         raise ValueError("Composition requires two to eight readable categories; use a comparison table otherwise.")
-    if plan.chart_type == "doughnut" and len(periods) != 1:
-        raise ValueError("Doughnut charts must describe exactly one period.")
-    if plan.chart_type != "doughnut" and len(periods) < 2:
+    if plan.chart_type in {"doughnut", "pie"} and len(periods) != 1:
+        raise ValueError("Pie and doughnut charts must describe exactly one period.")
+    if plan.chart_type not in {"doughnut", "pie"} and len(periods) < 2:
         raise ValueError("Stacked time-series charts require at least two comparable periods.")
     if len(points) != len(periods) * len(categories):
         raise ValueError("Composition is incomplete across periods; missing categories cannot be filled with zero.")
@@ -84,7 +94,7 @@ def composition_data(plan: ChartPlan, observations: list[Observation], totals: l
         raise ValueError("Independent margins or growth rates are not additive composition shares.")
     if any(is_aggregate_category(c) for c in categories):
         raise ValueError("Aggregate totals cannot be plotted as components alongside their parts.")
-    if plan.chart_type in {"stacked_percent", "doughnut"} or plan.total_observation_ids:
+    if plan.chart_type in {"stacked_percent", "doughnut", "pie"} or plan.total_observation_ids:
         if is_pct:
             if any(not isclose(s, 100, abs_tol=0.5) for s in sums):
                 raise ValueError("Reported percentage shares do not reconcile to 100% within rounding tolerance.")

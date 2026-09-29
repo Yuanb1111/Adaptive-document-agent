@@ -73,12 +73,12 @@ class PresentationPlanRecovery:
             # series together. Do not lose it by matching one series at a time.
             compositions = sorted((chart for chart in result.charts
                 if chart.id in usable_chart_ids
-                and chart.chart_type in {"stacked_bar", "stacked_percent", "doughnut"}
+                and chart.chart_type in {"stacked_bar", "stacked_percent", "doughnut", "pie"}
                 and set(chart.observation_ids) <= observations.keys()),
                 key=lambda chart: (-len(chart.observation_ids), chart.id))
             for chart in compositions:
                 covered = {sid for sid in topic.series_ids
-                    if {item.id for item in series_by_id.get(sid, [])} <= set(chart.observation_ids)}
+                    if {item.id for item in series_by_id.get(sid, [])} <= set([*chart.observation_ids, *chart.total_observation_ids])}
                 if covered:
                     chart_ids.append(chart.id)
                     visible_series.update(covered)
@@ -91,7 +91,7 @@ class PresentationPlanRecovery:
                                  if chart.id in usable_chart_ids and chart.id not in chart_ids
                                  and set(chart.observation_ids) <= series_observation_ids
                                  and set(chart.observation_ids) & series_observation_ids), None)
-                if matching is not None and len(chart_ids) < 2:
+                if matching is not None and len(chart_ids) < 3:
                     chart_ids.append(matching.id)
                     visible_series.add(series_id)
             if not chart_ids and len(members) > 40:
@@ -101,7 +101,7 @@ class PresentationPlanRecovery:
             pages = sorted({e.page for item in observations.values() for e in item.evidence})
             charted_ids = {
                 oid for chart in result.charts if chart.id in chart_ids
-                for oid in chart.observation_ids
+                for oid in [*chart.observation_ids, *chart.total_observation_ids]
             }
             supporting_ids = [oid for oid in members if oid not in charted_ids]
             referenced_ids = set(supporting_ids) | charted_ids
@@ -124,9 +124,8 @@ class PresentationPlanRecovery:
                 safe_title = topic.question if supported(topic.question) else "Selected evidence"
             safe_question = topic.question if supported(topic.question) else "How do the cited measures compare?"
             safe_reason = topic.rationale if supported(topic.rationale) else ""
-            # A two-chart layout must not silently hide a third series named
-            # in the model's analytical question. Show its sourced endpoints
-            # in the bottom evidence band; retain every point in notes.
+            # Retain selected evidence that cannot form a chart in the
+            # supporting band, with every source point available in notes.
             visible_support_ids: list[str] = []
             for series_id in topic.series_ids:
                 if series_id in visible_series:
@@ -144,7 +143,8 @@ class PresentationPlanRecovery:
                 observation_ids=members, caveats=topic.caveats,
                 source_pages=pages,
             )
-            layout = "two_up" if len(chart_ids) > 1 else "chart_with_data" if chart_ids else "data_overview"
+            layout = ("three_up" if len(chart_ids) == 3 else "two_up" if len(chart_ids) == 2
+                      else "chart_with_data" if chart_ids else "data_overview")
             slide = PresentationSlide(
                 id=f"topic_{topic.id}", slide_type="analysis", title=safe_title,
                 section_id=topic.id, section_title=topic.title,

@@ -32,7 +32,7 @@ def test_qualified_totals_are_never_components(label):
     with pytest.raises(ValueError, match="Aggregate totals"):
         composition_data(plan, values)
     charts = reported_composition_charts(DocumentIndex(values))
-    assert {chart.chart_type for chart in charts} == {"stacked_bar", "doughnut"}
+    assert {chart.chart_type for chart in charts} == {"stacked_bar", "stacked_percent", "doughnut"}
     for chart in charts:
         assert not set(chart.observation_ids) & set(chart.total_observation_ids)
     chosen = next(chart for chart in charts if chart.chart_type == "stacked_bar")
@@ -198,5 +198,7 @@ def test_composition_colors_unique_and_thin_segments_unlabelled():
     add_composition_chart(slide, plan, values, (.5, .5, 8, 4))
     chart = next(s.chart for s in slide.shapes if s.has_chart)
     assert len({str(s.format.fill.fore_color.rgb) for s in chart.series}) == 3
-    assert not chart.plots[0].has_data_labels
+    assert chart.plots[0].has_data_labels
+    small = next(series for series in chart.series if series.name == "Small")
+    assert all(point.data_label._dLbl.xpath("c:showVal")[0].get("val") == "0" for point in small.points)
     assert sorted(sum(s.values) for s in chart.series) == [2, 80, 118]

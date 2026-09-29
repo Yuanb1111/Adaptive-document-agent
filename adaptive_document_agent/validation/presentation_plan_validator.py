@@ -298,9 +298,11 @@ class PresentationPlanValidator:
                             referenced_pages.update(source.page for source in observation.evidence)
                         else:
                             errors.append(f"chart {identifier} references unknown observation {observation_id}")
-                    from adaptive_document_agent.services.composition_data import COMPOSITION_TYPES, composition_data
+                    from adaptive_document_agent.services.composition_data import uses_composition_data, composition_data
                     types = {item.chart_type, *(b.chart_type for b in slide.visual_blocks if identifier in b.chart_ids and b.chart_type)}
-                    for chart_type in types & COMPOSITION_TYPES:
+                    for chart_type in types:
+                        if not uses_composition_data(item.model_copy(update={"chart_type": chart_type})):
+                            continue
                         try:
                             composition_data(item.model_copy(update={"chart_type": chart_type}),
                                 [observation_by_id[o] for o in item.observation_ids if o in observation_by_id],

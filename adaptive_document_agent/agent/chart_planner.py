@@ -134,10 +134,23 @@ class ChartPlanner:
         seen_series: set[tuple[str, ...]] = set()
         seen_metrics: set[str] = set()
         chart_type_counts: Counter[ChartType] = Counter()
+        from adaptive_document_agent.services.composition_candidates import presentation_compositions
+        composition_by_ids = {
+            frozenset([*chart.observation_ids, *chart.total_observation_ids]): chart
+            for chart in presentation_compositions(index)
+        } if requested_series else {}
 
         # A semantic topic decision precedes visual selection. Valid requested
         # series are not displaced by the generic top-ten chart quota.
         for requested in requested_series or []:
+            composition = composition_by_ids.get(frozenset(item.id for item in requested))
+            if composition is not None:
+                key = tuple(sorted(composition.observation_ids))
+                if key not in seen_series:
+                    output.append(composition)
+                    seen_series.add(key)
+                    chart_type_counts[composition.chart_type] += 1
+                continue
             observations = [index.get(item.id) for item in requested]
             observations = [item for item in observations if item and item.value is not None and item.evidence]
             if len(observations) < 2 or conflicting_groups(observations):

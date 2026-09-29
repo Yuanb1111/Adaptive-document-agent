@@ -522,7 +522,7 @@ def test_layout_qa_detects_and_repairs_all_classes():
     )
 
     # 2. Cramped 3-chart slide with long titles and multi-series
-    chart1 = ChartPlan(id="c1", title="Very Detailed Segment Operating Metric", chart_type="bar", question="Q1", observation_ids=["rev-2021", "rev-2022"])
+    chart1 = ChartPlan(id="c1", title="Very Detailed Segment Operating Metric With Extended Category Disclosures And Multiple Reporting Basis Explanations", chart_type="bar", question="Q1", observation_ids=["rev-2021", "rev-2022"])
     chart2 = ChartPlan(id="c2", title="Second Operating Metric Trajectory", chart_type="line", question="Q2", observation_ids=["rev-2022", "rev-2023"])
     chart3 = ChartPlan(id="c3", title="Third Long Metric With Detailed Disclosures", chart_type="bar", question="Q3", observation_ids=["rev-2021", "rev-2023"])
     result.charts = [scatter_chart, chart1, chart2, chart3]

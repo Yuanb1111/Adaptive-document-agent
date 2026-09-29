@@ -166,15 +166,15 @@ def build_presentation(result: PipelineResult, template_path: str | Path | None 
         del presentation.slides._sldIdLst[presentation.slides._sldIdLst.index(sld_id)]
 
     from .presentation_style import deck_color_map
-    from .composition_data import COMPOSITION_TYPES
+    from .composition_data import uses_composition_data, composition_data
     color_keys = []
     color_groups = []
     color_index = DocumentIndex(result.observations)
     for chart in result.charts:
         values = [color_index.get(oid) for oid in chart.observation_ids if color_index.get(oid)]
-        if chart.chart_type in COMPOSITION_TYPES:
-            dimension = chart.series_dimension or chart.x_dimension
-            group = [str(({**o.dimensions, **o.category_dimensions}).get(dimension, display_metric_name(o))) for o in values]
+        if uses_composition_data(chart):
+            group = composition_data(chart, values,
+                [color_index.get(oid) for oid in chart.total_observation_ids if color_index.get(oid)]).categories
         else:
             rows = _series_rows(chart, values)
             group = [row[0] if chart.chart_type == "pie" else row[1] for row in rows]
@@ -1525,8 +1525,8 @@ def _add_native_chart(
     compact: bool = False,
     totals: list[Observation] | None = None,
 ) -> tuple[float, str]:
-    from .composition_data import COMPOSITION_TYPES
-    if plan.chart_type in COMPOSITION_TYPES:
+    from .composition_data import uses_composition_data
+    if uses_composition_data(plan):
         from .composition_renderer import add_composition_chart
         return add_composition_chart(slide, plan, values, bounds, totals=totals, compact=compact)
     from pptx.chart.data import CategoryChartData, XyChartData
@@ -2758,7 +2758,7 @@ def _chart_group_title(plans: list[ChartPlan], index: DocumentIndex) -> str:
 
 
 def _usable_charts(result: PipelineResult) -> list[ChartPlan]:
-    from .composition_data import COMPOSITION_TYPES, composition_data
+    from .composition_data import uses_composition_data, composition_data
     from .presentation_evidence import ambiguous_source_table_ids, observation_uses_ambiguous_table
     index = DocumentIndex(result.observations)
     ambiguous_tables = ambiguous_source_table_ids(result)
@@ -2768,7 +2768,7 @@ def _usable_charts(result: PipelineResult) -> list[ChartPlan]:
         if any(item and observation_uses_ambiguous_table(item, ambiguous_tables) for item in observations):
             continue
         observations = [item for item in observations if item and is_meaningful_metric(item)]
-        if plan.chart_type in COMPOSITION_TYPES:
+        if uses_composition_data(plan):
             composition_data(plan, observations, [index.get(oid) for oid in plan.total_observation_ids if index.get(oid)])
             # An unchanged composition is still a meaningful comparison. Its
             # categories may live in category_dimensions, not legacy dimensions.
@@ -2788,11 +2788,11 @@ def _usable_charts(result: PipelineResult) -> list[ChartPlan]:
 
 
 def _chart_findings(charts: list[ChartPlan], index: DocumentIndex) -> list[dict[str, object]]:
-    from .composition_data import COMPOSITION_TYPES
+    from .composition_data import uses_composition_data
     output: list[dict[str, object]] = []
     seen: set[str] = set()
     for chart in charts:
-        if chart.chart_type in COMPOSITION_TYPES:
+        if uses_composition_data(chart):
             # A category matrix is not one unsegmented period series.
             continue
         values = [index.get(identifier) for identifier in chart.observation_ids]

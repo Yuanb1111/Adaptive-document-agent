@@ -65,6 +65,34 @@ def series_directory(result: PipelineResult) -> tuple[list[dict[str, object]], d
                 if set(definition["observation_ids"]).intersection(item.id for item in group)
             ],
         })
+    # A complete matrix is one selectable analytical view, so the model need
+    # not spend all three series slots naming individual categories.
+    from adaptive_document_agent.document_model import DocumentIndex
+    from adaptive_document_agent.services.composition_candidates import presentation_compositions
+    from adaptive_document_agent.services.composition_data import composition_data
+    index = DocumentIndex(eligible)
+    for chart in presentation_compositions(index):
+        members = [index.get(oid) for oid in [*chart.observation_ids, *chart.total_observation_ids]]
+        matrix = composition_data(chart, [index.get(oid) for oid in chart.observation_ids],
+                                  [index.get(oid) for oid in chart.total_observation_ids])
+        identifier = stable_id("presentation_composition", chart.id)
+        lookup[identifier] = members
+        directory.append({
+            "id": identifier, "metric": chart.title, "canonical_metric": None,
+            "periods": matrix.periods, "unit": members[0].unit, "currency": members[0].currency,
+            "entity": members[0].entity,
+            "dimensions": {"composition_categories": matrix.categories,
+                           "source_tables": sorted({o.source_table for o in members if o.source_table}),
+                           "reported_values": [{"metric": o.metric_original, "period": o.period,
+                                                "raw_value": o.raw_value} for o in members]},
+            "source_sections": sorted({o.source_section for o in members if o.source_section}),
+            "source_pages": matrix.source_pages, "observation_count": len(members),
+            "first_reported_value": None, "last_reported_value": None,
+            "evidence_status": "complete", "ratio_definitions": [],
+            "visual_kind": chart.chart_type,
+        })
+    for item in directory:
+        item.setdefault("visual_kind", "series")
     return directory, lookup
 
 
@@ -97,6 +125,7 @@ class PresentationTopicSelector:
             "id", "metric", "periods", "unit", "currency", "entity", "dimensions",
             "source_sections", "source_pages", "observation_count",
             "first_reported_value", "last_reported_value", "evidence_status",
+            "visual_kind",
         )
         payload = {
             "document_purpose": result.profile.document_purpose,

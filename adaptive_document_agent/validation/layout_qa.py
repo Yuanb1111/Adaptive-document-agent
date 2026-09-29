@@ -72,8 +72,11 @@ def _is_cramped_multi_chart_slide(slide: PresentationSlide, chart_lookup: dict[s
         # evidence band at a readable size in the supported widescreen template.
         return True
 
-    # In a 3-chart layout, panel width is ~3.73 in. If any chart has multi-series legend
-    # or long title, it is cramped.
+    # Measure text at the actual compact heading size. Three simple charts
+    # fit the widescreen template; dense matrices still need wider panels.
+    from adaptive_document_agent.services.slide_compositor import _lines
+    from adaptive_document_agent.services.presentation_style import CHART_TITLE_PT
+    from adaptive_document_agent.services.composition_data import uses_composition_data, composition_data
     for cid in chart_ids:
         chart = chart_lookup.get(cid)
         if not chart:
@@ -85,11 +88,18 @@ def _is_cramped_multi_chart_slide(slide: PresentationSlide, chart_lookup: dict[s
             for item in obs if item
         }
         series_names.discard(None)
-        if len(series_names) > 1:
+        if uses_composition_data(chart):
+            try:
+                matrix = composition_data(chart, obs, [index.get(oid) for oid in chart.total_observation_ids if index.get(oid)])
+            except ValueError:
+                return True
+            if len(matrix.categories) > 4 or len(matrix.periods) > 6:
+                return True
+            if any(len(_lines(name, 1.6, 10)) > 2 for name in matrix.categories):
+                return True
+        elif len(series_names) > 3 or len({o.period for o in obs}) > 6:
             return True
-        if len(chart.title) > 32:
-            return True
-        if len(getattr(slide, "message", "") or "") > 90:
+        if len(_lines(chart.title, 3.73, CHART_TITLE_PT)) > 3:
             return True
 
     return False

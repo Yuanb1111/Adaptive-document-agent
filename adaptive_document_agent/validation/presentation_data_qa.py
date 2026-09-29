@@ -47,14 +47,14 @@ def validate_presentation_data(result: PipelineResult):
 
     # This gate also covers legacy/fallback exports without an LLM slide plan.
     from adaptive_document_agent.document_model.series import metric_key, metric_identity_key, source_context_key
-    from adaptive_document_agent.services.composition_data import COMPOSITION_TYPES, composition_data
+    from adaptive_document_agent.services.composition_data import uses_composition_data, composition_data
     observation_map = {o.id: o for o in result.observations}
     planned_chart_ids = _planned_chart_ids(result)
     for chart in result.charts:
         if planned_chart_ids is not None and chart.id not in planned_chart_ids:
             continue
         values = [observation_map[oid] for oid in chart.observation_ids if oid in observation_map]
-        if chart.chart_type in COMPOSITION_TYPES:
+        if uses_composition_data(chart):
             try:
                 composition_data(chart, values, [observation_map[oid] for oid in chart.total_observation_ids if oid in observation_map])
             except ValueError as exc:
@@ -87,9 +87,11 @@ def validate_presentation_data(result: PipelineResult):
         for cid in chart_ids:
             chart = charts.get(cid)
             if chart:
-                from adaptive_document_agent.services.composition_data import COMPOSITION_TYPES, composition_data
+                from adaptive_document_agent.services.composition_data import uses_composition_data, composition_data
                 requested_types = {chart.chart_type, *(b.chart_type for b in slide.visual_blocks if cid in b.chart_ids and b.chart_type)}
-                for requested_type in requested_types & COMPOSITION_TYPES:
+                for requested_type in requested_types:
+                    if not uses_composition_data(chart.model_copy(update={"chart_type": requested_type})):
+                        continue
                     try:
                         composition_data(chart.model_copy(update={"chart_type": requested_type}),
                             [observations[oid] for oid in chart.observation_ids if oid in observations],

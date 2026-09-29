@@ -410,10 +410,10 @@ def test_topic_recovery_selects_composition_across_category_series():
     result.presentation_topics = PresentationTopicSelection(topics=[PresentationTopic(
         id="mix", title="Category mix", question="How did the category mix change?",
         rationale="The source reports a complete category composition.",
-        series_ids=[entry["id"] for entry in directory],
+        series_ids=[entry["id"] for entry in directory if entry["visual_kind"] == "series"],
     )])
     result.charts = ChartPlanner().plan([], [], DocumentIndex(observations),
-        requested_series=list(lookup.values()), only_requested=True)
+        requested_series=[lookup[sid] for sid in result.presentation_topics.topics[0].series_ids], only_requested=True)
     plan = PresentationPlanRecovery().from_selected_topics(result)
     selected = {cid for slide in plan.slides if slide.slide_type == "analysis" for cid in slide.chart_ids}
     assert any(chart.id in selected and chart.chart_type == "stacked_percent" for chart in result.charts)

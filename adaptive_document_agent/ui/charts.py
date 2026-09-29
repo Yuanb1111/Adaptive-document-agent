@@ -67,18 +67,19 @@ def render_chart(
     selected = chart_type or plan.chart_type
     if selected not in (plan.available_chart_types or [plan.chart_type]):
         raise ValueError(f"Chart type '{selected}' is not compatible with this analysis.")
-    from adaptive_document_agent.services.composition_data import COMPOSITION_TYPES, composition_data
-    if selected in COMPOSITION_TYPES:
+    from adaptive_document_agent.services.composition_data import uses_composition_data, composition_data
+    if uses_composition_data(plan.model_copy(update={"chart_type": selected})):
         from adaptive_document_agent.services.presentation_style import deck_color_map
         values = [index.get(oid) for oid in plan.observation_ids if index.get(oid)]
         totals = [index.get(oid) for oid in plan.total_observation_ids if index.get(oid)]
         matrix = composition_data(plan.model_copy(update={"chart_type": selected}), values, totals)
         colors = deck_color_map(matrix.categories)
         enabled = plan.show_data_labels if show_data_labels is None else show_data_labels
-        if selected == "doughnut":
-            figure = go.Figure(go.Pie(labels=matrix.categories, values=[r[0] for r in matrix.values], hole=0.62,
+        if selected in {"doughnut", "pie"}:
+            figure = go.Figure(go.Pie(labels=matrix.categories, values=[r[0] for r in matrix.values], hole=0.62 if selected == "doughnut" else 0,
                 marker_colors=["#" + colors[c] for c in matrix.categories], sort=False,
-                textinfo="label+percent" if enabled else "none"))
+                textinfo="label+percent" if enabled else "none",
+                texttemplate="%{label}<br>%{percent:.1%}" if enabled else None))
         else:
             sums = [sum(row[i] for row in matrix.values) for i in range(len(matrix.periods))]
             figure = go.Figure()
