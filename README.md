@@ -216,7 +216,7 @@ python -m streamlit run app.py
 
 Then:
 
-If this is your first visit, use the **零基础上手手册与操作 Tips** link above the upload field. It opens the bundled public PDF guide directly in the browser.
+If this is your first visit, use the **零基础上手手册** link below the sidebar's DOCUMENT INTELLIGENCE label. It opens the bundled public PDF guide in the browser.
 
 1. Configure an execution mode, provider, and model in the sidebar.
 2. Optionally describe an analysis focus in plain language.

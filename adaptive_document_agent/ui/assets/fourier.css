@@ -15,9 +15,11 @@
 [data-testid="stSidebar"] h2 { font-size: 1.05rem; letter-spacing: 0; }
 [data-testid="stSidebar"] [data-testid="stSidebarContent"] { padding-top: .6rem; }
 [data-testid="stSidebar"] [data-testid="stCaptionContainer"] { line-height: 1.5; }
-.fourier-brand { margin: 0 0 1.9rem; }
+.fourier-brand { margin: 0 0 .3rem; transform: translateY(-5px); }
 .fourier-brand img { width: 220px; max-width: 100%; height: auto; display: block; }
 .fourier-brand-caption { color: #55565F; font-size: .66rem; letter-spacing: .13em; margin-left: 19px; }
+.fourier-brand-guide { display: inline-flex; align-items: center; min-height: 1.25rem; margin: .35rem 0 0 19px; color: #5F1BCE; font-size: .77rem; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
+.fourier-brand-guide:hover { color: #190049; }
 .fourier-masthead { display: flex; align-items: center; justify-content: space-between; gap: 16px; color: #55565F; font-size: .7rem; letter-spacing: .14em; margin-bottom: .8rem; }
 .fourier-badge { border: 1px solid #DBDCDC; border-radius: 999px; padding: 7px 12px; color: #190049; letter-spacing: 0; font-size: .75rem; white-space: nowrap; }
 .fourier-section { display: flex; align-items: center; gap: 10px; margin: .35rem 0 .6rem; }
