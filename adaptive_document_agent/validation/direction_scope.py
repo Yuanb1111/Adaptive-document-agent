@@ -27,23 +27,63 @@ class DirectionScope:
     error: str = ""
 
 
-def bind_endpoint_to_explicit_context(claim: str, context: str) -> str:
+def bind_endpoint_to_explicit_context(
+    claim: str, context: str, *, direction_end: int | None = None,
+    direction_word: str = "",
+) -> str:
     """Use a model-written comparison range to qualify its own endpoint claim.
 
     The caller must still validate the resulting claim against linked evidence.
     No period is inferred from the observation series here.
     """
     ranges = list(_RANGE.finditer(context))
-    endpoints = list(_BY_ENDPOINT.finditer(claim))
-    if len(ranges) != 1 or len(endpoints) != 1:
+    if len(ranges) != 1:
         return claim
-    if len(list(re.finditer(rf"\b{_PERIOD}\b", claim, re.I))) != 1:
-        return claim
-    bound, endpoint = ranges[0], endpoints[0]
+    if direction_end is None:
+        endpoints = list(_BY_ENDPOINT.finditer(claim))
+        if len(endpoints) != 1 or len(list(re.finditer(rf"\b{_PERIOD}\b", claim, re.I))) != 1:
+            return claim
+        endpoint = endpoints[0]
+    else:
+        # Only the qualifier immediately following the flagged predicate may
+        # borrow the question's range. Other predicates keep their own scope.
+        endpoint = re.match(rf"\s+(?:by|in)\s+(?P<end>{_PERIOD})\b", claim[direction_end:], re.I)
+        if endpoint is None:
+            return claim
+        endpoint_start, endpoint_end = direction_end + endpoint.start(), direction_end + endpoint.end()
+        if len(list(re.finditer(rf"\b{_PERIOD}\b", claim[:endpoint_start].split(",")[-1], re.I))):
+            return claim
+    bound = ranges[0]
     normal = lambda value: re.sub(r"\s+", "", value).casefold()
     if normal(bound['end']) != normal(endpoint['end']):
         return claim
-    return claim[:endpoint.start()] + f"from {bound['start']} to {bound['end']}" + claim[endpoint.end():]
+    if direction_end is None:
+        endpoint_start, endpoint_end = endpoint.span()
+    # A sign crossing 'between' two observed periods does not claim that the
+    # first negative/positive observation occurred in the ending period.
+    replacement = (f"between {bound['start']} and {bound['end']}"
+                   if direction_word.casefold() in {"turned negative", "turned positive"}
+                   else f"from {bound['start']} to {bound['end']}")
+    return claim[:endpoint_start].rstrip() + " " + replacement + claim[endpoint_end:]
+
+
+def context_sign_transition_supported(
+    context: str, observations: list[Observation], direction_word: str,
+) -> bool:
+    """Check a question's explicit endpoints before rebinding a sign claim."""
+    if direction_word.casefold() not in {"turned negative", "turned positive"}:
+        return True
+    ranges = list(_RANGE.finditer(context))
+    if len(ranges) != 1:
+        return False
+    match = ranges[0]
+    first = _period_index(match["start"], observations)
+    last = _period_index(match["end"], observations)
+    if first is None or last is None or first >= last:
+        return False
+    start_value, end_value = observations[first].value, observations[last].value
+    return (start_value > 0 and end_value < 0 if direction_word.casefold() == "turned negative"
+            else start_value < 0 and end_value > 0)
 
 
 def _sequence_between(clause: str, start: int, end: int, metric_spans: list[tuple[int, int]]):

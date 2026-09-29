@@ -205,6 +205,57 @@ def test_question_range_does_not_rescue_unsupported_endpoint_claim() -> None:
                for issue in ClaimValidator().validate_plan(repaired, observations))
 
 
+def test_question_range_repairs_only_ambiguous_sign_crossing_in_two_metric_title() -> None:
+    cash_flow = _series("Operating cash flow", [6, -116, -157], years=(2021, 2022, 2023))
+    cash_balance = _series("Cash at period end", [149, 297, 110], years=(2021, 2022, 2023))
+    observations = cash_flow + cash_balance
+    title = ("Operating cash flow turned negative in FY2023, and cash at period end "
+             "fell from FY2021 to FY2023.")
+    question = "How did operating cash flow and cash at period end evolve from FY2021 to FY2023?"
+    ids = [item.id for item in observations]
+    summary = PresentationSlide(
+        id="summary", slide_type="executive_summary", title="Executive Summary",
+        bullets=[title], bullet_observation_ids=[ids], observation_ids=ids,
+    )
+    analysis = PresentationSlide(
+        id="cash", slide_type="analysis", title=title, message=question,
+        observation_ids=ids,
+    )
+    plan = PresentationPlan(title="Reported movements", slides=[summary, analysis])
+    assert {issue.code for issue in ClaimValidator().validate_plan(plan, observations)} == {
+        "direction_scope_ambiguous"
+    }
+    before = [item.model_dump() for item in observations]
+    repaired, repairs = repair_presentation_plan(plan, observations)
+    expected = ("Operating cash flow turned negative between FY2021 and FY2023, "
+                "and cash at period end fell from FY2021 to FY2023.")
+    assert repaired.slides[0].bullets == [expected]
+    assert repaired.slides[1].title == expected
+    assert repairs
+    assert not ClaimValidator().validate_plan(repaired, observations)
+    assert [item.model_dump() for item in observations] == before
+    assert not repair_presentation_plan(repaired, observations)[1]
+
+
+@pytest.mark.parametrize("values,question", [
+    ([-6, -116, -157], "How did operating cash flow evolve from FY2021 to FY2023?"),
+    ([6, -116, -157], "How did operating cash flow evolve from FY2021 to FY2022?"),
+])
+def test_question_range_does_not_rescue_unsupported_sign_crossing(
+    values: list[float], question: str,
+) -> None:
+    observations = _series("Operating cash flow", values, years=(2021, 2022, 2023))
+    title = "Operating cash flow turned negative in FY2023."
+    slide = _slide(title, observations, "title")
+    slide.message = question
+    plan = PresentationPlan(title="Reported movements", slides=[slide])
+    repaired, repairs = repair_presentation_plan(plan, observations)
+    assert repaired.slides[0].title == title
+    assert not repairs
+    assert any(issue.code == "direction_scope_ambiguous"
+               for issue in ClaimValidator().validate_plan(repaired, observations))
+
+
 @pytest.mark.parametrize(("text", "supported"), [
     ("Net current assets rose from year-end 2023 to 2025.", True),
     ("Net current assets rose from end of the year 2023 to 2025.", True),

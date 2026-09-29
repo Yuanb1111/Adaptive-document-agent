@@ -43,6 +43,7 @@ from adaptive_document_agent.document_model.period_semantic_validator import ext
 from adaptive_document_agent.models import ChartPlan, Observation, PresentationPlan, PresentationSlide, ValidationIssue
 from .direction_scope import (
     bind_endpoint_to_explicit_context,
+    context_sign_transition_supported,
     direction_context,
     has_temporal_sequence,
     predicate_conjunctions,
@@ -2386,9 +2387,7 @@ def _bind_topic_endpoint_claims(
     cannot supply a missing period unless the same linked observations support
     the resulting title and any verbatim executive-summary copy.
     """
-    candidate_ids = [slide.id for slide in plan.slides
-                     if slide.slide_type == "analysis"
-                     and bind_endpoint_to_explicit_context(slide.title, slide.message) != slide.title]
+    candidate_ids = [slide.id for slide in plan.slides if slide.slide_type == "analysis"]
     if not candidate_ids:
         return []
     validator = ClaimValidator()
@@ -2416,7 +2415,16 @@ def _bind_topic_endpoint_claims(
         ), None)
         if slide.slide_type != "analysis" or title_issue is None:
             continue
-        revised_title = bind_endpoint_to_explicit_context(slide.title, slide.message)
+        linked_ids = set(title_issue.related_ids)
+        linked = sorted((item for item in observations if item.id in linked_ids),
+                        key=lambda item: period_sort_key(item.period))
+        if not context_sign_transition_supported(slide.message, linked, title_issue.offending_direction):
+            continue
+        revised_title = bind_endpoint_to_explicit_context(
+            slide.title, slide.message,
+            direction_end=title_issue.claim_end,
+            direction_word=title_issue.offending_direction,
+        )
         if revised_title == slide.title:
             continue
         candidate = plan.model_copy(deep=True)
