@@ -113,7 +113,7 @@ def align_redundant_slide_evidence(
             ):
                 continue
             direct_periods = {item.period for item in direct}
-            candidates = []
+            candidates: list[tuple[int, dict[str, str]]] = []
             for (peer_metric, peer_context), series in direct_series.items():
                 peer_periods = {item.period for item in series}
                 if peer_metric != metric or peer_context == context or not direct_periods <= peer_periods:
@@ -129,9 +129,15 @@ def align_redundant_slide_evidence(
                         break
                     matches[item.id] = peers[0].id
                 if len(matches) == len(direct):
-                    candidates.append(matches)
-            if len(candidates) == 1:
-                replacements.update(candidates[0])
+                    candidates.append((len(peer_periods), matches))
+            if candidates:
+                # An exact-value source with additional reported periods is a
+                # better coherent reference than another duplicate with only
+                # equal coverage. Equal best candidates remain ambiguous.
+                most_periods = max(count for count, _ in candidates)
+                best = [matches for count, matches in candidates if count == most_periods]
+                if len(best) == 1:
+                    replacements.update(best[0])
 
         if not replacements:
             continue

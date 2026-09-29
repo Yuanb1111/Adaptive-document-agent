@@ -131,6 +131,36 @@ def test_unplotted_secondary_metric_uses_exact_superset_series() -> None:
     assert observations[0].evidence[0].page == 328
 
 
+def test_duplicate_sources_prefer_unique_exact_superset_for_summary() -> None:
+    """A later source with one more period resolves competing duplicate tables."""
+    observations = [
+        _fact(f"{context}_{year}", year, value, context=context, page=page)
+        for context, page, values in (
+            ("EARLY", 10, ((2022, 100), (2023, 120))),
+            ("SECOND", 11, ((2022, 100), (2023, 120))),
+            ("FULL", 12, ((2022, 100), (2023, 120), (2024, 150))),
+        )
+        for year, value in values
+    ]
+    original = [item.model_dump() for item in observations]
+    plan = PresentationPlan(title="Working capital", slides=[PresentationSlide(
+        id="summary", slide_type="executive_summary", title="Executive Summary",
+        bullets=["Inventories increased."],
+        observation_ids=[item.id for item in observations],
+        bullet_observation_ids=[[item.id for item in observations]],
+        source_pages=[10, 11, 12],
+    )])
+    assert any(issue.code == "directional_contradiction"
+               for issue in ClaimValidator().validate_plan(plan, observations))
+    repaired, repairs = repair_presentation_plan(plan, observations)
+    expected = [f"FULL_{year}" for year in (2022, 2023, 2024)]
+    assert repaired.slides[0].observation_ids == expected
+    assert repaired.slides[0].bullet_observation_ids == [expected]
+    assert repaired.slides[0].source_pages == [12]
+    assert repairs and not ClaimValidator().validate_plan(repaired, observations)
+    assert [item.model_dump() for item in observations] == original
+
+
 def test_unplotted_conflicting_source_is_not_silently_aligned() -> None:
     observations = [
         *[_fact(f"short_{year}", year, value, context="DISCUSSION", page=328)
