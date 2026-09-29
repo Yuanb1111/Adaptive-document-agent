@@ -256,6 +256,56 @@ def test_question_range_does_not_rescue_unsupported_sign_crossing(
                for issue in ClaimValidator().validate_plan(repaired, observations))
 
 
+def test_category_qualified_margin_claims_keep_three_source_series_separate() -> None:
+    rows = (
+        ("Algorithm modules", [37.4, 31.3, 26.0]),
+        ("Sensors", [18.5, 15.2, 20.4]),
+        ("Robot lawn mowers", [49.2, 33.6, 42.3]),
+    )
+    observations = []
+    for category, values in rows:
+        for item in _series("Gross profit margin", values, years=(2023, 2024, 2025)):
+            item.id = f"{category}_{item.period}"
+            item.unit = "percent"
+            item.raw_unit = "%"
+            item.category_dimensions = {"category": category}
+            observations.append(item)
+    text = ("Algorithm module gross margin declined from FY2023 to FY2025, "
+            "sensor gross margin rose, and robot lawn mower gross margin declined.")
+    assert not ClaimValidator().validate_slide(_slide(text, observations, "bullets"), observations)
+    unqualified = "Gross margin declined from FY2023 to FY2025."
+    issues = ClaimValidator().validate_slide(_slide(unqualified, observations), observations)
+    assert any(issue.code == "direction_scope_ambiguous" for issue in issues)
+
+
+def test_unique_cash_balance_runs_bind_their_stated_end_dates() -> None:
+    observations = _series("Cash and cash equivalents", [27, 46, 119, 110],
+                           years=(2023, 2024, 2025, 2026))
+    for item, period in zip(observations,
+                            ("2023-12-31", "2024-12-31", "2025-12-31", "2026-02-28")):
+        item.period = period
+        item.period_type = "balance_sheet_date"
+    title = "Cash and cash equivalents grew then eased."
+    bullet = ("Cash and cash equivalents grew through 2025-12-31 "
+              "before easing at 2026-02-28.")
+    slide = PresentationSlide(id="cash", slide_type="analysis", title=title,
+                              bullets=[bullet], observation_ids=[o.id for o in observations])
+    assert not ClaimValidator().validate_slide(slide, observations)
+    slide.bullets = [bullet.replace("2025-12-31", "2024-12-31")]
+    assert any(issue.code == "direction_scope_ambiguous"
+               for issue in ClaimValidator().validate_slide(slide, observations))
+
+
+def test_accounting_before_items_is_not_a_temporal_connector() -> None:
+    observations = _series("Adjusted net loss", [-55, -44, -26])
+    text = ("The narrowing adjusted net loss indicates improving underlying "
+            "profitability before non-recurring items.")
+    assert not ClaimValidator().validate_slide(_slide(text, observations), observations)
+    observations[-1].value = -70
+    temporal = "Adjusted net loss narrowed before widening."
+    assert not ClaimValidator().validate_slide(_slide(temporal, observations), observations)
+
+
 @pytest.mark.parametrize(("text", "supported"), [
     ("Net current assets rose from year-end 2023 to 2025.", True),
     ("Net current assets rose from end of the year 2023 to 2025.", True),

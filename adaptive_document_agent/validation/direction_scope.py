@@ -19,6 +19,10 @@ _RANGE = re.compile(
     rf"(?:to|through|until|and|[–-])\s*(?P<end>{_PERIOD})\b", re.I,
 )
 _BY_ENDPOINT = re.compile(rf"\bby\s+(?P<end>{_PERIOD})\b", re.I)
+_RUN_ENDPOINT = re.compile(rf"\b(?:by|through|until|at)\s+(?P<end>{_PERIOD})\b", re.I)
+_NON_TEMPORAL_BEFORE = re.compile(
+    r"\bbefore\s+(?:non[- ]recurring|one[- ]off|exceptional)\s+(?:items|charges|expenses)\b", re.I,
+)
 
 
 @dataclass(frozen=True)
@@ -88,7 +92,19 @@ def context_sign_transition_supported(
 
 def _sequence_between(clause: str, start: int, end: int, metric_spans: list[tuple[int, int]]):
     return next((m for m in _SEQUENCE.finditer(clause, start, end)
-                 if not any(a <= m.start() and m.end() <= b for a, b in metric_spans)), None)
+                 if not any(a <= m.start() and m.end() <= b for a, b in metric_spans)
+                 and not _NON_TEMPORAL_BEFORE.match(clause, m.start())), None)
+
+
+def _trend_runs(observations: list[Observation], trend: Callable[[Observation, Observation], object]):
+    runs: list[tuple[int, int, object]] = []
+    for index, (first, last) in enumerate(zip(observations, observations[1:])):
+        state = trend(first, last)
+        if runs and runs[-1][2] == state:
+            runs[-1] = (runs[-1][0], index + 1, state)
+        else:
+            runs.append((index, index + 1, state))
+    return runs
 
 
 def has_temporal_sequence(clause: str, associations: list[DirectionSpan], metric: str,
@@ -213,6 +229,15 @@ def resolve_direction_scope(
 
     period_mentions = list(re.finditer(rf"\b{_PERIOD}\b", local_text, re.I))
     if period_mentions:
+        if lo < hi and len(period_mentions) == 1:
+            # An ordered pair of predicates can identify unique observed runs.
+            # Its own stated endpoint must equal the end of that exact run.
+            runs = _trend_runs(observations, trend)
+            endpoints = list(_RUN_ENDPOINT.finditer(local_text))
+            if len(runs) == hi - lo + 1 and len(endpoints) == 1:
+                run_start, run_end, _ = runs[position - lo]
+                if _period_index(endpoints[0]["end"], observations) == run_end:
+                    return DirectionScope(observations[run_start:run_end + 1])
         if (lo == hi and len(observations) == 2 and len(period_mentions) == 1
                 and _period_index(period_mentions[0].group(), observations) == 1):
             # With only two linked observations the named final period has
@@ -230,13 +255,7 @@ def resolve_direction_scope(
         return DirectionScope(observations[index:index + 2])
     # Consecutive identical semantic trends form a single run. Do not select a
     # subset of runs or collapse an extra reversal to make the sentence fit.
-    runs: list[tuple[int, int, object]] = []
-    for index, (first, last) in enumerate(zip(observations, observations[1:])):
-        state = trend(first, last)
-        if runs and runs[-1][2] == state:
-            runs[-1] = (runs[-1][0], index + 1, state)
-        else:
-            runs.append((index, index + 1, state))
+    runs = _trend_runs(observations, trend)
     if len(runs) == count:
         first, last, _ = runs[position - lo]
         return DirectionScope(observations[first:last + 1])

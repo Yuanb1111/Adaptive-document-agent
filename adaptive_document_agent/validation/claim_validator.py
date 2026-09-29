@@ -902,6 +902,8 @@ _STANDARD_INCREASE_REPLACEMENTS: dict[str, str] = {
     "contraction": "expansion",
     "slumped": "surged",
     "narrowed": "expanded",
+    "eased": "rose",
+    "easing": "rising",
 }
 
 _STANDARD_DECREASE_REPLACEMENTS: dict[str, str] = {
@@ -1263,7 +1265,7 @@ def split_into_clauses(text: str) -> list[str]:
         r"(?<!\d)\.(?!\d)\s+",
         r",\s+(?:while|whilst|whereas|although|though|but|however|yet|and)\b",
         r"\b(?:while|whilst|whereas|although|though|but|however|yet)\b",
-        r"(?<!\d),(?!\d)\s+(?=[a-zA-Z])",
+        r",\s+(?=[a-zA-Z])",
     ]
     pattern = "|".join(delims)
     raw_clauses = re.split(pattern, text, flags=re.IGNORECASE)
@@ -1411,6 +1413,7 @@ _ALL_DIRECTIONAL_WORDS: list[str] = [
     "decreased", "decreasing", "decreases", "decrease",
     "fell", "falling", "falls", "fall",
     "dropped", "dropping", "drops", "drop",
+    "eased", "easing",
     "contracted", "contracting", "contraction",
     "expanded", "expanding", "expansion",
     "narrowed", "narrowing", "narrows", "narrow",
@@ -1574,6 +1577,23 @@ def is_text_relevant_to_metric(
     if (s_start in text_lower and s_start not in ("", "0")) or (s_end in text_lower and s_end not in ("", "0")):
         return True
     return False
+
+
+def _series_category_in_text(series: dict[str, Any], text: str) -> bool:
+    """Match a source category phrase, allowing only a simple plural inflection."""
+    values = list(series["first"].category_dimensions.values())
+    if not values:
+        return False
+
+    def words(value: str) -> list[str]:
+        tokens = re.findall(r"[a-z0-9]+", value.casefold())
+        return [word[:-1] if len(word) > 3 and word.endswith("s") and not word.endswith("ss")
+                else word for word in tokens]
+
+    haystack = words(text)
+    return all(any(haystack[i:i + len(needle)] == needle
+                   for i in range(len(haystack) - len(needle) + 1))
+               for value in values if (needle := words(str(value))))
 
 
 class ClaimValidator:
@@ -1797,6 +1817,20 @@ class ClaimValidator:
                     scope_text = direction_context(
                         clause, assocs, (m_name, dir_word, direction_start, direction_end), metric_spans
                     )
+                    category_series = [s for s in series_list if s["first"].category_dimensions]
+                    if len(category_series) == len(series_list) and len(series_list) > 1:
+                        qualified = [s for s in series_list if _series_category_in_text(s, scope_text)]
+                        if len(qualified) != 1:
+                            issues.append(DirectionalClaimIssue(
+                                code="direction_scope_ambiguous", severity="error", stage="presentation",
+                                message=f"Slide {slide.id} {comp_type}: '{m_name}' needs one explicit source category.",
+                                slide_id=slide.id, metric_name=m_name, target_component=comp_type,
+                                bullet_index=bullet_idx, offending_direction=dir_word,
+                                expected_direction="UNRESOLVED_SCOPE",
+                                related_ids=[o.id for s in series_list for o in s["sorted_obs"]],
+                            ))
+                            continue
+                        series_list = qualified
 
                     # 1. Incompatible series check (e.g. only currency mismatch or incompatible periods without comparable series)
                     incomp_series = [s for s in series_list if not s["is_comp"]]
