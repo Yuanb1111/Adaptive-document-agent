@@ -42,6 +42,7 @@ from adaptive_document_agent.document_model import (
 from adaptive_document_agent.document_model.period_semantic_validator import extract_period_basis
 from adaptive_document_agent.models import ChartPlan, Observation, PresentationPlan, PresentationSlide, ValidationIssue
 from .direction_scope import (
+    bind_endpoint_to_explicit_context,
     direction_context,
     has_temporal_sequence,
     predicate_conjunctions,
@@ -2372,6 +2373,77 @@ def repair_slide_claims(
     return repaired_plan.slides[0], repairs
 
 
+def _bind_topic_endpoint_claims(
+    plan: PresentationPlan,
+    observations: list[Observation],
+    charts: list[ChartPlan] | None,
+    insight_observation_ids: dict[str, list[str]] | None,
+    evidence_plan: PresentationPlan | None,
+) -> list[str]:
+    """Carry an explicit question range into its ambiguous takeaway copy.
+
+    Only a strictly improving claim-validation result is retained. A question
+    cannot supply a missing period unless the same linked observations support
+    the resulting title and any verbatim executive-summary copy.
+    """
+    candidate_ids = [slide.id for slide in plan.slides
+                     if slide.slide_type == "analysis"
+                     and bind_endpoint_to_explicit_context(slide.title, slide.message) != slide.title]
+    if not candidate_ids:
+        return []
+    validator = ClaimValidator()
+
+    def validate(candidate: PresentationPlan) -> list[ValidationIssue]:
+        return validator.validate_plan(
+            candidate, observations, charts,
+            insight_observation_ids=insight_observation_ids,
+            evidence_plan=candidate if evidence_plan is None or evidence_plan is plan else evidence_plan,
+        )
+
+    def key(issue: ValidationIssue) -> tuple:
+        return (getattr(issue, "slide_id", None), issue.code,
+                getattr(issue, "metric_name", None), getattr(issue, "target_component", None),
+                getattr(issue, "bullet_index", None), getattr(issue, "offending_direction", None))
+
+    current = validate(plan)
+    repairs: list[str] = []
+    for slide_id in candidate_ids:
+        slide = next(item for item in plan.slides if item.id == slide_id)
+        title_issue = next((issue for issue in current if
+            issue.code == "direction_scope_ambiguous"
+            and getattr(issue, "slide_id", None) == slide.id
+            and getattr(issue, "target_component", None) == "title"
+        ), None)
+        if slide.slide_type != "analysis" or title_issue is None:
+            continue
+        revised_title = bind_endpoint_to_explicit_context(slide.title, slide.message)
+        if revised_title == slide.title:
+            continue
+        candidate = plan.model_copy(deep=True)
+        revised = next(item for item in candidate.slides if item.id == slide.id)
+        revised.title = revised_title
+        if sum(item.slide_type == "analysis" and item.title == slide.title for item in plan.slides) == 1:
+            for summary in candidate.slides:
+                if (summary.slide_type not in {"executive_summary", "summary"}
+                        or len(summary.bullet_observation_ids) != len(summary.bullets)):
+                    continue
+                for index, bullet in enumerate(summary.bullets):
+                    if (bullet == slide.title
+                            and set(title_issue.related_ids) <= set(summary.bullet_observation_ids[index])
+                            and any(issue.code == "direction_scope_ambiguous"
+                                    and getattr(issue, "slide_id", None) == summary.id
+                                    and getattr(issue, "target_component", None) == "bullet"
+                                    and getattr(issue, "bullet_index", None) == index
+                                    for issue in current)):
+                        summary.bullets[index] = revised_title
+        checked = validate(candidate)
+        if len(checked) < len(current) and {key(issue) for issue in checked} <= {key(issue) for issue in current}:
+            plan.slides = candidate.slides
+            current = checked
+            repairs.append(f"Slide {slide.id} title and matching summary: bound endpoint to question period range")
+    return repairs
+
+
 def repair_presentation_plan(
     plan: PresentationPlan,
     observations: list[Observation],
@@ -2393,6 +2465,9 @@ def repair_presentation_plan(
                 if new != old:
                     setattr(slide, field, new)
                     alignment_repairs.append(f"Slide {slide.id}: removed duplicate period bounds in {field}")
+    scope_repairs = _bind_topic_endpoint_claims(
+        plan, observations, charts, insight_observation_ids, evidence_plan,
+    )
     validator = ClaimValidator()
     before = plan.model_copy(deep=True)
     issues = validator.validate_plan(plan, observations, charts, insight_observation_ids=insight_observation_ids,
@@ -2434,4 +2509,4 @@ def repair_presentation_plan(
         original_slides = {s.id: s for s in before.slides}
         repaired_plan.slides = [original_slides[s.id] if s.id in unsafe else s for s in repaired_plan.slides]
         claim_repairs = [m for m in claim_repairs if not any(m.startswith(f"Slide {sid} ") for sid in unsafe)]
-    return repaired_plan, [*alignment_repairs, *claim_repairs]
+    return repaired_plan, [*alignment_repairs, *scope_repairs, *claim_repairs]

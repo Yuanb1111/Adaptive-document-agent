@@ -161,6 +161,50 @@ def test_unresolved_or_missing_period_scope_is_not_guessed(values: list[float], 
     assert [o.model_dump() for o in observations] == before_observations
 
 
+def test_question_range_repairs_matching_title_and_summary_endpoint() -> None:
+    observations = _series("Gross profit margin", [31.3, 28.3, 29.5], years=(2021, 2022, 2023))
+    for item in observations:
+        item.unit = "percent"
+        item.raw_unit = "%"
+    title = "Raw materials dominated cost of sales while gross margin narrowed by FY2023."
+    ids = [item.id for item in observations]
+    summary = PresentationSlide(
+        id="summary", slide_type="executive_summary", title="Executive Summary",
+        bullets=[title], bullet_observation_ids=[ids], observation_ids=ids,
+    )
+    analysis = PresentationSlide(
+        id="margin", slide_type="analysis", title=title,
+        message="How did gross margin move across FY2021 to FY2023?",
+        observation_ids=ids,
+    )
+    plan = PresentationPlan(title="Reported movements", slides=[summary, analysis])
+    assert {issue.code for issue in ClaimValidator().validate_plan(plan, observations)} == {
+        "direction_scope_ambiguous"
+    }
+    before = [item.model_dump() for item in observations]
+    repaired, repairs = repair_presentation_plan(plan, observations)
+    expected = "Raw materials dominated cost of sales while gross margin narrowed from FY2021 to FY2023."
+    assert repaired.slides[0].bullets == [expected]
+    assert repaired.slides[1].title == expected
+    assert repairs
+    assert not ClaimValidator().validate_plan(repaired, observations)
+    assert [item.model_dump() for item in observations] == before
+    assert not repair_presentation_plan(repaired, observations)[1]
+
+
+def test_question_range_does_not_rescue_unsupported_endpoint_claim() -> None:
+    observations = _series("Gross profit margin", [31.3, 28.3, 29.5], years=(2021, 2022, 2023))
+    text = "Gross margin increased by FY2023."
+    slide = _slide(text, observations, "title")
+    slide.message = "How did gross margin move across FY2021 to FY2023?"
+    plan = PresentationPlan(title="Reported movements", slides=[slide])
+    repaired, repairs = repair_presentation_plan(plan, observations)
+    assert repaired.slides[0].title == text
+    assert not repairs
+    assert any(issue.code == "direction_scope_ambiguous"
+               for issue in ClaimValidator().validate_plan(repaired, observations))
+
+
 def test_preposed_period_range_belongs_to_its_independent_metric() -> None:
     observations = _series("Revenue", [100, 200, 150]) + _series("Net loss", [-100, -160, -125])
     text = "Revenue increased and from FY2024 to FY2025 net loss narrowed."

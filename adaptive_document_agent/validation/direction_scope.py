@@ -18,12 +18,32 @@ _RANGE = re.compile(
     rf"\b(?:from\s+|between\s+)?(?P<start>{_PERIOD})\s*"
     rf"(?:to|through|until|and|[–-])\s*(?P<end>{_PERIOD})\b", re.I,
 )
+_BY_ENDPOINT = re.compile(rf"\bby\s+(?P<end>{_PERIOD})\b", re.I)
 
 
 @dataclass(frozen=True)
 class DirectionScope:
     observations: list[Observation] | None = None
     error: str = ""
+
+
+def bind_endpoint_to_explicit_context(claim: str, context: str) -> str:
+    """Use a model-written comparison range to qualify its own endpoint claim.
+
+    The caller must still validate the resulting claim against linked evidence.
+    No period is inferred from the observation series here.
+    """
+    ranges = list(_RANGE.finditer(context))
+    endpoints = list(_BY_ENDPOINT.finditer(claim))
+    if len(ranges) != 1 or len(endpoints) != 1:
+        return claim
+    if len(list(re.finditer(rf"\b{_PERIOD}\b", claim, re.I))) != 1:
+        return claim
+    bound, endpoint = ranges[0], endpoints[0]
+    normal = lambda value: re.sub(r"\s+", "", value).casefold()
+    if normal(bound['end']) != normal(endpoint['end']):
+        return claim
+    return claim[:endpoint.start()] + f"from {bound['start']} to {bound['end']}" + claim[endpoint.end():]
 
 
 def _sequence_between(clause: str, start: int, end: int, metric_spans: list[tuple[int, int]]):
