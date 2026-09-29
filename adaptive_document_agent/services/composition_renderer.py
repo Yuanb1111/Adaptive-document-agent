@@ -125,11 +125,11 @@ def add_composition_chart(slide, plan, observations, bounds, *, totals=None, com
                 for i, value in enumerate(row):
                     if value / column_totals[i] < .06:
                         label = series.points[i].data_label
-                        element = OxmlElement("c:delete")
-                        element.set("val", "1")
-                        label._get_or_add_dLbl().insert(1, element)
-                        # Some local renderers ignore c:delete but honour the
-                        # explicit label-content switches.
+                        # A deleted point label cannot also carry the styling
+                        # and content nodes python-pptx adds. Office repairs
+                        # that invalid combination on open. Hide its content
+                        # explicitly while keeping the native chart editable.
+                        label._get_or_add_dLbl()
                         for tag in ("showVal", "showPercent", "showCatName", "showSerName"):
                             flags = label._dLbl.xpath(f"c:{tag}")
                             flag = flags[0] if flags else OxmlElement(f"c:{tag}")

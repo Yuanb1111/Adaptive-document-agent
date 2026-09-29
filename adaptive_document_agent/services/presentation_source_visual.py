@@ -67,8 +67,8 @@ def select_company_source_visual(pdf_bytes: bytes, result: PipelineResult) -> So
 def render_profile_with_source(presentation, title, items, visual: SourceVisual, *, notes=""):
     """Keep complete introductory copy beside uncropped source artwork.
 
-    A long introduction retains its existing pagination and gets a separate
-    preview page instead of losing facts or shrinking the body font.
+    A long introduction retains its existing pagination. The source image is
+    omitted when it would require an otherwise empty preview page.
     """
     from .presentation_brief import _copy_height, _heading_height, render_profile
     from .presentation_artwork import _picture
@@ -91,9 +91,29 @@ def render_profile_with_source(presentation, title, items, visual: SourceVisual,
                    for i in range(0, len(heights), columns)]
     needed = sum(row_heights) + max(0, len(row_heights) - 1) * .20
     fits = bool(retained) and needed <= bottom - top
-    if not fits:
-        # Reuse this slide for a full-page preview, then render all copy.
+    if not retained:
         image_rect = Rect(.65, top, width - 1.3, bottom - top - .30)
+    elif not fits:
+        slide_id = presentation.slides._sldIdLst[-1]
+        presentation.part.drop_rel(slide_id.rId)
+        presentation.slides._sldIdLst.remove(slide_id)
+        pages = render_profile(presentation, title, items, notes=notes)
+        first = pages[0]
+        copy_bottom = max((shape.top.inches + shape.height.inches for shape in first.shapes
+                           if shape.name == 'brief:body'), default=bottom)
+        available = bottom - copy_bottom - .18
+        if available >= 1.45:
+            picture = _picture(first, visual.payload,
+                               Rect(.65, copy_bottom + .18, width - 1.3, available))
+            picture.name = f'source_document_image:p{visual.page}'
+            cited_pages = sorted({visual.page} | {p for item in items for p in item.pages})
+            for shape in first.shapes:
+                if shape.has_text_frame and shape.text.startswith('Source: Document disclosures'):
+                    shape.text_frame.paragraphs[0].runs[0].text = _source_footer(cited_pages)
+                    break
+            first.notes_slide.notes_text_frame.text += (
+                f'\n\nOriginal image from uploaded PDF page {visual.page}; context artwork only.')
+        return pages
     else:
         y = top
         gap = .20 + min(.15, max(0, (bottom - top - needed) / max(len(row_heights), 1)))
@@ -123,6 +143,4 @@ def render_profile_with_source(presentation, title, items, visual: SourceVisual,
         origin + "Context artwork only; analytical claims use their separately cited evidence.\n\n"
         + notes + "\n\n" + full_copy
     )
-    if fits or not retained:
-        return [slide]
-    return [slide, *render_profile(presentation, title, items, notes=notes)]
+    return [slide]

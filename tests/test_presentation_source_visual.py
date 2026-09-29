@@ -129,7 +129,9 @@ def test_long_profile_preview_paginates_without_hiding_copy():
     text = " ".join(shape.text for slide in slides for shape in slide.shapes if shape.has_text_frame)
     assert all(item.title in text for item in items)
     assert text.count("A fully sourced and qualified statement.") == 36
-    assert sum(shape.name == "source_document_image:p1" for slide in slides for shape in slide.shapes) == 1
+    assert not any(shape.name == "source_document_image:p1" for slide in slides for shape in slide.shapes)
+    assert all(any(shape.has_text_frame and shape.text.strip() not in {"", "Document overview", "Document overview (continued)"}
+                   for shape in slide.shapes) for slide in slides)
 
 
 def test_summary_introduction_no_longer_bypasses_source_preview():

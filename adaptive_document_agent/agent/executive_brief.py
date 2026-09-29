@@ -67,4 +67,12 @@ class ExecutiveBriefWriter:
                 messages = [*messages, {'role': 'assistant', 'content': brief.model_dump_json()},
                             {'role': 'user', 'content': 'Repair the source-bound briefing. Validation errors: '
                              + json.dumps(errors, ensure_ascii=False) + '. Use only the supplied excerpts.'}]
+        # A rejected claim must not discard independently verified items. Keep
+        # only items whose own literal quotes and quantities pass the same gate.
+        verified = [item for item in brief.items if not validate_executive_brief(
+            ExecutiveBrief(title='Executive Summary', items=[item]), result, excerpts=excerpts)]
+        if len(verified) >= 3:
+            salvaged = ExecutiveBrief(title='Executive Summary', items=verified)
+            if not validate_executive_brief(salvaged, result, excerpts=excerpts):
+                return salvaged
         raise ValueError('Executive brief failed evidence checks: ' + '; '.join(errors))

@@ -300,7 +300,9 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
     slides_by_type = {slide.slide_type: slide for slide in plan.slides}
     from .presentation_brief import omit_redundant_summary
     summary = slides_by_type["executive_summary"]
-    omit_summary = not result.executive_brief and omit_redundant_summary(plan, summary)
+    use_editorial_brief = result.executive_brief is not None or any(
+        issue.code == 'executive_brief_unavailable' for issue in result.validation_warnings)
+    omit_summary = not use_editorial_brief and omit_redundant_summary(plan, summary)
 
     # Standard order: 1. Cover, 2. Contents, 3. Company at a Glance, 4. Executive Summary
     cover = slides_by_type["cover"]
@@ -745,11 +747,14 @@ def _add_planned_summary(
     slide_plan: PresentationSlide,
     index: DocumentIndex,
 ) -> None:
-    if result.executive_brief:
-        from .executive_brief import brief_items
+    from .executive_brief import display_brief
+    brief_title, selected_brief = display_brief(result)
+    if selected_brief and (result.executive_brief is not None or any(
+            issue.code == 'executive_brief_unavailable' for issue in result.validation_warnings)):
         from .presentation_summary import render_complete_summary
-        render_complete_summary(presentation, result.executive_brief.title, brief_items(result),
-                                notes=result.executive_brief.model_dump_json(indent=2), single_column=True)
+        notes = result.executive_brief.model_dump_json(indent=2) if result.executive_brief else ''
+        render_complete_summary(presentation, brief_title, selected_brief,
+                                notes=notes, single_column=True)
         return
     if _planned_chart_requests(slide_plan) or any(b.role in {"kpi", "table"} and b.observation_ids for b in slide_plan.visual_blocks):
         from .slide_compositor import render_composed_slide
@@ -1224,11 +1229,13 @@ def _add_evidence_overview(presentation: Any, result: PipelineResult) -> None:
 
 
 def _add_document_overview(presentation: Any, result: PipelineResult) -> None:
-    if result.executive_brief:
-        from .executive_brief import brief_items
+    from .executive_brief import display_brief
+    brief_title, selected_brief = display_brief(result)
+    if selected_brief:
         from .presentation_summary import render_complete_summary
-        render_complete_summary(presentation, result.executive_brief.title, brief_items(result),
-                                notes=result.executive_brief.model_dump_json(indent=2), single_column=True)
+        notes = result.executive_brief.model_dump_json(indent=2) if result.executive_brief else ''
+        render_complete_summary(presentation, brief_title, selected_brief,
+                                notes=notes, single_column=True)
         return
     from .presentation_brief import overview_items, render_brief
     items, notes = overview_items(result.profile)
@@ -1679,6 +1686,32 @@ def _add_native_chart(
         # Signed dynamic format preserves minus sign and exact precision
         labels.number_format = num_fmt
         labels.number_format_is_linked = False
+        if (compact and chart.chart_type == XL_CHART_TYPE.LINE_MARKERS
+                and len(categories) >= 5 and len(chart.series) == 1):
+            # Keep endpoints and the largest interior turning point readable.
+            # Source values remain in the editable workbook and slide notes.
+            values_by_point = list(chart.series[0].values)
+            if all(value is not None for value in values_by_point):
+                visible = {0, len(values_by_point) - 1}
+                turns = [i for i in range(1, len(values_by_point)-1)
+                         if (values_by_point[i]-values_by_point[i-1])
+                            * (values_by_point[i+1]-values_by_point[i]) < 0]
+                if turns:
+                    visible.add(max(turns, key=lambda i: abs(values_by_point[i] - (
+                        values_by_point[0] + (values_by_point[-1]-values_by_point[0])
+                        * i/(len(values_by_point)-1)))))
+                from pptx.oxml.xmlchemy import OxmlElement
+                for point_index, point in enumerate(chart.series[0].points):
+                    if point_index in visible:
+                        continue
+                    label = point.data_label._get_or_add_dLbl()
+                    flag = label.xpath('c:showVal')
+                    if flag:
+                        flag[0].set('val', '0')
+                    else:
+                        hidden = OxmlElement('c:showVal')
+                        hidden.set('val', '0')
+                        label.append(hidden)
     except (AttributeError, ValueError):
         pass
     try:
@@ -1909,6 +1942,7 @@ def _add_evidence_table_slides(
 ) -> None:
     from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
     from pptx.util import Inches
+    from .language_qa import clean_display_copy
 
     observations = _appendix_observations(result, charts)
     # Realign title if mislabeled with offering/proceeds without offering data
@@ -1961,7 +1995,7 @@ def _add_evidence_table_slides(
             raw_unit=item.raw_unit,
             unit=item.unit,
         )
-        metric_name = sanitize_metric_label(semantic.clean_name)
+        metric_name = clean_display_copy(sanitize_metric_label(semantic.clean_name))
         categories = item.category_dimensions or {
             k: v for k, v in item.dimensions.items()
             if k not in {"table_context", "section", "period_basis", "column_role", "reporting_basis", "basis", "restatement", "restated", "ifrs_status"}
@@ -2159,13 +2193,16 @@ def _add_evidence_table_slides(
         table_h = min(4.50, content_h - 0.35)
         num_rows = len(table_rows) + 1
         num_cols = len(formatted_headers)
+        short_table = num_rows <= 5
+        body_pt = 11.0 if short_table else 9.5
+        header_pt = 11.5 if short_table else 10.5
         table_shape = slide.shapes.add_table(num_rows, num_cols, Inches(0.45), Inches(table_top), Inches(11.70), Inches(table_h))
         table_shape.name = "evidence:packable"
         table = table_shape.table
 
         num_p = len(active_p_chunk)
         metric_w = max(2.80, min(3.80, 11.70 - 1.10 - num_p * 1.15))
-        unit_w = 1.10
+        unit_w = 1.30
         period_w = (11.70 - metric_w - unit_w) / max(num_p, 1)
         table.columns[0].width = Inches(metric_w)
         table.columns[1].width = Inches(unit_w)
@@ -2174,8 +2211,8 @@ def _add_evidence_table_slides(
 
         for col_idx, h_text in enumerate(formatted_headers):
             cell = table.cell(0, col_idx)
-            cell.text = h_text
-            _cell_style(cell, fill=FOURIER_PURPLE, color=WHITE, bold=True, size=10.5)
+            cell.text = clean_display_copy(h_text)
+            _cell_style(cell, fill=FOURIER_PURPLE, color=WHITE, bold=True, size=header_pt)
             cell.vertical_anchor = MSO_ANCHOR.MIDDLE
             if col_idx >= 2:
                 cell.text_frame.paragraphs[0].alignment = PP_ALIGN.RIGHT
@@ -2185,42 +2222,43 @@ def _add_evidence_table_slides(
         for row_idx, (row_label, row_unit, row_vals, is_header) in enumerate(table_rows, start=1):
             if is_header:
                 cell0 = table.cell(row_idx, 0)
-                cell0.text = f"■ {row_label.upper()}"
-                _cell_style(cell0, fill=FOURIER_BG_CARD, color=FOURIER_PURPLE, bold=True, size=10.0)
+                cell0.text = clean_display_copy(f"■ {row_label.upper()}")
+                _cell_style(cell0, fill=FOURIER_BG_CARD, color=FOURIER_PURPLE, bold=True, size=body_pt)
                 cell0.vertical_anchor = MSO_ANCHOR.MIDDLE
                 cell0.text_frame.paragraphs[0].alignment = PP_ALIGN.LEFT
                 for col_idx in range(1, num_cols):
                     cell = table.cell(row_idx, col_idx)
                     cell.text = ""
-                    _cell_style(cell, fill=FOURIER_BG_CARD, color=FOURIER_PURPLE, bold=True, size=10.0)
+                    _cell_style(cell, fill=FOURIER_BG_CARD, color=FOURIER_PURPLE, bold=True, size=body_pt)
             else:
                 row_fill = WHITE if row_idx % 2 == 0 else FOURIER_BG_CARD
                 cell0 = table.cell(row_idx, 0)
-                cell0.text = row_label
-                _cell_style(cell0, fill=row_fill, color=FOURIER_DARK, bold=False, size=9.5)
+                cell0.text = clean_display_copy(row_label)
+                _cell_style(cell0, fill=row_fill, color=FOURIER_DARK, bold=False, size=body_pt)
                 cell0.text_frame.word_wrap = True
                 cell0.vertical_anchor = MSO_ANCHOR.MIDDLE
                 cell0.text_frame.paragraphs[0].alignment = PP_ALIGN.LEFT
 
                 cell1 = table.cell(row_idx, 1)
-                cell1.text = str(row_unit)
-                _cell_style(cell1, fill=row_fill, color=FOURIER_DARK, bold=False, size=9.5)
+                cell1.text = clean_display_copy(str(row_unit))
+                _cell_style(cell1, fill=row_fill, color=FOURIER_DARK, bold=False, size=body_pt)
                 cell1.vertical_anchor = MSO_ANCHOR.MIDDLE
                 cell1.text_frame.paragraphs[0].alignment = PP_ALIGN.LEFT
 
                 for col_idx, val in enumerate(row_vals, start=2):
                     cell = table.cell(row_idx, col_idx)
-                    cell.text = str(val)
-                    _cell_style(cell, fill=row_fill, color=FOURIER_DARK, bold=False, size=9.5)
+                    cell.text = clean_display_copy(str(val))
+                    _cell_style(cell, fill=row_fill, color=FOURIER_DARK, bold=False, size=body_pt)
                     cell.vertical_anchor = MSO_ANCHOR.MIDDLE
                     cell.text_frame.paragraphs[0].alignment = PP_ALIGN.RIGHT
 
         from .text_capacity import wrap_copy
         from copy import deepcopy
-        for row in table.rows:
+        for table_row_index, row in enumerate(table.rows):
             lines = []
             for cell, col in zip(row.cells, table.columns):
-                wrapped = wrap_copy(cell.text, col.width.inches - .16, 10.5)
+                wrapped = wrap_copy(cell.text, col.width.inches - .16,
+                                    header_pt if table_row_index == 0 else body_pt)
                 properties = deepcopy(cell.text_frame.paragraphs[0]._p.pPr)
                 cell.text = "\n".join(wrapped)
                 if properties is not None:
@@ -2228,7 +2266,8 @@ def _add_evidence_table_slides(
                         paragraph._p.insert(0, deepcopy(properties))
                 cell.text_frame.word_wrap = True
                 lines.append(len(wrapped))
-            row.height = Inches(max(.38, max(lines) * .16 + .13))
+            row.height = Inches(max(.55 if short_table else .38,
+                                    max(lines) * (body_pt / 72 * 1.15) + .13))
 
         has_unaudited = any("*" in h for h in formatted_headers[1:])
         star_note = " | * Unaudited" if has_unaudited else ""
@@ -2282,10 +2321,10 @@ def update_geometry(
 
 
 def _base_slide(presentation: Any, title: str, subtitle: str = "", *, background: str | None = None) -> Any:
-    from adaptive_document_agent.services.language_qa import polish_slide_title
+    from adaptive_document_agent.services.language_qa import clean_display_copy, polish_slide_title
 
-    clean_title = polish_slide_title(_summary_text(title, 118))
-    clean_subtitle = _summary_text(subtitle, 175) if subtitle else ""
+    clean_title = polish_slide_title(_summary_text(clean_display_copy(title), 118))
+    clean_subtitle = _summary_text(clean_display_copy(subtitle), 175) if subtitle else ""
     layout_idx = 5 if len(clean_title) <= 52 else 6
     if layout_idx < len(presentation.slide_layouts):
         slide = presentation.slides.add_slide(presentation.slide_layouts[layout_idx])
@@ -2362,6 +2401,7 @@ def _text(
 ) -> Any:
     from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
     from pptx.util import Inches, Pt
+    from .language_qa import clean_display_copy
 
     box = slide.shapes.add_textbox(Inches(left), Inches(top), Inches(width), Inches(height))
     frame = box.text_frame
@@ -2371,7 +2411,7 @@ def _text(
     frame.margin_top = frame.margin_bottom = Inches(0.01)
     frame.vertical_anchor = MSO_ANCHOR.TOP
     paragraph = frame.paragraphs[0]
-    paragraph.text = value
+    paragraph.text = clean_display_copy(value)
     paragraph.alignment = {"left": PP_ALIGN.LEFT, "center": PP_ALIGN.CENTER, "right": PP_ALIGN.RIGHT}[align]
     paragraph.font.name = font
     paragraph.font.size = Pt(size)

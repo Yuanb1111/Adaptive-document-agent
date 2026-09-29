@@ -73,3 +73,85 @@ def brief_items(result: PipelineResult):
     if errors:
         raise ValueError('Invalid executive brief: ' + '; '.join(errors))
     return [BriefItem(item.label, item.text, sorted({q.page for q in item.evidence})) for item in brief.items]
+
+
+def display_brief(result: PipelineResult):
+    """Use the editorial brief or evidence-bound facts from selected charts.
+
+    The presentation plan selects topics semantically. This fallback only
+    formats the selected, comparable observations when model copy cannot pass
+    quotation checks; it never changes the extracted records.
+    """
+    if result.executive_brief is not None:
+        return result.executive_brief.title, brief_items(result)
+    from adaptive_document_agent.document_model import DocumentIndex
+    from .presentation_brief import BriefItem
+
+    plan = result.presentation_plan
+    if plan is None:
+        return 'Executive Summary', []
+    index = DocumentIndex(result.observations)
+    charts = {chart.id: chart for chart in result.charts}
+    items = []
+    for slide in plan.slides:
+        if slide.slide_type != 'analysis':
+            continue
+        facts = [_brief_fact_for_chart(charts[cid], index) for cid in slide.chart_ids if cid in charts]
+        facts = [fact for fact in facts if fact is not None][:3]
+        if not facts:
+            continue
+        pages = sorted({page for fact in facts for page in fact[1]})
+        label = slide.section_title or slide.title
+        items.append(BriefItem(label, ' '.join(fact[0] for fact in facts), pages))
+        if len(items) >= 6:
+            break
+    return 'Executive Summary', items
+
+
+def _brief_fact_for_chart(chart, index):
+    """Render a selected, comparable series as exact levels and periods."""
+    from adaptive_document_agent.document_model import display_metric_name, period_sort_key
+    from adaptive_document_agent.document_model.period_semantic_validator import format_canonical_period
+    from .composition_data import uses_composition_data
+    from .financial_formatter import format_compact_currency
+    from .pptx_export import _chart_findings
+    from .language_qa import clean_display_copy
+
+    if uses_composition_data(chart) or not _chart_findings([chart], index):
+        return None
+    unique = {}
+    for identifier in chart.observation_ids:
+        item = index.get(identifier)
+        if item is not None and item.period and item.value is not None:
+            previous = unique.get(item.period)
+            if previous is None or item.confidence > previous.confidence:
+                unique[item.period] = item
+    ordered = sorted(unique.values(), key=lambda item: period_sort_key(item.period))
+    if len(ordered) < 2:
+        return None
+    points = [ordered[0], ordered[-1]]
+    if len(ordered) >= 3:
+        values = [float(item.value) for item in ordered]
+        turning = [i for i in range(1, len(values)-1)
+                   if (values[i]-values[i-1]) * (values[i+1]-values[i]) < 0]
+        if turning:
+            pivot = max(turning, key=lambda i: abs(values[i] - (
+                values[0] + (values[-1]-values[0])*i/(len(values)-1))))
+            points.insert(1, ordered[pivot])
+
+    def value(item):
+        number = float(item.value)
+        if item.currency:
+            shown = format_compact_currency(number, raw_unit=item.raw_unit,
+                                            currency=item.currency, is_base_value=True)
+            return shown.replace('-'+item.currency, item.currency+' -', 1)
+        if item.unit in {'percent', '%'} or item.raw_unit == '%':
+            return f'{number:,.1f}%'
+        if item.unit in {'count', 'units'}:
+            return f'{number:,.0f} units'
+        return f'{number:,.1f} {item.unit or item.raw_unit or ""}'.strip()
+
+    label = clean_display_copy(display_metric_name(ordered[0]))
+    levels = '; '.join(f'{format_canonical_period(item)} {value(item)}' for item in points)
+    pages = sorted({e.page for item in points for e in item.evidence})
+    return f'{label}: {levels}.', pages

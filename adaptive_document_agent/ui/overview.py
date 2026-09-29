@@ -7,14 +7,15 @@ from .branding import insight_card
 
 
 def render(st, result: PipelineResult) -> None:
-    from adaptive_document_agent.services.executive_brief import brief_items
+    from adaptive_document_agent.services.executive_brief import display_brief
     try:
-        items = brief_items(result)
+        title, items = display_brief(result)
     except ValueError:
+        title = "Executive Summary"
         items = []
         st.warning("The saved executive briefing failed its source checks. Showing document context instead.")
     if items:
-        st.subheader(_literal(result.executive_brief.title))
+        st.subheader(_literal(title))
         for item in items:
             st.markdown(f"**{_literal(item.title)}** — {_literal(item.text)}")
             st.caption("Source pages: " + ", ".join(map(str, item.pages)))

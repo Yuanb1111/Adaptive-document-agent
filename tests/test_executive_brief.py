@@ -7,7 +7,7 @@ from pptx.util import Inches
 from adaptive_document_agent.agent.executive_brief import ExecutiveBriefWriter
 from adaptive_document_agent.models import DocumentPage, DocumentProfile, ParsedDocument, PipelineResult
 from adaptive_document_agent.models.executive_brief import ExecutiveBrief
-from adaptive_document_agent.services.executive_brief import brief_items, validate_executive_brief
+from adaptive_document_agent.services.executive_brief import brief_items, display_brief, validate_executive_brief
 from adaptive_document_agent.services.llm import LLMGateway
 from adaptive_document_agent.services.llm.config import LLMSettings, ProviderName
 from adaptive_document_agent.services.llm.mock import MockLLMClient
@@ -130,3 +130,49 @@ def test_chinese_amounts_keep_currency_and_magnitude():
     for changed in (source.replace("46亿美元", "46亿港元"), source.replace("46亿美元", "46万美元")):
         brief.items[0].text = changed
         assert validate_executive_brief(brief, r)
+
+
+def test_invalid_item_does_not_discard_three_independently_verified_brief_items():
+    source = 'Revenue was 12. Costs were 8. Cash was 4.'
+    r = result_for([source])
+    items = [
+        {'label': label, 'text': sentence, 'evidence': [{'page': 1, 'text': sentence}]}
+        for label, sentence in [('Revenue', 'Revenue was 12.'),
+                                ('Costs', 'Costs were 8.'),
+                                ('Cash', 'Cash was 4.')]
+    ]
+    items.append({'label': 'Invented', 'text': 'Debt was 99.',
+                  'evidence': [{'page': 1, 'text': 'Revenue was 12.'}]})
+    g, client = gateway([{'title': 'Highlights', 'items': items}] * 2)
+    brief = ExecutiveBriefWriter(g).generate(r)
+    assert [item.label for item in brief.items] == ['Revenue', 'Costs', 'Cash']
+    assert not validate_executive_brief(brief, r)
+    assert len(client.calls) == 2
+
+
+def test_missing_editorial_brief_uses_selected_sourced_charts_in_web_and_ppt():
+    from tests.test_pptx_export import _result
+    from adaptive_document_agent.models import PresentationPlan
+
+    r = _result()
+    original = r.model_dump()
+    from adaptive_document_agent.models import ValidationIssue
+    r.validation_warnings.append(ValidationIssue(code='executive_brief_unavailable',
+        message='Source checks rejected the final briefing.', stage='report'))
+    r.presentation_plan = PresentationPlan(title='Review', slides=[
+        PresentationSlide(id='summary', slide_type='executive_summary', title='Executive Summary'),
+        PresentationSlide(id='revenue', slide_type='analysis', title='Revenue',
+                          message='How did revenue change?', chart_ids=['chart-1']),
+    ])
+    title, items = display_brief(r)
+    assert title == 'Executive Summary'
+    assert len(items) == 1 and items[0].pages == [234]
+    assert 'FY2023 RMB 267.0m' in items[0].text
+    assert 'FY2025 RMB 521.7m' in items[0].text
+    web = WebRecorder(); render(web, r)
+    assert any(_literal(items[0].text) in copy for copy in web.copy)
+    ppt = Presentation(); ppt.slide_width, ppt.slide_height = Inches(13.333), Inches(7.5)
+    _add_planned_summary(ppt, r, r.presentation_plan.slides[0], DocumentIndex(r.observations))
+    visible = ' '.join(s.text for slide in ppt.slides for s in slide.shapes if s.has_text_frame)
+    assert items[0].text in visible
+    assert [item.model_dump() for item in r.observations] == original['observations']

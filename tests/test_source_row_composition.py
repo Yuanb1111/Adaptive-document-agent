@@ -155,4 +155,7 @@ def test_small_composition_parts_do_not_hide_every_label():
             from pptx.enum.chart import XL_DATA_LABEL_POSITION
             assert native.series[0].points[1].data_label.position == XL_DATA_LABEL_POSITION.OUTSIDE_END
         else:
-            assert native.series[1].points[0].data_label._dLbl.xpath('c:delete')[0].get('val') == '1'
+            label = native.series[1].points[0].data_label._dLbl
+            assert not label.xpath('c:delete')
+            assert label.xpath('c:showVal')[0].get('val') == '0'
+            assert label.xpath('c:showPercent')[0].get('val') == '0'

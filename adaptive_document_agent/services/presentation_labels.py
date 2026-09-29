@@ -36,3 +36,14 @@ def qualify_heading(title: str, observations: list[Observation]) -> str:
 
 def qualified_metric_name(observation: Observation) -> str:
     return qualify_heading(display_metric_name(observation), [observation])
+
+
+def readable_chart_heading(title: str, *, composition: bool = False) -> str:
+    """Keep chart captions tied to their measure without pipeline boilerplate."""
+    from .language_qa import clean_display_copy
+
+    label = clean_display_copy(title)
+    label = re.sub(r"(?i)\s*(?:[-–—]\s*)?reported values(?=\s*(?:\(|$))", "", label).strip()
+    if composition and re.fullmatch(r"(?i)(?:% of total|share of total)?\s*composition", label):
+        return "Category share of total"
+    return label or "Reported measure"

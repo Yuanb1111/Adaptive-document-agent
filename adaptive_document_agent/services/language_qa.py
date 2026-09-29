@@ -110,6 +110,22 @@ def clean_presentation_text(text: str) -> str:
     return clean.strip()
 
 
+def clean_display_copy(text: str) -> str:
+    """Remove broken extraction glyphs only from audience-facing copy.
+
+    Raw page text, quotes, observation labels and speaker-note evidence retain
+    their original bytes. A replacement character cannot be reconstructed, so
+    it is omitted rather than guessed as a meaningful symbol.
+    """
+    if not text:
+        return ""
+    clean = str(text).replace("\ufffd", "")
+    clean = re.sub(r"(?i)%\s*of\b", "% of", clean)
+    # Keep every original boundary and space: pagination stores adjacent text
+    # fragments in separate shapes and reconstructs their exact copy later.
+    return clean
+
+
 _EXPENSE_NUMERATORS: tuple[tuple[str, str], ...] = (
     (r"(?:research\s+(?:and|&)\s+development|r\s*&\s*d)", "R&D"),
     (r"(?:selling|sales)\s+(?:and|&)\s+marketing", "Selling & Marketing"),

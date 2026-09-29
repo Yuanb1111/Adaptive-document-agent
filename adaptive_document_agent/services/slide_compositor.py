@@ -13,7 +13,7 @@ from adaptive_document_agent.document_model import display_metric_name
 from adaptive_document_agent.models import ChartPlan, PipelineResult, PresentationSlide
 
 from .presentation_style import CHART_TITLE_PT, DARK, FONT, FOOTNOTE_PT, GUTTER, MUTED, PURPLE
-from .presentation_labels import qualify_heading
+from .presentation_labels import qualify_heading, readable_chart_heading
 
 COMMENTARY_PT = 16
 COMMENTARY_LINE_PT = 20
@@ -243,7 +243,9 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
                    | {e.page for iid in insight_ids if iid in insight_map for e in insight_map[iid].evidence})
     from .presentation_conventions import signed_expense_note, signed_expense_display
     convention = signed_expense_note(support + [index.get(oid) for oid in chart_obs if index.get(oid)])
-    subtitle = "\n".join(part for part in (slide_plan.message, convention) if part)
+    from .presentation_trajectory import supported_subtitle
+    display_message = (slide_plan.message if support else supported_subtitle(slide_plan, charts, index))
+    subtitle = "\n".join(part for part in (display_message, convention) if part)
     heading = slide_plan.title
     # A complete analytical claim may not fit the template's 32 pt title role.
     # Reuse the planner's own section heading and display the entire claim as
@@ -253,7 +255,9 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
         heading = slide_plan.section_title
         if slide_plan.title.endswith(" (continued)"):
             heading += " (continued)"
-        subtitle = "\n".join(part for part in (slide_plan.title, convention) if part)
+        subtitle = "\n".join(part for part in (
+            slide_plan.title,
+            convention) if part)
     convention_h = 0.0
     if len(_lines(subtitle, 8.91, 18)) > 3 and convention:
         subtitle = subtitle.removesuffix("\n" + convention)
@@ -287,7 +291,9 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
         qualified = {display_metric_name(o) for o in values}
         if len(qualified) == 1 and not any(o.category_dimensions for o in values) and any(o.parent_section or o.dimensions.get("section") for o in values):
             heading = next(iter(qualified))
-        heading = qualify_heading(heading, values)
+        from .composition_data import uses_composition_data
+        heading = readable_chart_heading(qualify_heading(heading, values),
+                                         composition=uses_composition_data(chart))
         heading = re.sub(r"(?i)^Adjusted for Adjusted\b", "Adjusted", heading)
         headings.append(re.sub(r"(?i)\b(margin|ratio|share)\s+\1\b", r"\1", heading))
     shared_heading_h = max([.28] + [len(_lines(t, r.w, CHART_TITLE_PT)) * CHART_TITLE_PT / 72 * 1.22
@@ -299,7 +305,9 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
         # label names only the child. Do not turn grants into expense metrics.
         if len(qualified) == 1 and not any(o.category_dimensions for o in values) and any(o.parent_section or o.dimensions.get("section") for o in values):
             title = re.sub(r"(?i)^Adjusted for Adjusted\b", "Adjusted", next(iter(qualified)))
-        title = re.sub(r"(?i)\b(margin|ratio|share)\s+\1\b", r"\1", title)
+        from .composition_data import uses_composition_data
+        title = readable_chart_heading(re.sub(r"(?i)\b(margin|ratio|share)\s+\1\b", r"\1", title),
+                                       composition=uses_composition_data(chart))
         title_lines = _lines(title, rect.w, CHART_TITLE_PT)
         if len(title_lines) > 3:
             raise ValueError(f"Chart title exceeds readable capacity: {chart.id}")
@@ -311,8 +319,6 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
             raise ValueError("Chart labels cannot fit; split the planned charts into additional slides.")
         scale, scale_label = _add_native_chart(slide, chart, values, bounds, compact=rect.w < 4.5, totals=totals)
         unit = "Share (%)" if chart.chart_type == "stacked_percent" else _unit_label(values, scale_label)
-        if chart.chart_type == "line" and any(o.as_of_date or o.period_basis == "point_in_time" for o in values):
-            unit += " | Dates shown as equally spaced categories"
         if chart.chart_type in {"doughnut", "pie"}:
             unit = f"{values[0].period} | {unit}"
         _put_text(slide, unit, Rect(rect.x, rect.y + heading_h, rect.w, 0.20), size=FOOTNOTE_PT, color=MUTED)
