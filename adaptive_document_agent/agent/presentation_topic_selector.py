@@ -14,6 +14,15 @@ from adaptive_document_agent.utils.ids import stable_id
 from .prompting import load_prompt, untrusted_document_message
 
 
+def _reconciles_order(order, index, waterfall_data, visual_block_type) -> bool:
+    """Check only existence of a source-consistent arithmetic ordering."""
+    try:
+        waterfall_data(visual_block_type(role="waterfall", observation_ids=list(order)), index)
+    except ValueError:
+        return False
+    return True
+
+
 def series_directory(result: PipelineResult) -> tuple[list[dict[str, object]], dict[str, list]]:
     """Expose every extracted metric scope, without truncating to a chart quota."""
     directory: list[dict[str, object]] = []
@@ -180,6 +189,34 @@ class PresentationTopicSelector:
                 raise ValueError(f"Topic {topic.id} cites unknown or no metric series")
             if len(topic.series_ids) != len(set(topic.series_ids)):
                 raise ValueError(f"Topic {topic.id} repeats a metric series")
+            if len(topic.series_ids) > 3:
+                from adaptive_document_agent.models import PresentationVisualBlock
+                from adaptive_document_agent.services.presentation_matrix import comparison_matrix
+
+                members = list({item.id: item for sid in topic.series_ids for item in lookup[sid]}.values())
+                if len(members) > 30:
+                    raise ValueError(f"Topic {topic.id} exceeds a readable comparison matrix")
+                dimensions = {key for item in members
+                              for key in {**item.dimensions, **item.category_dimensions}
+                              if key not in {"table_context", "section", "column_role", "period_basis"}}
+                for dimension in dimensions:
+                    try:
+                        comparison_matrix(PresentationVisualBlock(
+                            role="matrix", observation_ids=[item.id for item in members],
+                            matrix_dimension=dimension), {item.id: item for item in members})
+                        break
+                    except ValueError:
+                        continue
+                else:
+                    from itertools import permutations
+                    from adaptive_document_agent.services.presentation_waterfall import waterfall_data
+
+                    index = {item.id: item for item in members}
+                    if not (3 <= len(members) <= 6 and any(
+                        _reconciles_order(order, index, waterfall_data, PresentationVisualBlock)
+                        for order in permutations(index)
+                    )):
+                        raise ValueError(f"Topic {topic.id} links more than three series without a complete matrix or exact bridge")
             if primary_pages and any(
                 not any(e.page in primary_pages for item in lookup[sid] for e in item.evidence)
                 for sid in topic.series_ids

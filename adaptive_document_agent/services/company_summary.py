@@ -70,6 +70,18 @@ def validate_summary(company, result) -> list[str]:
             allowed = PresentationPlanValidator._numbers(item.source_quote)
             if claimed - allowed:
                 errors.append(f"{field}: unsupported numeric claims {sorted(claimed - allowed)}")
+    if company.value_chain and not 3 <= len(company.value_chain) <= 5:
+        errors.append("value_chain: a sourced flow requires three to five distinct stages")
+    for item in company.value_chain:
+        if not set(item.source_pages) <= candidate_text.keys():
+            errors.append("value_chain: citations must belong to supplied company introduction candidates")
+        quote = normalize(item.source_quote)
+        if not quote or not any(quote in normalize(candidate_text.get(p, "")) for p in item.source_pages):
+            errors.append("value_chain: supporting quote is absent from cited pages")
+        claimed = PresentationPlanValidator._numbers(item.label + " " + item.text)
+        allowed = PresentationPlanValidator._numbers(item.source_quote)
+        if claimed - allowed:
+            errors.append(f"value_chain: unsupported numeric claims {sorted(claimed - allowed)}")
     if bool(company.summary_overview) != bool(company.summary_business):
         errors.append("company Summary introduction requires both overview and business pages")
     return errors

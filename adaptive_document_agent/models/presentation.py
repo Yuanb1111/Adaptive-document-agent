@@ -36,7 +36,18 @@ PresentationLayout = Literal[
 
 PresentationSlideRole = Literal["overview", "deep_dive", "drivers", "watch_items", "risk", "methodology", "source_data"]
 
-PresentationBlockRole = Literal["hero", "supporting", "kpi", "table", "commentary"]
+PresentationBlockRole = Literal["hero", "supporting", "kpi", "table", "commentary", "waterfall", "matrix", "horizon"]
+
+
+class HorizonItem(BaseModel):
+    """One source-quoted fact in a stock, flow and future comparison."""
+
+    kind: Literal["stock", "flow", "future"]
+    label: str = Field(min_length=1, max_length=60)
+    text: str = Field(min_length=1, max_length=240)
+    source_pages: list[int] = Field(min_length=1)
+    source_quote: str = Field(min_length=1)
+    observation_id: str = ""
 
 
 class CompanyFact(BaseModel):
@@ -91,6 +102,7 @@ class CompanyProfile(BaseModel):
     field_source_pages: dict[str, list[int]] = Field(default_factory=dict)
     summary_overview: CompanySummaryPage | None = None
     summary_business: CompanySummaryPage | None = None
+    value_chain: list[CompanySummaryItem] = Field(default_factory=list, max_length=5)
 
 
 class PresentationVisualBlock(BaseModel):
@@ -99,9 +111,11 @@ class PresentationVisualBlock(BaseModel):
     role: PresentationBlockRole
     title: str = ""
     chart_ids: list[str] = Field(default_factory=list, max_length=2)
-    observation_ids: list[str] = Field(default_factory=list, max_length=12)
+    observation_ids: list[str] = Field(default_factory=list, max_length=30)
     insight_ids: list[str] = Field(default_factory=list, max_length=3)
     chart_type: ChartType | None = None
+    matrix_dimension: str = ""
+    horizon_items: list[HorizonItem] = Field(default_factory=list, max_length=3)
 
 
 class PresentationSlide(BaseModel):
@@ -165,7 +179,7 @@ class PresentationTopic(BaseModel):
     question: str
     rationale: str
     takeaway: str = ""
-    series_ids: list[str] = Field(default_factory=list, max_length=3)
+    series_ids: list[str] = Field(default_factory=list, max_length=24)
     caveats: list[str] = Field(default_factory=list, max_length=3)
 
 

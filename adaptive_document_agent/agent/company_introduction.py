@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from pydantic import BaseModel, Field
 
 from adaptive_document_agent.models import PipelineResult, PresentationPlan
-from adaptive_document_agent.models.presentation import CompanyProfile, CompanySummaryPage
+from adaptive_document_agent.models.presentation import CompanyProfile, CompanySummaryItem, CompanySummaryPage
 from adaptive_document_agent.services.company_summary import summary_excerpts, validate_summary
 from .prompting import untrusted_document_message
 
@@ -23,6 +23,7 @@ class IntroductionDraft(BaseModel):
     name_page: int | None = None
     overview: CompanySummaryPage | None = None
     business: CompanySummaryPage | None = None
+    value_chain: list[CompanySummaryItem] = Field(default_factory=list, max_length=5)
 
 
 _RULES = (
@@ -104,19 +105,27 @@ def ensure_company_introduction(gateway, result, plan) -> None:
          "Preserve the date, measurement basis and attribution of every market ranking; "
          "omit a ranking if its qualifiers cannot fit rather than generalizing it. "
          "Page titles must be short topic labels without numeric claims. Provide the legal company name "
-         "only with a literal name_quote and name_page. If insufficient, return null pages."},
+         "only with a literal name_quote and name_page. If insufficient, return null pages. "
+         "Optionally provide value_chain as three to five ordered operating stages when the "
+         "supplied excerpts explicitly explain a coherent flow from offering through customer, "
+         "revenue or operations. Give every stage a concise label, a short factual sentence, "
+         "a literal contiguous source_quote and its source_pages. Do not infer missing stages "
+         "or force a flow for documents without one; otherwise return an empty list."},
         untrusted_document_message(json.dumps(excerpts, ensure_ascii=False)),
     ]
     for attempt in range(2):
         draft = gateway.generate_structured(messages, IntroductionDraft,
                                             stage="presentation", allow_repair=False)
-        company = CompanyProfile(summary_overview=draft.overview, summary_business=draft.business)
+        company = CompanyProfile(summary_overview=draft.overview, summary_business=draft.business,
+                                 value_chain=draft.value_chain)
         errors = validate_summary(company, result)
         if not draft.overview or not draft.business:
             errors.append("Both distinct introduction pages need source evidence")
         for page in (draft.overview, draft.business):
             if page and any(not set(item.source_pages) <= set(selected.pages) for item in page.items):
                 errors.append("Citations must belong to the selected excerpts")
+        if any(not set(item.source_pages) <= set(selected.pages) for item in draft.value_chain):
+            errors.append("Operating flow citations must belong to the selected excerpts")
         if draft.name:
             norm = lambda s: " ".join(s.casefold().split())
             text = by_page.get(draft.name_page, {}).get("text", "") if draft.name_page in selected.pages else ""
@@ -129,6 +138,7 @@ def ensure_company_introduction(gateway, result, plan) -> None:
         if not errors:
             company.source_pages = sorted({p for page in (draft.overview, draft.business)
                                            for item in page.items for p in item.source_pages}
+                                          | {p for item in draft.value_chain for p in item.source_pages}
                                           | ({draft.name_page} if draft.name else set()))
             _apply_introduction(plan, company)
             from adaptive_document_agent.services.presentation_identity import reconcile_presentation_identity

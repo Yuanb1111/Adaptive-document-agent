@@ -33,7 +33,7 @@ def visible_observation_ids(slide, charts):
     chart_ids = [*slide.chart_ids, *(cid for block in slide.visual_blocks for cid in block.chart_ids)]
     return list(dict.fromkeys([
         *(oid for cid in chart_ids if cid in charts for oid in charts[cid].observation_ids),
-        *(oid for block in slide.visual_blocks if block.role in {"table", "kpi"} for oid in block.observation_ids),
+        *(oid for block in slide.visual_blocks if block.role in {"table", "kpi", "waterfall", "matrix", "horizon"} for oid in block.observation_ids),
     ]))
 
 

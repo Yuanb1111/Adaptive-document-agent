@@ -5,6 +5,7 @@ import pytest
 from adaptive_document_agent.agent.company_introduction import (
     IntroductionDraft, IntroductionPages, ensure_company_introduction,
 )
+from adaptive_document_agent.models.presentation import CompanySummaryItem
 from adaptive_document_agent.models import Observation, PresentationSlide, SourceEvidence
 from adaptive_document_agent.document_model.topic_matcher import is_positive_topic_mismatch
 from adaptive_document_agent.validation.claim_validator import ClaimValidator, extract_metric_aliases
@@ -62,6 +63,26 @@ def test_recovery_extracts_two_pages_independently_and_removes_heuristic_fields(
     assert all(call[2]["stage"] == "presentation" for call in gateway.calls)
     ensure_company_introduction(gateway, result, result.presentation_plan)
     assert len(gateway.calls) == 2
+
+
+def test_independent_introduction_attaches_sourced_operating_flow():
+    result = sample()
+    company = result.presentation_plan.company.model_copy(deep=True)
+    result.presentation_plan.company.summary_overview = None
+    result.presentation_plan.company.summary_business = None
+    passages = ["We provide payroll and scheduling services.",
+                "Employers purchase access for their teams.",
+                "Customers pay recurring subscription fees."]
+    result.document.pages[2].text += "\n" + "\n".join(passages[1:])
+    draft = IntroductionDraft(overview=company.summary_overview, business=company.summary_business,
+                              value_chain=[CompanySummaryItem(
+                                  label=label, text=passage, source_quote=passage, source_pages=[18])
+                                  for label, passage in zip(("Offer", "Customers", "Revenue"), passages)])
+    gateway = Gateway([IntroductionPages(pages=[5, 18]), draft])
+    ensure_company_introduction(gateway, result, result.presentation_plan)
+    assert [item.label for item in result.presentation_plan.company.value_chain] == [
+        "Offer", "Customers", "Revenue",
+    ]
 
 
 def test_introduction_rejects_invented_quotation_after_one_repair():

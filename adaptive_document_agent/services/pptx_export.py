@@ -299,6 +299,8 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
     chart_by_id = {item.id: item for item in _usable_charts(result)}
     from .presentation_key_figures import select_key_figures
     key_figures = select_key_figures(result, list(chart_by_id.values()))
+    from .presentation_value_chain import can_render_value_chain
+    value_chain = can_render_value_chain(plan.company, presentation.slide_width.inches)
     slides_by_type = {slide.slide_type: slide for slide in plan.slides}
     from .presentation_brief import omit_redundant_summary
     summary = slides_by_type["executive_summary"]
@@ -317,8 +319,12 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
             contents_slides.insert(company_index + 1, contents_slides[company_index].model_copy(update={
                 "section_title": plan.company.summary_business.title,
             }))
-    _add_planned_contents(presentation, contents_slides, include_key_figures=bool(key_figures))
+    _add_planned_contents(presentation, contents_slides, include_key_figures=bool(key_figures),
+                          include_value_chain=value_chain)
     _add_company_at_a_glance(presentation, result, slides_by_type["company_overview"])
+    if value_chain:
+        from .presentation_value_chain import render_value_chain
+        render_value_chain(presentation, plan.company)
     if omit_summary:
         presentation.slides[-1].notes_slide.notes_text_frame.text += (
             "\n\nOmitted duplicate summary; original copy and evidence references:\n"
@@ -339,6 +345,24 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
     ordinal = 0
     for slide_plan in plan.slides[3:]:
         if slide_plan.slide_type == "analysis":
+            horizon = [block for block in slide_plan.visual_blocks if block.role == "horizon"]
+            if horizon:
+                from .presentation_horizon import render_horizon
+                render_horizon(presentation, slide_plan, horizon[0], index, result.document)
+                ordinal += 1
+                continue
+            matrix = [block for block in slide_plan.visual_blocks if block.role == "matrix"]
+            if matrix:
+                from .presentation_matrix import render_matrix
+                render_matrix(presentation, slide_plan, matrix[0], index)
+                ordinal += 1
+                continue
+            waterfall = [block for block in slide_plan.visual_blocks if block.role == "waterfall"]
+            if waterfall:
+                from .presentation_waterfall import render_waterfall
+                render_waterfall(presentation, slide_plan, waterfall[0], index)
+                ordinal += 1
+                continue
             chart_requests = _planned_chart_requests(slide_plan)
             requested_chart_ids = [identifier for identifier, _ in chart_requests]
             unavailable_chart_ids = set(requested_chart_ids) - chart_by_id.keys()
@@ -478,6 +502,7 @@ def _planned_observations(slide_plan: PresentationSlide, index: DocumentIndex) -
 def _add_planned_contents(
     presentation: Any, planned_slides: list[PresentationSlide], *, evidence_in_notes: bool = False,
     include_key_figures: bool = False,
+    include_value_chain: bool = False,
 ) -> None:
     entries: list[str] = []
     seen: set[str] = set()
@@ -500,6 +525,9 @@ def _add_planned_contents(
         if key not in seen:
             seen.add(key)
             entries.append(label)
+        if include_value_chain and item.slide_type == 'company_overview' and 'how the business operates' not in seen:
+            seen.add('how the business operates')
+            entries.append('How the business operates')
         if include_key_figures and item.slide_type == 'executive_summary' and 'key figures' not in seen:
             seen.add('key figures')
             entries.append('Key Figures')

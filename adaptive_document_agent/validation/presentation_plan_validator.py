@@ -67,6 +67,7 @@ class PresentationPlanValidator:
         from adaptive_document_agent.services.company_summary import validate_summary
         errors.extend(validate_summary(plan.company, result))
         company_pages.update(page for fact in plan.company.key_facts for page in fact.source_pages)
+        company_pages.update(page for step in plan.company.value_chain for page in step.source_pages)
         company_pages.update(page for pages in plan.company.field_source_pages.values() for page in pages)
         if company_pages - valid_pages:
             errors.append("company profile contains source pages outside the document")
@@ -255,8 +256,35 @@ class PresentationPlanValidator:
                 if len(overrides) > 1:
                     errors.append(f"slide {slide.id} gives conflicting chart types for {cid}")
             for block in slide.visual_blocks:
-                if block.role in {"kpi", "table", "commentary"} and block.chart_ids:
+                if block.role in {"kpi", "table", "commentary", "waterfall", "matrix", "horizon"} and block.chart_ids:
                     errors.append(f"slide {slide.id}: {block.role} blocks cannot contain charts")
+                if block.role == "waterfall":
+                    from adaptive_document_agent.services.presentation_waterfall import waterfall_data
+                    try:
+                        waterfall_data(block, observation_by_id)
+                    except ValueError as exc:
+                        errors.append(f"slide {slide.id}: {exc}")
+                    if len(slide.visual_blocks) != 1 or chart_ids:
+                        errors.append(f"slide {slide.id}: a waterfall requires its own evidence page")
+                if block.role == "matrix":
+                    from adaptive_document_agent.services.presentation_matrix import comparison_matrix
+                    try:
+                        comparison_matrix(block, observation_by_id)
+                    except ValueError as exc:
+                        errors.append(f"slide {slide.id}: {exc}")
+                    if len(slide.visual_blocks) != 1 or chart_ids:
+                        errors.append(f"slide {slide.id}: a comparison matrix requires its own evidence page")
+                if block.role == "horizon":
+                    from adaptive_document_agent.services.presentation_horizon import horizon_data
+                    try:
+                        horizon_data(block, observation_by_id, result.document)
+                    except ValueError as exc:
+                        errors.append(f"slide {slide.id}: {exc}")
+                    item_pages = {page for item in block.horizon_items for page in item.source_pages}
+                    if not item_pages <= set(slide.source_pages):
+                        errors.append(f"slide {slide.id}: horizon source pages must be cited on the slide")
+                    if len(slide.visual_blocks) != 1 or chart_ids:
+                        errors.append(f"slide {slide.id}: a horizon comparison requires its own evidence page")
                 if block.chart_type:
                     if block.chart_type == "table":
                         errors.append(
@@ -280,6 +308,9 @@ class PresentationPlanValidator:
                 item = observation_by_id.get(identifier)
                 if item:
                     referenced_pages.update(source.page for source in item.evidence)
+            for block in slide.visual_blocks:
+                if block.role == "horizon":
+                    referenced_pages.update(page for item in block.horizon_items for page in item.source_pages)
             for identifier in insight_ids:
                 item = insight_by_id.get(identifier)
                 if item:

@@ -315,7 +315,14 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
         heading_h = shared_heading_h
         _put_text(slide, title, Rect(rect.x, rect.y, rect.w, heading_h), size=CHART_TITLE_PT)
         totals = [index.get(oid) for oid in chart.total_observation_ids if index.get(oid)]
-        bounds = (rect.x, rect.y + heading_h + 0.22, rect.w, rect.h - heading_h - 0.22)
+        from .presentation_chart_annotation import chart_change_annotation
+        change = chart_change_annotation(chart, index)
+        change_lines = _lines(change, rect.w, 10) if change else []
+        if len(change_lines) > 2:
+            change, change_lines = "", []
+        change_h = len(change_lines) * .17
+        chart_offset = heading_h + .22 + (change_h + .06 if change else 0)
+        bounds = (rect.x, rect.y + chart_offset, rect.w, rect.h - chart_offset)
         if bounds[3] < 1.25:
             raise ValueError("Chart labels cannot fit; split the planned charts into additional slides.")
         scale, scale_label = _add_native_chart(slide, chart, values, bounds, compact=rect.w < 4.5, totals=totals)
@@ -323,6 +330,9 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
         if chart.chart_type in {"doughnut", "pie"}:
             unit = f"{values[0].period} | {unit}"
         _put_text(slide, unit, Rect(rect.x, rect.y + heading_h, rect.w, 0.20), size=FOOTNOTE_PT, color=MUTED)
+        if change:
+            _put_text(slide, change, Rect(rect.x, rect.y + heading_h + .22, rect.w, change_h),
+                      size=10, bold=True, color=PURPLE).name = f"annotation:{chart.id}"
         list(s for s in slide.shapes if s.has_chart)[-1].name = f"chart:{chart.id}"
 
     def draw_support(owner, items, rect, table=False):
