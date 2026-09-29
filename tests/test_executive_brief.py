@@ -79,6 +79,18 @@ def test_writer_repairs_only_once_without_silently_accepting_invalid_copy():
     assert len(client.calls)==2
 
 
+def test_schema_invalid_long_brief_gets_one_compact_source_checked_retry():
+    source = 'Revenue was USD 4.6 billion in 2025.'
+    result = result_for([source + ' Context.' * 800])
+    g, client = gateway([{}, {}, payload(source)])
+    brief = ExecutiveBriefWriter(g).generate(result)
+    assert brief.items[0].text == source
+    assert not validate_executive_brief(brief, result)
+    assert len(client.calls) == 3
+    assert 'at most four' in client.calls[2][0]['content']
+    assert len(client.calls[2][1]['content']) < len(client.calls[0][1]['content'])
+
+
 def test_page_selection_can_find_a_late_narrative_constraint_without_a_chart():
     source='Customers may cancel purchases without a long-term commitment.'
     r=result_for(['Background context.']*11+[source])

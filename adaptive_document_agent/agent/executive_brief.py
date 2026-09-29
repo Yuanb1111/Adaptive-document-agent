@@ -5,6 +5,7 @@ from adaptive_document_agent.models import PipelineResult
 from adaptive_document_agent.models.executive_brief import ExecutiveBrief
 from adaptive_document_agent.services.executive_brief import validate_executive_brief
 from adaptive_document_agent.services.llm import LLMGateway
+from adaptive_document_agent.services.llm.exceptions import LLMResponseError, LLMTransportError
 from .prompting import load_prompt, untrusted_document_message
 
 
@@ -59,7 +60,28 @@ class ExecutiveBriefWriter:
         messages = [{'role': 'system', 'content': load_prompt('executive_brief.txt')},
                     untrusted_document_message(json.dumps(payload, ensure_ascii=False))]
         for attempt in range(2):
-            brief = self.gateway.generate_structured(messages, ExecutiveBrief, stage='report')
+            try:
+                brief = self.gateway.generate_structured(messages, ExecutiveBrief, stage='report')
+            except LLMTransportError:
+                raise
+            except LLMResponseError:
+                if attempt:
+                    raise
+                # A schema-invalid long briefing may still contain useful
+                # evidence. Ask for a smaller fresh synthesis through the same
+                # privacy-enforcing gateway, then run the usual source checks.
+                compact = {page: text[:4000] for page, text in excerpts.items()}
+                excerpts = compact
+                messages = [
+                    {'role': 'system', 'content': load_prompt('executive_brief.txt')
+                     + '\nReturn at most four concise findings with short, literal quotes. '
+                       'Keep all required fields and use only the supplied excerpts.'},
+                    untrusted_document_message(json.dumps({**payload,
+                        'source_excerpts': [{'page': page, 'text': text,
+                                             'truncated': len(pages[page]) > len(text)}
+                                            for page, text in compact.items()]}, ensure_ascii=False)),
+                ]
+                continue
             errors = validate_executive_brief(brief, result, excerpts=excerpts)
             if not errors:
                 return brief
