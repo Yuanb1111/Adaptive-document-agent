@@ -398,7 +398,7 @@ def test_closing_reserves_space_for_lower_ranked_watch_items():
     deck = Presentation()
     render_closing(deck, result, closing)
     text = " ".join(shape.text for slide in deck.slides for shape in slide.shapes if shape.has_text_frame)
-    assert "Watch items" in text
+    assert "What to monitor" in text
     assert all(bullet in text for bullet in closing.bullets)
 
 

@@ -297,6 +297,8 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
         return
     index = DocumentIndex(result.observations)
     chart_by_id = {item.id: item for item in _usable_charts(result)}
+    from .presentation_key_figures import select_key_figures
+    key_figures = select_key_figures(result, list(chart_by_id.values()))
     slides_by_type = {slide.slide_type: slide for slide in plan.slides}
     from .presentation_brief import omit_redundant_summary
     summary = slides_by_type["executive_summary"]
@@ -315,7 +317,7 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
             contents_slides.insert(company_index + 1, contents_slides[company_index].model_copy(update={
                 "section_title": plan.company.summary_business.title,
             }))
-    _add_planned_contents(presentation, contents_slides)
+    _add_planned_contents(presentation, contents_slides, include_key_figures=bool(key_figures))
     _add_company_at_a_glance(presentation, result, slides_by_type["company_overview"])
     if omit_summary:
         presentation.slides[-1].notes_slide.notes_text_frame.text += (
@@ -329,6 +331,9 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
     if quality_notes:
         notes = presentation.slides[-1].notes_slide.notes_text_frame
         notes.text += "\n\nSource scope and data-quality notes:\n" + "\n".join(quality_notes)
+    if key_figures:
+        from .presentation_key_figures import render_key_figures
+        render_key_figures(presentation, key_figures)
 
     rendered_charts: list[ChartPlan] = []
     ordinal = 0
@@ -472,6 +477,7 @@ def _planned_observations(slide_plan: PresentationSlide, index: DocumentIndex) -
 
 def _add_planned_contents(
     presentation: Any, planned_slides: list[PresentationSlide], *, evidence_in_notes: bool = False,
+    include_key_figures: bool = False,
 ) -> None:
     entries: list[str] = []
     seen: set[str] = set()
@@ -494,6 +500,9 @@ def _add_planned_contents(
         if key not in seen:
             seen.add(key)
             entries.append(label)
+        if include_key_figures and item.slide_type == 'executive_summary' and 'key figures' not in seen:
+            seen.add('key figures')
+            entries.append('Key Figures')
 
     _render_contents_entries(presentation, entries, "Presentation structure")
 

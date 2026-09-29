@@ -105,7 +105,7 @@ def test_a_conclusion_without_watch_item_still_shares_its_evidence():
     slides = render_closing(_deck(), result, plan)
     assert len(slides) == 1 and len(_tables(slides[0])) == 2
     assert plan.bullets[0] in _copy(slides[0])
-    assert "Watch items" not in _copy(slides[0])
+    assert "What to monitor" not in _copy(slides[0])
 
 
 def test_short_findings_with_identical_periods_and_units_share_one_closing_page():

@@ -514,7 +514,9 @@ class PresentationPlanRecovery:
                 seen.add(normalize(statement))
                 candidates.append((item, statement))
             groups.append(candidates)
-        ordered = groups[0][:2] + groups[1][:2] + groups[0][2:] + groups[1][2:]
+        # Prefer concrete model-written follow-ups when available, while
+        # retaining the leading evidence-grounded implication.
+        ordered = groups[0][:1] + groups[1][:3] + groups[0][1:] + groups[1][3:]
         for item, statement in ordered[:4]:
             bullets.append(statement)
             selected_ids.append(item.id)

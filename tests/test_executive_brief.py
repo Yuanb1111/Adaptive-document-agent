@@ -5,7 +5,7 @@ import pytest
 from pptx import Presentation
 from pptx.util import Inches
 from adaptive_document_agent.agent.executive_brief import ExecutiveBriefWriter
-from adaptive_document_agent.models import DocumentPage, DocumentProfile, ParsedDocument, PipelineResult
+from adaptive_document_agent.models import DocumentPage, DocumentProfile, ParsedDocument, PipelineResult, PresentationPlan
 from adaptive_document_agent.models.executive_brief import ExecutiveBrief
 from adaptive_document_agent.services.executive_brief import brief_items, display_brief, validate_executive_brief
 from adaptive_document_agent.services.llm import LLMGateway
@@ -100,6 +100,29 @@ def test_page_selection_can_find_a_late_narrative_constraint_without_a_chart():
     assert len(client.calls)==2
     assert '12' in client.calls[0][1]['content']
     assert 'Background context.' not in client.calls[1][1]['content']
+
+
+def test_brief_retrieves_leading_selected_topic_pages_and_repairs_missing_coverage():
+    texts = ['General background information.'] * 9 + [
+        'First selected measure was 8 units.', 'Second selected measure was 12 units.',
+        'Third selected measure was 16 units.',
+    ]
+    result = result_for(texts)
+    result.presentation_plan = PresentationPlan(title='Review', slides=[
+        PresentationSlide(id=f'topic-{page}', slide_type='analysis', title=f'Topic {page}',
+                          section_title=f'Selected measure {page}', source_pages=[page])
+        for page in (10, 11, 12)
+    ])
+    first = payload(texts[9], page=10, label='First measure')
+    second = {'title': 'Key takeaways', 'items': [
+        first['items'][0], payload(texts[10], page=11, label='Second measure')['items'][0],
+    ]}
+    g, client = gateway([{'pages': [1]}, first, second])
+    brief = ExecutiveBriefWriter(g).generate(result)
+    assert len(brief.items) == 2
+    assert len(client.calls) == 3
+    request = client.calls[1][1]['content']
+    assert all(f'"page": {page}' in request for page in (10, 11, 12))
 
 
 class WebRecorder:

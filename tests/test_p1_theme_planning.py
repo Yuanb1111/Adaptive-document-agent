@@ -213,7 +213,7 @@ def test_calculated_slide_claim_requires_exact_linked_inputs_and_exports():
     slide.title = f"Units shipped increased by {calc['display']}"
     PresentationPlanValidator().validate(result.presentation_plan, result)
     deck = Presentation(io.BytesIO(export_pptx(result)))
-    assert any(slide.title == s.text for sl in deck.slides for s in sl.shapes if s.has_text_frame)
+    assert any(s.text.startswith(slide.title) for sl in deck.slides for s in sl.shapes if s.has_text_frame)
     # A bare calculation ID must not bypass the evidence boundary.
     slide.chart_ids = ["b"]
     slide.visual_blocks = [b for b in slide.visual_blocks if "a" not in b.chart_ids]

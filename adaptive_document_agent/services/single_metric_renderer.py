@@ -22,6 +22,8 @@ def add_single_metric_slide(presentation, plan: ChartPlan, analysis: SingleMetri
         if (first.parent_section or first.dimensions.get("section", "")).casefold() not in title.casefold():
             title = qualified
     title = qualify_heading(title, series)
+    from .presentation_trajectory import scoped_direction_title
+    title = scoped_direction_title(title, [plan], {item.id: item for item in series})
     scale, scale_label = _display_scale(series, max(abs(o.value) for o in series))
     unit = _unit_label(series, scale_label)
     if (first.unit_family == "currency" or first.unit == "currency") and not first.currency:

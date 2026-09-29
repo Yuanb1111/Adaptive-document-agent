@@ -14,13 +14,15 @@ class _Cell:
     width: float
     heading_height: float
     body_height: float
+    padding: float = .06
 
     @property
     def height(self) -> float:
-        return self.heading_height + self.body_height + .06
+        return self.heading_height + self.body_height + self.padding
 
 
-def _rows(items: list[BriefItem], width: float, columns: int) -> list[list[_Cell]]:
+def _rows(items: list[BriefItem], width: float, columns: int, *, body_pt: int = BODY_PT,
+          compact: bool = False) -> list[list[_Cell]]:
     """Pair findings in reading order; let an odd final finding use the full width."""
     rows = []
     for offset in range(0, len(items), columns):
@@ -29,14 +31,15 @@ def _rows(items: list[BriefItem], width: float, columns: int) -> list[list[_Cell
         rows.append([
             _Cell(item, .65 + column * (cell_width + .30), cell_width,
                   _heading_height(item.title, cell_width),
-                  _copy_height(item.text, cell_width, BODY_PT) + .08)
+                  _copy_height(item.text, cell_width, body_pt) + (.03 if compact else .08),
+                  .04 if compact else .06)
             for column, item in enumerate(group)
         ])
     return rows
 
 
-def _height(rows: list[list[_Cell]]) -> float:
-    return sum(max(cell.height for cell in row) for row in rows) + .16 * max(0, len(rows) - 1)
+def _height(rows: list[list[_Cell]], *, compact: bool = False) -> float:
+    return sum(max(cell.height for cell in row) for row in rows) + (.14 if compact else .16) * max(0, len(rows) - 1)
 
 
 def _split_item(item: BriefItem, width: float, capacity: float) -> tuple[BriefItem, BriefItem]:
@@ -90,16 +93,25 @@ def render_complete_summary(presentation: Any, title: str, items: list[BriefItem
         capacity = bottom - top
         rows = []
         selected_count = 0
+        body_pt = BODY_PT
+        # Three or four long editorial findings can often share a single
+        # readable page at 14 pt. Use this only when all copy actually fits;
+        # otherwise retain the normal-size continuation layout.
+        if single_column and 3 <= len(remaining) <= 4:
+            compact_rows = _rows(remaining, width, 2, body_pt=14, compact=True)
+            if _height(compact_rows, compact=True) <= capacity:
+                rows, selected_count, body_pt = compact_rows, len(remaining), 14
         # Bound the geometric search, not the content: remaining findings always
         # continue on another page. Eight short findings can use four paired rows.
-        for count in range(min(8, len(remaining)), 0, -1):
-            for columns in ((1,) if single_column else ((2, 1) if count >= 4 else (1, 2))):
-                candidate = _rows(remaining[:count], width, columns)
-                if _height(candidate) <= capacity:
-                    rows, selected_count = candidate, count
+        if not rows:
+            for count in range(min(8, len(remaining)), 0, -1):
+                for columns in ((1,) if single_column else ((2, 1) if count >= 4 else (1, 2))):
+                    candidate = _rows(remaining[:count], width, columns)
+                    if _height(candidate) <= capacity:
+                        rows, selected_count = candidate, count
+                        break
+                if rows:
                     break
-            if rows:
-                break
         if remaining and not rows:
             first, rest = _split_item(remaining[0], width, capacity)
             rows = _rows([first], width, 1)
@@ -108,7 +120,8 @@ def render_complete_summary(presentation: Any, title: str, items: list[BriefItem
             remaining = remaining[selected_count:]
 
         used = sum(max(cell.height for cell in row) for row in rows)
-        gap = min(.34, max(.16, (capacity - used) / max(1, len(rows) - 1)))
+        gap = min(.34, max(.14 if body_pt == 14 else .16,
+                            (capacity - used) / max(1, len(rows) - 1)))
         y = top
         for row in rows:
             for cell in row:
@@ -117,7 +130,7 @@ def render_complete_summary(presentation: Any, title: str, items: list[BriefItem
                                     size=HEADING_PT, bold=True, color=FOURIER_PURPLE)
                     heading.name = "brief:heading"
                 body = _text(slide, cell.item.text, cell.left, y + cell.heading_height + .04,
-                             cell.width, cell.body_height, size=BODY_PT, color=FOURIER_DARK)
+                             cell.width, cell.body_height, size=body_pt, color=FOURIER_DARK)
                 body.name = "brief:body"
             y += max(cell.height for cell in row) + gap
         if not rows:

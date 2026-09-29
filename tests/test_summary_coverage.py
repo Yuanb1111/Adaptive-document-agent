@@ -47,6 +47,19 @@ def test_five_complete_findings_share_one_page_with_the_final_item_visible():
     _assert_readable_geometry(deck, slides)
 
 
+def test_three_long_editorial_findings_use_one_complete_readable_page():
+    deck = blank_deck()
+    items = [BriefItem(f"Finding {i}",
+                      "The source reports a measured change for the stated population and reporting period. " * 5,
+                      [i + 1]) for i in range(3)]
+    slides = render_complete_summary(deck, "Executive Summary", items, single_column=True)
+    assert len(slides) == 1
+    assert [shape.text for shape in _bodies(slides)] == [item.text for item in items]
+    assert all(shape.text_frame.paragraphs[0].font.size.pt == 14 for shape in _bodies(slides))
+    assert all(shape.top.inches + shape.height.inches <= deck.slide_height.inches - 1.02
+               for shape in _bodies(slides))
+
+
 @pytest.mark.parametrize("count", [1, 3, 4, 6, 7, 9, 17])
 def test_all_selected_findings_are_displayed_in_model_order(count):
     deck = blank_deck()

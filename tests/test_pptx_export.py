@@ -180,13 +180,13 @@ def test_pptx_export_renders_validated_ai_story_plan() -> None:
         for slide in deck.slides
     ]
 
-    assert titles[:5] == [
+    assert titles[:4] == [
         "Example Automation",
         "Contents",
         "Company at a Glance",
         "Executive Summary",
-        "Revenue growth accelerated in the latest period",
     ]
+    assert titles[4].startswith("Revenue growth accelerated in the latest period")
     cover_subtitle = next(
         shape for shape in deck.slides[0].placeholders if shape.placeholder_format.idx == 15
     )
@@ -195,7 +195,7 @@ def test_pptx_export_renders_validated_ai_story_plan() -> None:
     assert "Example Automation" in all_text
     assert "Revenue growth accelerated in the latest period" in all_text
     assert any(
-        shape.has_text_frame and shape.text.strip() == "Revenue growth accelerated in the latest period"
+        shape.has_text_frame and shape.text.strip().startswith("Revenue growth accelerated in the latest period")
         for shape in deck.slides[4].shapes
     )
     contents_text = "\n".join(shape.text for shape in deck.slides[1].shapes if shape.has_text_frame)

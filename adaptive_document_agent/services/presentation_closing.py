@@ -91,7 +91,7 @@ def render_closing(presentation, result, plan):
         title = plan.title + (" (continued)" if page else "")
         slide, top = _base(presentation, title, "")
         visible_pages = set()
-        for column, heading in enumerate(("Conclusions", "Watch items")):
+        for column, heading in enumerate(("What it means", "What to monitor")):
             if page >= len(columns[column]):
                 continue
             x = .65 + column * (width + .35)
@@ -208,7 +208,7 @@ def _render_linked_page(presentation, title, subtitle, groups, tables, notes):
         table_y += shape.height.inches + .28
     right, width = .55 + table_width + .3, full_width - table_width - .3
     y = top
-    for heading, items in zip(("Conclusions", "Watch items"), groups):
+    for heading, items in zip(("What it means", "What to monitor"), groups):
         if not items:
             continue
         _text(slide, heading, right, y, width, .3, size=17, bold=True, color=FOURIER_PURPLE)

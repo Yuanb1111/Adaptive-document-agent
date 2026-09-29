@@ -243,10 +243,11 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
                    | {e.page for iid in insight_ids if iid in insight_map for e in insight_map[iid].evidence})
     from .presentation_conventions import signed_expense_note, signed_expense_display
     convention = signed_expense_note(support + [index.get(oid) for oid in chart_obs if index.get(oid)])
-    from .presentation_trajectory import supported_subtitle
+    from .presentation_trajectory import scoped_direction_title, supported_subtitle
     display_message = (slide_plan.message if support else supported_subtitle(slide_plan, charts, index))
     subtitle = "\n".join(part for part in (display_message, convention) if part)
-    heading = slide_plan.title
+    scoped_title = scoped_direction_title(slide_plan.title, charts, index)
+    heading = scoped_title
     # A complete analytical claim may not fit the template's 32 pt title role.
     # Reuse the planner's own section heading and display the entire claim as
     # the 18 pt subtitle; do not shrink, truncate or rewrite its meaning.
@@ -256,7 +257,7 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
         if slide_plan.title.endswith(" (continued)"):
             heading += " (continued)"
         subtitle = "\n".join(part for part in (
-            slide_plan.title,
+            scoped_title,
             convention) if part)
     convention_h = 0.0
     if len(_lines(subtitle, 8.91, 18)) > 3 and convention:

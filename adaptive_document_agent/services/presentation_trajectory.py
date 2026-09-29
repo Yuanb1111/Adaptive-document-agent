@@ -41,6 +41,38 @@ def _has_turn(ordered):
                for i in range(1, len(values)-1))
 
 
+def scoped_direction_title(title, charts, index):
+    """Add the exact plotted endpoint period to a model-written directional title.
+
+    A shared scope is required when several charts appear together. This only
+    qualifies the model's claim; it never derives a direction from the numbers.
+    """
+    from adaptive_document_agent.document_model.period_semantic_validator import format_observation_period
+    from adaptive_document_agent.document_model.series import metric_identity_key
+    from adaptive_document_agent.validation.claim_validator import are_observations_compatible
+
+    if not _DIRECTION.search(title) or not charts:
+        return title
+    scopes = set()
+    for chart in charts:
+        plotted = [index.get(oid) for oid in chart.observation_ids if index.get(oid)]
+        if len({metric_identity_key(item) for item in plotted}) != 1:
+            return title
+        ordered = _series(chart, index)
+        if len(ordered) < 2 or not are_observations_compatible(ordered[0], ordered[-1])[0]:
+            return title
+        first, last = format_observation_period(ordered[0]), format_observation_period(ordered[-1])
+        if not first or not last or first == last:
+            return title
+        scopes.add((first, last))
+    if len(scopes) != 1:
+        return title
+    first, last = next(iter(scopes))
+    if first in title and last in title:
+        return title
+    return f"{title} ({first}–{last})"
+
+
 def supported_subtitle(slide, charts, index):
     """Answer a planned question or qualify an overbroad directional claim.
 
