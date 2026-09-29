@@ -3,6 +3,7 @@
 [server]
 fileWatcherType = "none"
 runOnSave = false
+enableStaticServing = true
 
 # FOURIER Visual Identity Guidelines V1.0, June 2024.
 [theme]

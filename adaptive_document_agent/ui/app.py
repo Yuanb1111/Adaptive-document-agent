@@ -169,6 +169,10 @@ def run_app() -> None:
         with st.container(border=True):
             branding.section_label(st, "01", "Start with your document")
             st.caption("Choose a model in the sidebar, set an optional focus, then upload your PDF.")
+            st.markdown(
+                "📘 第一次使用？[点击查看零基础上手手册与操作 Tips]"
+                "(app/static/Adaptive_Document_Agent_Beginner_Guide_Public_2026-09-28.pdf)"
+            )
             analysis_focus = st.text_area(
                 "Analysis focus (optional)",
                 placeholder="e.g. Explain the business model, compare reported financial performance, and highlight disclosed risks.",
