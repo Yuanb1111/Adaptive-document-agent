@@ -43,11 +43,20 @@ def validate_narrative_plan(plan, result, calculations=None) -> list[str]:
         if any(not observations[oid].evidence or observations[oid].validation_status not in {"valid", "partially_valid"}
                for oid in ids if oid in observations):
             errors.append(f"theme {theme.id} includes invalid or ungrounded observations")
-        allowed = " ".join(str(v) for oid in ids if oid in observations
-                           for v in (observations[oid].raw_value, observations[oid].value, observations[oid].period))
-        allowed += " " + " ".join(insights[i].narrative for i in theme.insight_ids if i in insights)
+        # Parse each source field on its own. Joining an amount ending in a
+        # three-digit group with a following date can make the number parser
+        # consume the year as part of the amount.
+        allowed_numbers = set().union(*(
+            PresentationPlanValidator._numbers(str(value))
+            for oid in ids if oid in observations
+            for value in (observations[oid].raw_value, observations[oid].value, observations[oid].period)
+            if value is not None
+        ))
+        for insight_id in theme.insight_ids:
+            if insight_id in insights:
+                allowed_numbers.update(PresentationPlanValidator._numbers(insights[insight_id].narrative))
         claimed = " ".join([theme.title, theme.question, theme.rationale, *theme.caveats])
-        if PresentationPlanValidator._numbers(claimed) - PresentationPlanValidator._numbers(allowed):
+        if PresentationPlanValidator._numbers(claimed) - allowed_numbers:
             errors.append(f"theme {theme.id} contains unsupported numeric claims")
         signature = (frozenset(ids), frozenset(theme.insight_ids))
         if signature in signatures:

@@ -205,6 +205,9 @@ def validate_product(product: str) -> str:
     # in prospectus front matter and can otherwise match a broad verb pattern.
     if re.search(r"(?i)\b(?:printed|electronic)\s+copies?\b.*\b(?:prospectus|report|document)\b", s):
         return ""
+    # A market-share statistic is an analytical claim, not a product name.
+    if re.search(r"(?i)\bmarket\s+share\s+of\s+\d", s):
+        return ""
     # Reject navigation artifacts
     for pat in _NAVIGATION_ARTIFACT_PATTERNS:
         if pat.search(s):
@@ -888,6 +891,25 @@ def extract_structured_company_fields(
     clean_field_source_pages: dict[str, list[int]] = {}
     for k, v in field_source_pages.items():
         clean_field_source_pages[k] = sorted(set(v))
+
+    # A broad prose match can capture an incomplete numeric fragment (for
+    # example a percentage cut off after its first digit). Optional overview
+    # list entries must pass the same cited-page number check as the finished
+    # presentation; otherwise one fragment can invalidate every plan path.
+    from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
+
+    def supported_entries(values: list[str], field: str) -> list[str]:
+        pages = set(clean_field_source_pages.get(field) or company.source_pages)
+        allowed = PresentationPlanValidator._allowed_company_numbers(pages, result)
+        retained = [value for value in values
+                    if not (PresentationPlanValidator._numbers(value) - allowed)]
+        if not retained:
+            clean_field_source_pages.pop(field, None)
+        return retained
+
+    products = supported_entries(products, "products")
+    application_areas = supported_entries(application_areas, "application_areas")
+    geographies = supported_entries(geographies, "geographies")
 
     # Inherit source pages
     all_cited_pages = set(company.source_pages)

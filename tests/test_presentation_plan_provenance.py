@@ -3,9 +3,10 @@
 import pytest
 
 from adaptive_document_agent.agent.presentation_plan_recovery import PresentationPlanRecovery
-from adaptive_document_agent.models import DocumentPage, ValidationIssue
+from adaptive_document_agent.models import DocumentPage, PresentationPlan, PresentationTheme, ValidationIssue
 from adaptive_document_agent.ui import technical
 from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator as Validator
+from adaptive_document_agent.validation.narrative_plan_validator import validate_narrative_plan
 from tests.test_pptx_export import _result
 
 
@@ -21,6 +22,30 @@ from tests.test_pptx_export import _result
 ])
 def test_complete_numeric_tokens(text, expected):
     assert Validator._numbers(text) == expected
+
+
+def test_theme_date_is_checked_independently_from_grouped_amount() -> None:
+    result = _result()
+    observation = result.observations[0].model_copy(deep=True)
+    observation.raw_value = "1,449,103"
+    observation.value = 1_449_103
+    observation.period = "2023-06-30"
+    result.observations = [observation]
+    result.charts = []
+    theme = PresentationTheme(
+        id="balance", title="Balance sheet", question="What changed?",
+        rationale="Reported balance sheet values are available.",
+        observation_ids=[observation.id],
+        source_pages=sorted({source.page for source in observation.evidence}),
+        caveats=["The balance sheet includes an interim date in 2023."],
+    )
+    plan = PresentationPlan(title="Review", themes=[theme], slides=[])
+
+    assert not any("unsupported numeric claims" in error
+                   for error in validate_narrative_plan(plan, result))
+    theme.caveats = ["The balance sheet includes an interim date in 2025."]
+    assert any("unsupported numeric claims" in error
+               for error in validate_narrative_plan(plan, result))
 
 
 def summary_result():

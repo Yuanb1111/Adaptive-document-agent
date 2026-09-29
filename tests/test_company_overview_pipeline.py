@@ -321,6 +321,26 @@ def test_prospectus_distribution_is_not_a_company_product() -> None:
     assert recovered.products == []
 
 
+def test_company_overview_drops_uncited_numeric_product_fragment() -> None:
+    page = DocumentPage(page_number=1, text=(
+        "COMPANY OVERVIEW\nEXAMPLE DEVICES LIMITED\n"
+        "Our Model 2 Controller is a core product. The industry's market share was 2.8%."
+    ))
+    result = _make_dummy_pipeline_result([page])
+    company = CompanyProfile(
+        name="EXAMPLE DEVICES LIMITED",
+        products=["Model 2 Controller", "industry market share of 2", "Model 9 accessory"],
+        source_pages=[1], field_source_pages={"products": [1]},
+    )
+    snapshot = result.model_dump()
+
+    extracted = extract_structured_company_fields(company, result)
+
+    assert extracted.products == ["Model 2 Controller"]
+    assert extracted.field_source_pages["products"] == [1]
+    assert result.model_dump() == snapshot
+
+
 def test_issuer_product_series_are_recovered_without_forecast_period() -> None:
     result = _make_dummy_pipeline_result([
         DocumentPage(page_number=1, text="ACME ROBOTICS LIMITED"),
