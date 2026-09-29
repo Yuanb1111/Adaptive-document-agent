@@ -17,6 +17,7 @@ from adaptive_document_agent.models import (
     PresentationTopicSelection, SourceEvidence,
 )
 from adaptive_document_agent.services.pptx_export import _add_planned_summary
+from adaptive_document_agent.services.presentation_claim_evidence import prepare_presentation_claims
 from tests.test_presentation_brief import blank_deck, visible
 from tests.test_summary_coverage import _assert_readable_geometry, _bodies
 
@@ -81,6 +82,21 @@ def test_duplicate_source_count_does_not_change_selected_topic_order():
         rebuild_selected_topic_summary(result, result.presentation_plan)
     assert single.presentation_plan.slides[0].bullets == repeated.presentation_plan.slides[0].bullets
     assert len(repeated.presentation_plan.slides[0].observation_ids) == 54
+
+
+def test_export_preparation_reconciles_summary_duplicates_after_topic_rebuild():
+    result = _topic_result(count=1, copies=2)
+    for item in result.observations:
+        item.dimensions["table_context"] = f"source-{item.evidence[0].page}"
+    original = deepcopy(result.observations)
+    prepare_presentation_claims(result)
+    summary = result.presentation_plan.slides[0]
+    assert len(summary.bullet_observation_ids[0]) == 3
+    assert len(summary.observation_ids) == 3
+    assert result.observations == original
+    snapshot = result.model_dump()
+    prepare_presentation_claims(result)
+    assert result.model_dump() == snapshot
 
 
 def test_all_eight_topics_without_takeaways_keep_bound_insights_and_provenance():

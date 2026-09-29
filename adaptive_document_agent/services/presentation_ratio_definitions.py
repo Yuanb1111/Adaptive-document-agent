@@ -9,8 +9,11 @@ from __future__ import annotations
 
 import json
 import re
+from math import isclose
 
 from adaptive_document_agent.models import SourceEvidence, ValidationIssue
+from adaptive_document_agent.document_model import period_sort_key
+from .presentation_share_claims import share_direction_supported, source_row
 from .presentation_evidence import ambiguous_source_table_ids, observation_uses_ambiguous_table
 
 
@@ -69,7 +72,7 @@ _RATIO_TO = re.compile(
 _PERCENT_OF = re.compile(r"\b(?:as\s+)?(?:a\s+)?percentage\s+of\s+([\w -]+?)(?=\s+and\b|[.,;!?]|$)", re.I)
 
 
-def _bound_subject(text, definition):
+def _bound_subject(text, definition, *, term="ratio"):
     """Accept a literal source label or its explicit preceding-clause subject."""
     metric = re.sub(r"\s+ratio\b.*$", "", definition["metric"], flags=re.I)
     numerator = definition["numerator"]
@@ -84,7 +87,7 @@ def _bound_subject(text, definition):
         return key == _key(metric) or (len([w for w in key.split() if w != "and"]) >= 2
                                       and f" {key} " in f" {_key(numerator)} ")
 
-    ratio = re.search(r"\bratio\b", text, re.I)
+    ratio = re.search(r"\b" + re.escape(term) + r"\b", text, re.I)
     if ratio is None:
         return False
     clauses = re.split(r"[.;,]|\b(?:while|whereas)\b", text[:ratio.start()], flags=re.I)
@@ -96,6 +99,77 @@ def _bound_subject(text, definition):
                               clauses[-2].strip(), maxsplit=1, flags=re.I)
         return len(antecedent) == 2 and source_phrase(antecedent[0])
     return source_phrase(prefix)
+
+
+_POSSESSIVE_SHARE = re.compile(
+    r"\b(?:while|whereas)\s+its\s+share\s+of\s+(?:the\s+)?"
+    r"(?P<denominator>.+?)\s+"
+    r"(?P<direction>rose|fell|grew|increased|decreased|declined|expanded|contracted)\b",
+    re.I,
+)
+
+
+def source_defined_possessive_share(text, selected, visible, eligible, definitions):
+    """Validate one possessive share against a literal ratio footnote and its rows.
+
+    The reported ratio, numerator and denominator must all be selected, visible
+    where applicable, unique by period and arithmetically consistent. This
+    cannot turn an unrelated percentage into a claimed share.
+    """
+    matches = list(_POSSESSIVE_SHARE.finditer(text))
+    if len(matches) != 1 or len(re.findall(r"\bshare\b", text, re.I)) != 1:
+        return []
+    match = matches[0]
+    selected_ids = {item.id for item in selected}
+    visible_ids = {item.id for item in visible}
+    eligible_ids = {item.id for item in eligible}
+    percentage_ids = {item.id for item in selected if item.unit in {"percent", "percentage", "%"}}
+    supported = []
+    for definition in definitions:
+        ratio_ids = set(definition["observation_ids"])
+        source_denominator = _key(definition["denominator"])
+        stated_denominator = _key(match["denominator"])
+        denominator_matches = (stated_denominator == source_denominator or (
+            source_denominator.startswith("annual ")
+            and stated_denominator == source_denominator.removeprefix("annual ")
+            and all(item.period_type == "fiscal_year" for item in selected if item.id in ratio_ids)
+        ))
+        if (not ratio_ids or percentage_ids != ratio_ids or not ratio_ids <= visible_ids & eligible_ids
+                or not denominator_matches
+                or not _bound_subject(text, definition, term="share")):
+            continue
+        rows = {}
+        for label in ("numerator", "denominator"):
+            grouped = {}
+            for item in selected:
+                if (item.id in eligible_ids and item.unit not in {"percent", "percentage", "%"}
+                        and _key(source_row(item)) == _key(definition[label])):
+                    grouped.setdefault(item.period, []).append(item)
+            rows[label] = grouped
+        ratios = sorted((item for item in selected if item.id in ratio_ids),
+                        key=lambda item: period_sort_key(item.period))
+        if len(ratios) < 2 or len({item.period for item in ratios}) != len(ratios):
+            continue
+        if not share_direction_supported(ratios, match.group()):
+            continue
+        for ratio in ratios:
+            numerator = rows["numerator"].get(ratio.period, [])
+            denominator = rows["denominator"].get(ratio.period, [])
+            if (len(numerator) != 1 or len(denominator) != 1 or denominator[0].value == 0
+                    or numerator[0].unit != denominator[0].unit
+                    or numerator[0].currency != denominator[0].currency
+                    or numerator[0].entity != denominator[0].entity
+                    or numerator[0].period_type != denominator[0].period_type
+                    or numerator[0].period_basis != denominator[0].period_basis):
+                break
+            decimal = re.search(r"\.(\d+)", ratio.raw_value or "")
+            tolerance = 0.5 * 10 ** (-len(decimal[1])) if decimal else 0.5
+            if not isclose(100 * numerator[0].value / denominator[0].value,
+                           ratio.value, rel_tol=0, abs_tol=tolerance + 1e-6):
+                break
+        else:
+            supported.append(ratios)
+    return supported[0] if len(supported) == 1 else []
 
 
 def _rewrite(text, definition, known_labels):

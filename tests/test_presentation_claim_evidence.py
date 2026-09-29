@@ -117,6 +117,71 @@ def test_amount_growth_does_not_prove_share_growth():
     assert not result.presentation_plan.slides[-1].visual_blocks
 
 
+def test_explicit_ratio_footnote_preserves_source_backed_possessive_share() -> None:
+    result = _sample()
+    title = ("A&B expenditure rose from FY2021 to FY2022 while its share of "
+             "total expenditure fell.")
+    rows = (
+        ("Annual alpha and beta expenditure", "currency", (40, 50), "amount"),
+        ("Annual total expenditure", "currency", (100, 200), "total"),
+        ("Annual alpha and beta expenditure ratio", "percent", (40.0, 25.0), "ratio"),
+    )
+    result.observations = [Observation(
+        id=f"{kind}-{year}", metric_original=row, value=value,
+        raw_value=f"{value:.1f}%" if unit == "percent" else str(value),
+        unit=unit, period=f"FY{year}", period_basis="FY", period_type="fiscal_year",
+        table_id=f"{kind}-table", validation_status="valid",
+        evidence=[SourceEvidence(page=2, table_id=f"{kind}-table", row_label=row,
+                                 text=str(value), extraction_method="digital_table", confidence=.9)],
+        confidence=.9,
+    ) for row, unit, values, kind in rows for year, value in zip((2021, 2022), values)]
+    result.document.pages[1].text = (
+        "Annual alpha and beta expenditure ratio(1) 40.0% 25.0%\n"
+        "(1) Calculated by dividing annual alpha and beta expenditure by annual total expenditure."
+    )
+    result.charts = [ChartPlan(
+        id=kind, title=row, chart_type="line", question="How did this measure change?",
+        observation_ids=[f"{kind}-{year}" for year in (2021, 2022)], source_pages=[2],
+    ) for row, _, _, kind in rows]
+    ids = [item.id for item in result.observations]
+    summary = PresentationSlide(id="summary", slide_type="executive_summary", title="Summary",
+                                bullets=[title], bullet_observation_ids=[ids], observation_ids=ids)
+    analysis = PresentationSlide(id="ratio", slide_type="analysis", title=title,
+                                 section_title="Expenditure and intensity", chart_ids=[c.id for c in result.charts])
+    result.presentation_plan = PresentationPlan(title="Expenditure", slides=[summary, analysis])
+    raw = copy.deepcopy(result.observations)
+    prepare_presentation_claims(result)
+    assert analysis.title == title
+    assert summary.bullets == [title]
+    assert result.observations == raw
+    snapshot = result.model_dump()
+    prepare_presentation_claims(result)
+    assert result.model_dump() == snapshot
+
+    for change in ("wrong_direction", "wrong_denominator", "wrong_value",
+                   "incompatible_currency", "missing_definition"):
+        candidate = copy.deepcopy(result)
+        selected = candidate.presentation_plan.slides[-1]
+        bullet = candidate.presentation_plan.slides[0]
+        if change == "wrong_direction":
+            selected.title = selected.title.replace("fell", "rose")
+            bullet.bullets = [selected.title]
+        elif change == "wrong_denominator":
+            selected.title = selected.title.replace("total expenditure", "revenue")
+            bullet.bullets = [selected.title]
+        elif change == "wrong_value":
+            ratio = next(item for item in candidate.observations if item.id == "ratio-2022")
+            ratio.value, ratio.raw_value = 26.0, "26.0%"
+        elif change == "incompatible_currency":
+            denominator = next(item for item in candidate.observations if item.id == "total-2022")
+            denominator.currency = "USD"
+        else:
+            candidate.document.pages[1].text = "Annual alpha and beta expenditure ratio 40.0% 25.0%"
+        prepare_presentation_claims(candidate)
+        assert candidate.presentation_plan.slides[-1].title == "Expenditure and intensity"
+        assert candidate.presentation_plan.slides[0].bullets == ["Expenditure and intensity"]
+
+
 def test_unsupported_share_keeps_independent_topic_measure_instead_of_generic_title():
     result = _sample()
     slide = result.presentation_plan.slides[-1]

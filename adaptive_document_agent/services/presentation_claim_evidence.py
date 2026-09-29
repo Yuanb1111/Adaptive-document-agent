@@ -192,6 +192,8 @@ def prepare_presentation_claims(result: PipelineResult, plan: PresentationPlan |
     themes = {theme.id: theme for theme in plan.themes}
     topics = {topic.id: topic for topic in result.presentation_topics.topics} if result.presentation_topics else {}
     totals = source_total_denominators(result)
+    from .presentation_ratio_definitions import ratio_definitions, source_defined_possessive_share
+    definitions = ratio_definitions(result)
     notes, replacements, restored_titles = [], {}, defaultdict(set)
     for slide in plan.slides:
         if slide.slide_type != "analysis":
@@ -215,7 +217,14 @@ def prepare_presentation_claims(result: PipelineResult, plan: PresentationPlan |
         clauses = [share_claims(selected, copy) for copy in (slide.title, slide.message)]
         theme = themes.get(slide.theme_id)
         qualifications = [slide.message, *(theme.caveats if theme else [])]
-        shares, unsupported = [], any(group is None for group in clauses)
+        shares = []
+        for index, copy in enumerate((slide.title, slide.message)):
+            if clauses[index] is None:
+                sourced = source_defined_possessive_share(copy, selected, displayed, eligible, definitions)
+                if sourced:
+                    clauses[index] = []
+                    shares.extend(sourced)
+        unsupported = any(group is None for group in clauses)
         for claim in [claim for group in clauses if group is not None for claim in group]:
             scoped = displayed if any(_row(item) == claim.subject for item in displayed) else selected
             bound = _reported_shares(scoped, eligible, claim.text, subject=claim.subject,
@@ -294,7 +303,7 @@ def prepare_presentation_claims(result: PipelineResult, plan: PresentationPlan |
     for slide in plan.slides:
         slide.bullets = [replacements.get(text, text) for text in slide.bullets]
     from .presentation_summary_claims import prepare_summary_claims
-    notes.extend(prepare_summary_claims(plan, eligible, by_id, charts, totals))
+    notes.extend(prepare_summary_claims(plan, eligible, by_id, charts, totals, definitions))
     plan.editorial_notes = list(dict.fromkeys([*plan.editorial_notes, *notes]))
     from .presentation_ratio_definitions import prepare_presentation_ratio_definitions
     from .presentation_period_scope import prepare_presentation_period_scope
@@ -303,4 +312,10 @@ def prepare_presentation_claims(result: PipelineResult, plan: PresentationPlan |
     if plan.planning_origin in {"topic_compilation", "topic_recovery"}:
         from adaptive_document_agent.agent.presentation_summary_selection import sync_selected_topic_summary_evidence
         sync_selected_topic_summary_evidence(result, plan)
+    # Summary rebuilding can reintroduce duplicate references from another
+    # source table after the earlier claim repair pass. Reconcile the final
+    # visible references before export and on every repeated preparation.
+    from adaptive_document_agent.validation.presentation_evidence_alignment import align_redundant_slide_evidence
+    notes.extend(align_redundant_slide_evidence(plan, result.observations, result.charts))
+    plan.editorial_notes = list(dict.fromkeys([*plan.editorial_notes, *notes]))
     return notes

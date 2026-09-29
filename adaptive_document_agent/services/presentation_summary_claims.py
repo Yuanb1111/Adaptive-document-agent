@@ -5,8 +5,9 @@ from adaptive_document_agent.validation.narrative_plan_validator import expanded
 from .presentation_share_claims import share_claims, share_direction_supported
 
 
-def prepare_summary_claims(plan, eligible, by_id, charts, totals):
+def prepare_summary_claims(plan, eligible, by_id, charts, totals, definitions=()):
     from .presentation_claim_evidence import _RANK, _SHARE, _reported_shares, _ranking_peers, visible_observation_ids
+    from .presentation_ratio_definitions import source_defined_possessive_share
     from .presentation_share_claims import source_row
 
     analyses = [slide for slide in plan.slides if slide.slide_type == "analysis"]
@@ -29,6 +30,11 @@ def prepare_summary_claims(plan, eligible, by_id, charts, totals):
             qualifications = [note for theme in themes for note in theme.caveats]
             claims = share_claims(selected, text)
             supported, evidence = claims is not None and bool(selected), []
+            if claims is None:
+                sourced = source_defined_possessive_share(text, selected, displayed, eligible, definitions)
+                if sourced:
+                    supported = True
+                    evidence.extend(sourced)
             for claim in claims or []:
                 scoped = displayed if any(source_row(item) == claim.subject for item in displayed) else selected
                 bound = _reported_shares(scoped, eligible, claim.text, subject=claim.subject,
