@@ -1540,7 +1540,15 @@ def _possessive_ratio_metric(
     for metric_name, series in metric_series_map.items():
         source_label = series[0]["first"].metric_original
         match = re.match(r"(.+?)\s+ratio\b", source_label, re.I)
-        if match and re.search(r"\b" + re.escape(match[1].strip()) + r"\b", previous_clause, re.I):
+        if not match:
+            continue
+        subject = match[1].strip()
+        forms = {subject}
+        # Initialisms such as R&D are grounded in the source row's own
+        # "research and development" words, not a document-specific alias.
+        for pair in re.finditer(r"\b([A-Za-z]+)\s+(?:and|&)\s+([A-Za-z]+)\b", subject, re.I):
+            forms.add(subject[:pair.start()] + pair[1][0] + "&" + pair[2][0] + subject[pair.end():])
+        if any(re.search(r"\b" + re.escape(form) + r"\b", previous_clause, re.I) for form in forms):
             candidates.append(metric_name)
     return candidates[0] if len(candidates) == 1 else None
 
