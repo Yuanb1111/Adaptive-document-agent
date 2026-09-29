@@ -24,6 +24,7 @@ from adaptive_document_agent.models import (
     ReportPlan,
 )
 from adaptive_document_agent.utils.ids import stable_id
+from adaptive_document_agent.utils.period_axis import has_complete_period_cadence
 
 
 _NUMERIC_CATEGORY_PATTERN = re.compile(r"^\s*[-+]?(?:\d{1,3}(?:,\d{3})*|\d+)(?:\.\d+)?\s*$")
@@ -152,7 +153,7 @@ class ChartPlanner:
             metric = metric_key(series[0])
             chart_type = self._select_period_chart_type(series, chart_type_counts)
             available_types: list[ChartType] = ["line", "bar", "table"]
-            if len(series) >= 4 and all(float(item.value) >= 0 for item in series if item.value is not None):
+            if self._area_eligible(series):
                 available_types.insert(2, "area")
             output.append(ChartPlan(
                 id=stable_id("chart", "topic_series", *identifiers),
@@ -413,7 +414,7 @@ class ChartPlanner:
             default_type = self._select_period_chart_type(series, chart_type_counts)
             chart_type_counts[default_type] += 1
             available_types: list[ChartType] = ["line", "bar", "table"]
-            if len(series) >= 4 and all(float(item.value) >= 0 for item in series if item.value is not None):
+            if self._area_eligible(series):
                 available_types.insert(2, "area")
             output.append(
                 ChartPlan(
@@ -519,16 +520,27 @@ class ChartPlanner:
         return "bar"
 
     @staticmethod
+    def _area_eligible(observations: list[Observation]) -> bool:
+        values = [float(item.value) for item in observations if item.value is not None]
+        periods = sorted((item.period for item in observations if item.period), key=period_sort_key)
+        return (len(values) >= 4 and len(values) == len(periods)
+                and len(set(periods)) == len(periods)
+                and all(value >= 0 for value in values)
+                and has_complete_period_cadence(periods))
+
+    @staticmethod
     def _select_period_chart_type(
         observations: list[Observation],
         chart_type_counts: Counter[ChartType],
     ) -> ChartType:
         periods = {item.period for item in observations if item.period}
-        if len(periods) <= 3:
+        # Two points are a direct comparison. Three or more compatible
+        # periods can also show a trajectory, so let the existing mix
+        # balancing choose between a line and columns.
+        if len(periods) <= 2:
             return "bar"
         choices: list[ChartType] = ["line", "bar"]
-        values = [float(item.value) for item in observations if item.value is not None]
-        if len(periods) >= 4 and values and all(value >= 0 for value in values):
+        if ChartPlanner._area_eligible(observations):
             choices.append("area")
         preference = {"line": 0, "bar": 1, "area": 2}
         return min(choices, key=lambda chart_type: (chart_type_counts[chart_type], preference[chart_type]))
@@ -579,7 +591,10 @@ class ChartPlanner:
                 except ValueError:
                     pass
             return choices
-        return ["line", "bar", "area", "table"]
+        choices: list[ChartType] = ["line", "bar"]
+        if ChartPlanner._area_eligible(observations):
+            choices.append("area")
+        return [*choices, "table"]
 
     @staticmethod
     def _x_title(task: AnalysisTask, observations: list[Observation]) -> str:

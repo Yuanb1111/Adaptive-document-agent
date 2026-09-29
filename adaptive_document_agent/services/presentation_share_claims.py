@@ -72,11 +72,21 @@ class ShareClaim:
 
 def _row_mentions(selected, text):
     mentions = []
-    for row in {source_row(item) for item in selected} - {""}:
-        label = re.sub(r"(?i)^subtotal\s+of\s+|\s+markets?$", "", row)
-        words = re.findall(r"[^\W_]+", label)
-        pattern = r"(?<!\w)" + r"[\W_]+".join(re.escape(w) for w in words) + r"(?!\w)"
-        mentions.extend((m.start(), m.end(), row) for m in re.finditer(pattern, text, re.I))
+    rows = {source_row(item) for item in selected} - {""}
+    labels = {row: re.findall(r"[^\W_]+", re.sub(r"(?i)^subtotal\s+of\s+|\s+markets?$", "", row))
+              for row in rows}
+    prefixes = {}
+    for row, words in labels.items():
+        if len(words) >= 3 and words[-2].casefold() not in {"of", "and", "the"}:
+            prefixes.setdefault(tuple(word.casefold() for word in words[:-1]), set()).add(row)
+    for row, words in labels.items():
+        forms = [words]
+        prefix = tuple(word.casefold() for word in words[:-1])
+        if prefix in prefixes and prefixes[prefix] == {row}:
+            forms.append(words[:-1])
+        for form in forms:
+            pattern = r"(?<!\w)" + r"[\W_]+".join(re.escape(word) for word in form) + r"(?!\w)"
+            mentions.extend((m.start(), m.end(), row) for m in re.finditer(pattern, text, re.I))
     # A complete metric label wins over a substring such as Revenue inside
     # Deferred revenue. Identically positioned, distinct labels stay ambiguous.
     return [m for m in mentions if not any(n[0] <= m[0] and m[1] <= n[1]
@@ -98,7 +108,7 @@ def share_claims(selected, text):
     separators = [m for m in re.finditer(r"[,;!?]|(?<!\d)\.(?!\d)|\b(?:while|whereas|and|but)\b", text, re.I)
                   if not any(start <= m.start() and m.end() <= end for start, end, _ in mentions)]
     bounds = [0, *[position for m in separators for position in (m.start(), m.end())], len(text)]
-    claims, previous, previous_bare = [], "", False
+    claims, previous, previous_bare, previous_compound = [], "", False, False
     for start, end in zip(bounds[::2], bounds[1::2]):
         clause = text[start:end]
         share = SHARE_WORD.search(clause)
@@ -108,6 +118,8 @@ def share_claims(selected, text):
             previous = next(iter(rows)) if len(rows) == 1 else ""
             previous_bare = bool(previous and len(local) == 1 and not clause[:local[0][0]].strip()
                                  and re.fullmatch(r"\s*(?:['’]s)?\s*", clause[local[0][1]:]))
+            previous_compound = bool(previous and len(local) == 1 and not previous_bare
+                                     and not any(share_motion(clause)))
             continue
         # A shared predicate after 'A and B' cannot be validated as B alone.
         # Separate 'A share expanded and B share contracted' clauses are safe.
@@ -123,6 +135,12 @@ def share_claims(selected, text):
             subject_start = min(left for left, right, row in before if right == closest and row == subject)
             subject_end = closest
         elif previous and re.match(r"\s*(?:(?:increas\w*|rais\w*|expand\w*|reduc\w*)\s+)?its\b", clause, re.I):
+            subject, subject_start, subject_end = previous, 0, 0
+        elif (previous_compound and not local
+              and re.fullmatch(r"\s*(?:[\w-]+\s+)?", clause[:share.start()])):
+            # "Category sales volume and revenue share rose" keeps the one
+            # explicit source row across the two measures. The denominator and
+            # direction still have to pass their independent evidence checks.
             subject, subject_start, subject_end = previous, 0, 0
         else:
             return None
@@ -145,7 +163,7 @@ def share_claims(selected, text):
             if prefix and not any(share_motion(prefix)) and re.fullmatch(r"[\w-]+(?:\s+[\w-]+){0,3}", prefix):
                 denominator = normalized(prefix)
         claims.append(ShareClaim(subject, clause[subject_start:].strip(), denominator))
-        previous, previous_bare = subject, False
+        previous, previous_bare, previous_compound = subject, False, False
     return claims
 
 

@@ -197,3 +197,42 @@ def test_summary_uses_visible_source_before_original_duplicate_source_refs():
     snapshot = result.model_dump()
     prepare_presentation_claims(result)
     assert result.model_dump() == snapshot
+
+
+@pytest.mark.parametrize("claim,valid", [
+    ("North America sales volume and revenue share expanded.", True),
+    ("North America sales volume and revenue share contracted.", False),
+    ("North America sales volume and units share expanded.", False),
+])
+def test_source_row_prefix_and_compound_measure_share_claim(claim, valid):
+    result = _sample()
+    slide = result.presentation_plan.slides[-1]
+    selected = [item for item in result.observations if item.evidence[0].row_label == "Enterprise"]
+    for item in selected:
+        item.evidence[0].row_label = "North America customers"
+        if item.unit == "percent":
+            item.evidence[0].column_label = "% of revenue"
+    slide.observation_ids = [item.id for item in selected]
+    slide.title = claim
+    raw = copy.deepcopy(result.observations)
+    prepare_presentation_claims(result)
+    assert slide.title == (claim if valid else "Customer mix")
+    assert result.observations == raw
+    if valid:
+        assert {item.id for item in selected if item.unit == "percent"} <= {
+            oid for block in slide.visual_blocks for oid in block.observation_ids
+        }
+
+
+def test_short_row_prefix_must_identify_one_source_row():
+    result = _sample()
+    slide = result.presentation_plan.slides[-1]
+    for item in result.observations:
+        item.evidence[0].row_label = ("North America customers" if item.evidence[0].row_label == "Enterprise"
+                                      else "North America outlets")
+        if item.unit == "percent":
+            item.evidence[0].column_label = "% of revenue"
+    slide.observation_ids = [item.id for item in result.observations]
+    slide.title = "North America sales volume and revenue share expanded."
+    prepare_presentation_claims(result)
+    assert slide.title == "Customer mix"

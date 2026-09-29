@@ -38,6 +38,7 @@ from adaptive_document_agent.document_model.period_semantic_validator import (
     is_interim_date,
 )
 from adaptive_document_agent.models import ChartPlan, Observation, PipelineResult, PresentationSlide
+from adaptive_document_agent.utils.period_axis import has_complete_period_cadence
 from adaptive_document_agent.services.financial_formatter import (
     format_compact_currency,
     normalize_currency_symbol,
@@ -1515,28 +1516,6 @@ def _chart_category_labels(categories: list[str], width: float) -> list[str]:
             for label in categories]
 
 
-def _continuous_period_axis(categories: list[str]) -> bool:
-    """Only connect time points when the displayed periods form a complete cadence.
-
-    Unknown and point-in-time labels deliberately fail closed: an area chart
-    would otherwise imply values for periods the source never reported.
-    """
-    if len(categories) < 3:
-        return False
-    annual = [re.fullmatch(r"(?:FY|CY)?\s*((?:19|20)\d{2})\*?", label.strip(), re.I)
-              for label in categories]
-    if all(annual):
-        years = [int(match.group(1)) for match in annual]
-        return all(right - left == 1 for left, right in zip(years, years[1:]))
-    quarterly = [re.fullmatch(r"(?:Q([1-4])\s*((?:19|20)\d{2})|((?:19|20)\d{2})\s*Q([1-4]))\*?", label.strip(), re.I)
-                 for label in categories]
-    if all(quarterly):
-        positions = [int(match.group(2) or match.group(3)) * 4 + int(match.group(1) or match.group(4))
-                     for match in quarterly]
-        return all(right - left == 1 for left, right in zip(positions, positions[1:]))
-    return False
-
-
 def _add_native_chart(
     slide: Any,
     plan: ChartPlan,
@@ -1612,7 +1591,7 @@ def _add_native_chart(
             lookup = {label: value for label, series_name, value in rows if series_name == name}
             data.add_series(name, [lookup.get(label) / scale if lookup.get(label) is not None else None for label in categories])
         effective_chart_type = plan.chart_type
-        if effective_chart_type == "area" and not _continuous_period_axis(categories):
+        if effective_chart_type == "area" and not has_complete_period_cadence(categories):
             effective_chart_type = "bar"
         chart_type = {
             "line": XL_CHART_TYPE.LINE_MARKERS,

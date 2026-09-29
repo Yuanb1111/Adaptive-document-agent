@@ -55,7 +55,7 @@ def test_complete_reported_series_adds_charts_beyond_successful_calculations() -
     charts = ChartPlanner().plan([], [], DocumentIndex(observations), preferred_metrics=["Revenue", "Cash"])
     assert len(charts) == 2
     assert all(chart.analysis_task_id is None for chart in charts)
-    assert all(chart.chart_type == "bar" for chart in charts)
+    assert [chart.chart_type for chart in charts] == ["line", "bar"]
     assert all(set(chart.available_chart_types) == {"line", "bar", "table"} for chart in charts)
 
 
@@ -92,7 +92,7 @@ def test_chart_planner_deduplicates_same_series_and_bounds_output() -> None:
     charts = ChartPlanner().plan(tasks, results, index, maximum=2)
     assert len(charts) == 1
     assert charts[0].chart_type == "bar"
-    assert {"line", "bar", "area", "table"} == set(charts[0].available_chart_types)
+    assert {"line", "bar", "table"} == set(charts[0].available_chart_types)
 
 
 def test_long_positive_period_series_use_a_balanced_chart_mix() -> None:
@@ -131,6 +131,23 @@ def test_long_positive_period_series_use_a_balanced_chart_mix() -> None:
         results.append(AnalysisResult(task_id=task.id, title=task.title, result=1.0, evidence=evidence))
     charts = ChartPlanner().plan(tasks, results, DocumentIndex(observations), maximum=3)
     assert [chart.chart_type for chart in charts] == ["line", "bar", "area"]
+
+
+def test_irregular_dates_do_not_offer_filled_area() -> None:
+    evidence = [SourceEvidence(page=4, text="reported", extraction_method="digital_table", confidence=0.9)]
+    dates = ("2021-12-31", "2022-12-31", "2023-12-31", "2024-06-30", "2024-10-31")
+    observations = [
+        Observation(id=f"{metric}-{index}", metric_original=metric, value=float(100 + index),
+                    raw_value=str(100 + index), period=period, confidence=0.9, evidence=evidence)
+        for metric in ("Cash", "Deposits", "Borrowings")
+        for index, period in enumerate(dates)
+    ]
+    index = DocumentIndex(observations)
+    groups = [[item for item in observations if item.metric_original == metric]
+              for metric in ("Cash", "Deposits", "Borrowings")]
+    charts = ChartPlanner().plan([], [], index, requested_series=groups, only_requested=True)
+    assert [chart.chart_type for chart in charts] == ["line", "bar", "line"]
+    assert all("area" not in chart.available_chart_types for chart in charts)
 
 
 def test_long_category_labels_default_to_horizontal_bar() -> None:
@@ -254,7 +271,7 @@ def test_time_chart_uses_categorical_period_axis_and_visible_values() -> None:
     assert figure.layout.xaxis.type == "category"
     assert list(figure.data[0].text) == ["CNY 100.00M", "CNY 120.00M"]
     assert "CNY" in figure.layout.yaxis.title.text
-    for style in ("bar", "area", "table"):
+    for style in ("bar", "line", "table"):
         assert render_chart(plan, index, chart_type=style).data
 
 
