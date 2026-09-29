@@ -67,7 +67,9 @@ def test_invalid_advanced_choice_keeps_existing_chart_or_data_plan():
 
     plan = PresentationPlanner(Gateway()).plan(result)
     slide = next(item for item in plan.slides if item.slide_type == "analysis")
-    assert all(visual.role != "matrix" for visual in slide.visual_blocks)
+    assert len(slide.visual_blocks) == 1
+    assert slide.visual_blocks[0].role == "matrix"
+    assert set(slide.visual_blocks[0].observation_ids) == set(block.observation_ids)
     PresentationPlanValidator().validate(plan, result)
 
 

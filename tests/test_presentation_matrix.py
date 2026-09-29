@@ -3,7 +3,9 @@
 import pytest
 
 from adaptive_document_agent.models import Observation, PresentationSlide, PresentationVisualBlock, SourceEvidence
-from adaptive_document_agent.services.presentation_matrix import comparison_matrix, render_matrix
+from adaptive_document_agent.services.presentation_matrix import (
+    comparison_matrix, render_matrix, topic_matrix_dimension,
+)
 from tests.test_presentation_brief import blank_deck
 
 
@@ -50,3 +52,22 @@ def test_missing_or_conflicting_matrix_cell_is_never_filled():
     block.observation_ids.append(extra.id)
     with pytest.raises(ValueError, match="duplicate"):
         comparison_matrix(block, {item.id: item for item in [*items, extra]})
+
+
+def test_parallel_source_metrics_form_a_complete_period_matrix() -> None:
+    items = [Observation(
+        id=f"{name}-{year}", metric_original=f"{name}: share of total",
+        value=value, raw_value=str(value), unit="percent", raw_unit="%",
+        period=f"FY{year}", period_basis="FY", period_type="fiscal_year",
+        validation_status="valid", confidence=.99,
+        evidence=[SourceEvidence(page=4, text=str(value), extraction_method="digital_table", confidence=.99)],
+    ) for name, values in (("North", (15, 18, 20)), ("South", (25, 23, 21)),
+                         ("East", (35, 34, 33)), ("West", (20, 22, 24)))
+    for year, value in zip((2022, 2023, 2024), values)]
+    assert topic_matrix_dimension(items) == "source_metric"
+    block = PresentationVisualBlock(role="matrix", matrix_dimension="source_metric",
+                                    observation_ids=[item.id for item in items])
+    matrix = comparison_matrix(block, {item.id: item for item in items})
+    assert len(matrix.row_labels) == 4 and len(matrix.column_labels) == 3
+    assert matrix.column_labels[0].startswith("FY2022")
+    assert topic_matrix_dimension(items[:-1]) is None

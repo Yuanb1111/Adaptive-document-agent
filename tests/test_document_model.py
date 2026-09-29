@@ -74,3 +74,6 @@ def test_display_metric_filter_rejects_table_grammar_and_cleans_units() -> None:
     assert not is_meaningful_metric(junk)
     assert display_metric_name(valid) == "Cash and cash equivalents"
     assert display_metric_name(child) == "Borrowings: Secured and guaranteed"
+    repeated = Observation(id="adjusted", metric_original="Adjusted net loss",
+                           parent_section="Adjusted for", value=-10, raw_value="(10)", confidence=0.8)
+    assert display_metric_name(repeated) == "Adjusted net loss"

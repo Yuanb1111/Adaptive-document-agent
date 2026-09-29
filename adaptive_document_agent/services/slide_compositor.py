@@ -316,7 +316,8 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
         _put_text(slide, title, Rect(rect.x, rect.y, rect.w, heading_h), size=CHART_TITLE_PT)
         totals = [index.get(oid) for oid in chart.total_observation_ids if index.get(oid)]
         from .presentation_chart_annotation import chart_change_annotation
-        change = chart_change_annotation(chart, index)
+        change = chart_change_annotation(chart, index,
+                                         scope_text=f"{slide_plan.title} {slide_plan.message}")
         change_lines = _lines(change, rect.w, 10) if change else []
         if len(change_lines) > 2:
             change, change_lines = "", []

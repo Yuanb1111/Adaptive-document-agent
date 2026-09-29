@@ -14,6 +14,22 @@ def test_largest_adjacent_change_uses_exact_reported_periods():
     assert chart_change_annotation(chart, index) == "FY2022 to FY2023: +10.0 units"
 
 
+def test_explicit_slide_periods_use_endpoint_change_and_hide_unknown_unit():
+    result = _result()
+    chart = result.charts[0]
+    first = result.observations[0]
+    middle = result.observations[1]
+    last = middle.model_copy(deep=True, update={"id": "measure-0-2024", "period": "FY2024",
+                                                "value": 18.0, "raw_value": "18"})
+    for item in (first, middle, last):
+        item.unit, item.raw_unit = "unknown", "unknown"
+    chart.observation_ids.append(last.id)
+    index = {item.id: item for item in (first, middle, last)}
+    assert chart_change_annotation(chart, index) == "FY2022 to FY2023: +10.0"
+    assert chart_change_annotation(chart, index, scope_text="Growth from FY2022 to FY2024") == (
+        "FY2022 to FY2024: +8.00")
+
+
 def test_mixed_period_and_conflicting_values_have_no_annotation():
     result = _result()
     chart = result.charts[0]

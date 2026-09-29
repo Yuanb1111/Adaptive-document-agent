@@ -402,6 +402,20 @@ def test_closing_reserves_space_for_lower_ranked_watch_items():
     assert all(bullet in text for bullet in closing.bullets)
 
 
+def test_calculated_conclusion_uses_sourced_result_instead_of_absence_claim() -> None:
+    result = _result()
+    result.insights[0] = result.insights[0].model_copy(update={
+        "kind": "calculated_result", "title": "Reported growth rate",
+        "narrative": "Reported growth was 12.5% from FY2022 to FY2024.",
+        "implication": "Growth improved, but no cost drivers are provided in the supplied data.",
+    })
+    closing = PresentationPlanRecovery._risks_slide(
+        result, PresentationSlide(id="summary", slide_type="executive_summary", title="Summary"))
+    assert closing is not None
+    assert closing.title == "Conclusions"
+    assert closing.bullets == ["Reported growth was 12.5% from FY2022 to FY2024."]
+
+
 def test_topic_recovery_selects_composition_across_category_series():
     from tests.test_p0_composition import matrix, result_for
     observations, _ = matrix()
@@ -417,3 +431,29 @@ def test_topic_recovery_selects_composition_across_category_series():
     plan = PresentationPlanRecovery().from_selected_topics(result)
     selected = {cid for slide in plan.slides if slide.slide_type == "analysis" for cid in slide.chart_ids}
     assert any(chart.id in selected and chart.chart_type == "stacked_percent" for chart in result.charts)
+
+
+def test_four_parallel_metric_series_keep_a_complete_evidence_table() -> None:
+    from tests.test_p0_composition import observation, result_for
+
+    rows = (("North share", (15, 18, 20)), ("South share", (25, 23, 21)),
+            ("East share", (35, 34, 33)), ("West share", (20, 22, 24)))
+    observations = [observation(f"{name}-{year}", name, value, f"FY{year}", unit="percent")
+                    for name, values in rows for year, value in zip((2022, 2023, 2024), values)]
+    for item in observations:
+        item.raw_unit = "%"
+        item.period_type = "fiscal_year"
+    result = result_for(observations, [])
+    directory, lookup = series_directory(result)
+    result.presentation_topics = PresentationTopicSelection(topics=[PresentationTopic(
+        id="regional_mix", title="Regional mix", question="How did regional shares change?",
+        rationale="Four reported region series share the same three periods.",
+        series_ids=[entry["id"] for entry in directory],
+    )])
+    PresentationTopicSelector._validate(result.presentation_topics, lookup)
+    plan = PresentationPlanRecovery().from_selected_topics(result)
+    slide = next(item for item in plan.slides if item.theme_id == "regional_mix")
+    assert slide.chart_ids == []
+    assert len(slide.visual_blocks) == 1
+    assert slide.visual_blocks[0].role == "matrix"
+    assert set(slide.visual_blocks[0].observation_ids) == {item.id for item in observations}

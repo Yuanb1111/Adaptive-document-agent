@@ -67,6 +67,29 @@ class PresentationPlanRecovery:
             observations = {oid: observation_by_id[oid] for oid in members if oid in observation_by_id}
             if len(observations) < 2:
                 continue
+            if len(topic.series_ids) > 3:
+                from adaptive_document_agent.services.presentation_matrix import topic_matrix_dimension
+
+                matrix_dimension = topic_matrix_dimension(list(observations.values()))
+                if matrix_dimension:
+                    pages = sorted({e.page for item in observations.values() for e in item.evidence})
+                    themes.append(PresentationTheme(
+                        id=topic.id, title=topic.title, question=topic.question,
+                        rationale=topic.rationale, observation_ids=members,
+                        caveats=topic.caveats, source_pages=pages,
+                    ))
+                    analysis_slides.append(PresentationSlide(
+                        id=f"topic_{topic.id}", slide_type="analysis", title=topic.title,
+                        section_id=topic.id, section_title=topic.title,
+                        slide_role="overview", layout="data_overview", message=topic.question,
+                        visual_blocks=[PresentationVisualBlock(
+                            role="matrix", observation_ids=members,
+                            matrix_dimension=matrix_dimension)],
+                        theme_id=topic.id, analytical_question=topic.question,
+                        selection_reason=topic.rationale, comparison_mode="parallel",
+                        source_pages=pages,
+                    ))
+                    continue
             chart_ids: list[str] = []
             visible_series: set[str] = set()
             # A validated composition can cover several model-selected category
@@ -506,8 +529,12 @@ class PresentationPlanRecovery:
         for field in ("implication", "watch_item"):
             candidates = []
             for item in eligible:
-                statement = (getattr(item, field) or "").strip()
-                if (not statement or any(char.isdigit() for char in statement)
+                # A calculated finding has a verified, numeric narrative. Its
+                # optional implication may assert that other evidence is absent
+                # without a document-wide proof of absence.
+                statement = ((item.narrative if field == "implication" and item.kind == "calculated_result"
+                              else getattr(item, field)) or "").strip()
+                if (not statement or (field == "watch_item" and any(char.isdigit() for char in statement))
                     or re.search(r"(?i)\b(?:caused|driven by|due to|contributed to)\b", statement)
                     or normalize(statement) in seen):
                     continue
@@ -517,6 +544,7 @@ class PresentationPlanRecovery:
         # Prefer concrete model-written follow-ups when available, while
         # retaining the leading evidence-grounded implication.
         ordered = groups[0][:1] + groups[1][:3] + groups[0][1:] + groups[1][3:]
+        has_watch_item = any(candidate in groups[1] for candidate in ordered[:4])
         for item, statement in ordered[:4]:
             bullets.append(statement)
             selected_ids.append(item.id)
@@ -526,11 +554,12 @@ class PresentationPlanRecovery:
         return PresentationSlide(
             id="slide_risks",
             slide_type="risks",
-            title="Conclusions and Watch Items",
+            title="Conclusions and Watch Items" if has_watch_item else "Conclusions",
             section_id="risks",
             section_title="Conclusions",
             slide_role="risk",
-            message="Implications and indicators to monitor, based on the cited findings.",
+            message=("Implications and indicators to monitor, based on the cited findings."
+                     if has_watch_item else "Conclusions based on the cited findings."),
             bullets=bullets,
             insight_ids=list(dict.fromkeys(selected_ids)),
             source_pages=sorted(pages),

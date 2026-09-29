@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from adaptive_document_agent.document_model import period_sort_key
 from adaptive_document_agent.document_model.metric_semantic_classifier import classify_metric
 from adaptive_document_agent.document_model.period_semantic_validator import format_observation_period
@@ -9,8 +11,8 @@ from adaptive_document_agent.document_model.series import metric_identity_key
 from adaptive_document_agent.validation.claim_validator import are_observations_compatible
 
 
-def chart_change_annotation(chart, index) -> str:
-    """Name the largest adjacent reported change without inferring a driver.
+def chart_change_annotation(chart, index, *, scope_text: str = "") -> str:
+    """Name a stated endpoint change, otherwise the largest adjacent change.
 
     The chart was selected semantically by the model. Python only calculates a
     directly comparable difference and retains the exact period endpoints.
@@ -63,8 +65,14 @@ def chart_change_annotation(chart, index) -> str:
     if len(ordered) < 2 or any(not are_observations_compatible(a, b)[0]
                                for a, b in zip(ordered, ordered[1:])):
         return ""
-    first, last = max(zip(ordered, ordered[1:]),
-                      key=lambda pair: abs(float(pair[1].value) - float(pair[0].value)))
+    start_label = format_observation_period(ordered[0])
+    end_label = format_observation_period(ordered[-1])
+    stated_range = bool(start_label and end_label and re.search(
+        rf"\b(?:from\s+)?{re.escape(start_label)}\s*(?:to|through|until|[-–—])\s*"
+        rf"{re.escape(end_label)}\b", scope_text, re.I))
+    first, last = ((ordered[0], ordered[-1]) if stated_range else
+                   max(zip(ordered, ordered[1:]),
+                       key=lambda pair: abs(float(pair[1].value) - float(pair[0].value))))
     semantic = classify_metric(last.metric_original, unit=last.unit,
                                raw_unit=last.raw_unit, value=last.value)
     change = float(last.value) - float(first.value)
@@ -78,8 +86,8 @@ def chart_change_annotation(chart, index) -> str:
             amount += f" {last.currency}"
         if label:
             amount += f" {label}"
-        elif last.unit == "count":
-            amount += f" {last.raw_unit or 'units'}"
-        elif last.unit not in {"", "currency", "count"}:
+        elif last.unit == "count" and last.raw_unit not in {None, "", "unknown", "generic"}:
+            amount += f" {last.raw_unit}"
+        elif last.unit not in {None, "", "currency", "count", "unknown", "generic"}:
             amount += f" {last.unit}"
     return f"{format_observation_period(first)} to {format_observation_period(last)}: {amount}"

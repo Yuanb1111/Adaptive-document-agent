@@ -278,6 +278,47 @@ def test_category_qualified_margin_claims_keep_three_source_series_separate() ->
     assert any(issue.code == "direction_scope_ambiguous" for issue in issues)
 
 
+def test_shared_margin_alias_binds_to_qualified_source_metric() -> None:
+    warehouse = _series("Gross margin for warehouse fulfillment solutions %",
+                        [36.6, 39.0, 39.2], years=(2022, 2023, 2024))
+    industrial = _series("Gross margin for industrial material transport solutions %",
+                         [18.4, 12.9, 12.1], years=(2022, 2023, 2024))
+    observations = [*warehouse, *industrial]
+    for item in observations:
+        item.unit, item.raw_unit, item.currency = "percent", "%", None
+    text = ("Warehouse fulfillment gross margin rose while industrial material "
+            "transport gross margin fell from FY2022 to FY2024.")
+    slide = _slide(text, observations, "bullets")
+    assert not ClaimValidator().validate_slide(slide, observations)
+    repaired, repairs = repair_presentation_plan(PresentationPlan(title="Margins", slides=[slide]),
+                                                 observations)
+    assert repaired.slides[0].bullets == [text]
+    assert not repairs
+    slide.bullets = [text.replace("transport gross margin fell", "transport gross margin rose")]
+    issues = ClaimValidator().validate_slide(slide, observations)
+    assert any("industrial_material_transport" in issue.metric_name
+               and issue.offending_direction == "rose" for issue in issues)
+    slide.bullets = ["Gross margin rose from FY2022 to FY2024."]
+    assert any(issue.code == "direction_scope_ambiguous"
+               for issue in ClaimValidator().validate_slide(slide, observations))
+
+
+def test_financing_cash_flow_does_not_borrow_cash_balance_direction() -> None:
+    financing = _series("Net cash generated from/(used in) financing activities",
+                        [1505, 150, -56], years=(2022, 2023, 2024))
+    balance = _series("Cash and cash equivalents at the end of the year",
+                      [1121, 760, 636], years=(2022, 2023, 2024))
+    text = ("Financing cash flow turned negative and ending cash decreased "
+            "from FY2022 to FY2024.")
+    observations = [*financing, *balance]
+    slide = _slide(text, observations, "bullets")
+    assert not ClaimValidator().validate_slide(slide, observations)
+    repaired, repairs = repair_presentation_plan(PresentationPlan(title="Cash", slides=[slide]),
+                                                 observations)
+    assert repaired.slides[0].bullets == [text]
+    assert not repairs
+
+
 def test_unique_cash_balance_runs_bind_their_stated_end_dates() -> None:
     observations = _series("Cash and cash equivalents", [27, 46, 119, 110],
                            years=(2023, 2024, 2025, 2026))

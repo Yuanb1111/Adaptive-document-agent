@@ -28,7 +28,11 @@ def comparison_matrix(block, index) -> ComparisonMatrix:
     rows, columns, cells, scope = [], [], {}, None
     for item in items:
         dims = {**item.dimensions, **item.category_dimensions}
-        row = str(dims.pop(dimension, "")).strip()
+        if dimension == "source_metric":
+            from adaptive_document_agent.document_model.series import display_metric_name
+            row = display_metric_name(item)
+        else:
+            row = str(dims.pop(dimension, "")).strip()
         if not row:
             raise ValueError("Every matrix record must identify the selected category.")
         other_dims = tuple(sorted((key, str(value)) for key, value in dims.items()
@@ -38,7 +42,8 @@ def comparison_matrix(block, index) -> ComparisonMatrix:
             scope = item_scope
         elif item_scope != scope:
             raise ValueError("Matrix cells mix distinct entities or nonselected dimensions.")
-        column = (item.metric_original, format_observation_period(item), item.unit,
+        column = ("" if dimension == "source_metric" else item.metric_original,
+                  format_observation_period(item), item.unit,
                   item.raw_unit, item.currency, item.parent_section)
         if row not in rows:
             rows.append(row)
@@ -59,9 +64,28 @@ def comparison_matrix(block, index) -> ComparisonMatrix:
             parts.append(currency)
         parts.append(raw_unit or ("%" if unit == "percent" else unit))
         suffix = " ".join(part for part in parts if part)
-        names.append(f"{name}\n{period}" + (f" ({suffix})" if suffix else ""))
+        names.append((f"{name}\n" if name else "") + period
+                     + (f" ({suffix})" if suffix else ""))
     return ComparisonMatrix(tuple(rows), tuple(names),
                             tuple(tuple(cells[row, col] for col in columns) for row in rows), tuple(items))
+
+
+def topic_matrix_dimension(items: list) -> str | None:
+    """Find an exact, readable source matrix without inferring missing cells."""
+    from adaptive_document_agent.models import PresentationVisualBlock
+
+    index = {item.id: item for item in items}
+    dimensions = {key for item in items
+                  for key in {**item.dimensions, **item.category_dimensions}
+                  if key not in {"table_context", "section", "column_role", "period_basis"}}
+    for dimension in [*sorted(dimensions), "source_metric"]:
+        try:
+            comparison_matrix(PresentationVisualBlock(
+                role="matrix", observation_ids=list(index), matrix_dimension=dimension), index)
+            return dimension
+        except ValueError:
+            continue
+    return None
 
 
 def render_matrix(presentation, slide_plan, block, index):
@@ -76,7 +100,8 @@ def render_matrix(presentation, slide_plan, block, index):
     width = presentation.slide_width.inches - 1.1
     first_width = width * .22
     data_width = (width - first_width) / len(matrix.column_labels)
-    headers = [block.matrix_dimension, *matrix.column_labels]
+    headers = ["Metric" if block.matrix_dimension == "source_metric" else block.matrix_dimension,
+               *matrix.column_labels]
     if any(len(_lines(label, data_width - .18, 12)) > 3 for label in matrix.column_labels):
         raise ValueError("Matrix column heading exceeds readable capacity.")
     header_h = .85

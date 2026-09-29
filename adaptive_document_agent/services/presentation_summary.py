@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import re
 from typing import Any
 
-from .presentation_brief import BODY_PT, HEADING_PT, BriefItem, _copy_height, _heading_height
+from .presentation_brief import BODY_PT, HEADING_PT, LINE_HEIGHT_FACTOR, BriefItem, _copy_height, _heading_height
 
 
 @dataclass(frozen=True)
@@ -129,9 +129,14 @@ def render_complete_summary(presentation: Any, title: str, items: list[BriefItem
                     heading = _text(slide, cell.item.title, cell.left, y, cell.width, cell.heading_height,
                                     size=HEADING_PT, bold=True, color=FOURIER_PURPLE)
                     heading.name = "brief:heading"
+                    heading.text_frame.paragraphs[0].line_spacing = LINE_HEIGHT_FACTOR
                 body = _text(slide, cell.item.text, cell.left, y + cell.heading_height + .04,
                              cell.width, cell.body_height, size=body_pt, color=FOURIER_DARK)
                 body.name = "brief:body"
+                # The capacity calculation reserves this same line spacing.
+                # Without it, long items leave unused height inside their text
+                # boxes, making the next finding appear farther away.
+                body.text_frame.paragraphs[0].line_spacing = LINE_HEIGHT_FACTOR
             y += max(cell.height for cell in row) + gap
         if not rows:
             _text(slide, "See the evidence pages for supported findings and scope.",

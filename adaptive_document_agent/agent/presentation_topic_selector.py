@@ -191,23 +191,12 @@ class PresentationTopicSelector:
                 raise ValueError(f"Topic {topic.id} repeats a metric series")
             if len(topic.series_ids) > 3:
                 from adaptive_document_agent.models import PresentationVisualBlock
-                from adaptive_document_agent.services.presentation_matrix import comparison_matrix
+                from adaptive_document_agent.services.presentation_matrix import topic_matrix_dimension
 
                 members = list({item.id: item for sid in topic.series_ids for item in lookup[sid]}.values())
                 if len(members) > 30:
                     raise ValueError(f"Topic {topic.id} exceeds a readable comparison matrix")
-                dimensions = {key for item in members
-                              for key in {**item.dimensions, **item.category_dimensions}
-                              if key not in {"table_context", "section", "column_role", "period_basis"}}
-                for dimension in dimensions:
-                    try:
-                        comparison_matrix(PresentationVisualBlock(
-                            role="matrix", observation_ids=[item.id for item in members],
-                            matrix_dimension=dimension), {item.id: item for item in members})
-                        break
-                    except ValueError:
-                        continue
-                else:
+                if topic_matrix_dimension(members) is None:
                     from itertools import permutations
                     from adaptive_document_agent.services.presentation_waterfall import waterfall_data
 

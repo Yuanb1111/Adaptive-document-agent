@@ -1339,6 +1339,15 @@ def extract_metric_aliases(
     elif "cash" in combined and not any(k in combined for k in ("cash flow", "operating", "investing", "financing")):
         aliases.update(["cash and cash equivalents", "cash balance", "cash reserves", "cash", "现金及现金等价物", "现金余额", "现金"])
 
+    # Source cash-flow rows often say "cash generated from/(used in) X
+    # activities" while the presentation says "X cash flow". Bind this
+    # paraphrase to the activity named by the source, not to a cash balance.
+    if "cash" in combined:
+        for activity in ("operating", "investing", "financing"):
+            if re.search(rf"\b{activity}\s+activities\b", combined):
+                aliases.update((f"{activity} cash flow", f"{activity} cash flows",
+                                f"cash flow from {activity} activities"))
+
     if ("net loss" in combined or "net_loss" in combined
             or re.search(r"\bloss\s+for\s+the\s+(?:year|period)(?:/period)?\b", combined)):
         if re.search(r"\badjusted\b|non[ -](?:ifrs|gaap)", combined):
@@ -1445,6 +1454,7 @@ def _associate_clause_direction_spans(
     is_only_metric: bool = False, only_metric_name: str | None = None,
 ) -> list[tuple[str, str, int, int]]:
     """Find directional claims in a local clause and associate each only with its specific metric."""
+    ambiguous_metric = "__ambiguous_source_metric__"
     # Independently predicated conjuncts have independent subjects, even when
     # one subject has no known alias. Do not lend that predicate to the other
     # metric. Preserve joint subjects such as 'volume and price increased'.
@@ -1465,6 +1475,28 @@ def _associate_clause_direction_spans(
             all_alias_pairs.append((len(alias), alias, m_name))
     all_alias_pairs.sort(key=lambda x: -x[0])
 
+    # Generic aliases such as "gross margin" can name several source rows.
+    # Resolve them with words that distinguish the source metrics in this
+    # clause. A tie remains unbound so no other series can silently repair it.
+    alias_owners: dict[str, set[str]] = defaultdict(set)
+    for _, alias, metric in all_alias_pairs:
+        alias_owners[alias.casefold()].add(metric)
+
+    def owner_for(alias: str) -> str | None:
+        owners = alias_owners[alias.casefold()]
+        if len(owners) == 1:
+            return next(iter(owners))
+        alias_words = set(re.findall(r"[a-z0-9]+", alias.casefold()))
+        clause_words = set(re.findall(r"[a-z0-9]+", clause.casefold()))
+        words_by_owner = {metric: set(re.findall(r"[a-z0-9]+", metric.casefold())) - alias_words
+                          for metric in owners}
+        scores = {metric: len((words - set().union(*(other for name, other in words_by_owner.items()
+                                                   if name != metric))) & clause_words)
+                  for metric, words in words_by_owner.items()}
+        best = max(scores.values(), default=0)
+        matches = [metric for metric, score in scores.items() if score == best]
+        return matches[0] if best > 0 and len(matches) == 1 else None
+
     clause_lower = clause.casefold()
     occupied = [False] * len(clause)
     metric_spans: list[tuple[int, int, str]] = []
@@ -1473,7 +1505,8 @@ def _associate_clause_direction_spans(
         for m in re.finditer(pattern, clause_lower):
             s, e = m.start(), m.end()
             if not any(occupied[s:e]):
-                metric_spans.append((s, e, m_name))
+                resolved = owner_for(alias)
+                metric_spans.append((s, e, resolved or ambiguous_metric))
                 for i in range(s, e):
                     occupied[i] = True
 
@@ -1811,6 +1844,17 @@ class ClaimValidator:
                                 for m in re.finditer(r"\b" + re.escape(alias) + r"\b", clause, re.I)]
 
                 for m_name, dir_word, direction_start, direction_end in assocs:
+                    if m_name == "__ambiguous_source_metric__":
+                        issue_key = (slide.id, comp_type, bullet_idx, clause_index, direction_start, "ambiguous_metric")
+                        if issue_key not in seen_issues:
+                            seen_issues.add(issue_key)
+                            issues.append(DirectionalClaimIssue(
+                                code="direction_scope_ambiguous", severity="error", stage="presentation",
+                                message=f"Slide {slide.id} {comp_type}: '{dir_word}' has no unique source metric.",
+                                slide_id=slide.id, target_component=comp_type, bullet_index=bullet_idx,
+                                offending_direction=dir_word, expected_direction="UNRESOLVED_SCOPE",
+                            ))
+                        continue
                     if m_name not in metric_series_map:
                         continue
                     series_list = metric_series_map[m_name]
