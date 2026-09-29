@@ -146,13 +146,25 @@ def _narrow(slide, replacements):
     old = slide.title
     old_message = slide.message
     title = slide.section_title.strip()
-    slide.title = title if title and not (_RANK.search(title) or _SHARE.search(title)) else "Reported measures"
+    if title and (_RANK.search(title) or _SHARE.search(title)):
+        # A selected topic can name several measures even when one comparative
+        # claim cannot be bound. Keep the independently named measures visible.
+        parts = [re.sub(r"(?i)^and\s+", "", part.strip()) for part in title.split(",")]
+        safe = [part for part in parts if part and not (_RANK.search(part) or _SHARE.search(part))]
+        title = " and ".join(safe) if safe else ""
+    slide.title = title or "Reported measures"
     if _RANK.search(slide.message) or _SHARE.search(slide.message):
         # Keep independent qualifications even when the comparative sentence
         # has to go. Raw semantic decisions remain in presentation_topics.
         clauses = re.split(r"(?<=[.!?])\s+|;\s*", slide.message)
         retained = [part for part in clauses if not (_RANK.search(part) or _SHARE.search(part))]
-        slide.message = " ".join(retained).strip() or "Reported values across the cited periods."
+        slide.message = " ".join(retained).strip() or (
+            f"Reported values for {slide.title} across the cited periods."
+            if title else "Reported values across the cited periods."
+        )
+    elif slide.message == "Reported values across the cited periods." and title:
+        # Cached plans may already contain the previous generic fallback.
+        slide.message = f"Reported values for {title} across the cited periods."
     slide.analytical_question = "How do the reported values vary across the cited periods?"
     slide.selection_reason = _NARROW_REASON
     replacements[old] = slide.title

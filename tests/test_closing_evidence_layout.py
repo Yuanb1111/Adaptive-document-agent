@@ -108,6 +108,26 @@ def test_a_conclusion_without_watch_item_still_shares_its_evidence():
     assert "Watch items" not in _copy(slides[0])
 
 
+def test_short_findings_with_identical_periods_and_units_share_one_closing_page():
+    result, plan = _result()
+    for observation in result.observations[:2]:
+        observation.period = observation.period.replace("2022-12-31", "FY2022").replace("2024-05-31", "FY2024")
+        observation.period_type, observation.period_basis = "fiscal_year", "FY"
+        observation.as_of_date = None
+        observation.audited_status = "unknown"
+    plan.insight_ids = []
+    plan.bullets = ["The first reported measure changed.", "The second reported measure changed."]
+    plan.bullet_observation_ids = [[o.id for o in result.observations[:2]],
+                                   [o.id for o in result.observations[2:4]]]
+    plan.observation_ids = [oid for group in plan.bullet_observation_ids for oid in group]
+    slides = render_closing(_deck(), result, plan)
+    assert len(slides) == 1
+    assert all(bullet in _copy(slides[0]) for bullet in plan.bullets)
+    assert len(_tables(slides[0])) == 1
+    assert {row[0] for row in _tables(slides[0])[0][1:]} == {"Number of reserve units", "Active sites"}
+    assert all(o.raw_value in slides[0].notes_slide.notes_text_frame.text for o in result.observations[:4])
+
+
 def test_explicit_bullet_inputs_can_bind_a_reworded_conclusion():
     result, plan = _result()
     plan.insight_ids = []

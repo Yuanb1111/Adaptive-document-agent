@@ -123,29 +123,71 @@ def _render_linked_pages(presentation, result, plan, groups, records, notes):
 
     start_count = len(presentation.slides)
     slides, shown_ids = [], set()
+    bundles = []
     for identity, (copy, subtitle) in groups.items():
         evidence_plan = plan.model_copy(update={"insight_ids": [], "observation_ids": list(identity)})
         tables, _ = closing_evidence(result, evidence_plan)
         if not tables or len({key[0] for key, _ in tables}) != 1:
             break
-        slide = _render_linked_page(presentation, plan.title, subtitle, copy, tables, notes)
-        if slide is None:
-            break
-        slides.append(slide)
-        shown_ids.update(identity)
+        bundles.append((identity, copy, subtitle, tables))
     else:
-        # Explicit additional facts in the plan remain visible even if no bullet
-        # has a matching insight. All raw records also remain in speaker notes.
-        remaining = [o.id for o in records if o.id not in shown_ids]
-        evidence_plan = plan.model_copy(update={"insight_ids": [], "observation_ids": remaining})
-        tables, _ = closing_evidence(result, evidence_plan)
-        return _append_evidence_pages(presentation, slides, tables, notes)
+        # Join short linked findings only when their complete table signatures
+        # agree. The union of source IDs regenerates one table, so shared rows
+        # are shown once and no evidence/copy relationship is inferred.
+        batches = []
+        for bundle in bundles:
+            signature = tuple(key for key, _ in bundle[3])
+            if batches and batches[-1][0] == signature:
+                batches[-1][1].append(bundle)
+            else:
+                batches.append((signature, [bundle]))
+        for _, batch in batches:
+            candidate = batch[0]
+            if len(batch) > 1:
+                identity = sorted({oid for item in batch for oid in item[0]})
+                evidence_plan = plan.model_copy(update={"insight_ids": [], "observation_ids": identity})
+                merged_tables, _ = closing_evidence(result, evidence_plan)
+                merged_copy = [[item for bundle in batch for item in bundle[1][column]] for column in (0, 1)]
+                candidate = (tuple(identity), merged_copy,
+                             "Reported values supporting the conclusions", merged_tables)
+            identity, copy, subtitle, tables = candidate
+            slide = _render_linked_page(presentation, plan.title, subtitle, copy, tables, notes)
+            if slide is not None:
+                slides.append(slide)
+                shown_ids.update(identity)
+                continue
+            _drop_last_slide(presentation)
+            if len(batch) == 1:
+                break
+            for oid, body, heading, source_tables in batch:
+                separate = _render_linked_page(presentation, plan.title, heading, body, source_tables, notes)
+                if separate is None:
+                    _drop_last_slide(presentation)
+                    break
+                slides.append(separate)
+                shown_ids.update(oid)
+            else:
+                continue
+            break
+        else:
+            # Explicit additional facts remain visible; all raw records also
+            # remain in speaker notes.
+            remaining = [o.id for o in records if o.id not in shown_ids]
+            evidence_plan = plan.model_copy(update={"insight_ids": [], "observation_ids": remaining})
+            tables, _ = closing_evidence(result, evidence_plan)
+            return _append_evidence_pages(presentation, slides, tables, notes)
 
     while len(presentation.slides) > start_count:
         slide_id = presentation.slides._sldIdLst[-1]
         presentation.part.drop_rel(slide_id.rId)
         presentation.slides._sldIdLst.remove(slide_id)
     return None
+
+
+def _drop_last_slide(presentation):
+    slide_id = presentation.slides._sldIdLst[-1]
+    presentation.part.drop_rel(slide_id.rId)
+    presentation.slides._sldIdLst.remove(slide_id)
 
 
 def _render_linked_page(presentation, title, subtitle, groups, tables, notes):

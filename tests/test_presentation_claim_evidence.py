@@ -117,6 +117,17 @@ def test_amount_growth_does_not_prove_share_growth():
     assert not result.presentation_plan.slides[-1].visual_blocks
 
 
+def test_unsupported_share_keeps_independent_topic_measure_instead_of_generic_title():
+    result = _sample()
+    slide = result.presentation_plan.slides[-1]
+    slide.section_title = "Enterprise amount, Revenue Share"
+    slide.message = "Its share increased."
+    prepare_presentation_claims(result)
+    assert slide.title == "Enterprise amount"
+    assert slide.message == "Reported values for Enterprise amount across the cited periods."
+    assert result.presentation_plan.slides[0].bullets == ["Enterprise amount"]
+
+
 def test_share_direction_binds_to_its_clause_subject_not_first_named_category():
     result = _sample()
     consumers = [_observation("Consumer", year, value, share=False) for year, value in ((2022, 700), (2023, 480))]

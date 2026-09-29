@@ -2131,7 +2131,7 @@ def _add_evidence_table_slides(
                                    *[entry["periods"].get(p, "—") for p in p_chunk]])
             header_height = row_height(["Financial Metric", "Unit", *p_chunk])
             slide_specs.extend((list(p_chunk), bundle, is_bs)
-                               for bundle in paginate_themes(list(themes.items()), capacity=4.10 - header_height,
+                               for bundle in paginate_themes(list(themes.items()), capacity=4.45 - header_height,
                                    row_cost=metric_height,
                                    heading_cost=lambda theme: row_height([f"■ {theme.upper()}", "", *[""] * len(p_chunk)])))
 
