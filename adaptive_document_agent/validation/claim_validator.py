@@ -1528,6 +1528,23 @@ def _associate_clause_direction_spans(
     return assocs
 
 
+def _possessive_ratio_metric(
+    clause: str,
+    previous_clause: str,
+    metric_series_map: dict[str, list[dict[str, Any]]],
+) -> str | None:
+    """Bind ``its ratio`` only to a uniquely named ratio of the prior subject."""
+    if not re.match(r"\s*its\s+ratio\b", clause, re.I) or not previous_clause:
+        return None
+    candidates = []
+    for metric_name, series in metric_series_map.items():
+        source_label = series[0]["first"].metric_original
+        match = re.match(r"(.+?)\s+ratio\b", source_label, re.I)
+        if match and re.search(r"\b" + re.escape(match[1].strip()) + r"\b", previous_clause, re.I):
+            candidates.append(metric_name)
+    return candidates[0] if len(candidates) == 1 else None
+
+
 def is_text_relevant_to_metric(
     text: str,
     metric_name: str,
@@ -1737,7 +1754,7 @@ class ClaimValidator:
 
             clauses = split_into_clauses(comp_text)
             clause_cursor = 0
-            for clause in clauses:
+            for clause_index, clause in enumerate(clauses):
                 clause_offset = comp_text.find(clause, clause_cursor)
                 clause_cursor = clause_offset + len(clause)
                 assocs = _associate_clause_direction_spans(
@@ -1747,6 +1764,19 @@ class ClaimValidator:
                     is_only_metric=is_only_metric,
                     only_metric_name=only_metric_name,
                 )
+                if re.match(r"\s*its\s+ratio\b", clause, re.I):
+                    previous = clauses[clause_index - 1] if clause_index else ""
+                    ratio_metric = _possessive_ratio_metric(clause, previous, metric_series_map)
+                    ratio_assocs = (_associate_clause_direction_spans(
+                        clause, {ratio_metric: ["its ratio"]}
+                    ) if ratio_metric else [])
+                    if len(ratio_assocs) != 1:
+                        issues.append(ValidationIssue(
+                            code="direction_ratio_subject_ambiguous", severity="error", stage="presentation",
+                            message=f"Slide {slide.id} {comp_type}: the subject of 'its ratio' is not uniquely supported.",
+                        ))
+                        continue
+                    assocs = ratio_assocs
                 metric_spans = [m.span() for aliases in metric_aliases_map.values() for alias in aliases
                                 for m in re.finditer(r"\b" + re.escape(alias) + r"\b", clause, re.I)]
 

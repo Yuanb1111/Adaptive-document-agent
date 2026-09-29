@@ -259,6 +259,7 @@ def repair_presentation_plan_claims(result: PipelineResult) -> list[str]:
     plan, repairs = repair_presentation_plan(result.presentation_plan, result.observations, result.charts,
         insight_observation_ids=insight_inputs(result) if result.insights else None)
     result.presentation_plan = plan
+    plan.editorial_notes = list(dict.fromkeys([*plan.editorial_notes, *repairs]))
     return repairs
 
 
