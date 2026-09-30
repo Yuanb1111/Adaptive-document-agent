@@ -221,23 +221,45 @@ def test_lexical_fragment_heuristics_warn_without_rejecting_valid_articles_or_va
     assert any(shape.text == text for shape in deck.slides[0].shapes if shape.has_text_frame)
 
 
-@pytest.mark.parametrize("title,categories,values", [
-    ("Revenue increased versus last year", ["Large segment", "Small segment"], [120, 10]),
-    ("Costs improved", ["FY2024", "FY2025"], [120, 90]),
-    ("Revenue increased", ["FY2025", "FY2024"], [120, 90]),
-    ("Revenue grew while costs fell", ["FY2024", "FY2025"], [90, 120]),
-    ("Losses increased", ["FY2024", "FY2025"], [-90, -120]),
-    ("Revenue increased", ["3 months ended 30 June 2024", "6 months ended 30 June 2025"], [120, 90]),
+@pytest.mark.parametrize("title,series_name,categories,values", [
+    ("Revenue increased", "Revenue", ["Large segment", "Small segment"], [120, 10]),
+    ("Costs improved", "Costs", ["FY2024", "FY2025"], [120, 90]),
+    ("Revenue increased", "Revenue", ["FY2025", "FY2024"], [120, 90]),
+    ("Revenue grew while costs fell", "Revenue", ["FY2024", "FY2025"], [90, 120]),
+    ("Losses increased", "Losses", ["FY2024", "FY2025"], [-90, -120]),
+    ("Revenue increased", "Revenue", ["3 months ended 30 June 2024", "6 months ended 30 June 2025"], [120, 90]),
 ])
-def test_direction_guesses_require_comparable_time_axis_and_unambiguous_semantics(title, categories, values):
+def test_direction_guesses_require_comparable_time_axis_and_unambiguous_semantics(title, series_name, categories, values):
     from adaptive_document_agent.services.ppt_preflight import PresentationPreflight
     deck = Presentation()
     slide = deck.slides.add_slide(deck.slide_layouts[6])
     data = CategoryChartData()
     data.categories = categories
-    data.add_series("Measure", values)
+    data.add_series(series_name, values)
     chart = slide.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, Inches(1), Inches(1), Inches(4), Inches(3), data).chart
     chart.has_title = True
     chart.chart_title.text_frame.text = title
     findings = [i for i in PresentationPreflight(deck).validate_and_sanitize() if i.code == "title_data_misalignment"]
     assert findings and all(i.severity == "warning" for i in findings)
+
+
+@pytest.mark.parametrize("title,series_name,categories,values", [
+    ("Revenue increased in FY2024", "Revenue", ["FY2023", "FY2024", "FY2025"], [100, 200, 90]),
+    ("Revenue increased in the latest year", "Revenue", ["FY2023", "FY2024", "FY2025"], [200, 90, 100]),
+    ("Revenue increased", "Costs", ["FY2024", "FY2025"], [120, 90]),
+    ("Revenue never increased", "Revenue", ["FY2024", "FY2025"], [120, 90]),
+    ("Revenue has never declined", "Revenue", ["FY2024", "FY2025"], [90, 120]),
+])
+def test_title_direction_is_not_borrowed_from_another_metric_or_time_scope(title, series_name, categories, values):
+    from adaptive_document_agent.services.ppt_preflight import PresentationPreflight
+    deck = Presentation()
+    slide = deck.slides.add_slide(deck.slide_layouts[6])
+    data = CategoryChartData()
+    data.categories = categories
+    data.add_series(series_name, values)
+    chart = slide.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, Inches(1), Inches(1), Inches(4), Inches(3), data).chart
+    chart.has_title = True
+    chart.chart_title.text_frame.text = title
+    issues = PresentationPreflight(deck).validate_and_sanitize()
+    assert any(i.code == "title_data_misalignment" and i.severity == "warning" for i in issues)
+    assert not [i for i in issues if i.severity == "error"]

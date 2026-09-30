@@ -315,9 +315,10 @@ can exceed that threshold. Direct monetary-value/percentage mismatches remain
 errors; the gate does not infer correctness or incorrectness from size alone.
 Suspected broken-word prefixes also remain warnings, since articles, variables,
 and abbreviations can legitimately match that lexical heuristic.
-Title/endpoint contradictions block only on a comparable chronological axis
-with unambiguous literal direction and nonnegative values. Category rankings,
-reverse chronology, loss magnitudes, and evaluative wording retain review warnings.
+Title/endpoint contradictions block only for a simple `<series name> <direction>`
+claim on a comparable chronological axis with nonnegative values. Category
+rankings, reverse chronology, loss magnitudes, and richer prose (including
+negation or a narrower time scope) retain review warnings for source-aware QA.
 
 Warnings and repairs are retained in the pipeline result and exposed in the Data Quality or Technical Details views. The system does not fabricate replacement facts when validation fails.
 

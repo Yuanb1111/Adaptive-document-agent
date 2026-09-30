@@ -592,11 +592,14 @@ class PresentationPreflight:
                     )
                 except (AttributeError, IndexError, TypeError, ValueError):
                     ordered_periods = False
-                unambiguous_direction = (
-                    bool(positive_words.search(title)) != bool(negative_words.search(title))
-                    and not re.search(r"(?i)\b(?:improved|rebounded|weakened)\b", title)
-                )
-                confirmed = ordered_periods and unambiguous_direction and all(value >= 0 for value in values)
+                # Only a simple, metric-bound literal claim can be proven by
+                # endpoints alone. Richer prose can contain negation, temporal
+                # scope or other measures; leave it to source-aware claim QA.
+                series_name = str(series[0].name or "").strip()
+                literal_claim = bool(series_name and re.fullmatch(
+                    re.escape(series_name) + r"\s+(?:grew|rose|increased|expanded|fell|decreased|declined|contracted|dropped)[.!]?",
+                    title, re.IGNORECASE))
+                confirmed = ordered_periods and literal_claim and all(value >= 0 for value in values)
                 self.issues.append(
                     PreflightIssue(
                         idx,
