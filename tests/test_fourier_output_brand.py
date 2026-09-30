@@ -151,13 +151,22 @@ def test_overlapping_category_subsets_keep_same_native_series_color(chart_type):
     assert all(len(set(colors.values())) == 2 for colors in native.values())
 
 
-def test_long_claim_keeps_full_text_under_semantic_section_heading():
+@pytest.mark.parametrize("claim,placement", [
+    (
+        "Operating activity expanded across the comparable reporting periods, with shipment "
+        "and service observations supporting the scale of the change",
+        "subtitle",
+    ),
+    (
+        "Operating activity expanded across the comparable reporting periods, while the retained "
+        "shipment and service observations provide separate evidence for the scale and timing of this change",
+        "commentary",
+    ),
+])
+def test_long_claim_keeps_full_text_under_semantic_section_heading(claim, placement):
     result = paired_result()
     slide_plan = result.presentation_plan.slides[3]
-    slide_plan.title = (
-        "Operating activity expanded across the comparable reporting periods, while the retained "
-        "shipment and service observations provide separate evidence for the scale and timing of this change"
-    )
+    slide_plan.title = claim
     slide_plan.section_title = "Operating activity"
     slide_plan.message = "How did shipments and service activity change across the reported periods?"
     before_slides = [slide.model_dump() for slide in result.presentation_plan.slides]
@@ -165,11 +174,21 @@ def test_long_claim_keeps_full_text_under_semantic_section_heading():
     output = Presentation(BytesIO(build_presentation(result, BUNDLED_TEMPLATE_PATH)))
     slide = next(slide for slide in output.slides if slide.name.startswith("composed_"))
     title = next(shape for shape in slide.shapes if shape.has_text_frame and shape.text == slide_plan.section_title)
-    subtitle = next(shape for shape in slide.shapes if shape.has_text_frame and shape.text == slide_plan.title)
     assert title.text_frame.paragraphs[0].font.size.pt == 32
     assert str(title.text_frame.paragraphs[0].font.color.rgb) == TEXT
-    assert subtitle.text_frame.paragraphs[0].font.size.pt == 18
-    assert str(subtitle.text_frame.paragraphs[0].font.color.rgb) == PRIMARY
+    subtitle = next(shape for shape in slide.placeholders if shape.placeholder_format.idx == 16)
+    if placement == "subtitle":
+        assert subtitle.text == claim
+        assert subtitle.text_frame.paragraphs[0].font.size.pt == 18
+        assert str(subtitle.text_frame.paragraphs[0].font.color.rgb) == PRIMARY
+    else:
+        assert subtitle.text == ""
+        commentary = next(shape for shape in slide.shapes
+                          if shape.has_text_frame and claim in shape.text)
+        assert commentary.name.startswith("composed:text:")
+        assert commentary.text_frame.paragraphs[0].font.size.pt == 16
+        assert str(commentary.text_frame.paragraphs[0].font.color.rgb) == TEXT
+        assert "Both measures provide complementary evidence of operating activity." in commentary.text
     notes = json.loads(slide.notes_slide.notes_text_frame.text)
     assert notes["analytical_question"] == slide_plan.message
     assert notes["planned_title"] == slide_plan.title
