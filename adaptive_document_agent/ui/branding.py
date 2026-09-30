@@ -31,7 +31,7 @@ def sidebar_brand(st) -> None:
     st.markdown(
         f'<div class="fourier-brand"><img src="{_logo_uri()}" alt="FOURIER 傅利叶" />'
         '<a class="fourier-brand-guide" '
-        'href="app/static/Adaptive_Document_Agent_Beginner_Guide_Public_2026-09-28.pdf" '
+        'href="app/static/Adaptive_Document_Agent_Beginner_Guide_Public_2026-09-30.pdf" '
         'aria-label="打开零基础上手手册 PDF">零基础上手手册 ↗</a></div>',
         unsafe_allow_html=True,
     )
