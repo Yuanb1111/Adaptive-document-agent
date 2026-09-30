@@ -379,9 +379,9 @@ class PresentationPreflight:
                         self.issues.append(
                             PreflightIssue(
                                 idx,
-                                "impossible_percentage",
-                                f"Percentage value exceeds 1,000%: '{match.group(0)}'",
-                                severity="error",
+                                "extreme_percentage",
+                                f"Percentage value exceeds 1,000%; verify the source and comparison basis: '{match.group(0)}'",
+                                severity="warning",
                             )
                         )
             elif shape.has_table:
@@ -411,9 +411,9 @@ class PresentationPreflight:
                                 self.issues.append(
                                     PreflightIssue(
                                         idx,
-                                        "impossible_percentage",
-                                        f"Percentage value in table exceeds 1,000%: '{match.group(0)}'",
-                                        severity="error",
+                                        "extreme_percentage",
+                                        f"Percentage value in table exceeds 1,000%; verify the source and comparison basis: '{match.group(0)}'",
+                                        severity="warning",
                                     )
                                 )
 
@@ -430,7 +430,9 @@ class PresentationPreflight:
                                 idx,
                                 "truncated_text_fragment",
                                 f"Text fragment appears to begin with a broken word: '{p.text}'",
-                                severity="error",
+                                # A lexical fragment can also be an article,
+                                # variable, or abbreviation ("a company", "x axis").
+                                severity="warning",
                             )
                         )
                     if dangling_pattern.search(t):
@@ -572,12 +574,38 @@ class PresentationPreflight:
             tolerance = max(abs(values[0]), abs(values[-1]), 1.0) * 1e-9
             contradicts = (positive_words.search(title) and delta < -tolerance) or (negative_words.search(title) and delta > tolerance)
             if contradicts:
+                # Endpoints only prove a literal directional contradiction on
+                # an ordered, comparable time axis. Category rankings, reverse
+                # chronology, loss magnitudes, and evaluative/mixed prose need
+                # semantic evidence that this native-shape check does not have.
+                from adaptive_document_agent.document_model.period_semantic_validator import (
+                    are_periods_comparable, classify_period, period_sort_key_extended,
+                )
+                try:
+                    labels = [str(category.label) for category in chart.plots[0].categories]
+                    keys = [period_sort_key_extended(label) for label in labels]
+                    ordered_periods = (
+                        len(labels) == len(values)
+                        and all(classify_period(label).period_type != "generic" for label in labels)
+                        and all(a < b for a, b in zip(keys, keys[1:]))
+                        and all(are_periods_comparable(a, b)[0] for a, b in zip(labels, labels[1:]))
+                    )
+                except (AttributeError, IndexError, TypeError, ValueError):
+                    ordered_periods = False
+                # Only a simple, metric-bound literal claim can be proven by
+                # endpoints alone. Richer prose can contain negation, temporal
+                # scope or other measures; leave it to source-aware claim QA.
+                series_name = str(series[0].name or "").strip()
+                literal_claim = bool(series_name and re.fullmatch(
+                    re.escape(series_name) + r"\s+(?:grew|rose|increased|expanded|fell|decreased|declined|contracted|dropped)[.!]?",
+                    title, re.IGNORECASE))
+                confirmed = ordered_periods and literal_claim and all(value >= 0 for value in values)
                 self.issues.append(
                     PreflightIssue(
                         idx,
                         "title_data_misalignment",
                         f"Directional title '{title}' conflicts with chart endpoints ({values[0]:g} to {values[-1]:g})",
-                        severity="error",
+                        severity="error" if confirmed else "warning",
                     )
                 )
 
@@ -677,4 +705,3 @@ class PresentationPreflight:
                     severity="warning",
                 )
             )
-

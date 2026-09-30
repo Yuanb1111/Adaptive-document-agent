@@ -57,6 +57,7 @@ def render(st, result: PipelineResult, raw_pdf: bytes, progress) -> None:
     pptx_bytes: bytes | None = None
     qa_error: CriticalQAError | None = None
     visual_report = None
+    preflight_report = None
     export_timings = None
     try:
         if artwork_error:
@@ -72,6 +73,7 @@ def render(st, result: PipelineResult, raw_pdf: bytes, progress) -> None:
             )
         pptx_bytes = verified.payload
         visual_report = verified.report
+        preflight_report = getattr(verified, "preflight_report", None)
         export_timings = verified.timings_ms
         result.export_timings_ms = dict(export_timings)
         progress.finish()
@@ -79,13 +81,20 @@ def render(st, result: PipelineResult, raw_pdf: bytes, progress) -> None:
     except VisualQAError as exc:
         qa_error = exc
         visual_report = exc.report
+        preflight_report = getattr(exc, "preflight_report", None)
     except CriticalQAError as exc:
         qa_error = exc
+        preflight_report = getattr(exc, "preflight_report", None)
     except ValueError as exc:
-        qa_error = CriticalQAError(f"PowerPoint generation failed: {exc}. No verified file was produced.")
+        preflight_report = getattr(exc, "preflight_report", None)
+        qa_error = CriticalQAError(f"PowerPoint generation failed: {exc}. No verified file was produced.",
+                                  financial_report=getattr(exc, "financial_report", None),
+                                  preflight_report=preflight_report)
     except Exception as exc:
+        preflight_report = getattr(exc, "preflight_report", None)
         qa_error = CriticalQAError(
-            f"PowerPoint generation failed ({type(exc).__name__}). No verified file was produced."
+            f"PowerPoint generation failed ({type(exc).__name__}). No verified file was produced.",
+            financial_report=getattr(exc, "financial_report", None), preflight_report=preflight_report,
         )
 
     with st.container(border=True):
@@ -134,7 +143,7 @@ def render(st, result: PipelineResult, raw_pdf: bytes, progress) -> None:
         progress.fail("PowerPoint export blocked")
         from adaptive_document_agent.services.export_diagnostics import export_diagnostics
 
-        qa = export_diagnostics(result, qa_error, visual_report)
+        qa = export_diagnostics(result, qa_error, visual_report, preflight_report)
         stage = qa["export_error"]["stage"]
         st.error(
             f"PowerPoint export blocked at the {stage} check. "
@@ -150,10 +159,20 @@ def render(st, result: PipelineResult, raw_pdf: bytes, progress) -> None:
                 "application/json",
             )
 
-    if editorial or visual_report:
+    if editorial or visual_report or preflight_report:
         with st.expander("Delivery diagnostics", expanded=False):
             for item in editorial:
                 st.markdown(f"- {item.slide_id + ': ' if item.slide_id else ''}{item.message}")
+            if preflight_report:
+                st.caption(f"Native preflight: {preflight_report.status}")
+                for issue in preflight_report.issues:
+                    st.write(str(issue))
+                st.download_button(
+                    "Download preflight QA report",
+                    json.dumps(preflight_report.to_dict(), indent=2),
+                    "ppt_preflight_qa.json",
+                    "application/json",
+                )
             if visual_report:
                 st.caption(
                     f"Rendered validation: {visual_report.status}; passes: {visual_report.attempts}; "

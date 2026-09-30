@@ -310,6 +310,26 @@ The current validation stack includes:
 - layout QA for cramped multi-chart slides, unreadable scatter charts, long titles, zero-crossing labels, KPI spacing, and legend/unit collisions;
 - a final PowerPoint preflight and a hard export blocker for unresolved critical contradictions.
 
+Native PowerPoint preflight findings are retained separately from financial and
+rendered QA. Error-level findings block saving/export, including errors that a
+sanitizer attempted to rewrite; a text repair does not establish correct source
+values or units. Warning/info findings remain nonblocking and appear in Delivery
+diagnostics and `ppt_preflight_qa.json`, including after native-build cache reuse.
+`export_pptx_with_report()` exposes them as `preflight_report`; the existing
+`export_pptx()` and `build_presentation()` byte-return contracts remain unchanged.
+`force=True` only retains its legacy financial-QA behavior and cannot bypass
+preflight or rendered QA. Blocked exports include the original preflight findings
+and slide numbers in the complete diagnostic report's `preflight_qa` section.
+Magnitude-only percentages above 1,000% are review warnings: legitimate growth
+can exceed that threshold. Direct monetary-value/percentage mismatches remain
+errors; the gate does not infer correctness or incorrectness from size alone.
+Suspected broken-word prefixes also remain warnings, since articles, variables,
+and abbreviations can legitimately match that lexical heuristic.
+Title/endpoint contradictions block only for a simple `<series name> <direction>`
+claim on a comparable chronological axis with nonnegative values. Category
+rankings, reverse chronology, loss magnitudes, and richer prose (including
+negation or a narrower time scope) retain review warnings for source-aware QA.
+
 Warnings and repairs are retained in the pipeline result and exposed in the Data Quality or Technical Details views. The system does not fabricate replacement facts when validation fails.
 
 ## Exports and Developer Artifacts

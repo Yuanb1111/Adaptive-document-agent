@@ -21,6 +21,7 @@ from adaptive_document_agent.utils.pipeline_version import PIPELINE_VERSION
 
 from .presentation_rendering import RenderingError, check_render_input, configured_renderer
 from .qa_reporter import CriticalQAError
+from .presentation_preflight_report import PreflightReport
 
 POLICY_VERSION = "visual-qa-v2"
 NS = {"p": "http://schemas.openxmlformats.org/presentationml/2006/main",
@@ -75,6 +76,7 @@ class VerifiedPresentation:
     report: VisualQAReport
     timings_ms: dict[str, int] = field(default_factory=dict)
     build_cache_hit: bool = False
+    preflight_report: PreflightReport | None = None
 
 
 def package_digest(payload: bytes, *, exclude_positions=False) -> str:

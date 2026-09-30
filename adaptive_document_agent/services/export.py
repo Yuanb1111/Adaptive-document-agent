@@ -5,6 +5,7 @@ import io
 import hashlib
 import json
 from collections.abc import Callable
+from copy import deepcopy
 from time import perf_counter
 
 from pathlib import Path
@@ -13,6 +14,7 @@ from adaptive_document_agent.models import PipelineResult
 
 from .pdf_export import build_report_pdf
 from .pptx_export import build_presentation
+from .presentation_preflight_report import PreflightQAError, PreflightReport
 
 
 def export_markdown(result: PipelineResult) -> bytes:
@@ -82,8 +84,8 @@ def export_pptx_with_report(
 ):
     """Financial QA, native generation, then strict local rendered validation.
 
-    ``force`` retains its legacy financial-QA meaning; it never bypasses visual
-    verification. The raw builder is internal, not a verified export API.
+    ``force`` retains its legacy financial-QA meaning; it never bypasses native
+    preflight or visual verification. The raw builder is not a verified export API.
     """
     from .qa_reporter import CriticalQAError, run_comprehensive_qa
     from .presentation_visual_qa import verify_presentation
@@ -105,6 +107,7 @@ def export_pptx_with_report(
         reasons = "\n - ".join(e.message for e in qa.critical_errors)
         raise CriticalQAError(f"PowerPoint export blocked due to critical QA errors:\n - {reasons}", financial_report=qa)
 
+    preflight_report = PreflightReport()
     try:
         notify("Building PowerPoint")
         # Cache only native generation. Financial QA above ALWAYS runs; rendered
@@ -115,18 +118,27 @@ def export_pptx_with_report(
             from .pptx_export import _resolve_template_path
             template_digest = hashlib.sha256(_resolve_template_path(template_path).read_bytes()).hexdigest()
             cache_key = _build_cache_key(result, template_digest, artwork, source_pdf)
-        payload = build_cache.get(cache_key) if build_cache is not None else None
-        build_cache_hit = isinstance(payload, bytes)
+        cached = build_cache.get(cache_key) if build_cache is not None else None
+        # Old bytes-only entries cannot recover findings removed by sanitization.
+        # Rebuild them rather than silently returning an incomplete QA report.
+        build_cache_hit = (isinstance(cached, tuple) and len(cached) == 2
+                           and isinstance(cached[0], bytes) and isinstance(cached[1], PreflightReport))
+        if build_cache_hit:
+            payload, preflight_report = deepcopy(cached)
         if not build_cache_hit:
-            payload = build_presentation(result, template_path=template_path, artwork=artwork, source_pdf=source_pdf)
+            payload = build_presentation(result, template_path=template_path, artwork=artwork, source_pdf=source_pdf,
+                                         preflight_report=preflight_report)
+        if preflight_report.errors:
+            raise PreflightQAError(preflight_report)
         build_finished = perf_counter()
         notify("Rendering and checking PowerPoint layout")
         verified = verify_presentation(payload, renderer=renderer, cache=visual_cache)
         if build_cache is not None:
             build_cache.clear()
             # QA/build may have repaired the plan in-place. Key the final state.
-            build_cache[_build_cache_key(result, template_digest, artwork, source_pdf)] = payload
+            build_cache[_build_cache_key(result, template_digest, artwork, source_pdf)] = (payload, deepcopy(preflight_report))
         verified.build_cache_hit = build_cache_hit
+        verified.preflight_report = preflight_report
         verified.timings_ms = {
             "financial_qa": round((qa_finished - started) * 1000),
             "ppt_build": round((build_finished - qa_finished) * 1000),
@@ -134,8 +146,11 @@ def export_pptx_with_report(
             "ppt_export_total": round((perf_counter() - started) * 1000),
         }
         return verified
-    except CriticalQAError as exc:
+    except Exception as exc:
+        # Preserve original exception types for existing callers, while carrying
+        # findings through later geometry, brand, save, or rendered QA failures.
         exc.financial_report = qa
+        exc.preflight_report = preflight_report if preflight_report.completed or preflight_report.issues else None
         raise
 
 
@@ -146,7 +161,7 @@ def _build_cache_key(result: PipelineResult, template_digest: str, artwork: byte
     content = result.model_dump_json(exclude={"llm_usage", "timings_ms", "stage_details_ms", "pipeline_total_ms", "export_timings_ms"}).encode()
     from adaptive_document_agent.utils.pipeline_version import PIPELINE_VERSION
     image_digest = hashlib.sha256(source_pdf).digest() if source_pdf is not None else b""
-    return (f"ppt-build-v7:{PIPELINE_VERSION}", template_digest,
+    return (f"ppt-build-v8:{PIPELINE_VERSION}", template_digest,
             hashlib.sha256(content + b"\0" + (artwork or b"") + b"\0" + image_digest).hexdigest())
 
 

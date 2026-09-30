@@ -47,6 +47,7 @@ from adaptive_document_agent.services.financial_formatter import (
 )
 from adaptive_document_agent.services.movement_formatter import FinancialMovementFormatter
 from adaptive_document_agent.services.ppt_preflight import PresentationPreflight
+from adaptive_document_agent.services.presentation_preflight_report import PreflightQAError, PreflightReport
 from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
 
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent
@@ -137,7 +138,7 @@ def _resolve_template_path(template_path: str | Path | None = None) -> Path:
 
 
 def build_presentation(result: PipelineResult, template_path: str | Path | None = None, *, artwork: bytes | None = None,
-                       source_pdf: bytes | None = None) -> bytes:
+                       source_pdf: bytes | None = None, preflight_report: PreflightReport | None = None) -> bytes:
     """Return an editable, presentation-ready PowerPoint based on the FOURIER Light Version Template."""
     try:
         from pptx import Presentation
@@ -194,7 +195,13 @@ def build_presentation(result: PipelineResult, template_path: str | Path | None 
 
     # Pre-export preflight check and sanitization
     preflight = PresentationPreflight(presentation)
-    preflight.validate_and_sanitize()
+    report = preflight_report if preflight_report is not None else PreflightReport()
+    report.issues = list(preflight.validate_and_sanitize())
+    report.completed = True
+    # Keep the original findings: a text substitution cannot establish that an
+    # erroneous value/unit is now evidence-backed. Never rerun to erase errors.
+    if report.errors:
+        raise PreflightQAError(report)
     from .slide_compositor import validate_composed_geometry
     validate_composed_geometry(presentation)
     from .presentation_brand_qa import validate_generated_brand

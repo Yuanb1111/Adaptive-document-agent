@@ -42,7 +42,8 @@ def test_document_strings_are_escaped_in_custom_cards():
 
 
 @pytest.mark.parametrize("blocked", [False, True])
-def test_result_widgets_keep_downloads_evidence_and_export_gate(monkeypatch, blocked):
+@pytest.mark.parametrize("native_findings", [False, True])
+def test_result_widgets_keep_downloads_evidence_and_export_gate(monkeypatch, blocked, native_findings):
     import streamlit as st
     from adaptive_document_agent.services import export_readiness, presentation_editorial
     from adaptive_document_agent.utils import timing
@@ -57,12 +58,17 @@ def test_result_widgets_keep_downloads_evidence_and_export_gate(monkeypatch, blo
     monkeypatch.setattr(app, "_analyse_upload", lambda *args, **kwargs: result)
     monkeypatch.setattr(st, "file_uploader", lambda *args, **kwargs: None if kwargs.get("key") else BytesIO(b"test"))
     report = SimpleNamespace(cache_hit=False, status="passed", attempts=1, coverage=[], to_dict=lambda: {})
+    from adaptive_document_agent.services.ppt_preflight import PreflightIssue
+    from adaptive_document_agent.services.presentation_preflight_report import PreflightQAError, PreflightReport
+    native = PreflightReport([PreflightIssue(1, "native_finding", "Native finding detail", "error" if blocked else "warning")]) if native_findings else None
 
     def export(*args, **kwargs):
         if blocked:
+            if native:
+                raise PreflightQAError(native)
             raise CriticalQAError("Synthetic QA blocker")
         return SimpleNamespace(payload=b"verified-test-payload", report=report,
-                               timings_ms={"ppt_export_total": 123}, build_cache_hit=False)
+                               timings_ms={"ppt_export_total": 123}, build_cache_hit=False, preflight_report=native)
 
     monkeypatch.setattr(deliverables, "export_pptx_with_report", export)
     page = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "app.py"), default_timeout=30).run()
@@ -74,6 +80,10 @@ def test_result_widgets_keep_downloads_evidence_and_export_gate(monkeypatch, blo
     downloads = [item.proto.label for item in page.get("download_button")]
     assert "Download Markdown" in downloads and "Download CSV" in downloads
     progress = "\n".join(item.value for item in page.markdown)
+    if native_findings:
+        assert "Download preflight QA report" in downloads
+        assert any("Native preflight:" in item.value for item in page.caption)
+        assert any("Native finding detail" in item.value for item in page.markdown)
     if blocked:
         assert "Download presentation (.pptx)" not in downloads
         assert any(item.label == "Download presentation (.pptx)" and item.disabled for item in page.button)
