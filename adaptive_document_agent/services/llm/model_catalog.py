@@ -6,7 +6,8 @@ import json
 import re
 from typing import Any
 from urllib.parse import urljoin
-from urllib.request import Request, urlopen
+from urllib.error import URLError
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .config import ProviderName
 
@@ -116,7 +117,8 @@ def _request_config(
     headers = {"Accept": "application/json"}
     if provider == ProviderName.GEMINI:
         headers["x-goog-api-key"] = api_key or ""
-        return "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000", headers
+        root = (base_url or "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
+        return f"{root}/models?pageSize=1000", headers
     if provider == ProviderName.OLLAMA:
         root = (base_url or "http://localhost:11434").rstrip("/") + "/"
         return urljoin(root, "api/tags"), headers
@@ -134,10 +136,19 @@ def _request_config(
     return urljoin(root, "models"), headers
 
 
+class _CredentialRedirectHandler(HTTPRedirectHandler):
+    """Do not forward catalog credentials to a server-selected destination."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if req.get_header("Authorization") or req.get_header("X-goog-api-key"):
+            raise URLError("Credentialed model catalog redirects are not allowed.")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def _request_json(url: str, headers: dict[str, str], timeout_seconds: float) -> dict[str, Any]:
     try:
         request = Request(url, headers=headers, method="GET")
-        with urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310 - provider URLs are controlled above
+        with build_opener(_CredentialRedirectHandler()).open(request, timeout=timeout_seconds) as response:
             raw = response.read(2_000_000)
         payload = json.loads(raw)
     except Exception as exc:

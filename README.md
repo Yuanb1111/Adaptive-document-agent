@@ -141,6 +141,16 @@ LLM_PRESENTATION_MODEL=
 
 The sidebar can override the provider, model, base URL, execution mode, and API key for the current process. UI-entered keys are masked and are not written to disk, logs, reports, or exports.
 
+Keys are scoped to the selected provider and endpoint. Changing either starts a new
+key input; configured credentials are reused only for their original provider and
+endpoint in non-public deployments. Public sessions never inherit server keys or
+server endpoint overrides. Main and stage model IDs cannot change the selected
+provider. Generation requires an explicit key for cloud providers; keyless Ollama
+and custom OpenAI-compatible endpoints use a non-secret placeholder instead of
+falling back to SDK environment credentials. Credentialed model-catalog requests
+refuse redirects rather than forward a key to a server-selected destination.
+Gemini generation also uses a request-owned, non-redirecting client.
+
 **Refresh available models** updates a compact picker with at most three recent
 choices. OpenAI shows the latest catalog version of each general-purpose tier
 (Sol, Astra, Luna), removing older versions and duplicate dated snapshots. Other
