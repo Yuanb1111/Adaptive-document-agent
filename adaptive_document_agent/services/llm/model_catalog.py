@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
@@ -12,7 +13,7 @@ from .config import ProviderName
 
 RECOMMENDED_MODELS: dict[ProviderName, tuple[str, ...]] = {
     ProviderName.DEEPSEEK: ("deepseek-flash", "deepseek-v4-pro"),
-    ProviderName.OPENAI: ("gpt-6-sol", "gpt-6-astra", "gpt-6-luna"),
+    ProviderName.OPENAI: ("gpt-6.1-sol", "gpt-6-astra", "gpt-6-luna"),
     ProviderName.GEMINI: ("gemini-3.8-flash", "gemini-3.1-pro-preview", "gemini-3.7-flash"),
     ProviderName.OPENROUTER: (
         "openai/gpt-6-sol",
@@ -46,6 +47,45 @@ class ModelCatalogError(RuntimeError):
 
 def recommended_models(provider: ProviderName) -> list[str]:
     return list(RECOMMENDED_MODELS.get(provider, ()))
+
+
+def shortlist_models(provider: ProviderName, models: list[str]) -> list[str]:
+    """Show at most three recent choices, with one version per OpenAI tier.
+
+    Catalog creation timestamps order providers that expose them. OpenAI's
+    versioned general-purpose tiers use numeric versions, since a newly created
+    snapshot is not necessarily a newer model generation. Keep only actual IDs
+    from the catalog; manual entry remains available for other models.
+    """
+    unique = list(dict.fromkeys(models))
+    canonical = [
+        model for model in unique
+        if re.sub(r"-\d{4}-\d{2}-\d{2}$", "", model) not in unique
+        or not re.search(r"-\d{4}-\d{2}-\d{2}$", model)
+    ]
+    if provider == ProviderName.OPENAI:
+        tiers = {}
+        for model in canonical:
+            match = re.fullmatch(r"gpt-(\d+(?:\.\d+)*)-(sol|astra|luna)(?:-\d{4}-\d{2}-\d{2})?", model)
+            if not match:
+                continue
+            version = tuple(int(part) for part in match[1].split("."))
+            tier = match[2]
+            if tier not in tiers or version > tiers[tier][0]:
+                tiers[tier] = (version, model)
+        if tiers:
+            return [tiers[tier][1] for tier in ("sol", "astra", "luna") if tier in tiers]
+    # Collapse multiple dated snapshots even if their undated alias is absent.
+    result = []
+    seen = set()
+    for model in canonical:
+        family = re.sub(r"-\d{4}-\d{2}-\d{2}$", "", model)
+        if family not in seen:
+            result.append(model)
+            seen.add(family)
+        if len(result) == 3:
+            break
+    return result
 
 
 def list_provider_models(
@@ -127,7 +167,17 @@ def _models_from_payload(provider: ProviderName, payload: dict[str, Any]) -> lis
         for value in candidates
         if isinstance(value, str) and value.strip() and _is_text_model(provider, value)
     }
-    return sorted(cleaned, key=str.casefold)
+    created = {}
+    for item in payload.get("data", []):
+        if isinstance(item, dict) and isinstance(item.get("id"), str) and isinstance(item.get("created"), (int, float)):
+            created[item.get("id")] = item["created"]
+    def sort_key(model: str) -> tuple:
+        match = re.match(r"^(?:[^/]+/)?(?:gpt-|gemini-|deepseek-v)(\d+(?:\.\d+)*)", model)
+        version = tuple(int(part) for part in match[1].split(".")) if match else ()
+        padded_version = (*version, 0, 0, 0)[:3]
+        return (-created.get(model, 0), tuple(-part for part in padded_version), model.casefold())
+
+    return sorted(cleaned, key=sort_key)
 
 
 def _is_text_model(provider: ProviderName, model: str) -> bool:

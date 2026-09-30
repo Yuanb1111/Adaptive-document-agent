@@ -160,32 +160,27 @@ def run_app() -> None:
                     )
             if readiness["ready"]:
                 st.caption(f"PowerPoint export environment ready: {readiness['backend']}")
+            else:
+                st.caption(readiness["message"])
     if not readiness["ready"]:
-        st.warning("PowerPoint export environment is not ready. " + readiness["message"])
-        st.caption("Analysis and other formats remain available. Fix the renderer before expecting a verified PowerPoint download.")
+        st.warning("PowerPoint export is currently unavailable. Analysis and other download formats remain available.")
     cache = cache_for_session(st.session_state, public_deployment=public_deployment)
-    upload_column, guide_column = st.columns([1.55, 1], gap="large")
-    with upload_column:
-        with st.container(border=True):
-            branding.section_label(st, "01", "Start with your document")
-            st.caption("Choose a model in the sidebar, set an optional focus, then upload your PDF.")
+    with st.container(border=True):
+        branding.section_label(st, "01", "Upload your document")
+        with st.expander("Analysis options (optional)", expanded=False):
             analysis_focus = st.text_area(
                 "Analysis focus (optional)",
-                placeholder="e.g. Explain the business model, compare reported financial performance, and highlight disclosed risks.",
-                height=110,
+                placeholder="e.g. Compare performance and highlight disclosed risks.",
+                height=88,
                 help="Leave blank for automatic discovery. Changing the focus or model after upload starts a new analysis.",
             )
             review_scope = st.toggle(
                 "Review page scope before analysis (optional)", value=False,
                 help="Review and confirm selected page ranges before deep analysis begins.",
             )
-            uploaded = st.file_uploader("Upload one PDF", type=["pdf"], accept_multiple_files=False)
-            st.caption("Analysis starts automatically after upload unless page-scope review is enabled.")
-    with guide_column:
-        with st.container(border=True):
-            branding.output_guide(st)
+        uploaded = st.file_uploader("Upload one PDF", type=["pdf"], accept_multiple_files=False)
+        st.caption("Analysis starts automatically after upload unless page-scope review is enabled.")
     if not uploaded:
-        branding.empty_workspace(st)
         return
     raw_pdf = uploaded.getvalue()
     scope_key = _analysis_scope_key(raw_pdf, analysis_focus, settings)

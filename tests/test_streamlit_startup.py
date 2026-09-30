@@ -118,6 +118,11 @@ def test_public_homepage_sessions_and_widget_reruns(watching):
             for _ in range(2):
                 app = AppTest.from_file("app.py", default_timeout=30).run()
                 assert not app.exception, app.exception
+                assert [item.label for item in app.selectbox][:2] == ["Provider", "Model"]
+                expanders = {{item.label: item for item in app.expander}}
+                assert not expanders["Analysis options (optional)"].proto.expanded
+                assert not expanders["Advanced model settings"].proto.expanded
+                assert not any("THE OUTPUT" in item.value for item in app.markdown)
                 app.text_area[0].input("Compare comparable reporting periods").run()
                 assert not app.exception, app.exception
                 assert app.text_area[0].value == "Compare comparable reporting periods"

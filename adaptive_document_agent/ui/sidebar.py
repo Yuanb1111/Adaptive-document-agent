@@ -11,6 +11,7 @@ from adaptive_document_agent.services.llm.model_catalog import (
     ModelCatalogError,
     list_provider_models,
     recommended_models,
+    shortlist_models,
 )
 
 from .deployment import is_public_deployment
@@ -35,16 +36,16 @@ def _available_models(
     refresh: bool,
     auto_discover: bool,
 ) -> tuple[list[str], str | None]:
-    """Merge stable suggestions with a short-lived, session-only live catalog."""
-    suggestions = recommended_models(provider)
-    if not (refresh or auto_discover):
-        return suggestions, None
+    """Shortlist a session-only live catalog, falling back to recommendations."""
+    suggestions = shortlist_models(provider, recommended_models(provider))
 
     state = _session_state(st)
     cache = state.setdefault("provider_model_catalog", {})
     key_fingerprint = sha256((api_key or "").encode()).hexdigest()[:12]
     cache_key = f"{provider.value}|{base_url or ''}|{key_fingerprint}"
     cached = cache.get(cache_key) if isinstance(cache, dict) else None
+    if not (refresh or auto_discover) and not cached:
+        return suggestions, None
     now = time.monotonic()
     if not refresh and cached and now - cached["loaded_at"] < _CATALOG_TTL_SECONDS:
         live = cached["models"]
@@ -56,7 +57,7 @@ def _available_models(
         if isinstance(cache, dict):
             cache[cache_key] = {"loaded_at": now, "models": live}
 
-    return list(dict.fromkeys([*suggestions, *live])), None
+    return shortlist_models(provider, live), None
 
 
 def render_sidebar(st, *, public_deployment: bool | None = None) -> LLMSettings:
@@ -85,9 +86,9 @@ def render_sidebar(st, *, public_deployment: bool | None = None) -> LLMSettings:
     with st.sidebar:
         sidebar_brand(st)
         st.header("Model connection")
-        if public_deployment:
-            st.caption("Connect your model to begin. This hosted app uses your own provider API key.")
-        mode_label = st.selectbox("Execution Mode", mode_labels, index=mode_labels.index(default_mode))
+        mode_label = "Cloud" if public_deployment else st.selectbox(
+            "Execution Mode", mode_labels, index=mode_labels.index(default_mode),
+        )
         default_provider_label = label_by_provider.get(defaults.provider, "DeepSeek")
         if default_provider_label not in provider_labels:
             default_provider_label = "DeepSeek"
@@ -107,17 +108,16 @@ def render_sidebar(st, *, public_deployment: bool | None = None) -> LLMSettings:
             type="password",
             help="Used only for this session; never written to disk, logs, reports, or exports.",
         )
-        st.caption("Enter your own API key. It is kept only in the current session and must be entered again later.")
         configured_key = defaults.api_key.get_secret_value() if defaults.api_key and not public_deployment else None
         effective_key = key or configured_key
-        refresh_models = bool(
-            st.button(
+        advanced_controls = st.expander("Advanced model settings", expanded=False)
+        with advanced_controls:
+            refresh_models = bool(st.button(
                 "Refresh available models",
                 key=f"refresh_models_{provider.value}",
-                help="Reload the provider's live catalog. New provider models then appear without a code update.",
+                help="Refresh up to three recent models. Other models can be entered manually.",
                 use_container_width=True,
-            )
-        )
+            ))
         auto_discover = bool(key) or provider == ProviderName.OLLAMA or (
             provider == ProviderName.OPENAI_COMPATIBLE and bool(base_url)
         )
@@ -130,16 +130,20 @@ def render_sidebar(st, *, public_deployment: bool | None = None) -> LLMSettings:
             auto_discover=auto_discover,
         )
         preferred_model = defaults.model if provider == defaults.provider else (models[0] if models else "")
+        model_key = f"model_select_{provider.value}"
+        current_model = _session_state(st).get(model_key)
+        if isinstance(current_model, str) and current_model != _MANUAL_MODEL:
+            preferred_model = current_model
         if preferred_model and preferred_model not in models:
-            models.insert(0, preferred_model)
+            models = [preferred_model, *models][:3]
         options = [*models, _MANUAL_MODEL]
         with model_controls:
             selected_model = st.selectbox(
                 "Model",
                 options,
                 index=options.index(preferred_model) if preferred_model in options else 0,
-                key=f"model_select_{provider.value}",
-                help="Provider-specific models. Enter an API key or refresh to load the live catalog.",
+                key=model_key,
+                help="Up to three recent models; your configured selection is retained. Use manual entry for other IDs.",
             )
             if selected_model == _MANUAL_MODEL:
                 model = st.text_input(
@@ -150,25 +154,32 @@ def render_sidebar(st, *, public_deployment: bool | None = None) -> LLMSettings:
                 ).strip()
             else:
                 model = selected_model
-        if catalog_error:
-            st.caption(f"Live catalog unavailable: {catalog_error} Showing recommended models and manual entry.")
-        elif auto_discover or refresh_models:
-            st.caption(f"Live catalog loaded: {len(models)} compatible model(s). Cached for 5 minutes.")
-        else:
-            st.caption("Showing recommended models. Enter an API key or refresh to query the live provider catalog.")
         privacy = {"Auto": PrivacyMode.AUTO, "Cloud": PrivacyMode.CLOUD, "Local Only": PrivacyMode.LOCAL_ONLY}[mode_label]
         api_key = SecretStr(key) if key else (None if public_deployment else defaults.api_key)
         stage_models = {}
-        with st.expander("Stage models (optional)"):
+        with advanced_controls:
+            if catalog_error:
+                st.caption(f"Live catalog unavailable: {catalog_error} Showing recommended models and manual entry.")
+            elif auto_discover or refresh_models:
+                st.caption(f"Showing {len(models)} model(s), up to 3 recent choices. Current selection retained. Cached for 5 minutes.")
+            else:
+                st.caption("Showing up to 3 model choices. Enter an API key or refresh to update the provider catalog.")
             st.caption(
                 f"Each stage uses {provider_label}. Choose the main model or another model "
                 "from this provider; cross-provider routing is not allowed."
             )
-            stage_options = ["Use main model", *models]
             for stage in ("discovery", "semantic", "extraction", "planner", "vision", "insight", "report", "presentation"):
                 configured_stage_model = (
                     defaults.stage_models.get(stage, "") if provider == defaults.provider else ""
                 )
+                stage_key = f"stage_model_{provider.value}_{stage}"
+                current_stage_model = _session_state(st).get(stage_key)
+                if isinstance(current_stage_model, str):
+                    configured_stage_model = "" if current_stage_model == "Use main model" else current_stage_model
+                stage_models_available = list(dict.fromkeys([model, *models]))[:3] if model else models
+                if configured_stage_model and configured_stage_model not in stage_models_available:
+                    stage_models_available = [configured_stage_model, *stage_models_available]
+                stage_options = ["Use main model", *stage_models_available[:3]]
                 selected_stage_model = st.selectbox(
                     f"{stage.title()} model",
                     stage_options,
@@ -177,9 +188,9 @@ def render_sidebar(st, *, public_deployment: bool | None = None) -> LLMSettings:
                         if configured_stage_model in stage_options
                         else 0
                     ),
-                    key=f"stage_model_{provider.value}_{stage}",
+                    key=stage_key,
                 )
-                if selected_stage_model in models:
+                if selected_stage_model in stage_options and selected_stage_model != "Use main model":
                     stage_models[stage] = selected_stage_model
         settings = LLMSettings(
             provider=provider,
@@ -196,13 +207,10 @@ def render_sidebar(st, *, public_deployment: bool | None = None) -> LLMSettings:
             timeout_seconds=defaults.timeout_seconds,
             temperature=defaults.temperature,
         )
-        st.divider()
-        st.markdown("**Document privacy**")
         if settings.is_local:
             st.success("Local model")
             if privacy == PrivacyMode.LOCAL_ONLY:
                 st.caption("LLM processing remains on a loopback local endpoint. No cloud fallback is allowed.")
         else:
-            st.info("Cloud model")
-            st.caption("Relevant document content is sent to the configured provider.")
+            st.caption(f"Cloud processing · Relevant document content is sent to {provider_label}.")
         return settings

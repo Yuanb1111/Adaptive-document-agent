@@ -145,7 +145,7 @@ def test_sidebar_connects_stage_models_and_does_not_carry_to_other_provider(monk
             return options[kwargs.get("index", 0)]
         def text_input(self, label, value="", **kwargs):
             return value
-        def expander(self, *args):
+        def expander(self, *args, **kwargs):
             return nullcontext()
         def __getattr__(self, name):
             return lambda *args, **kwargs: None

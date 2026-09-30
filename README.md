@@ -139,6 +139,25 @@ LLM_PRESENTATION_MODEL=
 
 The sidebar can override the provider, model, base URL, execution mode, and API key for the current process. UI-entered keys are masked and are not written to disk, logs, reports, or exports.
 
+**Refresh available models** updates a compact picker with at most three recent
+choices. OpenAI shows the latest catalog version of each general-purpose tier
+(Sol, Astra, Luna), removing older versions and duplicate dated snapshots. Other
+catalogs use creation timestamps when supplied, then numeric versions for known
+model naming schemes. With neither, recency cannot be guaranteed. A configured or
+currently selected model is retained within the three-choice limit. Use **Enter
+a model ID manually…** for another model. Successful refreshes use the live list
+without appending old recommendations; failed refreshes show recommendations.
+The catalog is cached in the current session for five minutes. Refreshing the
+list does not generate content or consume model tokens.
+
+The start page focuses on a single PDF upload area. Set an optional focus or
+enable page-scope review in **Analysis options (optional)** before uploading;
+automatic analysis remains the default. **Advanced model settings** holds model
+refresh and individual stage overrides. Hosted deployments omit the fixed Cloud
+mode selector; local deployments retain execution-mode controls. Renderer and
+application diagnostics are in **Application status**, with a short visible
+notice if PowerPoint export is unavailable.
+
 ## Cloud Providers
 
 Cloud mode sends relevant, selected document content to the configured provider. Provider switching is configuration-only.

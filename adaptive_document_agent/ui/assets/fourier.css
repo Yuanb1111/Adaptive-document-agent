@@ -7,50 +7,32 @@
   font-family: Roboto, "Source Han Sans CN", "Source Han Sans SC", "Microsoft YaHei", Arial, sans-serif;
   color: #000; letter-spacing: -.025em;
 }
-.stApp h1 { font-size: clamp(1.9rem, 3vw, 2.8rem); font-weight: 700; padding-top: .4rem; }
+.stApp h1 { font-size: clamp(1.7rem, 2.6vw, 2.2rem); font-weight: 700; padding-top: .2rem; }
 .stMainBlockContainer, [data-testid="stMain"] .block-container {
-  max-width: 1440px; padding-top: 2.4rem; padding-bottom: 3rem;
+  max-width: 1200px; padding-top: 4.5rem; padding-bottom: 3rem;
 }
 [data-testid="stSidebar"] { background: #F6F7F7; border-right: 1px solid #DBDCDC; }
 [data-testid="stSidebar"] h2 { font-size: 1.05rem; letter-spacing: 0; }
 [data-testid="stSidebar"] [data-testid="stSidebarContent"] { padding-top: .6rem; }
 [data-testid="stSidebar"] [data-testid="stCaptionContainer"] { line-height: 1.5; }
 .fourier-brand { margin: 0 0 .3rem; transform: translateY(-5px); }
-.fourier-brand img { width: 220px; max-width: 100%; height: auto; display: block; }
-.fourier-brand-caption { color: #55565F; font-size: .66rem; letter-spacing: .13em; margin-left: 19px; }
+.fourier-brand img { width: 180px; max-width: 100%; height: auto; display: block; }
 .fourier-brand-guide { display: inline-flex; align-items: center; min-height: 1.25rem; margin: .35rem 0 0 19px; color: #5F1BCE; font-size: .77rem; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
 .fourier-brand-guide:hover { color: #190049; }
-.fourier-masthead { display: flex; align-items: center; justify-content: space-between; gap: 16px; color: #55565F; font-size: .7rem; letter-spacing: .14em; margin-bottom: .8rem; }
-.fourier-badge { border: 1px solid #DBDCDC; border-radius: 999px; padding: 7px 12px; color: #190049; letter-spacing: 0; font-size: .75rem; white-space: nowrap; }
 .fourier-section { display: flex; align-items: center; gap: 10px; margin: .35rem 0 .6rem; }
 .fourier-section > span { font-size: .74rem; font-weight: 600; color: #7A24FD; background: #F6F7F7; border: 1px solid #DBDCDC; border-radius: 8px; padding: 5px 8px; }
 .fourier-section h2 { margin: 0; padding: 0; font-size: 1.18rem; letter-spacing: -.02em; }
 [data-testid="stVerticalBlockBorderWrapper"] > div { border-radius: 14px; }
 [data-testid="stFileUploaderDropzone"] { border: 1.5px dashed #AB76FF; background: #F6F7F7; border-radius: 12px; padding: 1.6rem 1rem; }
 [data-testid="stFileUploaderDropzone"] button { background: #fff; }
-[data-testid="stTextArea"] textarea { min-height: 100px; }
 [data-testid="stMetric"] { background: #F6F7F7; border: 1px solid #DBDCDC; border-radius: 12px; padding: 16px 18px; }
 [data-testid="stMetricValue"] { color: #190049; }
 [data-testid="stTabs"] [role="tablist"] { gap: 20px; border-bottom: 1px solid #DBDCDC; }
 [data-testid="stTabs"] [role="tab"] { white-space: nowrap; padding: 12px 2px; }
 [data-testid="stTabs"] [role="tab"][aria-selected="true"] { color: #7A24FD; font-weight: 600; }
 .stApp button:focus-visible, .stApp a:focus-visible { outline: 3px solid #7A24FD; outline-offset: 3px; }
-.fourier-output-guide { padding: .15rem .45rem; }
 .fourier-eyebrow { display: block; color: #7A24FD; font-size: .7rem; font-weight: 600; letter-spacing: .1em; }
-.fourier-output-guide h3 { font-size: 1.2rem; line-height: 1.35; margin: .65rem 0 1rem; padding: 0; }
-.fourier-output-guide ul { padding-left: 1.2rem; font-size: .85rem; line-height: 1.8; color: #45454F; margin-bottom: 0; }
-.fourier-slide { background: #F6F7F7; border: 1px solid #DBDCDC; border-radius: 8px; padding: 18px 24px; aspect-ratio: 16 / 9; display: flex; flex-direction: column; justify-content: space-between; max-width: 430px; }
-.fourier-slide-format { font-size: .55rem; letter-spacing: .15em; color: #55565F; }
-.fourier-slide-title { font-size: clamp(1.25rem, 2.3vw, 2rem); line-height: 1.13; font-weight: 650; color: #190049; margin: 10px 0; }
-.fourier-slide-rule { width: 40px; height: 3px; background: #7A24FD; margin-bottom: 10px; }
-.fourier-slide-footer { font-size: .6rem; color: #55565F; }
 .fourier-small { font-size: .75rem; color: #55565F; line-height: 1.6; }
-.fourier-output-guide > .fourier-small { margin: .6rem 0; }
-.fourier-workflow { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid #DBDCDC; border-bottom: 1px solid #DBDCDC; margin: 1.4rem 0 1rem; }
-.fourier-workflow > div { padding: 1.4rem 1.4rem 1.2rem 0; }
-.fourier-workflow > div + div { padding-left: 1.4rem; border-left: 1px solid #DBDCDC; }
-.fourier-workflow h3 { font-size: 1rem; margin: .5rem 0; padding: 0; }
-.fourier-workflow p { color: #55565F; font-size: .85rem; line-height: 1.65; margin: 0; }
 .fourier-result-file { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: .9rem; padding: 0 0 .8rem; overflow-wrap: anywhere; }
 .fourier-file-type { background: #190049; color: #fff; border-radius: 5px; font-size: .65rem; padding: 6px; }
 .fourier-file-pages { color: #55565F; font-size: .8rem; }
@@ -59,11 +41,6 @@
 .fourier-insight p { font-size: .9rem; line-height: 1.65; }
 .fourier-progress { display: flex; align-items: center; gap: 20px; background: #F6F7F7; border: 1px solid #DBDCDC; border-radius: 14px; padding: 18px 22px; margin: 12px 0 22px; }
 @media (max-width: 760px) {
-  .stMainBlockContainer, [data-testid="stMain"] .block-container { padding: 1.5rem 1rem 2rem; }
-  .fourier-masthead { letter-spacing: .08em; font-size: .6rem; }
-  .fourier-workflow { grid-template-columns: 1fr; }
-  .fourier-workflow > div, .fourier-workflow > div + div { border-left: 0; padding: 1.1rem 0; }
-  .fourier-workflow > div + div { border-top: 1px solid #DBDCDC; }
+  .stMainBlockContainer, [data-testid="stMain"] .block-container { padding: 4rem 1rem 2rem; }
   .fourier-progress { padding: 16px; gap: 14px; }
-  .fourier-slide-title { font-size: 1.8rem; }
 }
