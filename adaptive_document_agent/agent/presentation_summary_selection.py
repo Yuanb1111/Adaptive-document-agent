@@ -23,6 +23,8 @@ def rebuild_selected_topic_summary(result: PipelineResult, plan: PresentationPla
     charts = {chart.id: chart for chart in result.charts}
     analyses = {slide.theme_id: slide for slide in plan.slides
                 if slide.slide_type == "analysis" and slide.slide_role == "overview"}
+    from .presentation_topic_scope_recovery import withheld_topic_ids
+    withheld = withheld_topic_ids(plan)
     from .presentation_topic_selector import series_directory
 
     _, series = series_directory(result)
@@ -92,6 +94,10 @@ def rebuild_selected_topic_summary(result: PipelineResult, plan: PresentationPla
         if (analysis and analysis.title.strip() and was_repaired
                 and not (PresentationPlanValidator._numbers(analysis.title) - allowed)):
             text = analysis.title
+        if topic.id in withheld:
+            # This explicit audit state survives title shortening, cached loads
+            # and repeated preparation. Never restore the rejected takeaway.
+            text = analysis.title if analysis else topic.question
         bullets.append(text)
         bullet_inputs.append(ids)
     if not bullets:

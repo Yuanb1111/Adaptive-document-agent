@@ -88,60 +88,92 @@ def topic_matrix_dimension(items: list) -> str | None:
     return None
 
 
+def _matrix_value(item) -> str:
+    value = item.raw_value.strip() or str(item.value)
+    if item.unit == "percent" and item.raw_unit == "%" and "%" not in value:
+        value += "%"
+    return value
+
+
 def render_matrix(presentation, slide_plan, block, index):
+    """Continue complete matrix rows on readable, independently cited pages."""
     from pptx.util import Inches, Pt
-    from .pptx_export import _source_footer, _text, FOURIER_DARK, FOURIER_MUTED, FOURIER_PURPLE
+    from .pptx_export import _source_footer, _text, _rgb, FOURIER_DARK, FOURIER_MUTED, FOURIER_PURPLE
     from .slide_compositor import _base, _lines
     from .presentation_style import FONT
+    from .fourier_brand import WHITE
 
     matrix = comparison_matrix(block, index)
-    slide, top = _base(presentation, slide_plan.title, slide_plan.message)
-    slide.name = "evidence_comparison_matrix"
     width = presentation.slide_width.inches - 1.1
     first_width = width * .22
     data_width = (width - first_width) / len(matrix.column_labels)
+    widths = [first_width, *([data_width] * len(matrix.column_labels))]
     headers = ["Metric" if block.matrix_dimension == "source_metric" else block.matrix_dimension,
                *matrix.column_labels]
-    if any(len(_lines(label, data_width - .18, 12)) > 3 for label in matrix.column_labels):
+    if any(len(_lines(label, cell_width - .20, 12)) > 3
+           for label, cell_width in zip(headers, widths)):
         raise ValueError("Matrix column heading exceeds readable capacity.")
+    rows = [[label, *(_matrix_value(item) for item in records)]
+            for label, records in zip(matrix.row_labels, matrix.cells)]
+    # Match the explicit cell margins and line spacing below. A long category
+    # or raw value gets more height, never a smaller font or truncated copy.
+    row_heights = [max(.78, max(len(_lines(value, cell_width - .20, 14))
+                               for value, cell_width in zip(row, widths)) * 18 / 72 + .12)
+                   for row in rows]
     header_h = .85
-    row_h = .78
-    total_h = header_h + row_h * len(matrix.row_labels)
-    if top + total_h > presentation.slide_height.inches - 1.02:
-        raise ValueError("Matrix exceeds readable slide capacity.")
-    shape = slide.shapes.add_table(len(matrix.row_labels) + 1, len(headers),
-                                   Inches(.55), Inches(top + .08), Inches(width), Inches(total_h))
-    shape.name = "table:comparison_matrix:" + ",".join(item.id for item in matrix.observations)
-    table = shape.table
-    table.columns[0].width = Inches(first_width)
-    for j in range(1, len(table.columns)):
-        table.columns[j].width = Inches(data_width)
-    table.rows[0].height = Inches(header_h)
-    for i in range(1, len(table.rows)):
-        table.rows[i].height = Inches(row_h)
-    for j, label in enumerate(headers):
-        table.cell(0, j).text = label
-    for i, (row_label, records) in enumerate(zip(matrix.row_labels, matrix.cells), 1):
-        table.cell(i, 0).text = row_label
-        for j, item in enumerate(records, 1):
-            value = item.raw_value.strip() or str(item.value)
-            if item.unit == "percent" and item.raw_unit == "%" and "%" not in value:
-                value += "%"
-            table.cell(i, j).text = value
-    for i, row in enumerate(table.rows):
-        for cell in row.cells:
-            cell.text_frame.word_wrap = True
-            for paragraph in cell.text_frame.paragraphs:
-                paragraph.font.name = FONT
-                paragraph.font.size = Pt(12 if i == 0 else 14)
-                paragraph.font.bold = i == 0
-                from .pptx_export import _rgb
-                paragraph.font.color.rgb = _rgb(FOURIER_PURPLE if i == 0 else FOURIER_DARK)
-    pages = sorted({source.page for item in matrix.observations for source in item.evidence})
-    _text(slide, _source_footer(pages), .55, presentation.slide_height.inches - .82,
-          width, .20, size=9, color=FOURIER_MUTED)
-    slide.notes_slide.notes_text_frame.text = json.dumps({
-        "matrix_dimension": block.matrix_dimension,
-        "source_observations": [item.model_dump(mode="json") for item in matrix.observations],
-    }, ensure_ascii=False)
-    return slide
+    first_slide, top = _base(presentation, slide_plan.title, slide_plan.message)
+    available = presentation.slide_height.inches - 1.02 - top - .08
+    if any(header_h + row_h > available for row_h in row_heights):
+        raise ValueError("Matrix row exceeds readable slide capacity.")
+    ranges = []
+    start, height = 0, header_h
+    for i, row_h in enumerate(row_heights):
+        if height + row_h > available:
+            ranges.append((start, i))
+            start, height = i, header_h
+        height += row_h
+    ranges.append((start, len(rows)))
+
+    for page, (start, end) in enumerate(ranges):
+        slide = first_slide if page == 0 else _base(presentation, slide_plan.title, slide_plan.message)[0]
+        slide.name = "evidence_comparison_matrix"
+        observations = [item for records in matrix.cells[start:end] for item in records]
+        heights = [header_h, *row_heights[start:end]]
+        shape = slide.shapes.add_table(end - start + 1, len(headers),
+                                       Inches(.55), Inches(top + .08), Inches(width), Inches(sum(heights)))
+        shape.name = "table:comparison_matrix:" + ",".join(item.id for item in observations)
+        table = shape.table
+        for column, cell_width in zip(table.columns, widths):
+            column.width = Inches(cell_width)
+        for i, (values, row_h) in enumerate(zip([headers, *rows[start:end]], heights)):
+            table.rows[i].height = Inches(row_h)
+            for j, value in enumerate(values):
+                cell = table.cell(i, j)
+                cell.text = value
+                cell.margin_left = cell.margin_right = Inches(.10)
+                cell.margin_top = cell.margin_bottom = Inches(.06)
+                cell.text_frame.word_wrap = True
+                if i == 0:
+                    # The inherited table theme may also use purple; set both
+                    # colours so the repeated headings stay visibly readable.
+                    cell.fill.solid()
+                    cell.fill.fore_color.rgb = _rgb(FOURIER_PURPLE)
+                for paragraph in cell.text_frame.paragraphs:
+                    paragraph.font.name = FONT
+                    paragraph.font.size = Pt(12 if i == 0 else 14)
+                    paragraph.font.bold = i == 0
+                    paragraph.font.color.rgb = _rgb(WHITE if i == 0 else FOURIER_DARK)
+                    paragraph.line_spacing = Pt(15 if i == 0 else 18)
+                    paragraph.space_before = paragraph.space_after = Pt(0)
+        pages = sorted({source.page for item in observations for source in item.evidence})
+        footer = _source_footer(pages)
+        if len(ranges) > 1:
+            footer += f" | Matrix {page + 1} of {len(ranges)}"
+        _text(slide, footer, .55, presentation.slide_height.inches - .82,
+              width, .20, size=9, color=FOURIER_MUTED)
+        slide.notes_slide.notes_text_frame.text = json.dumps({
+            "matrix_dimension": block.matrix_dimension,
+            "source_observations": [item.model_dump(mode="json") for item in observations],
+        }, ensure_ascii=False)
+    # Existing callers that inspect a single-page matrix still receive its slide.
+    return first_slide

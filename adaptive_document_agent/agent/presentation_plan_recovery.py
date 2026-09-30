@@ -43,12 +43,20 @@ class PresentationPlanRecovery:
         if previous is not None:
             selected = {topic.id for topic in result.presentation_topics.topics}
             covered = {theme.id for theme in previous.themes}
-            degraded = previous.planning_origin == "fallback" or any(
+            degraded = previous.planning_origin in {"fallback", "topic_recovery"} or any(
                 note.startswith("[review:presentation_degraded] Evidence-only fallback")
                 for note in previous.editorial_notes
             )
-            if not degraded or selected <= covered:
+            if not degraded:
                 return False
+            if selected <= covered:
+                from adaptive_document_agent.validation.claim_validator import ClaimValidator
+                from adaptive_document_agent.validation.presentation_provenance import insight_inputs
+
+                problems = ClaimValidator().validate_plan(previous, result.observations, result.charts,
+                                                         insight_observation_ids=insight_inputs(result))
+                if not any(issue.code == "direction_scope_ambiguous" for issue in problems):
+                    return False
         from .topic_plan_compiler import compile_topic_plan
         from adaptive_document_agent.models import ValidationIssue
 
@@ -90,6 +98,12 @@ class PresentationPlanRecovery:
         # The generic fallback's chart pages are discarded below. Do not let
         # an unrelated generic chart invalidate model-selected topic recovery.
         base = self.fallback(result, validate=False)
+        from .presentation_topic_scope_recovery import withheld_topic_ids, _WITHHELD_PREFIX
+        if result.presentation_plan:
+            # A retry for another topic cannot revive a previously withdrawn
+            # takeaway, even when its shortened title equals its question.
+            base.editorial_notes.extend(note for note in result.presentation_plan.editorial_notes
+                                        if note.startswith(_WITHHELD_PREFIX))
         _, series_by_id = series_directory(result)
         from adaptive_document_agent.document_model import period_sort_key
         observation_by_id = {item.id: item for item in result.observations}
@@ -277,8 +291,15 @@ class PresentationPlanRecovery:
             *([closing] if closing else []),
             *(slide for slide in base.slides if slide.slide_type in {"data_quality", "appendix"}),
         ]
+        withheld = withheld_topic_ids(base)
+        for slide in base.slides:
+            if slide.slide_type == "analysis" and slide.theme_id in withheld:
+                slide.title = slide.analytical_question
+        rebuild_selected_topic_summary(result, base)
         from adaptive_document_agent.services.presentation_claim_evidence import prepare_presentation_claims
         prepare_presentation_claims(result, base)
+        from .presentation_topic_scope_recovery import validate_selected_topic_claims
+        base = validate_selected_topic_claims(base, result)
         from adaptive_document_agent.services.presentation_editorial import stamp_editorial_review
         return stamp_editorial_review(PresentationPlanValidator().validate(base, result), result, origin=origin)
 

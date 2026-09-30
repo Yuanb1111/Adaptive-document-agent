@@ -193,6 +193,8 @@ def prepare_presentation_claims(result: PipelineResult, plan: PresentationPlan |
     charts = {chart.id: chart for chart in result.charts}
     themes = {theme.id: theme for theme in plan.themes}
     topics = {topic.id: topic for topic in result.presentation_topics.topics} if result.presentation_topics else {}
+    from adaptive_document_agent.agent.presentation_topic_scope_recovery import withheld_topic_ids
+    withheld = withheld_topic_ids(plan)
     totals = source_total_denominators(result)
     from .presentation_ratio_definitions import ratio_definitions, source_defined_possessive_share
     definitions = ratio_definitions(result)
@@ -203,7 +205,8 @@ def prepare_presentation_claims(result: PipelineResult, plan: PresentationPlan |
         # Cached plans may have been narrowed by the old one-subject / Total-only
         # check. Reconsider only that exact repair, using the retained model claim
         # and all current evidence checks. Never reset other repaired wording.
-        restoring = topics.get(slide.theme_id) if slide.selection_reason == _NARROW_REASON else None
+        restoring = (topics.get(slide.theme_id) if slide.selection_reason == _NARROW_REASON
+                     and slide.theme_id not in withheld else None)
         narrowed_title = slide.title
         if restoring and (_SHARE.search(restoring.takeaway) or _RANK.search(restoring.takeaway)):
             slide.title = restoring.takeaway

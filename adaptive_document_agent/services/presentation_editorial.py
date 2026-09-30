@@ -45,6 +45,10 @@ def review_presentation(plan: PresentationPlan | None, result: PipelineResult) -
     if plan is None:
         return [EditorialFinding("presentation_legacy", "Legacy evidence export: no analytical presentation plan is available.")]
     findings = []
+    from adaptive_document_agent.agent.presentation_topic_scope_recovery import withheld_topic_ids
+    if withheld_topic_ids(plan) & {theme.id for theme in plan.themes}:
+        findings.append(EditorialFinding("presentation_topic_claims_withheld",
+            "Ambiguously bound takeaways were withheld; the selected questions and source evidence remain. Review the presentation audit before using it as a final report."))
     from .presentation_period_scope import review_presentation_period_scope
     findings.extend(EditorialFinding("presentation_period_scope_unresolved", reason, slide_id)
                     for slide_id, reason in review_presentation_period_scope(result, plan))

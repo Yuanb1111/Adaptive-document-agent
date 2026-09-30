@@ -1,9 +1,7 @@
 """Bind model-selected questions to native presentation evidence without an LLM round trip."""
 
 from adaptive_document_agent.models import CompanyProfile, PipelineResult, PresentationPlan
-from adaptive_document_agent.validation.claim_validator import ClaimValidator, repair_presentation_plan
 from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
-from adaptive_document_agent.validation.presentation_provenance import insight_inputs
 from adaptive_document_agent.services.presentation_editorial import stamp_editorial_review
 from .presentation_topic_selector import PresentationTopicSelector, series_directory
 from .presentation_plan_recovery import PresentationPlanRecovery
@@ -30,21 +28,9 @@ def compile_topic_plan(result: PipelineResult) -> PresentationPlan:
     for slide in plan.slides:
         if slide.slide_type == "company_overview":
             slide.title = "Document at a Glance"
-    refs = insight_inputs(result)
-    plan, repairs = repair_presentation_plan(plan, result.observations, result.charts,
-                                            insight_observation_ids=refs)
-    problems = ClaimValidator().validate_plan(plan, result.observations, result.charts,
-                                             insight_observation_ids=refs)
-    if problems:
-        from .presentation_topic_scope_recovery import recover_unscoped_topic_claims
-        repairs.extend(recover_unscoped_topic_claims(plan, result, problems))
-        problems = ClaimValidator().validate_plan(plan, result.observations, result.charts,
-                                                 insight_observation_ids=refs)
-    if problems:
-        raise ValueError("Selected topic claims failed validation: " + "; ".join(p.message for p in problems))
+    # from_selected_topics owns the shared strict claim-recovery boundary.
     PresentationPlanValidator().validate(plan, result)
     plan = stamp_editorial_review(plan, result, origin="topic_compilation")
-    plan.editorial_notes.extend(repairs)
     for issue in result.validation_warnings:
         if issue.code in {"presentation_topics_unavailable", "presentation_topic_claims_withheld",
                           "presentation_closing_claim_withheld"}:
