@@ -87,7 +87,7 @@ def test_transport_failure_has_two_attempts_not_a_third_format_request(monkeypat
         raise TimeoutError("no response")
     module.completion = completion
     monkeypatch.setitem(sys.modules, "litellm", module)
-    settings = LLMSettings(provider=ProviderName.OPENAI, model="test")
+    settings = LLMSettings(provider=ProviderName.OPENAI, model="test", api_key="dummy-test-key")
     gateway = LLMGateway(LiteLLMProvider(settings), settings)
     with pytest.raises(LLMTransportError):
         gateway.generate_structured([], Answer, stage="report")

@@ -5,6 +5,7 @@ from types import ModuleType
 from typing import Any
 
 import pytest
+from pydantic import SecretStr
 
 from adaptive_document_agent.services.llm import LLMSettings, ProviderName
 from adaptive_document_agent.services.llm.litellm_provider import LiteLLMProvider
@@ -15,7 +16,7 @@ class UnsupportedParamsError(Exception):
 
 
 def _provider() -> LiteLLMProvider:
-    return LiteLLMProvider(LLMSettings(provider=ProviderName.OPENAI, model="gpt-5.6-sol"))
+    return LiteLLMProvider(LLMSettings(provider=ProviderName.OPENAI, model="gpt-5.6-sol", api_key=SecretStr("dummy-test-key")))
 
 
 def test_completion_omits_none_request_values(monkeypatch: pytest.MonkeyPatch) -> None:
