@@ -477,6 +477,8 @@ def run_comprehensive_qa(result: PipelineResult, auto_repair: bool = True) -> QA
             metrics_match_topic,
         )
 
+        from adaptive_document_agent.validation.presentation_topic_relations import TopicRelationValidator
+        topic_relations = TopicRelationValidator(result)
         obs_ids = {obs.id for obs in result.observations}
         obs_by_id = {obs.id: obs for obs in result.observations}
         chart_by_id = {c.id: c for c in result.charts}
@@ -493,7 +495,7 @@ def run_comprehensive_qa(result: PipelineResult, auto_repair: bool = True) -> QA
                 mismatched_by_family: dict[str, list[Observation]] = {}
                 for observation_id in slide.observation_ids:
                     observation = obs_by_id.get(observation_id)
-                    if observation and is_positive_topic_mismatch(observation, slide, is_supporting_kpi=is_hybrid_kpi_slide):
+                    if observation and topic_relations.mismatch(observation, slide, is_supporting_kpi=is_hybrid_kpi_slide):
                         family = (
                             getattr(observation, "metric_canonical", "")
                             or getattr(observation, "canonical_name", "")
@@ -547,7 +549,7 @@ def run_comprehensive_qa(result: PipelineResult, auto_repair: bool = True) -> QA
                         
                         mismatched_by_family: dict[str, list[Observation]] = {}
                         for item in chart_observations:
-                            if is_positive_topic_mismatch(item, slide):
+                            if topic_relations.mismatch(item, slide):
                                 family = (
                                     getattr(item, "metric_canonical", "")
                                     or getattr(item, "canonical_name", "")

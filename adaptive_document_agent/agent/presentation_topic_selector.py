@@ -194,8 +194,8 @@ class PresentationTopicSelector:
                 from adaptive_document_agent.services.presentation_matrix import topic_matrix_dimension
 
                 members = list({item.id: item for sid in topic.series_ids for item in lookup[sid]}.values())
-                if len(members) > 30:
-                    raise ValueError(f"Topic {topic.id} exceeds a readable comparison matrix")
+                if len(members) > 180:
+                    raise ValueError(f"Topic {topic.id} exceeds the retained evidence capacity")
                 if topic_matrix_dimension(members) is None:
                     from itertools import permutations
                     from adaptive_document_agent.services.presentation_waterfall import waterfall_data
@@ -205,7 +205,8 @@ class PresentationTopicSelector:
                         _reconciles_order(order, index, waterfall_data, PresentationVisualBlock)
                         for order in permutations(index)
                     )):
-                        raise ValueError(f"Topic {topic.id} links more than three series without a complete matrix or exact bridge")
+                        from adaptive_document_agent.validation.presentation_parallel_series import validate_parallel_series
+                        validate_parallel_series([lookup[sid] for sid in topic.series_ids])
             if primary_pages and any(
                 not any(e.page in primary_pages for item in lookup[sid] for e in item.evidence)
                 for sid in topic.series_ids

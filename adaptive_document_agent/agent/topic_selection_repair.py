@@ -9,7 +9,7 @@ from .prompting import untrusted_document_message
 
 
 def retain_valid_topics(selection, lookup, primary_pages, result, gateway, validate):
-    """At most one scoped correction; preserve rejected drafts in the JSON audit.
+    """At most one correction per topic; preserve rejected drafts in the audit.
 
     Python does not replace the model's choice of questions or importance. Each
     accepted topic is checked independently; one failed claim cannot invalidate
@@ -46,8 +46,11 @@ def retain_valid_topics(selection, lookup, primary_pages, result, gateway, valid
                         "unit", "raw_unit", "currency", "period", "dimensions", "category_dimensions", "evidence"})
                     for item in lookup[sid]]} for sid in topic.series_ids]}
                for topic, error in repairable]
-    encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    if repairable and len(encoded) <= 40_000:
+    for (original, _), scoped_payload in zip(repairable, payload):
+        encoded = json.dumps([scoped_payload], ensure_ascii=False, separators=(",", ":"))
+        if len(encoded) > 40_000:
+            audit(original, "Scoped correction exceeds the bounded context budget", "correction_not_requested")
+            continue
         try:
             revised = gateway.generate_structured([
                 {"role": "system", "content":
@@ -58,7 +61,7 @@ def retain_valid_topics(selection, lookup, primary_pages, result, gateway, valid
                  "Do not return other topics or omissions. Omit a topic only if it cannot be supported."},
                 untrusted_document_message(encoded),
             ], PresentationTopicSelection, stage="presentation", allow_repair=False)
-            originals = {topic.id: topic for topic, _ in repairable}
+            originals = {original.id: original}
             revised_counts = Counter(t.id for t in revised.topics)
             for topic in revised.topics:
                 try:
@@ -72,11 +75,7 @@ def retain_valid_topics(selection, lookup, primary_pages, result, gateway, valid
                 except ValueError as exc:
                     audit(topic, exc, "correction")
         except (LLMResponseError, LLMTransportError, ValueError) as exc:
-            for topic, _ in repairable:
-                audit(topic, exc, "correction_failed")
-    elif repairable:
-        for topic, _ in repairable:
-            audit(topic, "Scoped correction exceeds the bounded context budget", "correction_not_requested")
+            audit(original, exc, "correction_failed")
 
     # A bad optional takeaway must not erase a valid model-selected question.
     # Keep the original semantic scope and core rationale; only remove optional

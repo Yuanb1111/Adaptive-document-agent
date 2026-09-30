@@ -53,7 +53,14 @@ class PresentationPlanValidator:
             errors.append("slide types do not follow the required narrative order")
 
         main_slide_count = sum(slide.slide_type != "appendix" for slide in plan.slides)
-        if main_slide_count > 18:
+        # Page capacity must not discard a model-selected question. Count its
+        # independently scoped continuations as one logical analysis section;
+        # all per-page evidence, duplicate-scope and theme checks still apply.
+        theme_ids = {theme.id for theme in plan.themes}
+        continuations = Counter(slide.theme_id for slide in plan.slides
+                                if slide.slide_type == "analysis" and slide.theme_id in theme_ids)
+        logical_main_count = main_slide_count - sum(max(0, count - 1) for count in continuations.values())
+        if logical_main_count > 18:
             errors.append("the main presentation may contain at most 18 planned slides")
 
         observation_by_id = {item.id: item for item in result.observations}

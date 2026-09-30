@@ -164,7 +164,7 @@ class PresentationTheme(BaseModel):
     title: str
     question: str
     rationale: str
-    chart_ids: list[str] = Field(default_factory=list, max_length=12)
+    chart_ids: list[str] = Field(default_factory=list, max_length=24)
     observation_ids: list[str] = Field(default_factory=list, max_length=180)
     insight_ids: list[str] = Field(default_factory=list, max_length=12)
     caveats: list[str] = Field(default_factory=list, max_length=5)
@@ -209,4 +209,4 @@ class PresentationPlan(BaseModel):
     coverage_notes: list[str] = Field(default_factory=list, max_length=12)
     # Empty remains supported for cached plans created before theme planning.
     themes: list[PresentationTheme] = Field(default_factory=list, max_length=12)
-    slides: list[PresentationSlide] = Field(default_factory=list, max_length=24)
+    slides: list[PresentationSlide] = Field(default_factory=list, max_length=96)

@@ -25,6 +25,69 @@ def _quantities(text: str) -> set[tuple[str, str, str]]:
              (m['unit'] or '').casefold()) for m in _QUANTITY.finditer(text)}
 
 
+def restore_percentage_symbols(text: str, quotes: list[str], *, source_percentages=frozenset()) -> str:
+    """Restore only an unambiguous, item-bound literal percentage unit."""
+    units = {}
+    for quote in quotes:
+        for currency, value, unit in _quantities(quote):
+            units.setdefault(value, set()).add((currency, unit))
+
+    def replace(match):
+        value = PresentationPlanValidator._normalize_number(match['value'])
+        if (not match['currency'] and not match['currency_suffix'] and not match['unit']
+                and units.get(value)
+                and (units[value] <= {('', '%'), ('', 'percent')}
+                     or value in source_percentages and units[value] <= {('', ''), ('', '%'), ('', 'percent')})
+                and not re.match(r"\s*(?:years?\b|units?\b|times?\b|percentage\s+points?\b|pp\b)", text[match.end():], re.I)):
+            return match.group(0).rstrip() + '%' + match.group(0)[len(match.group(0).rstrip()):]
+        return match.group(0)
+    return _QUANTITY.sub(replace, text)
+
+
+def _quoted_table_percentages(item, result):
+    """A bare quoted cell needs a resolved, explicitly percentage source column."""
+    from collections import defaultdict
+    from decimal import Decimal, InvalidOperation
+    pages = {p.page_number: p for p in result.document.pages}
+    kinds = defaultdict(set)
+    for observation in result.observations:
+        if observation.value is None or observation.validation_status != 'valid' or observation.anomaly_notes:
+            continue
+        key = PresentationPlanValidator._normalize_number(observation.raw_value)
+        for evidence in observation.evidence:
+            quotes = [q.text for q in item.evidence if q.page == evidence.page]
+            if not any(key in {v for _, v, _ in _quantities(quote)} for quote in quotes):
+                continue
+            kinds[key].add(observation.unit_family if observation.unit_family != 'generic' else observation.unit)
+    percentages = set()
+    for observation in result.observations:
+        if (observation.validation_status != 'valid' or observation.anomaly_notes
+                or observation.unit not in {'percent', '%'}):
+            continue
+        key = PresentationPlanValidator._normalize_number(observation.raw_value)
+        if not kinds.get(key) or kinds[key] - {'percentage', 'percent'}:
+            continue
+        for evidence in observation.evidence:
+            if evidence.page not in {q.page for q in item.evidence}:
+                continue
+            page = pages.get(evidence.page)
+            table = next((t for t in page.tables if t.table_id == evidence.table_id), None) if page else None
+            row, col = observation.row_id, observation.column_id
+            if (table is None or row is None or col is None or not 0 <= row < len(table.rows)
+                    or not 0 <= col < len(table.column_types) or table.column_types[col] != 'percentage'
+                    or table.rows[row].alignment_status != 'resolved' or col >= len(table.rows[row].cells)):
+                continue
+            cell = table.rows[row].cells[col]
+            try:
+                value = Decimal(str(cell).strip().replace(',', '').rstrip('%'))
+                raw = Decimal(observation.raw_value.strip().replace(',', '').rstrip('%'))
+            except InvalidOperation:
+                continue
+            if value == raw:
+                percentages.add(key)
+    return percentages
+
+
 def validate_executive_brief(brief: ExecutiveBrief, result: PipelineResult, *,
                              excerpts: dict[int, str] | None = None) -> list[str]:
     """Check each item's own quotations and numeric scope, including cached exports.
@@ -72,7 +135,9 @@ def brief_items(result: PipelineResult):
     errors = validate_executive_brief(brief, result)
     if errors:
         raise ValueError('Invalid executive brief: ' + '; '.join(errors))
-    return [BriefItem(item.label, item.text, sorted({q.page for q in item.evidence})) for item in brief.items]
+    return [BriefItem(item.label, restore_percentage_symbols(item.text, [q.text for q in item.evidence],
+                        source_percentages=_quoted_table_percentages(item, result)),
+                      sorted({q.page for q in item.evidence})) for item in brief.items]
 
 
 def display_brief(result: PipelineResult):

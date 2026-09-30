@@ -313,6 +313,9 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
     _add_cover(presentation, result, title=cover.title, purpose=cover.message)
     contents_slides = [slide for slide in plan.slides
                        if not (omit_summary and slide.slide_type == "executive_summary")]
+    from .presentation_scope import scope_items
+    if not scope_items(result):
+        contents_slides = [s for s in contents_slides if s.slide_type != "data_quality"]
     if plan.company.summary_business:
         company_index = next((i for i, s in enumerate(contents_slides) if s.slide_type == "company_overview"), None)
         if company_index is not None:
@@ -442,8 +445,11 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
         elif slide_plan.slide_type == "risks":
             _add_planned_text_slide(presentation, result, slide_plan)
         elif slide_plan.slide_type == "data_quality":
-            # Keep full methodological disclosure in the summary and appendix
-            # notes without spending a sparse standalone audience page on it.
+            from .presentation_scope import scope_items
+            from .presentation_brief import render_profile
+            limits = scope_items(result)
+            if limits:
+                render_profile(presentation, "Coverage and limits", limits)
             continue
         elif slide_plan.slide_type == "appendix":
             previous_slide_count = len(presentation.slides)
@@ -511,16 +517,17 @@ def _add_planned_contents(
         "executive_summary": "Executive Summary",
         "analysis": "Analysis",
         "risks": "Key Risks and Watch Items",
-        "data_quality": "Data Quality",
+        "data_quality": "Coverage and limits",
         "appendix": "Data Index",
     }
     contents_order = planned_slides
     for item in contents_order:
-        if item.slide_type not in defaults or item.slide_type == "data_quality":
+        if item.slide_type not in defaults:
             continue
         if evidence_in_notes and item.slide_type == "appendix":
             continue
-        label = ("Data Index" if item.slide_type == "appendix" else item.section_title or defaults[item.slide_type]).strip()
+        label = ("Data Index" if item.slide_type == "appendix" else defaults[item.slide_type]
+                 if item.slide_type == "data_quality" else item.section_title or defaults[item.slide_type]).strip()
         key = label.casefold()
         if key not in seen:
             seen.add(key)
@@ -1695,6 +1702,13 @@ def _add_native_chart(
             pass
 
     num_fmt = _chart_number_format(scaled_vals)
+    label_fmt = num_fmt
+    if (scale > 1 and values and all(item.unit == "count" or item.unit_family == "count" for item in values)
+            and all(float(item.value).is_integer() for item in values if item.value is not None)):
+        # Scaling whole counts must retain every unit in the data labels.
+        # The axis may remain compact; its unit label declares the same scale.
+        digits = len(str(int(scale))) - 1
+        label_fmt = "#,##0." + "0" * digits + ";-#,##0." + "0" * digits + ";0"
 
     try:
         chart.plots[0].has_data_labels = plan.show_data_labels
@@ -1721,7 +1735,7 @@ def _add_native_chart(
             labels.font.size = Pt(12 if compact else 14)
         labels.font.bold = True
         # Signed dynamic format preserves minus sign and exact precision
-        labels.number_format = num_fmt
+        labels.number_format = label_fmt
         labels.number_format_is_linked = False
         if (compact and chart.chart_type == XL_CHART_TYPE.LINE_MARKERS
                 and len(categories) >= 5 and len(chart.series) == 1):
@@ -3012,7 +3026,7 @@ def _unit_label(observations: list[Observation], scale_label: str) -> str:
         for item in observations
     )
     if ("count" in units or "count" in families or any(getattr(item, "is_volume", False) for item in observations)) and not is_financial:
-        return "units"
+        return f"{scale_label} units" if scale_label else "units"
     currencies = {item.currency for item in observations if item.currency}
     raw_units = {item.raw_unit for item in observations if item.raw_unit}
     if currencies:

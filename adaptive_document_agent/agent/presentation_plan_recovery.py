@@ -39,6 +39,9 @@ class PresentationPlanRecovery:
         """
         if not result.presentation_topics or not result.presentation_topics.topics:
             return False
+        from .presentation_topic_audit_recovery import recover_audited_topics
+        if recover_audited_topics(result):
+            return True
         previous = result.presentation_plan
         if previous is not None:
             selected = {topic.id for topic in result.presentation_topics.topics}
@@ -173,7 +176,7 @@ class PresentationPlanRecovery:
                                  if chart.id in usable_chart_ids and chart.id not in chart_ids
                                  and set(chart.observation_ids) <= series_observation_ids
                                  and set(chart.observation_ids) & series_observation_ids), None)
-                if matching is not None and len(chart_ids) < 3:
+                if matching is not None:
                     chart_ids.append(matching.id)
                     visible_series.add(series_id)
             if not chart_ids and len(members) > 40:
@@ -212,8 +215,6 @@ class PresentationPlanRecovery:
             # supporting band, with every source point available in notes.
             visible_support_ids: list[str] = []
             for series_id in topic.series_ids:
-                if series_id in visible_series:
-                    continue
                 series_items = sorted(
                     (item for item in series_by_id.get(series_id, []) if item.id in supporting_ids),
                     key=lambda item: period_sort_key(item.period),
@@ -227,21 +228,36 @@ class PresentationPlanRecovery:
                 observation_ids=members, caveats=topic.caveats,
                 source_pages=pages,
             )
-            layout = ("three_up" if len(chart_ids) == 3 else "two_up" if len(chart_ids) == 2
-                      else "chart_with_data" if chart_ids else "data_overview")
-            slide = PresentationSlide(
-                id=f"topic_{topic.id}", slide_type="analysis", title=safe_title,
-                section_id=topic.id, section_title=topic.title,
-                slide_role="overview", layout=layout, message=safe_question,
-                chart_ids=chart_ids, observation_ids=supporting_ids,
-                visual_blocks=[PresentationVisualBlock(role="table", observation_ids=visible_support_ids[start:start + 12])
-                               for start in range(0, len(visible_support_ids), 12)],
-                theme_id=topic.id, analytical_question=safe_question,
-                selection_reason=safe_reason, comparison_mode="parallel" if len(chart_ids) > 1 else "context",
-                source_pages=pages,
-            )
             themes.append(theme)
-            analysis_slides.append(slide)
+            paginate = len(chart_ids) > 3 or len(supporting_ids) > 40
+            if not paginate:
+                groups = [(chart_ids, supporting_ids)]
+            else:
+                groups = [(chart_ids[start:start + 3], []) for start in range(0, len(chart_ids), 3)]
+                groups += [([], visible_support_ids[start:start + 12])
+                           for start in range(0, len(visible_support_ids), 12)]
+            for part, (group, support) in enumerate(groups):
+                # Each continuation cites only its displayed evidence. A global
+                # takeaway cannot borrow numbers from another panel's scope.
+                local_ids = set(support) | {
+                    oid for chart in result.charts if chart.id in group
+                    for oid in [*chart.observation_ids, *chart.total_observation_ids]}
+                local_pages = sorted({e.page for oid in local_ids if oid in observation_by_id
+                                      for e in observation_by_id[oid].evidence})
+                analysis_slides.append(PresentationSlide(
+                    id=f"topic_{topic.id}" if part == 0 else f"topic_{topic.id}_part_{part + 1}",
+                    slide_type="analysis", title=safe_question if paginate else safe_title,
+                    section_id=topic.id, section_title=topic.title,
+                    slide_role="overview" if part == 0 else "deep_dive",
+                    layout="three_up" if len(group) == 3 else "two_up" if len(group) == 2
+                           else "chart_with_data" if group and support else "single" if group else "data_overview",
+                    message=safe_question, chart_ids=group, observation_ids=support,
+                    visual_blocks=[PresentationVisualBlock(role="table", observation_ids=support[start:start + 12])
+                                   for start in range(0, len(support), 12)],
+                    theme_id=topic.id, analytical_question=safe_question,
+                    selection_reason=safe_reason, comparison_mode="parallel" if len(group) > 1 else "context",
+                    source_pages=local_pages,
+                ))
         if not analysis_slides:
             raise ValueError("Selected presentation topics contain no usable analytical evidence")
         base.themes = themes

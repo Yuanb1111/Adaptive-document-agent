@@ -81,6 +81,8 @@ def validate_presentation_data(result: PipelineResult):
         for error in validate_narrative_plan(result.presentation_plan, result):
             issues.append(QAItem(code="narrative_evidence_contract", severity="CRITICAL", message=error))
     observations = {o.id: o for o in result.observations}
+    from .presentation_topic_relations import TopicRelationValidator
+    topic_relations = TopicRelationValidator(result)
     charts = {c.id: c for c in result.charts}
     seen = {}
     for slide in result.presentation_plan.slides:
@@ -117,12 +119,12 @@ def validate_presentation_data(result: PipelineResult):
                 if not chart or any(oid not in observations for oid in chart.observation_ids):
                     issues.append(QAItem(code="chart_mismatch", severity="CRITICAL", slide_id=slide.id,
                         related_ids=[cid], message=f"Visual block on slide {slide.id} references missing chart data."))
-                elif any(is_positive_topic_mismatch(observations[oid], slide) for oid in chart.observation_ids):
+                elif any(topic_relations.mismatch(observations[oid], slide) for oid in chart.observation_ids):
                     issues.append(QAItem(code="chart_topic_mismatch", severity="CRITICAL", slide_id=slide.id,
                         related_ids=[cid], message=f"Visual block chart {cid} does not match slide '{slide.title}'."))
         block_ids = {oid for b in slide.visual_blocks for oid in b.observation_ids} - set(slide.observation_ids)
         kpi_ids = {oid for b in slide.visual_blocks if b.role == "kpi" for oid in b.observation_ids}
-        if any(is_positive_topic_mismatch(observations[oid], slide, is_supporting_kpi=oid in kpi_ids) for oid in block_ids if oid in observations):
+        if any(topic_relations.mismatch(observations[oid], slide, is_supporting_kpi=oid in kpi_ids) for oid in block_ids if oid in observations):
             issues.append(QAItem(code="slide_topic_mismatch", severity="CRITICAL", slide_id=slide.id,
                 related_ids=sorted(block_ids), message=f"Visual block table does not match slide '{slide.title}'."))
         from .scoped_narrative_values import scoped_value_errors

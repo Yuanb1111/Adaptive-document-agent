@@ -111,6 +111,9 @@ def display_metric_name(observation: Observation) -> str:
     label = re.sub(r"(?i)^(?:add|less|plus|minus)\s*[:\-\u2013\u2014]\s*", "", label)
     label = re.sub(r"(?i)^(?:adjustments?|reconciliation|sub-?total|total)\s*[:\-\u2013\u2014]\s*", "", label)
     label = _TRAILING_UNIT.sub("", label)
+    # Magnitude belongs to the rendered axis/unit column, which can rescale.
+    # Retain per-unit denominators and every business/category qualifier.
+    label = re.sub(r"(?i)\s*\((?:rmb|cny|usd|hkd|eur|gbp)\s+(?:in\s+)?(?:thousands?|millions?|billions?)\)\s*$", "", label)
     label = " ".join(label.split()).strip(" :;,-")
     # A repeated child heading can leak into the extracted metric name
     # (for example, "gross profit margin margin"). Keep the raw label on
@@ -128,6 +131,18 @@ def display_metric_name(observation: Observation) -> str:
     if not context and observation.metric_original.lstrip().startswith(("-", "\u2013", "\u2014", "\u2022")):
         context = observation.dimensions.get("table_context", "")
     context = " ".join(context.split()).strip(" :;,-")
+    # A concrete, unit-bearing source row starts its own measure. An inherited
+    # measure heading cannot turn count data into a price child. Category
+    # parents remain intact; a unit-only child still needs its measure parent.
+    row_labels = [e.row_label for e in observation.evidence if e.row_label]
+    from .metric_semantic_classifier import classify_metric
+    own = classify_metric(label, unit=observation.unit, raw_unit=observation.raw_unit)
+    parent = classify_metric(context)
+    concrete_row = any(re.search(r"(?i)\b(?:sales\s+volume|units|count|quantity)\b", row)
+                       for row in row_labels)
+    measure_heading = bool(re.search(r"(?i)\b(?:selling\s+price|price\s+per|per\s+unit)\b", context))
+    if own.is_volume and concrete_row and measure_heading and not parent.is_volume:
+        context = ""
     repeated_prefix = bool(re.search(r"(?i)\b(?:for|of|by|from)$", context)
                            and label.casefold().startswith(
                                re.sub(r"(?i)\s+(?:for|of|by|from)$", "", context).casefold() + " "))
