@@ -415,6 +415,24 @@ def test_decimal_values_at_dates_bind_nonfinancial_metric() -> None:
     assert not ClaimValidator().validate_slide(_slide(text, observations), observations)
 
 
+def test_value_in_period_sequence_binds_first_and_last_reported_periods() -> None:
+    observations = _series(
+        "Loss for the year/period", [-41756, -52477, -103281], years=(2021, 2022, 2023),
+    )
+    text = (
+        "Loss for the year/period widened from RMB41,756 thousand in FY2021 "
+        "to RMB52,477 thousand in FY2022 and RMB103,281 thousand in FY2023."
+    )
+    slide = _slide(text, observations, "bullets")
+    assert not ClaimValidator().validate_slide(slide, observations)
+    slide.bullets = [text.replace("FY2023", "FY2024")]
+    assert any(issue.code == "direction_scope_ambiguous"
+               for issue in ClaimValidator().validate_slide(slide, observations))
+    slide.bullets = [text.replace("FY2022", "FY2020")]
+    assert any(issue.code == "direction_scope_ambiguous"
+               for issue in ClaimValidator().validate_slide(slide, observations))
+
+
 def test_preposed_period_range_belongs_to_its_independent_metric() -> None:
     observations = _series("Revenue", [100, 200, 150]) + _series("Net loss", [-100, -160, -125])
     text = "Revenue increased and from FY2024 to FY2025 net loss narrowed."

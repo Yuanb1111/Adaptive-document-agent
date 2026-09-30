@@ -23,6 +23,15 @@ _VALUE_AT_DATE_RANGE = re.compile(
     rf"to\s+(?:(?!\bto\b)[^;\n]){{1,100}}?\bat\s+(?P<end>{_PERIOD})\b",
     re.I,
 )
+_VALUE_IN_PERIOD_START = re.compile(
+    rf"\bfrom\s+(?P<value>(?:(?!\b(?:to|and)\b)[^;\n]){{1,100}}?)"
+    rf"\bin\s+(?P<period>{_PERIOD})\b", re.I,
+)
+_VALUE_IN_PERIOD_NEXT = re.compile(
+    rf"\s+(?P<connector>to|and)\s+"
+    rf"(?P<value>(?:(?!\b(?:to|and)\b)[^;\n]){{1,100}}?)"
+    rf"\bin\s+(?P<period>{_PERIOD})\b", re.I,
+)
 _BY_ENDPOINT = re.compile(rf"\bby\s+(?P<end>{_PERIOD})\b", re.I)
 _RUN_ENDPOINT = re.compile(rf"\b(?:by|through|until|at)\s+(?P<end>{_PERIOD})\b", re.I)
 _NON_TEMPORAL_BEFORE = re.compile(
@@ -192,6 +201,37 @@ def direction_context(clause: str, associations: list[DirectionSpan], direction:
     return clause[start:end]
 
 
+def _value_in_period_ranges(text: str) -> list[tuple[list[str], int]]:
+    """Read explicit value/period sequences without inferring a missing endpoint."""
+    ranges = []
+    for start in _VALUE_IN_PERIOD_START.finditer(text):
+        if not re.search(r"\d", start["value"]):
+            continue
+        current = _VALUE_IN_PERIOD_NEXT.match(text, start.end())
+        if (current is None or current["connector"].casefold() != "to"
+                or not re.search(r"\d", current["value"])):
+            continue
+        periods = [start["period"]]
+        while True:
+            periods.append(current["period"])
+            last = current
+            following = _VALUE_IN_PERIOD_NEXT.match(text, current.end())
+            if following is None or following["connector"].casefold() != "and":
+                break
+            if not re.search(r"\d", following["value"]):
+                periods = []
+                break
+            current = following
+        if not periods:
+            continue
+        # A later unparsed period joined by "and" leaves the endpoint unclear.
+        tail = text[last.end():]
+        if re.match(r"\s+and\b", tail, re.I) and re.search(rf"\b{_PERIOD}\b", tail, re.I):
+            continue
+        ranges.append((periods, start.start()))
+    return ranges
+
+
 def resolve_direction_scope(
     clause: str,
     associations: list[DirectionSpan],
@@ -215,25 +255,32 @@ def resolve_direction_scope(
     lo, hi = _group_bounds(clause, associations, position, metric_spans)
     local_start, local_end = _context_bounds(clause, associations, position, position, metric_spans)
     local_text = clause[local_start:local_end]
-    # Model prose often places a sourced value before each date, e.g.
-    # "from 100 units at 2021-12-31 to 120 units at 2024-10-31".
-    # Both dates still need to resolve to this metric's linked observations.
-    ranges = [*_RANGE.finditer(local_text), *_VALUE_AT_DATE_RANGE.finditer(local_text)]
+    # Model prose often places a sourced value before each period, e.g.
+    # "from 100 units at 2021-12-31 to 120 units at 2024-10-31" or
+    # "from 100 units in FY2021 to 120 in FY2022 and 130 in FY2023".
+    # Every stated period must resolve to this metric's linked observations.
+    ranges = [([match["start"], match["end"]], match.start())
+              for match in [*_RANGE.finditer(local_text), *_VALUE_AT_DATE_RANGE.finditer(local_text)]]
+    ranges.extend(_value_in_period_ranges(local_text))
     if len(ranges) > 1 and allow_other_period_bases:
         basis = extract_period_basis(observations[0].period)
-        ranges = [r for r in ranges if extract_period_basis(r['start']) == basis
-                  and extract_period_basis(r['end']) == basis]
+        ranges = [r for r in ranges if all(extract_period_basis(period) == basis
+                                           for period in r[0])]
     if ranges:
         if len(ranges) != 1:
             return DirectionScope(error="Several period ranges qualify the same direction word")
-        match = ranges[0]
-        prefix = local_text[:match.start()]
+        periods, range_start = ranges[0]
+        prefix = local_text[:range_start]
         year_end = bool(re.search(r"(?i)\b(?:year[- ]end(?:\s+of)?|end\s+of\s+(?:the\s+)?year(?:\s+of)?)\s*$", prefix))
-        first = _period_index(match['start'], observations, year_end=year_end)
-        last = _period_index(match['end'], observations, year_end=year_end)
-        if first is None or last is None or first >= last:
+        indices = []
+        for period in periods:
+            index = _period_index(period, observations, year_end=year_end)
+            if index is None:
+                return DirectionScope(error="The stated period range is missing or not chronological")
+            indices.append(index)
+        if any(first >= last for first, last in zip(indices, indices[1:])):
             return DirectionScope(error="The stated period range is missing or not chronological")
-        return DirectionScope(observations[first:last + 1])
+        return DirectionScope(observations[indices[0]:indices[-1] + 1])
 
     period_mentions = list(re.finditer(rf"\b{_PERIOD}\b", local_text, re.I))
     if period_mentions:
