@@ -95,6 +95,8 @@ def export_pptx_with_report(
     started = perf_counter()
     notify = progress or (lambda _: None)
     notify("Checking PowerPoint evidence")
+    from adaptive_document_agent.agent.presentation_plan_recovery import PresentationPlanRecovery
+    PresentationPlanRecovery().recover_missing_plan(result)
     from .presentation_claim_evidence import prepare_presentation_claims
     prepare_presentation_claims(result)
     qa = run_comprehensive_qa(result, auto_repair=True)

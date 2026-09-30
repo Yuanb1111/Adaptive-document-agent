@@ -70,6 +70,17 @@ def test_ranking_chart_contains_complete_same_source_comparison_and_keeps_raw():
     assert result.model_dump() == snapshot
 
 
+def test_narrowed_comparison_does_not_leave_a_period_only_title():
+    result = _sample(rank=True)
+    result.observations = result.observations[:2] + result.observations[4:]
+    slide = result.presentation_plan.slides[-1]
+    slide.section_title = "Enterprise became the largest category, FY2022–FY2023"
+    before = [o.model_dump() for o in result.observations]
+    prepare_presentation_claims(result)
+    assert slide.title == "Reported measures"
+    assert [o.model_dump() for o in result.observations] == before
+
+
 @pytest.mark.parametrize("failure", ["partial", "conflict", "wrong_table", "wrong_basis", "unreliable", "not_largest"])
 def test_unproved_ranking_is_narrowed_in_slide_and_summary(failure):
     result = _sample(rank=True)

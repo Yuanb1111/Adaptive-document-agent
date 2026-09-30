@@ -150,7 +150,9 @@ def _narrow(slide, replacements):
         # A selected topic can name several measures even when one comparative
         # claim cannot be bound. Keep the independently named measures visible.
         parts = [re.sub(r"(?i)^and\s+", "", part.strip()) for part in title.split(",")]
-        safe = [part for part in parts if part and not (_RANK.search(part) or _SHARE.search(part))]
+        safe = [part for part in parts if part and not (_RANK.search(part) or _SHARE.search(part))
+                and re.search(r"[A-Za-z]{3,}", re.sub(
+                    r"(?i)\b(?:FY|[1369]M|[12]H|Q[1-4])?\s*(?:19|20)\d{2}\b", "", part))]
         title = " and ".join(safe) if safe else ""
     slide.title = title or "Reported measures"
     if _RANK.search(slide.message) or _SHARE.search(slide.message):

@@ -2396,6 +2396,12 @@ def _style_content_header(slide: Any, title: str, subtitle: str) -> None:
         title_ph.text_frame.margin_left = title_ph.text_frame.margin_right = Inches(.02)
         title_ph.text_frame.margin_top = title_ph.text_frame.margin_bottom = Inches(.01)
         for p in title_ph.text_frame.paragraphs:
+            # Header roles are flush left. Explicit paragraph geometry avoids
+            # inheriting the template's body-placeholder hanging indentation.
+            properties = p._p.get_or_add_pPr()
+            properties.set("marL", "0")
+            properties.set("indent", "0")
+            properties.set("algn", "l")
             p.font.name = FONT
             p.font.size = Pt(32)
             p.font.bold = True
@@ -2414,6 +2420,10 @@ def _style_content_header(slide: Any, title: str, subtitle: str) -> None:
             sub_ph.text_frame.margin_left = sub_ph.text_frame.margin_right = Inches(.02)
             sub_ph.text_frame.margin_top = sub_ph.text_frame.margin_bottom = Inches(.01)
             for p in sub_ph.text_frame.paragraphs:
+                properties = p._p.get_or_add_pPr()
+                properties.set("marL", "0")
+                properties.set("indent", "0")
+                properties.set("algn", "l")
                 p.font.name = FONT
                 p.font.size = Pt(18)
                 p.font.bold = False

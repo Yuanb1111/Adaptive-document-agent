@@ -265,9 +265,12 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
     # A complete analytical claim may not fit the template's 32 pt title role.
     # Reuse the planner's section heading and place the claim in the subtitle
     # or commentary according to available space, without rewriting its meaning.
-    if (len(_lines(heading, 8.91, 32)) > 2 and slide_plan.section_title
-            and len(_lines(slide_plan.section_title, 8.91, 32)) <= 2):
-        heading = slide_plan.section_title
+    if len(_lines(heading, 8.91, 32)) > 2:
+        # A selected topic can itself be a full sentence. When neither authored
+        # heading fits, use a neutral role label and keep the complete claim
+        # visibly below it; never truncate an analytical statement to fit.
+        heading = (slide_plan.section_title if slide_plan.section_title
+                   and len(_lines(slide_plan.section_title, 8.91, 32)) <= 2 else "Analysis")
         if slide_plan.title.endswith(" (continued)"):
             heading += " (continued)"
         subtitle = "\n".join(part for part in (

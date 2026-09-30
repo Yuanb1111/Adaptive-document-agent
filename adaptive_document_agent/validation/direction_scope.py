@@ -32,6 +32,12 @@ _VALUE_IN_PERIOD_NEXT = re.compile(
     rf"(?P<value>(?:(?!\b(?:to|and)\b)[^;\n]){{1,100}}?)"
     rf"\bin\s+(?P<period>{_PERIOD})\b", re.I,
 )
+_REVERSED_VALUE_RANGE = re.compile(
+    rf"\bto\s+(?:(?!\b(?:from|to|and)\b)[^;\n]){{1,100}}?"
+    rf"\b(?:in|at)\s+(?P<end>{_PERIOD})\s+"
+    rf"from\s+(?:(?!\b(?:from|to|and)\b)[^;\n]){{1,100}}?"
+    rf"\b(?:in|at)\s+(?P<start>{_PERIOD})\b", re.I,
+)
 _BY_ENDPOINT = re.compile(rf"\bby\s+(?P<end>{_PERIOD})\b", re.I)
 _RUN_ENDPOINT = re.compile(rf"\b(?:by|through|until|at)\s+(?P<end>{_PERIOD})\b", re.I)
 _NON_TEMPORAL_BEFORE = re.compile(
@@ -260,7 +266,8 @@ def resolve_direction_scope(
     # "from 100 units in FY2021 to 120 in FY2022 and 130 in FY2023".
     # Every stated period must resolve to this metric's linked observations.
     ranges = [([match["start"], match["end"]], match.start())
-              for match in [*_RANGE.finditer(local_text), *_VALUE_AT_DATE_RANGE.finditer(local_text)]]
+              for match in [*_RANGE.finditer(local_text), *_VALUE_AT_DATE_RANGE.finditer(local_text),
+                            *_REVERSED_VALUE_RANGE.finditer(local_text)]]
     ranges.extend(_value_in_period_ranges(local_text))
     if len(ranges) > 1 and allow_other_period_bases:
         basis = extract_period_basis(observations[0].period)

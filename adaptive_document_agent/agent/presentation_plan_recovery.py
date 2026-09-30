@@ -31,6 +31,38 @@ class PresentationPlanRecovery:
         """Prune unsupported material and align citations via PresentationPlanRepairer."""
         return PresentationPlanRepairer().repair(plan, result)
 
+    def recover_missing_plan(self, result: PipelineResult) -> bool:
+        """Retry a cached failed compilation locally, retaining all QA gates.
+
+        Commit the recovered state only when the selected questions validate.
+        Failed retries leave the evidence and missing-plan export block intact.
+        """
+        if result.presentation_plan is not None or not result.presentation_topics or not result.presentation_topics.topics:
+            return False
+        from .topic_plan_compiler import compile_topic_plan
+        from adaptive_document_agent.models import ValidationIssue
+
+        snapshot = result.model_copy(deep=True)
+        try:
+            plan = compile_topic_plan(snapshot)
+        except ValueError as exc:
+            message = "Cached presentation recovery failed: " + str(exc)[:1400]
+            if not any(i.code == "presentation_cached_recovery_failed" and i.message == message
+                       for i in result.validation_warnings):
+                result.validation_warnings.append(ValidationIssue(
+                    code="presentation_cached_recovery_failed", severity="warning", stage="presentation",
+                    message=message,
+                ))
+            return False
+        result.presentation_plan = plan
+        result.charts = snapshot.charts
+        result.validation_warnings = snapshot.validation_warnings
+        result.validation_warnings.append(ValidationIssue(
+            code="presentation_cached_plan_recovered", severity="info", stage="presentation",
+            message="Previously missing presentation plan recompiled from the retained model-selected questions and evidence without a model request.",
+        ))
+        return True
+
     def from_selected_topics(self, result: PipelineResult, *, origin: str = "topic_recovery") -> PresentationPlan:
         """Retain model-selected questions if final slide writing fails validation.
 
@@ -128,8 +160,10 @@ class PresentationPlanRecovery:
             }
             supporting_ids = [oid for oid in members if oid not in charted_ids]
             referenced_ids = set(supporting_ids) | charted_ids
-            allowed_numbers = PresentationPlanValidator._numbers(" ".join(
-                str(value) for oid in referenced_ids if oid in observations
+            # Parse source fields independently: a grouped amount followed by
+            # a date can otherwise absorb its year into a false numeric token.
+            allowed_numbers = set().union(*(
+                PresentationPlanValidator._numbers(str(value)) for oid in referenced_ids if oid in observations
                 for value in (
                     observations[oid].value, observations[oid].raw_value,
                     observations[oid].period, observations[oid].entity,
@@ -526,6 +560,14 @@ class PresentationPlanRecovery:
         # all four slots with implications before considering watch items.
         groups = []
         seen = set(summary_copy)
+        from adaptive_document_agent.validation.claim_validator import ClaimValidator
+        from adaptive_document_agent.validation.presentation_provenance import insight_inputs
+        from adaptive_document_agent.validation.scoped_narrative_values import scoped_value_errors
+        from adaptive_document_agent.models import ValidationIssue
+        import json
+
+        links = insight_inputs(result)
+        by_id = {o.id: o for o in result.observations}
         for field in ("implication", "watch_item"):
             candidates = []
             for item in eligible:
@@ -537,6 +579,26 @@ class PresentationPlanRecovery:
                 if (not statement or (field == "watch_item" and any(char.isdigit() for char in statement))
                     or re.search(r"(?i)\b(?:caused|driven by|due to|contributed to)\b", statement)
                     or normalize(statement) in seen):
+                    continue
+                # Optional closing copy must pass on its own analysis inputs.
+                # An unsafe conclusion cannot invalidate every selected topic
+                # or borrow another bullet's dates and values. Keep the model's
+                # original statement and rejection in the audit and raw insight.
+                records = [by_id[oid] for oid in links.get(item.id, [])]
+                candidate = PresentationSlide(id="slide_risks", slide_type="risks", title="Conclusions",
+                    bullets=[statement], observation_ids=[o.id for o in records])
+                failures = [issue.message for issue in ClaimValidator().validate_slide(candidate, records)
+                            if issue.severity == "error"]
+                failures.extend(scoped_value_errors(candidate, records, result.observations))
+                if failures:
+                    audit = json.dumps({"insight_id": item.id, "field": field,
+                        "statement": statement, "errors": failures}, ensure_ascii=False, sort_keys=True)
+                    if not any(issue.code == "presentation_closing_claim_withheld" and issue.message == audit
+                               for issue in result.validation_warnings):
+                        result.validation_warnings.append(ValidationIssue(
+                            code="presentation_closing_claim_withheld", severity="warning", stage="presentation",
+                            message=audit, related_ids=[item.id, *links.get(item.id, [])], evidence=item.evidence,
+                        ))
                     continue
                 seen.add(normalize(statement))
                 candidates.append((item, statement))
@@ -561,6 +623,9 @@ class PresentationPlanRecovery:
             message=("Implications and indicators to monitor, based on the cited findings."
                      if has_watch_item else "Conclusions based on the cited findings."),
             bullets=bullets,
+            observation_ids=list(dict.fromkeys(oid for iid in selected_ids for oid in links.get(iid, []))),
+            bullet_observation_ids=([links[iid] for iid in selected_ids]
+                                   if all(links.get(iid) for iid in selected_ids) else []),
             insight_ids=list(dict.fromkeys(selected_ids)),
             source_pages=sorted(pages),
         )

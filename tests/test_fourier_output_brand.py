@@ -176,6 +176,8 @@ def test_long_claim_keeps_full_text_under_semantic_section_heading(claim, placem
     title = next(shape for shape in slide.shapes if shape.has_text_frame and shape.text == slide_plan.section_title)
     assert title.text_frame.paragraphs[0].font.size.pt == 32
     assert str(title.text_frame.paragraphs[0].font.color.rgb) == TEXT
+    assert title.text_frame.paragraphs[0]._p.pPr.get("marL") == "0"
+    assert title.text_frame.paragraphs[0]._p.pPr.get("indent") == "0"
     subtitle = next(shape for shape in slide.placeholders if shape.placeholder_format.idx == 16)
     if placement == "subtitle":
         assert subtitle.text == claim
@@ -194,3 +196,21 @@ def test_long_claim_keeps_full_text_under_semantic_section_heading(claim, placem
     assert notes["planned_title"] == slide_plan.title
     assert [slide.model_dump() for slide in result.presentation_plan.slides] == before_slides
     assert [item.model_dump() for item in result.observations] == before_evidence
+
+
+def test_long_selected_topic_heading_keeps_complete_claim_visible():
+    result = paired_result()
+    slide_plan = result.presentation_plan.slides[3]
+    claim = (
+        "The reported operating activity expanded across the comparable annual periods, while shipment "
+        "and service observations show the scale of the change and retain their separate reporting definitions"
+    )
+    slide_plan.title = claim
+    slide_plan.section_title = claim
+    snapshot = slide_plan.model_dump()
+    deck = Presentation(BytesIO(build_presentation(result, BUNDLED_TEMPLATE_PATH)))
+    slides = [s for s in deck.slides if s.name.startswith("composed_")]
+    assert any(shape.text == "Analysis" for s in slides for shape in s.shapes if shape.has_text_frame)
+    visible = "\n".join(shape.text for s in slides for shape in s.shapes if shape.has_text_frame)
+    assert claim in visible
+    assert slide_plan.model_dump() == snapshot

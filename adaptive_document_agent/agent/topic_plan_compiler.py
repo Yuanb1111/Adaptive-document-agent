@@ -41,7 +41,8 @@ def compile_topic_plan(result: PipelineResult) -> PresentationPlan:
     plan = stamp_editorial_review(plan, result, origin="topic_compilation")
     plan.editorial_notes.extend(repairs)
     for issue in result.validation_warnings:
-        if issue.code in {"presentation_topics_unavailable", "presentation_topic_claims_withheld"}:
+        if issue.code in {"presentation_topics_unavailable", "presentation_topic_claims_withheld",
+                          "presentation_closing_claim_withheld"}:
             plan.editorial_status = "needs_review"
             plan.editorial_notes.append(f"{', '.join(issue.related_ids)}: {issue.message}")
     return plan
