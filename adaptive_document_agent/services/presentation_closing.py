@@ -122,7 +122,6 @@ def _render_linked_pages(presentation, result, plan, groups, records, notes):
     from .closing_evidence import closing_evidence
 
     start_count = len(presentation.slides)
-    slides, shown_ids = [], set()
     bundles = []
     for identity, (copy, subtitle) in groups.items():
         evidence_plan = plan.model_copy(update={"insight_ids": [], "observation_ids": list(identity)})
@@ -139,6 +138,7 @@ def _render_linked_pages(presentation, result, plan, groups, records, notes):
         for bundle in bundles:
             signature = tuple(key for key, _ in bundle[3])
             batches.setdefault(signature, []).append(bundle)
+        candidates = []
         for batch in batches.values():
             candidate = batch[0]
             if len(batch) > 1:
@@ -148,26 +148,10 @@ def _render_linked_pages(presentation, result, plan, groups, records, notes):
                 merged_copy = [[item for bundle in batch for item in bundle[1][column]] for column in (0, 1)]
                 candidate = (tuple(identity), merged_copy,
                              "Reported values supporting the conclusions", merged_tables)
-            identity, copy, subtitle, tables = candidate
-            slide = _render_linked_page(presentation, plan.title, subtitle, copy, tables, notes)
-            if slide is not None:
-                slides.append(slide)
-                shown_ids.update(identity)
-                continue
-            _drop_last_slide(presentation)
-            if len(batch) == 1:
-                break
-            for oid, body, heading, source_tables in batch:
-                separate = _render_linked_page(presentation, plan.title, heading, body, source_tables, notes)
-                if separate is None:
-                    _drop_last_slide(presentation)
-                    break
-                slides.append(separate)
-                shown_ids.update(oid)
-            else:
-                continue
-            break
-        else:
+            candidates.append((candidate, batch))
+        packed = _render_linked_bundle_pages(presentation, plan.title, candidates, notes)
+        if packed is not None:
+            slides, shown_ids = packed
             # Explicit additional facts remain visible; all raw records also
             # remain in speaker notes.
             remaining = [o.id for o in records if o.id not in shown_ids]
@@ -188,42 +172,98 @@ def _drop_last_slide(presentation):
     presentation.slides._sldIdLst.remove(slide_id)
 
 
-def _render_linked_page(presentation, title, subtitle, groups, tables, notes):
-    from .closing_evidence import render_evidence_table
+def _render_linked_bundle_pages(presentation, title, candidates, notes):
+    """Pack short linked findings while retaining separate table headers."""
+    from .closing_evidence import evidence_table_layout, render_evidence_table
     from .pptx_export import _source_footer, _text, FOURIER_DARK, FOURIER_MUTED, FOURIER_PURPLE
     from .slide_compositor import _base
     from .text_capacity import wrap_copy
 
-    slide, top = _base(presentation, title, subtitle)
     full_width = presentation.slide_width.inches - 1.1
-    table_width = full_width * .55
-    table_y = top
-    for table in tables:
-        shape = render_evidence_table(slide, table, x=.55, y=table_y, width=table_width)
-        # Artifact import renumbers native tables; unique names let rendered QA
-        # bind each visible table back to its original editable object.
-        shape.name = f"closing:evidence:{shape.shape_id}"
-        table_y += shape.height.inches + .28
-    right, width = .55 + table_width + .3, full_width - table_width - .3
-    y = top
-    for heading, items in zip(("What it means", "What to monitor"), groups):
-        if not items:
-            continue
-        _text(slide, heading, right, y, width, .3, size=17, bold=True, color=FOURIER_PURPLE)
-        y += .42
-        for item in items:
-            height = len(wrap_copy(item.text, width - .10, 16)) * .28 + .10
-            _text(slide, item.text, right, y, width, height, size=16, color=FOURIER_DARK).name = "closing:body"
-            y += height + .18
-    if max(y, table_y - .28) > presentation.slide_height.inches - 1.05:
-        return None
-    pages = sorted({page for _, rows in tables for _, _, sources in rows for page in sources}
-                   | {page for items in groups for item in items for page in item.pages})
-    note = " | * Unaudited" if any("*" in period for key, _ in tables for period in key[0]) else ""
-    _text(slide, _source_footer(pages) + note, .55, presentation.slide_height.inches - .82,
-          full_width, .2, size=9, color=FOURIER_MUTED)
-    slide.notes_slide.notes_text_frame.text = notes
-    return slide
+    table_width = full_width * .34
+    right, copy_width = .55 + table_width + .30, full_width - table_width - .30
+    subtitle = "Reported values supporting the conclusions"
+    slide, top = _base(presentation, title, subtitle)
+    bottom = presentation.slide_height.inches - 1.05
+
+    def dimensions(bundle):
+        _, groups, heading, tables = bundle
+        watch_only = bool(groups[1]) and not groups[0] and heading != subtitle
+        topic_height = (len(wrap_copy(heading, copy_width if watch_only else full_width, 16)) * .25 + .10
+                        if heading != subtitle else 0.0)
+        table_height = sum(sum(evidence_table_layout(table, table_width)[2]) + .10 for table in tables)
+        copy_height = topic_height if watch_only else 0.0
+        for column, items in enumerate(groups):
+            if not items:
+                continue
+            if column and groups[0]:
+                copy_height += .08
+            copy_height += sum(len(wrap_copy(item.text, copy_width - .10, 15)) * .245 + .18
+                               for item in items)
+        return (max(table_height, copy_height) if watch_only
+                else topic_height + max(table_height, copy_height)), topic_height, watch_only
+
+    bundles = []
+    for candidate, originals in candidates:
+        if dimensions(candidate)[0] <= bottom - top:
+            bundles.append(candidate)
+        elif len(originals) > 1 and all(dimensions(item)[0] <= bottom - top for item in originals):
+            bundles.extend(originals)
+        else:
+            return None
+
+    slides, shown_ids = [], set()
+    y, pages, unaudited = top, set(), False
+
+    def finish_page():
+        note = " | * Unaudited" if unaudited else ""
+        _text(slide, _source_footer(sorted(pages)) + note, .55,
+              presentation.slide_height.inches - .82, full_width, .2,
+              size=9, color=FOURIER_MUTED)
+        slide.notes_slide.notes_text_frame.text = notes
+        slides.append(slide)
+
+    for identity, groups, heading, tables in bundles:
+        height, topic_height, watch_only = dimensions((identity, groups, heading, tables))
+        if y > top and y + height > bottom:
+            finish_page()
+            slide, top = _base(presentation, title + " (continued)", subtitle)
+            y, pages, unaudited = top, set(), False
+        if y + height > bottom:
+            return None
+        if topic_height and not watch_only:
+            _text(slide, heading, .55, y, full_width, topic_height, size=16,
+                  bold=True, color=FOURIER_PURPLE)
+        row_top = y + (0 if watch_only else topic_height)
+        table_y = row_top
+        for table in tables:
+            shape = render_evidence_table(slide, table, x=.55, y=table_y, width=table_width)
+            # Artifact import renumbers native tables; unique names retain
+            # one-to-one provenance checks for every editable table.
+            shape.name = f"closing:evidence:{shape.shape_id}"
+            table_y += shape.height.inches + .10
+            pages.update(page for _, _, sources in table[1] for page in sources)
+            unaudited |= any("*" in period for period in table[0][0])
+        copy_y = row_top
+        if watch_only:
+            _text(slide, heading, right, copy_y, copy_width, topic_height,
+                  size=16, bold=True, color=FOURIER_PURPLE)
+            copy_y += topic_height
+        for column, items in enumerate(groups):
+            if not items:
+                continue
+            if column and groups[0]:
+                copy_y += .08
+            for item in items:
+                body_height = len(wrap_copy(item.text, copy_width - .10, 15)) * .245 + .08
+                _text(slide, item.text, right, copy_y, copy_width, body_height,
+                      size=15, color=FOURIER_PURPLE if column else FOURIER_DARK).name = "closing:body"
+                copy_y += body_height + .10
+                pages.update(item.pages)
+        shown_ids.update(identity)
+        y += height + .12
+    finish_page()
+    return slides, shown_ids
 
 
 def _append_evidence_pages(presentation, slides, tables, notes):

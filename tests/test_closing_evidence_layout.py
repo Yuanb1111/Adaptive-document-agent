@@ -68,26 +68,24 @@ def _tables(slide):
     return [[[c.text for c in row.cells] for row in s.table.rows] for s in slide.shapes if s.has_table]
 
 
-def test_independent_conclusions_and_their_evidence_share_two_compatible_pages():
+def test_independent_conclusions_and_their_evidence_share_one_readable_page():
     result, plan = _result()
     before, original_plan = result.model_dump(), plan.model_dump()
     deck = _deck()
     slides = render_closing(deck, result, plan)
-    assert len(slides) == len(deck.slides) == 2
+    assert len(slides) == len(deck.slides) == 1
     assert result.insights[0].implication in _copy(slides[0])
     assert result.insights[0].watch_item in _copy(slides[0])
-    assert result.insights[1].implication in _copy(slides[1])
-    assert result.insights[1].implication not in _copy(slides[0])
-    assert result.insights[0].watch_item not in _copy(slides[1])
-    assert _tables(slides[0]) == [[
+    assert result.insights[1].implication in _copy(slides[0])
+    assert _tables(slides[0])[0] == [
         ["Reported values (units)", "31 Dec 2022", "31 May 2024*"], ["Number of reserve units", "80.00", "50.00"],
-    ]]
-    annual_tables = _tables(slides[1])
+    ]
+    annual_tables = _tables(slides[0])[1:]
     assert len(annual_tables) == 2
     assert all(table[0][1:] == ["FY2022", "FY2024"] for table in annual_tables)
     assert {table[0][0] for table in annual_tables} == {"Reported values (units)", "Reported values (%)"}
-    assert "p. 20" in _copy(slides[0]) and "* Unaudited" in _copy(slides[0])
-    assert "p. 5-6" in _copy(slides[1])
+    assert "p. 5-6" in _copy(slides[0]) and "20" in _copy(slides[0])
+    assert "* Unaudited" in _copy(slides[0])
     for slide in slides:
         table_names = [shape.name for shape in slide.shapes if shape.has_table]
         assert len(table_names) == len(set(table_names))
@@ -128,6 +126,32 @@ def test_short_findings_with_identical_periods_and_units_share_one_closing_page(
     assert all(o.raw_value in slides[0].notes_slide.notes_text_frame.text for o in result.observations[:4])
 
 
+def test_three_short_linked_groups_keep_distinct_period_and_unit_tables_on_one_page():
+    result, plan = _result()
+    result.analysis_results[1].input_observation_ids = [o.id for o in result.observations[2:4]]
+    result.analysis_results.append(AnalysisResult(
+        task_id="recovery", title="Recovery rate", result_type="calculated_result",
+        result={}, input_observation_ids=[o.id for o in result.observations[4:6]], confidence=.99,
+    ))
+    result.insights.append(Insight(
+        id="recovery", title="Recovery rate increased", narrative="Recovery rate increased.",
+        kind="interpretation", watch_item="Monitor the next reported recovery rate.",
+        result_ids=["recovery"], evidence=[result.observations[4].evidence[0]], confidence=.99,
+    ))
+    plan.insight_ids.append("recovery")
+    plan.bullets.append(result.insights[-1].watch_item)
+
+    slides = render_closing(_deck(), result, plan)
+    assert len(slides) == 1
+    assert len(_tables(slides[0])) == 3
+    assert all(text in _copy(slides[0]) for text in plan.bullets)
+    assert [table[0][0] for table in _tables(slides[0])] == [
+        "Reported values (units)", "Reported values (units)", "Reported values (%)",
+    ]
+    assert _tables(slides[0])[0][0][1:] == ["31 Dec 2022", "31 May 2024*"]
+    assert all(table[0][1:] == ["FY2022", "FY2024"] for table in _tables(slides[0])[1:])
+
+
 def test_nonadjacent_findings_with_matching_evidence_headers_share_pages():
     result, plan = _result()
     for observation in result.observations[4:]:
@@ -162,11 +186,11 @@ def test_nonadjacent_findings_with_matching_evidence_headers_share_pages():
     plan.bullets = [result.insights[0].implication, result.insights[1].implication,
                     result.insights[2].implication, result.insights[3].implication]
     slides = render_closing(_deck(), result, plan)
-    assert len(slides) == 2
+    assert len(slides) == 1
     assert all(text in _copy(slides[0]) for text in (plan.bullets[0], plan.bullets[2]))
-    assert all(text in _copy(slides[1]) for text in (plan.bullets[1], plan.bullets[3]))
+    assert all(text in _copy(slides[0]) for text in (plan.bullets[1], plan.bullets[3]))
     assert {row[0] for row in _tables(slides[0])[0][1:]} == {"Number of reserve units", "Number of backup units"}
-    assert {row[0] for row in _tables(slides[1])[0][1:]} == {"Active sites", "Recovered sites"}
+    assert {row[0] for row in _tables(slides[0])[1][1:]} == {"Active sites", "Recovered sites"}
 
 
 def test_explicit_bullet_inputs_can_bind_a_reworded_conclusion():
@@ -239,5 +263,5 @@ def test_extra_explicit_facts_remain_visible_after_linked_bundles():
     result.observations.append(extra)
     plan.observation_ids = [extra.id]
     slides = render_closing(_deck(), result, plan)
-    assert len(slides) == 3
+    assert len(slides) == 2
     assert any("Extra disclosed measure" in row for table in _tables(slides[-1]) for row in table)

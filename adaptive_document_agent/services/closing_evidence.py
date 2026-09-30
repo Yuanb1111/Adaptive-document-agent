@@ -50,18 +50,24 @@ def closing_evidence(result, plan):
     return list(tables.items()), records
 
 
-def render_evidence_table(slide, table_spec, *, x, y, width):
-    from pptx.util import Inches
-    from pptx.enum.text import MSO_ANCHOR
-    from .pptx_export import _cell_style, FOURIER_PURPLE, FOURIER_DARK, FOURIER_BG_CARD, WHITE
+def evidence_table_layout(table_spec, width):
+    """Measure the same complete cells used by the editable closing table."""
     from .text_capacity import wrap_copy
-
     (periods, unit), rows = table_spec
     cells = [[f"Reported values ({unit})" if unit else "Reported values", *periods],
              *[[label, *values] for label, values, _ in rows]]
     widths = [width * .46] + [width * .54 / len(periods)] * len(periods)
     heights = [max(.43, max(len(wrap_copy(text, w - .16, 12)) for text, w in zip(row, widths)) * .20 + .12)
                for row in cells]
+    return cells, widths, heights
+
+
+def render_evidence_table(slide, table_spec, *, x, y, width):
+    from pptx.util import Inches
+    from pptx.enum.text import MSO_ANCHOR
+    from .pptx_export import _cell_style, FOURIER_PURPLE, FOURIER_DARK, FOURIER_BG_CARD, WHITE
+
+    cells, widths, heights = evidence_table_layout(table_spec, width)
     shape = slide.shapes.add_table(len(cells), len(cells[0]), Inches(x), Inches(y), Inches(width), Inches(sum(heights)))
     shape.name = "closing:evidence"
     for j, w in enumerate(widths):
