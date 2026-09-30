@@ -128,6 +128,47 @@ def test_short_findings_with_identical_periods_and_units_share_one_closing_page(
     assert all(o.raw_value in slides[0].notes_slide.notes_text_frame.text for o in result.observations[:4])
 
 
+def test_nonadjacent_findings_with_matching_evidence_headers_share_pages():
+    result, plan = _result()
+    for observation in result.observations[4:]:
+        observation.metric_original = "Recovered sites"
+        observation.unit = observation.raw_unit = "units"
+        observation.evidence[0].row_label = "Recovered sites"
+    extra = [observation.model_copy(deep=True) for observation in result.observations[:2]]
+    for index, observation in enumerate(extra):
+        observation.id = f"capacity-{index}"
+        observation.metric_original = "Number of backup units"
+        observation.evidence[0].row_label = "Number of backup units"
+    result.observations.extend(extra)
+    result.analysis_results.append(AnalysisResult(
+        task_id="capacity", title="Number of backup units", result_type="calculated_result",
+        result={}, input_observation_ids=[observation.id for observation in extra], confidence=.99,
+    ))
+    result.insights.append(Insight(
+        id="capacity", title="Number of backup units", narrative="Backup units changed.",
+        kind="interpretation", implication="Backup units need continued monitoring.",
+        result_ids=["capacity"], evidence=[extra[0].evidence[0]], confidence=.99,
+    ))
+    result.analysis_results.append(AnalysisResult(
+        task_id="recovery", title="Recovered sites", result_type="calculated_result",
+        result={}, input_observation_ids=[o.id for o in result.observations[4:6]], confidence=.99,
+    ))
+    result.insights.append(Insight(
+        id="recovery", title="Recovered sites", narrative="Recovered sites increased.",
+        kind="interpretation", implication="More sites recovered by the final period.",
+        result_ids=["recovery"], evidence=[result.observations[4].evidence[0]], confidence=.99,
+    ))
+    plan.insight_ids = ["reservoir", "sites", "capacity", "recovery"]
+    plan.bullets = [result.insights[0].implication, result.insights[1].implication,
+                    result.insights[2].implication, result.insights[3].implication]
+    slides = render_closing(_deck(), result, plan)
+    assert len(slides) == 2
+    assert all(text in _copy(slides[0]) for text in (plan.bullets[0], plan.bullets[2]))
+    assert all(text in _copy(slides[1]) for text in (plan.bullets[1], plan.bullets[3]))
+    assert {row[0] for row in _tables(slides[0])[0][1:]} == {"Number of reserve units", "Number of backup units"}
+    assert {row[0] for row in _tables(slides[1])[0][1:]} == {"Active sites", "Recovered sites"}
+
+
 def test_explicit_bullet_inputs_can_bind_a_reworded_conclusion():
     result, plan = _result()
     plan.insight_ids = []

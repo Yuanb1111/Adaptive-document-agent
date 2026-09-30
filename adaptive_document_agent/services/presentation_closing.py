@@ -131,17 +131,15 @@ def _render_linked_pages(presentation, result, plan, groups, records, notes):
             break
         bundles.append((identity, copy, subtitle, tables))
     else:
-        # Join short linked findings only when their complete table signatures
-        # agree. The union of source IDs regenerates one table, so shared rows
-        # are shown once and no evidence/copy relationship is inferred.
-        batches = []
+        # Join short linked findings with matching complete table signatures,
+        # even when the selected copy interleaves different period groups.
+        # First appearance sets page order; the union of source IDs regenerates
+        # each table so shared rows are shown once.
+        batches = {}
         for bundle in bundles:
             signature = tuple(key for key, _ in bundle[3])
-            if batches and batches[-1][0] == signature:
-                batches[-1][1].append(bundle)
-            else:
-                batches.append((signature, [bundle]))
-        for _, batch in batches:
+            batches.setdefault(signature, []).append(bundle)
+        for batch in batches.values():
             candidate = batch[0]
             if len(batch) > 1:
                 identity = sorted({oid for item in batch for oid in item[0]})
