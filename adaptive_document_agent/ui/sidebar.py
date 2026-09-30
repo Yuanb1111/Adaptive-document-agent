@@ -7,6 +7,7 @@ import time
 from pydantic import SecretStr
 
 from adaptive_document_agent.services.llm import LLMSettings, PrivacyMode, ProviderName
+from adaptive_document_agent.services.llm.credentials import configured_credential, credential_scope
 from adaptive_document_agent.services.llm.model_catalog import (
     ModelCatalogError,
     list_provider_models,
@@ -98,7 +99,7 @@ def render_sidebar(st, *, public_deployment: bool | None = None) -> LLMSettings:
         # needed to discover its options during this same Streamlit rerun.
         model_controls = st.container()
         default_url = defaults.base_url if provider == defaults.provider else ("http://localhost:11434" if provider == ProviderName.OLLAMA else "")
-        base_url = None
+        base_url = (default_url or None) if not public_deployment else None
         if provider in {ProviderName.OLLAMA, ProviderName.OPENAI_COMPATIBLE}:
             with st.expander("Connection settings"):
                 base_url = st.text_input("Base URL", value=default_url or "", key=f"base_url_{provider.value}")
@@ -106,9 +107,12 @@ def render_sidebar(st, *, public_deployment: bool | None = None) -> LLMSettings:
             "API key",
             value="",
             type="password",
+            key=f"api_key_{credential_scope(provider, base_url)}",
             help="Used only for this session; never written to disk, logs, reports, or exports.",
         )
-        configured_key = defaults.api_key.get_secret_value() if defaults.api_key and not public_deployment else None
+        configured_key = configured_credential(
+            defaults, provider, base_url, public_deployment=public_deployment,
+        )
         effective_key = key or configured_key
         advanced_controls = st.expander("Advanced model settings", expanded=False)
         with advanced_controls:
@@ -155,7 +159,7 @@ def render_sidebar(st, *, public_deployment: bool | None = None) -> LLMSettings:
             else:
                 model = selected_model
         privacy = {"Auto": PrivacyMode.AUTO, "Cloud": PrivacyMode.CLOUD, "Local Only": PrivacyMode.LOCAL_ONLY}[mode_label]
-        api_key = SecretStr(key) if key else (None if public_deployment else defaults.api_key)
+        api_key = SecretStr(effective_key) if effective_key else None
         stage_models = {}
         with advanced_controls:
             if catalog_error:

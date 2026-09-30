@@ -12,7 +12,8 @@ from pydantic import BaseModel
 
 from .base import LLMClient, LLMResponse
 from .capabilities import ModelCapabilities
-from .config import LLMSettings
+from .config import LLMSettings, ProviderName
+from .credentials import provider_endpoint
 from .exceptions import LLMConfigurationError, LLMTransportError, LLMStructuredOutputError
 from .structured import validate_structured_text
 from .usage import LLMUsage
@@ -64,9 +65,24 @@ class LiteLLMProvider(LLMClient):
         except ImportError as exc:
             raise LLMConfigurationError("LiteLLM is not installed. Install requirements.txt.") from exc
         key = self.settings.api_key.get_secret_value() if self.settings.api_key else None
-        model = self._litellm_model(kwargs.pop("model") or self.settings.model)
-        if not model:
+        if not key:
+            if self.settings.provider not in {ProviderName.OLLAMA, ProviderName.OPENAI_COMPATIBLE}:
+                raise LLMConfigurationError("An API key is required for the selected provider.")
+            # Explicit non-secret value prevents LiteLLM/OpenAI SDKs from using
+            # another provider's environment or process-global credentials.
+            key = "no-api-key"
+        base_url = provider_endpoint(self.settings.provider, self.settings.base_url)
+        if not base_url:
+            raise LLMConfigurationError("A base URL is required for the selected provider.")
+        selected_model = kwargs.pop("model", None) or self.settings.model
+        if not selected_model:
             raise LLMConfigurationError("No LLM model is configured.")
+        model = self._litellm_model(selected_model)
+        if self.settings.provider == ProviderName.GEMINI and not self.settings.base_url:
+            # LiteLLM expects a versioned Gemini api_base. Keep its default
+            # chat API versions while excluding ambient endpoint overrides.
+            version = "v1alpha" if "gemini-3" in selected_model else "v1beta"
+            base_url = f"{base_url}/{version}"
         request_kwargs = {name: value for name, value in kwargs.items() if value is not None}
         transient_retries = 0
         compatibility_retry_used = False
@@ -76,15 +92,18 @@ class LiteLLMProvider(LLMClient):
                      "started_at": datetime.now(timezone.utc).isoformat(),
                      "kind": "compatibility_retry" if compatibility_retry_used else "network_retry" if transient_retries else "initial"}
             try:
-                result = completion(
-                    model=model,
-                    messages=messages,
-                    api_key=key,
-                    api_base=self.settings.base_url,
-                    timeout=self.settings.timeout_seconds,
-                    num_retries=0,
-                    **request_kwargs,
-                )
+                with self._request_client() as client_options:
+                    result = completion(
+                        model=model,
+                        messages=messages,
+                        api_key=key,
+                        api_base=base_url,
+                        custom_llm_provider=self._provider_route,
+                        timeout=self.settings.timeout_seconds,
+                        num_retries=0,
+                        **client_options,
+                        **request_kwargs,
+                    )
                 event["status"] = "success"
                 return result
             except Exception as exc:
@@ -106,6 +125,23 @@ class LiteLLMProvider(LLMClient):
                 if _attempts.get() is not None:
                     _attempts.get().append(event)
 
+    @contextmanager
+    def _request_client(self):
+        if self.settings.provider != ProviderName.GEMINI:
+            yield {}
+            return
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+        # HTTPX strips Authorization across origins, but not x-goog-api-key.
+        # Use a request-owned client so concurrent sessions and retries cannot
+        # forward Gemini credentials via redirects or mutate global SDK state.
+        client = HTTPHandler(timeout=self.settings.timeout_seconds)
+        client.client.follow_redirects = False
+        try:
+            yield {"client": client}
+        finally:
+            client.close()
+
     @classmethod
     def _rejected_optional_params(cls, exc: Exception, request_kwargs: dict[str, Any]) -> set[str]:
         if type(exc).__name__ != "UnsupportedParamsError":
@@ -117,22 +153,15 @@ class LiteLLMProvider(LLMClient):
             if re.search(rf"(?<![a-z0-9_]){re.escape(param)}(?![a-z0-9_])", message)
         }
 
+    @property
+    def _provider_route(self) -> str:
+        return "openai" if self.settings.provider == ProviderName.OPENAI_COMPATIBLE else self.settings.provider.value
+
     def _litellm_model(self, model: str) -> str:
-        if self.settings.is_local:
-            # A stage override is a model name, not permission to reroute to a
-            # cloud provider (including when an Ollama name contains a slash).
-            prefix = "ollama/" if self.settings.provider.value == "ollama" else "openai/"
-            return model if model.startswith(prefix) else prefix + model
-        if "/" in model or self.settings.provider.value == "openai":
-            return model
-        prefix = {
-            "deepseek": "deepseek",
-            "gemini": "gemini",
-            "openrouter": "openrouter",
-            "ollama": "ollama",
-            "openai_compatible": "openai",
-        }.get(self.settings.provider.value)
-        return f"{prefix}/{model}" if prefix else model
+        # Model IDs (including stage overrides and OpenRouter's provider/model
+        # IDs) cannot change the selected credential's transport provider.
+        prefix = self._provider_route + "/"
+        return model if model.startswith(prefix) else prefix + model
 
     def generate_text(self, messages: list[dict[str, Any]], *, temperature: float = 0, max_tokens: int | None = None, model: str | None = None) -> LLMResponse:
         started = time.perf_counter()
