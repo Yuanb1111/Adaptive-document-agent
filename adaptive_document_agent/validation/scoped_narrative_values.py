@@ -1,14 +1,17 @@
 """Detect explicit endpoint values borrowed from a differently named measure.
 
 This is a conservative provenance check, not a semantic synonym engine. The
-model owns labels and meaning; exact retained labels bind an explicit from/to
-amount. A number elsewhere on the slide is not evidence for that measure.
+model owns labels and meaning; source-grounded aliases and qualified subjects
+bind an explicit from/to amount. A number elsewhere on the slide is not evidence
+for that measure.
 """
 
 from decimal import Decimal, InvalidOperation
 import re
 
 from adaptive_document_agent.models import Observation, PresentationSlide
+from .claim_validator import extract_metric_aliases
+from .presentation_metric_binding import possessive_ratio_subject
 
 
 _AMOUNT = re.compile(
@@ -32,7 +35,12 @@ def scoped_value_errors(slide: PresentationSlide, observations: list[Observation
     by_label: dict[str, list[Observation]] = {}
     selected_ids = {o.id for o in observations}
     for obs in label_catalog if label_catalog is not None else observations:
-        for label in (obs.metric_original, obs.metric_canonical, obs.presentation_label):
+        aliases = set(extract_metric_aliases(obs.metric_original, obs.metric_canonical, obs.presentation_label))
+        # A source category qualifies a measure, rather than naming a second
+        # measure inside e.g. "ASP for six-axis cobots".
+        for category in obs.category_dimensions.values():
+            aliases.update(f"{alias} for {category}" for alias in list(aliases))
+        for label in aliases:
             if label:
                 label = " ".join(label.replace("_", " ").casefold().split())
                 variants = {label}
@@ -41,11 +49,13 @@ def scoped_value_errors(slide: PresentationSlide, observations: list[Observation
                 for variant in variants:
                     group = by_label.setdefault(variant, [])
                     if obs.id in selected_ids:
-                        group.append(obs)
+                        if obs not in group:
+                            group.append(obs)
     errors = []
     for component in [slide.title, slide.message, *slide.bullets]:
         # Preserve decimal points and split only definite statement boundaries.
-        for clause in re.split(r";|\n|,?\s+\b(?:but|while|whereas)\b\s+|(?<=[.!?])\s+(?=[A-Z])", component):
+        clauses = re.split(r";|\n|,?\s+\b(?:but|while|whereas)\b\s+|(?<=[.!?])\s+(?=[A-Z])", component)
+        for clause_index, clause in enumerate(clauses):
             matches = []
             for label in by_label:
                 pattern = r"(?<!\w)" + r"\s+".join(re.escape(w) for w in label.split()) + r"(?!\w)"
@@ -55,6 +65,15 @@ def scoped_value_errors(slide: PresentationSlide, observations: list[Observation
                 if not any(match[0] < old[1] and match[1] > old[0] for old in selected):
                     selected.append(match)
             selected.sort()
+            if re.match(r"\s*its\s+(?:ratio|share)\b", clause, re.I):
+                ratio_labels = {o.metric_original.casefold(): o.metric_original for o in observations}
+                ratio = possessive_ratio_subject(clause, clauses[clause_index - 1] if clause_index else "", ratio_labels)
+                if ratio is None:
+                    if _AMOUNT.search(clause):
+                        errors.append(f"slide {slide.id}: ratio endpoint subject is not uniquely supported by retained source rows.")
+                    continue
+                # Denominator mentions qualify the ratio, not its endpoints.
+                selected = [(0, 0, ratio)]
             for idx, (_, end, label) in enumerate(selected):
                 segment = clause[end:selected[idx + 1][0] if idx + 1 < len(selected) else len(clause)]
                 named = by_label[label]

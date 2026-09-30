@@ -453,6 +453,10 @@ class PresentationPlanValidator:
             clean = re.sub(r"[, ' ]", "", clean)
         elif clean.count(",") == 1 and "." not in clean:
             clean = clean.replace(",", ".")
+        # Retained floats and prose integers denote the same exact value:
+        # 65900.0 must support 65,900, without rounding a different value.
+        if "." in clean:
+            clean = clean.rstrip("0").rstrip(".")
         return clean + suffix
 
     @staticmethod

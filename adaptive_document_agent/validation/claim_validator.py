@@ -49,7 +49,7 @@ from .direction_scope import (
     predicate_conjunctions,
     resolve_direction_scope,
 )
-from .presentation_metric_binding import coordinated_alias_owners, source_label_forms
+from .presentation_metric_binding import coordinated_alias_owners, possessive_ratio_subject, source_label_forms
 
 
 class MetricSemanticFamily(str, Enum):
@@ -1287,6 +1287,9 @@ def extract_metric_aliases(
         no_punct = re.sub(r"[_\-]+", " ", clean_metric).strip()
         if no_punct:
             aliases.add(no_punct)
+            for match in re.finditer(r"\b(\w+)\s*/\s*\(([^()]+)\)", no_punct):
+                aliases.update(no_punct[:match.start()] + option.strip() + no_punct[match.end():]
+                               for option in match.groups())
             # Source labels often abbreviate alternatives: 'year/period'.
             for match in re.finditer(r"\b(\w+)/(\w+)\b", no_punct):
                 for option in match.groups():
@@ -1581,19 +1584,9 @@ def _possessive_ratio_metric(
     metric_series_map: dict[str, list[dict[str, Any]]],
 ) -> str | None:
     """Bind a possessive ratio or share to a unique ratio of the prior subject."""
-    if not re.match(r"\s*its\s+(?:ratio|share)\b", clause, re.I) or not previous_clause:
-        return None
-    candidates = []
-    for metric_name, series in metric_series_map.items():
-        source_label = series[0]["first"].metric_original
-        match = re.match(r"(.+?)\s+ratio\b", source_label, re.I)
-        if not match:
-            continue
-        subject = match[1].strip()
-        forms = source_label_forms(subject)
-        if any(re.search(r"\b" + re.escape(form) + r"\b", previous_clause, re.I) for form in forms):
-            candidates.append(metric_name)
-    return candidates[0] if len(candidates) == 1 else None
+    return possessive_ratio_subject(clause, previous_clause, {
+        metric: series[0]["first"].metric_original for metric, series in metric_series_map.items()
+    })
 
 
 def is_text_relevant_to_metric(

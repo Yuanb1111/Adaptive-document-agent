@@ -9,7 +9,7 @@ from pptx import Presentation
 from adaptive_document_agent.agent.presentation_plan_recovery import PresentationPlanRecovery
 from adaptive_document_agent.agent.presentation_topic_selector import series_directory
 from adaptive_document_agent.agent.topic_plan_compiler import compile_topic_plan
-from adaptive_document_agent.models import PresentationTopic, PresentationTopicSelection
+from adaptive_document_agent.models import PresentationTopic, PresentationTopicSelection, PresentationPlan
 from adaptive_document_agent.services.export import export_pptx
 from adaptive_document_agent.services.qa_reporter import CriticalQAError
 from adaptive_document_agent.validation.claim_validator import ClaimValidator
@@ -100,3 +100,48 @@ def test_invalid_cached_selection_stays_blocked_and_recovery_is_transactional(lo
     assert result.presentation_plan is None
     assert result.model_dump(include=set(raw)) == raw
     assert any(i.code == "presentation_cached_recovery_failed" for i in result.validation_warnings)
+
+
+def test_public_export_recompiles_degraded_plan_which_lost_selected_topics(local_render_stub):
+    result = _selected(_result())
+    result.presentation_plan = PresentationPlanRecovery().fallback(result)
+    result.presentation_plan.planning_origin = "repaired"
+    result.presentation_plan.editorial_notes.append(
+        "[review:presentation_degraded] Evidence-only fallback: retained source values."
+    )
+    previous_company = result.presentation_plan.company.model_dump()
+    raw = result.model_dump(include={"observations", "insights", "presentation_topics", "llm_usage"})
+    export_pptx(result)
+    assert result.presentation_plan.planning_origin == "topic_compilation"
+    assert {theme.id for theme in result.presentation_plan.themes} == {"movement"}
+    assert result.presentation_plan.company.model_dump() == previous_company
+    assert result.model_dump(include=set(raw)) == raw
+
+
+def test_valid_existing_plan_is_not_replaced_merely_because_topics_exist():
+    result = _selected(_result())
+    result.presentation_plan = PresentationPlan(title="Authored plan", planning_origin="model")
+    before = result.model_dump()
+    assert not PresentationPlanRecovery().recover_missing_plan(result)
+    assert result.model_dump() == before
+
+
+def test_takeaway_without_start_period_retains_same_question_and_chart_data():
+    result = _selected(_result(), question="How did revenue change over the reported periods?",
+                       takeaway="Revenue increased through FY2025.")
+    raw = result.model_dump(include={"observations", "presentation_topics", "llm_usage"})
+    plan = compile_topic_plan(result)
+    analysis = next(s for s in plan.slides if s.slide_type == "analysis")
+    summary = next(s for s in plan.slides if s.slide_type == "executive_summary")
+    assert analysis.title == result.presentation_topics.topics[0].question
+    assert summary.bullets == [analysis.title]
+    assert analysis.chart_ids
+    assert any("Authored takeaway: Revenue increased through FY2025." in note for note in plan.editorial_notes)
+    assert result.model_dump(include=set(raw)) == raw
+
+
+def test_question_that_also_lacks_temporal_bounds_cannot_hide_the_error():
+    result = _selected(_result(), question="Did revenue increase through FY2025?",
+                       takeaway="Revenue increased through FY2025.")
+    with pytest.raises(ValueError, match="explicit period"):
+        compile_topic_plan(result)

@@ -32,19 +32,32 @@ class PresentationPlanRecovery:
         return PresentationPlanRepairer().repair(plan, result)
 
     def recover_missing_plan(self, result: PipelineResult) -> bool:
-        """Retry a cached failed compilation locally, retaining all QA gates.
+        """Retry a missing or degraded cached compilation, retaining all QA gates.
 
         Commit the recovered state only when the selected questions validate.
         Failed retries leave the evidence and missing-plan export block intact.
         """
-        if result.presentation_plan is not None or not result.presentation_topics or not result.presentation_topics.topics:
+        if not result.presentation_topics or not result.presentation_topics.topics:
             return False
+        previous = result.presentation_plan
+        if previous is not None:
+            selected = {topic.id for topic in result.presentation_topics.topics}
+            covered = {theme.id for theme in previous.themes}
+            degraded = previous.planning_origin == "fallback" or any(
+                note.startswith("[review:presentation_degraded] Evidence-only fallback")
+                for note in previous.editorial_notes
+            )
+            if not degraded or selected <= covered:
+                return False
         from .topic_plan_compiler import compile_topic_plan
         from adaptive_document_agent.models import ValidationIssue
 
         snapshot = result.model_copy(deep=True)
         try:
             plan = compile_topic_plan(snapshot)
+            if previous is not None:
+                plan.company = previous.company.model_copy(deep=True)
+                PresentationPlanValidator().validate(plan, snapshot)
         except ValueError as exc:
             message = "Cached presentation recovery failed: " + str(exc)[:1400]
             if not any(i.code == "presentation_cached_recovery_failed" and i.message == message
@@ -59,7 +72,7 @@ class PresentationPlanRecovery:
         result.validation_warnings = snapshot.validation_warnings
         result.validation_warnings.append(ValidationIssue(
             code="presentation_cached_plan_recovered", severity="info", stage="presentation",
-            message="Previously missing presentation plan recompiled from the retained model-selected questions and evidence without a model request.",
+            message="Previously missing or degraded presentation plan recompiled from the retained model-selected questions and evidence without a model request.",
         ))
         return True
 

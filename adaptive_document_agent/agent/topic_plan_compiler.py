@@ -36,6 +36,11 @@ def compile_topic_plan(result: PipelineResult) -> PresentationPlan:
     problems = ClaimValidator().validate_plan(plan, result.observations, result.charts,
                                              insight_observation_ids=refs)
     if problems:
+        from .presentation_topic_scope_recovery import recover_unscoped_topic_claims
+        repairs.extend(recover_unscoped_topic_claims(plan, result, problems))
+        problems = ClaimValidator().validate_plan(plan, result.observations, result.charts,
+                                                 insight_observation_ids=refs)
+    if problems:
         raise ValueError("Selected topic claims failed validation: " + "; ".join(p.message for p in problems))
     PresentationPlanValidator().validate(plan, result)
     plan = stamp_editorial_review(plan, result, origin="topic_compilation")

@@ -45,6 +45,16 @@ def _component(slide: PresentationSlide, component: str) -> str:
     return slide.bullets[0] if component == "bullets" else getattr(slide, component)
 
 
+def test_independent_as_predicates_cannot_borrow_the_other_subject():
+    observations = _series("ASP", [65.9, 61.4, 56.6], years=(2021, 2022, 2023))
+    observations += _series("Revenue", [100, 120, 130], years=(2021, 2022, 2023))
+    text = "Unknown product mix rose as ASP declined from FY2021 to FY2023."
+    plan = PresentationPlan(title="Review", slides=[_slide(text, observations)])
+    repaired, repairs = repair_presentation_plan(plan, observations)
+    assert not repairs
+    assert repaired.slides[0].message == text
+
+
 @pytest.mark.parametrize("component", ["title", "message", "bullets"])
 @pytest.mark.parametrize("text", [
     "Net loss widened then narrowed.",

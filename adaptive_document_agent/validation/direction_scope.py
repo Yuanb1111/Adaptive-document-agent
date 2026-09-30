@@ -152,7 +152,7 @@ def _period_index(label: str, observations: list[Observation], *, year_end: bool
 
 def predicate_conjunctions(clause: str):
     """Exclude the conjunction inside an explicit 'between X and Y' range."""
-    return [m for m in re.finditer(r"\band\b", clause, re.I)
+    return [m for m in re.finditer(r"\b(?:and|as)\b", clause, re.I)
             if not (re.search(rf"\bbetween\s+{_PERIOD}\s*$", clause[:m.start()], re.I)
                     and re.match(rf"\s*{_PERIOD}\b", clause[m.end():], re.I))]
 
