@@ -191,6 +191,20 @@ def _base(presentation, title, message):
     return slide, _content_zone(slide)[0]
 
 
+def _split_header_subtitle(subtitle: str) -> tuple[str, str]:
+    """Keep complete sentences in the header and move excess copy to commentary."""
+    if len(subtitle) <= 175 and len(_lines(subtitle, 8.91, 18)) <= 3:
+        return subtitle, ""
+    boundaries = (match.end() for match in re.finditer(r"(?<=[.!?。！？])\s+|\n+", subtitle))
+    fitting = [end for end in boundaries
+               if len(subtitle[:end].rstrip()) <= 175
+               and len(_lines(subtitle[:end].rstrip(), 8.91, 18)) <= 3]
+    if not fitting:
+        return "", subtitle.strip()
+    split = fitting[-1]
+    return subtitle[:split].rstrip(), subtitle[split:].strip()
+
+
 def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: list[ChartPlan],
                           result: PipelineResult, index) -> list:
     """Render all requested charts, explicit KPI/table facts and retained commentary."""
@@ -249,8 +263,8 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
     scoped_title = scoped_direction_title(slide_plan.title, charts, index)
     heading = scoped_title
     # A complete analytical claim may not fit the template's 32 pt title role.
-    # Reuse the planner's own section heading and display the entire claim as
-    # the 18 pt subtitle; do not shrink, truncate or rewrite its meaning.
+    # Reuse the planner's section heading and place the claim in the subtitle
+    # or commentary according to available space, without rewriting its meaning.
     if (len(_lines(heading, 8.91, 32)) > 2 and slide_plan.section_title
             and len(_lines(slide_plan.section_title, 8.91, 32)) <= 2):
         heading = slide_plan.section_title
@@ -263,6 +277,9 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
     if len(_lines(subtitle, 8.91, 18)) > 3 and convention:
         subtitle = subtitle.removesuffix("\n" + convention)
         convention_h = len(_lines(convention, presentation.slide_width.inches - 1.1, 12)) * 12 / 72 * 1.22 + .12
+    subtitle, subtitle_overflow = _split_header_subtitle(subtitle)
+    if subtitle_overflow:
+        text = "\n".join(part for part in (subtitle_overflow, text) if part)
     page_title = heading
     slide, top = _base(presentation, page_title, subtitle)
     slide.name = f"composed_{slide_plan.layout}"
