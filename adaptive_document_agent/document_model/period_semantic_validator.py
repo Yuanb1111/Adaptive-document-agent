@@ -23,6 +23,21 @@ MONTH_ABBR = {
     1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
     7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec",
 }
+_MONTH_COUNT_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+    "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12,
+    "一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6,
+    "七": 7, "八": 8, "九": 9, "十": 10, "十一": 11, "十二": 12,
+}
+_MONTHS_ENDED = re.compile(
+    r"\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|[0-9]{1,2})"
+    r"\s*months?\s*ended\b",
+    re.IGNORECASE,
+)
+
+
+def _month_count(token: str) -> int | None:
+    return int(token) if token.isdigit() else _MONTH_COUNT_WORDS.get(token.casefold())
 
 
 @dataclass(frozen=True)
@@ -46,27 +61,19 @@ def format_period_label(
         return ""
     p = " ".join(str(period).strip().split())
 
-    num_word_map = {
-        "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
-        "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12,
-        "一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6,
-        "七": 7, "八": 8, "九": 9, "十": 10, "十一": 11, "十二": 12,
-    }
-
     # 0. Interim month flow periods: e.g. "six months ended 30 Jun 2021" -> "6M2021"
     if not is_balance_sheet:
-        if m := re.search(r"(?i)(?:for\s+the\s+)?(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|\d{1,2})\s*months?\s*ended\s+.*?\b(20\d{2})\b", p):
-            count_str = m.group(1).casefold()
-            count_num = num_word_map.get(count_str, int(count_str) if count_str.isdigit() else None)
-            year_num = m.group(2)
-            if count_num:
+        if m := _MONTHS_ENDED.search(p):
+            count_num = _month_count(m.group(1))
+            year = re.search(r"\b(20\d{2})\b", p[m.end():])
+            if count_num and year:
                 star = "*" if (is_unaudited or "*" in p) else ""
-                return f"{count_num}M{year_num}{star}"
+                return f"{count_num}M{year.group(1)}{star}"
 
         if m := re.search(r"(?:截至\s*)?(20\d{2})年.*?止\s*([一二三四五六七八九十0-9]{1,2})\s*个?月", p):
             year_num = m.group(1)
             count_str = m.group(2)
-            count_num = num_word_map.get(count_str, int(count_str) if count_str.isdigit() else None)
+            count_num = _month_count(count_str)
             if count_num:
                 star = "*" if (is_unaudited or "*" in p) else ""
                 return f"{count_num}M{year_num}{star}"
@@ -198,6 +205,8 @@ def is_interim_date(period: str | None) -> bool:
     if not period:
         return False
     p = str(period).casefold()
+    if (m := _MONTHS_ENDED.search(p)) and _month_count(m.group(1)):
+        return True
     if any(k in p for k in ("interim", "unaudited", "*")):
         return True
     if re.search(r"\b[0-9]{1,2}m\b", p):
@@ -310,19 +319,23 @@ def extract_period_basis(period: str | None) -> str:
     if not period:
         return "generic"
     p = str(period).strip()
+    # Duration outranks its embedded end date. Use the same recognizer as the
+    # display formatter so raw table headers cannot collapse into a date basis.
+    if (m := _MONTHS_ENDED.search(p)) and (count := _month_count(m.group(1))):
+        return f"{count}M"
     if m := re.search(r"(?i)\b([0-9]{1,2})M(?:\d{2,4})?\b", p):
         return f"{m.group(1)}M".upper()
     if re.search(r"(?i)\b(?:1H|2H|H1|H2)(?:\s*(?:19|20)\d{2})?\b", p):
         return "6M"
     if re.search(r"(?i)\b(?:Q[1-4]|[1-4]Q)(?:\s*(?:19|20)\d{2})?\b", p):
         return "3M"
-    if re.search(r"(?i)six\s*months?\s*ended", p) or "六个月" in p:
+    if "六个月" in p:
         return "6M"
-    if re.search(r"(?i)three\s*months?\s*ended", p) or "三个月" in p:
+    if "三个月" in p:
         return "3M"
-    if re.search(r"(?i)four\s*months?\s*ended", p) or "四个月" in p:
+    if "四个月" in p:
         return "4M"
-    if re.search(r"(?i)nine\s*months?\s*ended", p) or "九个月" in p:
+    if "九个月" in p:
         return "9M"
     if re.search(r"(?i)\bYTD\b|year[\s-]to[\s-]date|年初至今", p):
         return "YTD"
