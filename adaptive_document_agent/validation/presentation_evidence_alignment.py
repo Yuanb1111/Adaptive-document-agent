@@ -25,7 +25,13 @@ def _same_reported_fact(left: Observation, right: Observation) -> bool:
         and left_dimensions == right_dimensions
         and left.category_dimensions == right.category_dimensions
         and left.unit == right.unit
-        and left.raw_unit == right.raw_unit
+        # Raw unit wording can differ while retained normalized units and
+        # explicit source scales agree. Never infer a scale from equal values.
+        and (left.raw_unit == right.raw_unit or (
+            bool(left.unit_family) and bool(left.unit)
+            and left.unit_scale is not None and right.unit_scale is not None
+            and left.unit_scale > 0 and left.unit_scale == right.unit_scale
+        ))
         and left.unit_scale == right.unit_scale
         and left.unit_family == right.unit_family
         and left.currency == right.currency
