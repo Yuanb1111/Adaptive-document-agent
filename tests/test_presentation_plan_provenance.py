@@ -75,6 +75,20 @@ def test_fallback_binds_summary_to_summary_pages_and_preserves_raw_result():
     Validator().validate(plan, result)
 
 
+def test_equivalent_percentages_preserve_source_and_reject_changed_values():
+    result = summary_result()
+    before = result.model_dump()
+    plan = PresentationPlanRecovery().fallback(result)
+    plan.company.one_line_description = plan.company.one_line_description.replace("13.0%", "13%")
+    Validator().validate(plan, result)
+    assert result.model_dump() == before
+
+    plan.company.one_line_description = plan.company.one_line_description.replace("13%", "13.01%")
+    with pytest.raises(ValueError, match="one_line_description.*unsupported numeric"):
+        Validator().validate(plan, result)
+    assert result.model_dump() == before
+
+
 @pytest.mark.parametrize("pages", [[], [999]])
 def test_fallback_does_not_assign_identity_pages_to_unsourced_summary(pages):
     result = summary_result()
