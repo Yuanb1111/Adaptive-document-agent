@@ -1571,8 +1571,8 @@ def _possessive_ratio_metric(
     previous_clause: str,
     metric_series_map: dict[str, list[dict[str, Any]]],
 ) -> str | None:
-    """Bind ``its ratio`` only to a uniquely named ratio of the prior subject."""
-    if not re.match(r"\s*its\s+ratio\b", clause, re.I) or not previous_clause:
+    """Bind a possessive ratio or share to a unique ratio of the prior subject."""
+    if not re.match(r"\s*its\s+(?:ratio|share)\b", clause, re.I) or not previous_clause:
         return None
     candidates = []
     for metric_name, series in metric_series_map.items():
@@ -1827,16 +1827,18 @@ class ClaimValidator:
                     is_only_metric=is_only_metric,
                     only_metric_name=only_metric_name,
                 )
-                if re.match(r"\s*its\s+ratio\b", clause, re.I):
+                possessive_ratio = re.match(r"\s*(its\s+(?:ratio|share))\b", clause, re.I)
+                if possessive_ratio:
                     previous = clauses[clause_index - 1] if clause_index else ""
                     ratio_metric = _possessive_ratio_metric(clause, previous, metric_series_map)
                     ratio_assocs = (_associate_clause_direction_spans(
-                        clause, {ratio_metric: ["its ratio"]}
+                        clause, {ratio_metric: [possessive_ratio[1]]}
                     ) if ratio_metric else [])
                     if len(ratio_assocs) != 1:
                         issues.append(ValidationIssue(
                             code="direction_ratio_subject_ambiguous", severity="error", stage="presentation",
-                            message=f"Slide {slide.id} {comp_type}: the subject of 'its ratio' is not uniquely supported.",
+                            message=(f"Slide {slide.id} {comp_type}: the subject of "
+                                     f"'{possessive_ratio[1]}' is not uniquely supported."),
                         ))
                         continue
                     assocs = ratio_assocs

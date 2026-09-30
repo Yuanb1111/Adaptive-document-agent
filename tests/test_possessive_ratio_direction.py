@@ -56,6 +56,35 @@ def test_unbound_possessive_ratio_does_not_borrow_denominator_direction():
                    issue.metric_name == "annual total operating expenditure" for issue in issues)
 
 
+def test_possessive_share_of_denominator_uses_reported_ratio_values():
+    observations = _observations()
+    title = (
+        "Annual research and development expenditure increased FY2021–FY2023 "
+        "while its share of annual total operating expenditure declined."
+    )
+    slide = PresentationSlide(id="rd", slide_type="analysis", title=title)
+    assert not ClaimValidator().validate_slide(slide, observations)
+
+    slide.title = title.replace("declined", "increased")
+    issues = ClaimValidator().validate_slide(slide, observations)
+    contradictions = [issue for issue in issues if issue.code == "directional_contradiction"]
+    assert len(contradictions) == 1
+    assert contradictions[0].metric_name == "annual research and development expenditure ratio %"
+    assert contradictions[0].expected_direction == "DECREASED"
+
+
+def test_unbound_possessive_share_does_not_borrow_denominator_direction():
+    observations = _observations()[:6]
+    slide = PresentationSlide(id="rd", slide_type="analysis", title=(
+        "Annual research and development expenditure increased FY2021–FY2023 "
+        "while its share of annual total operating expenditure declined."
+    ))
+    issues = ClaimValidator().validate_slide(slide, observations)
+    assert any(issue.code == "direction_ratio_subject_ambiguous" for issue in issues)
+    assert not any(issue.code == "directional_contradiction" and
+                   issue.metric_name == "annual total operating expenditure" for issue in issues)
+
+
 def test_qa_repair_records_the_corrected_direction_in_export_audit():
     result = _result()
     result.observations = _observations()
