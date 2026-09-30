@@ -18,6 +18,11 @@ _RANGE = re.compile(
     rf"\b(?:from\s+|between\s+)?(?P<start>{_PERIOD})\s*"
     rf"(?:to|through|until|and|[–-])\s*(?P<end>{_PERIOD})\b", re.I,
 )
+_VALUE_AT_DATE_RANGE = re.compile(
+    rf"\bfrom\s+(?:(?!\bto\b)[^;\n]){{1,100}}?\bat\s+(?P<start>{_PERIOD})\s+"
+    rf"to\s+(?:(?!\bto\b)[^;\n]){{1,100}}?\bat\s+(?P<end>{_PERIOD})\b",
+    re.I,
+)
 _BY_ENDPOINT = re.compile(rf"\bby\s+(?P<end>{_PERIOD})\b", re.I)
 _RUN_ENDPOINT = re.compile(rf"\b(?:by|through|until|at)\s+(?P<end>{_PERIOD})\b", re.I)
 _NON_TEMPORAL_BEFORE = re.compile(
@@ -210,7 +215,10 @@ def resolve_direction_scope(
     lo, hi = _group_bounds(clause, associations, position, metric_spans)
     local_start, local_end = _context_bounds(clause, associations, position, position, metric_spans)
     local_text = clause[local_start:local_end]
-    ranges = list(_RANGE.finditer(local_text))
+    # Model prose often places a sourced value before each date, e.g.
+    # "from 100 units at 2021-12-31 to 120 units at 2024-10-31".
+    # Both dates still need to resolve to this metric's linked observations.
+    ranges = [*_RANGE.finditer(local_text), *_VALUE_AT_DATE_RANGE.finditer(local_text)]
     if len(ranges) > 1 and allow_other_period_bases:
         basis = extract_period_basis(observations[0].period)
         ranges = [r for r in ranges if extract_period_basis(r['start']) == basis

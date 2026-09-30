@@ -379,6 +379,42 @@ def test_year_end_wording_does_not_turn_interim_dates_into_annual_dates() -> Non
     assert any(issue.code == "direction_scope_ambiguous" for issue in issues)
 
 
+@pytest.mark.parametrize(("metric", "values", "verb"), [
+    ("Total indebtedness", [8499, 32366, 67197, 78480, 87144], "increased"),
+    ("Inventories", [70901, 131843, 141520, 155296, 157903], "rose"),
+    ("Net current assets", [345007, 375338, 341055, 283265, 293546], "decreased"),
+])
+def test_value_at_date_range_binds_explicit_balance_sheet_periods(
+    metric: str, values: list[int], verb: str,
+) -> None:
+    dates = ("2021-12-31", "2022-12-31", "2023-12-31", "2024-06-30", "2024-10-31")
+    observations = _series(metric, values, years=(2021, 2022, 2023, 2024, 2025))
+    for observation, date in zip(observations, dates, strict=True):
+        observation.period = date
+        observation.period_type = "balance_sheet_date"
+        observation.raw_unit = "RMB thousand"
+        observation.currency = "RMB"
+    text = (f"{metric} {verb} from RMB {values[0]:,} thousand at {dates[0]} "
+            f"to RMB {values[-1]:,} thousand at {dates[-1]}.")
+    slide = _slide(text, observations, "bullets")
+    assert not ClaimValidator().validate_slide(slide, observations)
+    slide.bullets = [text.replace(dates[0], "2020-12-31")]
+    assert any(issue.code == "direction_scope_ambiguous"
+               for issue in ClaimValidator().validate_slide(slide, observations))
+
+
+def test_decimal_values_at_dates_bind_nonfinancial_metric() -> None:
+    observations = _series("Orders", [1.2, 1.5], years=(2023, 2024))
+    for observation, date in zip(observations, ("2023-12-31", "2024-12-31"), strict=True):
+        observation.period = date
+        observation.period_type = "point_in_time"
+        observation.unit = "count"
+        observation.raw_unit = "million orders"
+        observation.currency = None
+    text = "Orders increased from 1.2 million at 2023-12-31 to 1.5 million at 2024-12-31."
+    assert not ClaimValidator().validate_slide(_slide(text, observations), observations)
+
+
 def test_preposed_period_range_belongs_to_its_independent_metric() -> None:
     observations = _series("Revenue", [100, 200, 150]) + _series("Net loss", [-100, -160, -125])
     text = "Revenue increased and from FY2024 to FY2025 net loss narrowed."
