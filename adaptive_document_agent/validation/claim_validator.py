@@ -49,6 +49,7 @@ from .direction_scope import (
     predicate_conjunctions,
     resolve_direction_scope,
 )
+from .presentation_metric_binding import coordinated_alias_owners, source_label_forms
 
 
 class MetricSemanticFamily(str, Enum):
@@ -1314,6 +1315,9 @@ def extract_metric_aliases(
             aliases.add(clean_pres)
             aliases.add(re.sub(r"[_\-]+", " ", clean_pres).strip())
 
+    for alias in list(aliases):
+        aliases.update(source_label_forms(alias))
+
     combined = f"{canonical_name or ''} {metric_name} {pres_label or ''}".casefold()
 
     if re.search(r"\basp\b|\baverage selling price\b", combined):
@@ -1505,8 +1509,9 @@ def _associate_clause_direction_spans(
         for m in re.finditer(pattern, clause_lower):
             s, e = m.start(), m.end()
             if not any(occupied[s:e]):
-                resolved = owner_for(alias)
-                metric_spans.append((s, e, resolved or ambiguous_metric))
+                joint = coordinated_alias_owners(clause[:s], alias_owners[alias.casefold()])
+                resolved = (joint or [ambiguous_metric]) if joint is not None else [owner_for(alias) or ambiguous_metric]
+                metric_spans.extend((s, e, owner) for owner in resolved)
                 for i in range(s, e):
                     occupied[i] = True
 
@@ -1550,6 +1555,7 @@ def _associate_clause_direction_spans(
     assocs: list[tuple[str, str, int, int]] = []
     for ds, de, dw in dir_spans:
         closest_m = None
+        closest_span = None
         min_dist = 999999
         for ms, me, m_name in metric_spans:
             if de <= ms:
@@ -1561,8 +1567,11 @@ def _associate_clause_direction_spans(
             if dist < min_dist:
                 min_dist = dist
                 closest_m = m_name
+                closest_span = (ms, me)
         if closest_m:
-            assocs.append((closest_m, dw, ds, de))
+            # Source-qualified coordinated subjects share one predicate.
+            owners = {name for ms, me, name in metric_spans if (ms, me) == closest_span}
+            assocs.extend((owner, dw, ds, de) for owner in sorted(owners))
     return assocs
 
 
@@ -1581,11 +1590,7 @@ def _possessive_ratio_metric(
         if not match:
             continue
         subject = match[1].strip()
-        forms = {subject}
-        # Initialisms such as R&D are grounded in the source row's own
-        # "research and development" words, not a document-specific alias.
-        for pair in re.finditer(r"\b([A-Za-z]+)\s+(?:and|&)\s+([A-Za-z]+)\b", subject, re.I):
-            forms.add(subject[:pair.start()] + pair[1][0] + "&" + pair[2][0] + subject[pair.end():])
+        forms = source_label_forms(subject)
         if any(re.search(r"\b" + re.escape(form) + r"\b", previous_clause, re.I) for form in forms):
             candidates.append(metric_name)
     return candidates[0] if len(candidates) == 1 else None

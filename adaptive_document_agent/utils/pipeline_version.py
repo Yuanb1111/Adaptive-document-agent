@@ -1,6 +1,6 @@
 """Loaded code contract shared by session, extraction and export caches."""
 
-PIPELINE_VERSION = "2026-09-30-presentation-recovery-v69"
+PIPELINE_VERSION = "2026-09-30-presentation-metric-binding-v70"
 # Bump only when the corresponding evidence/analysis contract changes.
 EXTRACTION_VERSION = "extraction-v2"
 ANALYSIS_VERSION = "analysis-v38"

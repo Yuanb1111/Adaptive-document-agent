@@ -190,10 +190,10 @@ def _group_bounds(clause: str, associations: list[DirectionSpan], position: int,
 def _context_bounds(clause: str, associations: list[DirectionSpan], lo: int, hi: int,
                     metric_spans: list[tuple[int, int]]) -> tuple[int, int]:
     start, end = 0, len(clause)
-    if lo > 0:
+    if lo > 0 and associations[lo - 1][2:] != associations[lo][2:]:
         separator = _separator_bounds(clause, associations[lo - 1][3], associations[lo][2], metric_spans)
         start = separator[1] if separator else associations[lo][2]
-    if hi + 1 < len(associations):
+    if hi + 1 < len(associations) and associations[hi][2:] != associations[hi + 1][2:]:
         separator = _separator_bounds(clause, associations[hi][3], associations[hi + 1][2], metric_spans)
         end = separator[0] if separator else associations[hi + 1][2]
     return start, end

@@ -146,3 +146,31 @@ def test_source_derived_initialism_binds_ratio_without_issuer_aliases():
         "Annual A&B expenditure rose while its ratio to annual total operating expenditure declined."
     ))
     assert not ClaimValidator().validate_slide(other_slide, other)
+
+
+def test_omitted_annual_qualifier_binds_initialism_and_its_share():
+    observations = _observations()
+    slide = PresentationSlide(id="rd", slide_type="analysis", title=(
+        "R&D expenditure rose between FY2021 and FY2023 while its share of "
+        "total operating expenditure declined."
+    ))
+    assert not ClaimValidator().validate_slide(slide, observations)
+    for word, metric in (("rose", "annual research and development expenditure"),
+                         ("declined", "annual research and development expenditure ratio %")):
+        wrong = slide.model_copy(update={"title": slide.title.replace(word, "fell" if word == "rose" else "rose")})
+        contradictions = [issue for issue in ClaimValidator().validate_slide(wrong, observations)
+                          if issue.code == "directional_contradiction"]
+        assert len(contradictions) == 1
+        assert contradictions[0].metric_name == metric
+
+
+def test_omitted_annual_qualifier_does_not_resolve_duplicate_ratio_subjects():
+    observations = _observations()
+    observations += [item.model_copy(update={"id": item.id + "-other", "metric_original":
+                     "Research and development expenditure ratio to another base"})
+                     for item in observations[-3:]]
+    slide = PresentationSlide(id="rd", slide_type="analysis", title=(
+        "R&D expenditure rose between FY2021 and FY2023 while its share declined."
+    ))
+    assert any(issue.code == "direction_ratio_subject_ambiguous"
+               for issue in ClaimValidator().validate_slide(slide, observations))
