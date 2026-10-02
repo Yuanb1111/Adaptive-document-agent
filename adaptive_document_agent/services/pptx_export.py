@@ -2619,24 +2619,6 @@ def _presentation_chart_title(title: str, observations: list[Observation]) -> st
     return names if names and len(names) <= 110 else "Reported measures"
 
 
-def _chart_group_title(plans: list[ChartPlan], index: DocumentIndex) -> str:
-    labels: list[str] = []
-    for plan in plans:
-        observations = [index.get(identifier) for identifier in plan.observation_ids]
-        values = [item for item in observations if item and item.value is not None]
-        labels.append(_presentation_chart_title(plan.title, values))
-    common_prefix = os.path.commonprefix(labels).strip(" -:,")
-    if len(common_prefix) >= 4:
-        title = common_prefix
-    elif len(labels) == 2:
-        title = f"{labels[0]} and {labels[1]}"
-    else:
-        title = labels[0]
-    if " — " in title and len(title) > 72:
-        title = title.split(" — ", 1)[1]
-    return _summary_text(title, 78)
-
-
 def _change_summary(observations: list[Observation], scale: float) -> tuple[str, str] | None:
     from adaptive_document_agent.document_model.series import metric_identity_key
     if len({metric_identity_key(item) for item in observations}) != 1:
@@ -2735,7 +2717,13 @@ def _group_chart_plans(plans: list[ChartPlan], index: DocumentIndex) -> list[lis
         for candidate in list(remaining):
             if len(group) >= 3:
                 break
-            if all(_charts_belong_together(member, candidate, index) for member in group):
+            from .text_capacity import wrap_copy
+            full_title = _chart_group_title([*group, candidate], index)
+            # Plan separate complete headings before the downstream 14-word /
+            # 118-character header copy rules could silently drop a metric.
+            fits_heading = (len(full_title.split()) <= 14 and len(full_title) <= 118
+                            and len(wrap_copy(full_title, 8.91, 32)) <= 3)
+            if fits_heading and all(_charts_belong_together(member, candidate, index) for member in group):
                 group.append(candidate)
                 remaining.remove(candidate)
         groups.append(group)
@@ -2752,9 +2740,10 @@ def _charts_belong_together(left: ChartPlan, right: ChartPlan, index: DocumentIn
     if not left_values or not right_values:
         return False
 
-    left_contexts = _chart_contexts(left_values)
-    right_contexts = _chart_contexts(right_values)
-    shared_context = bool(left_contexts & right_contexts)
+    # A repeated heading is metadata, not evidence of a common subject. Source
+    # context is usable only when every plotted observation is bound to the
+    # same retained table and a concrete (non-section-only) context.
+    shared_context = bool(_chart_source_contexts(left_values) & _chart_source_contexts(right_values))
     left_periods = {item.period for item in left_values if item.period}
     right_periods = {item.period for item in right_values if item.period}
     if left_periods and right_periods:
@@ -2770,51 +2759,82 @@ def _charts_belong_together(left: ChartPlan, right: ChartPlan, index: DocumentIn
     if shared_context:
         return True
 
-    # Exact canonical metric match
-    left_canon = (getattr(left_values[0], "metric_canonical", "") or display_metric_name(left_values[0])).strip().casefold()
-    right_canon = (getattr(right_values[0], "metric_canonical", "") or display_metric_name(right_values[0])).strip().casefold()
-    if left_canon and right_canon and left_canon == right_canon:
+    from adaptive_document_agent.document_model.series import is_generic_metric_label, metric_label
+
+    left_names = {metric_label(item).strip().casefold() for item in left_values}
+    right_names = {metric_label(item).strip().casefold() for item in right_values}
+    # "Others" in separate tables is not a single measure, even if semantic
+    # resolution assigned it the same canonical label.
+    if any(is_generic_metric_label(name) for name in left_names | right_names):
+        return False
+    same_unit = _chart_unit_signature(left_values) == _chart_unit_signature(right_values)
+    same_status = {item.ifrs_status for item in left_values} == {item.ifrs_status for item in right_values}
+    if left_names == right_names and same_unit and same_status:
         return True
 
-    left_name = (left.title or (display_metric_name(left_values[0]) if left_values else "")).casefold()
-    right_name = (right.title or (display_metric_name(right_values[0]) if right_values else "")).casefold()
+    # Use every concrete retained metric, never a proposed chart title or just
+    # the first canonical label. An extra unpaired series cannot borrow another
+    # series' relationship.
+    if all(_complementary_metric_names(left_name, right_name)
+           for left_name in left_names for right_name in right_names):
+        return True
 
-    # Generic Merge 1: Margin & Cost of sales
+    same_page = bool(_chart_source_pages(left, left_values) & _chart_source_pages(right, right_values))
+    shared_terms = _chart_metric_tokens(left_values) & _chart_metric_tokens(right_values)
+    return same_page and same_unit and same_status and bool(shared_terms)
+
+
+def _complementary_metric_names(left_name: str, right_name: str) -> bool:
+    """Preserve established metric pairings using evidence labels only."""
     is_margin_cost = (
-        ("margin" in left_name or "gross profit" in left_name) and ("cost of sales" in right_name or "cost of revenue" in right_name)
+        ("margin" in left_name or "gross profit" in left_name)
+        and ("cost of sales" in right_name or "cost of revenue" in right_name)
     ) or (
-        ("margin" in right_name or "gross profit" in right_name) and ("cost of sales" in left_name or "cost of revenue" in left_name)
+        ("margin" in right_name or "gross profit" in right_name)
+        and ("cost of sales" in left_name or "cost of revenue" in left_name)
     )
     if is_margin_cost:
         return True
 
-    # Generic Merge 2: Operating expense intensities (Selling, Admin, R&D)
-    is_opex_left = any(term in left_name for term in ("selling", "administrative", "admin", "r&d", "research and development")) and any(s in left_name for s in ("revenue", "%", "share", "ratio"))
-    is_opex_right = any(term in right_name for term in ("selling", "administrative", "admin", "r&d", "research and development")) and any(s in right_name for s in ("revenue", "%", "share", "ratio"))
-    if is_opex_left and is_opex_right:
+    def is_opex_intensity(name: str) -> bool:
+        return any(term in name for term in ("selling", "administrative", "admin", "r&d", "research and development")) and any(
+            term in name for term in ("revenue", "%", "share", "ratio"))
+
+    if is_opex_intensity(left_name) and is_opex_intensity(right_name):
         return True
 
-    # Generic Merge 3: Volume & ASP
-    is_vol_asp = (
-        any(v in left_name for v in ("volume", "units", "shipment", "sales volume", "销量")) and any(p in right_name for p in ("asp", "price", "单价", "平均售价"))
-    ) or (
-        any(v in right_name for v in ("volume", "units", "shipment", "sales volume", "销量")) and any(p in left_name for p in ("asp", "price", "单价", "平均售价"))
-    )
-    if is_vol_asp:
-        return True
+    def is_volume(name: str) -> bool:
+        return bool(re.search(r"\b(?:volume|units|shipments?)\b|销量", name))
 
-    same_page = bool(_chart_source_pages(left, left_values) & _chart_source_pages(right, right_values))
-    same_unit = _chart_unit_signature(left_values) == _chart_unit_signature(right_values)
-    shared_terms = _chart_title_tokens(left, left_values) & _chart_title_tokens(right, right_values)
-    return same_page and same_unit and bool(shared_terms)
+    def is_price(name: str) -> bool:
+        return bool(re.search(r"\b(?:asp|price)\b|单价|平均售价", name))
+
+    return (is_volume(left_name) and is_price(right_name)) or (is_volume(right_name) and is_price(left_name))
 
 
-def _chart_contexts(values: list[Observation]) -> set[str]:
-    return {
-        " ".join(item.dimensions.get("table_context", "").casefold().split())
-        for item in values
-        if item.dimensions.get("table_context", "").strip()
+def _chart_source_contexts(values: list[Observation]) -> set[tuple[str, str]]:
+    """Return concrete context/table bindings shared by every plotted value.
+
+    The legacy source_table field may contain a display heading, so only
+    explicit table IDs are identity evidence. Ignore section-only vocabulary
+    rather than maintaining document-specific heading exceptions.
+    """
+    generic_words = {
+        "and", "the", "of", "for", "annual", "interim", "financial", "information",
+        "section", "results", "operations", "review", "summary", "overview",
+        "selected", "reported", "key", "highlights", "measures", "metrics", "data",
+        "analysis", "performance", "company", "group", "consolidated", "report",
     }
+    common: set[tuple[str, str]] | None = None
+    for item in values:
+        context = " ".join(item.dimensions.get("table_context", "").casefold().split())
+        tokens = set(re.findall(r"[^\W_]+", context, flags=re.UNICODE))
+        if not any(token not in generic_words and not token.isdigit() for token in tokens):
+            return set()
+        table_ids = {identifier for identifier in (item.table_id, *(source.table_id for source in item.evidence)) if identifier}
+        bindings = {(context, identifier) for identifier in table_ids}
+        common = bindings if common is None else common & bindings
+    return common or set()
 
 
 def _chart_unit_signature(values: list[Observation]) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -2825,58 +2845,51 @@ def _chart_unit_signature(values: list[Observation]) -> tuple[tuple[str, ...], t
 
 
 def _chart_source_pages(plan: ChartPlan, values: list[Observation]) -> set[int]:
-    return {
-        *plan.source_pages,
-        *(source.page for item in values for source in item.evidence),
-    }
+    # A proposed chart's broad page list must not override retained provenance.
+    evidence_pages = {source.page for item in values for source in item.evidence}
+    return evidence_pages or set(plan.source_pages)
 
 
-def _chart_title_tokens(plan: ChartPlan, values: list[Observation]) -> set[str]:
-    labels = " ".join([plan.title, *(display_metric_name(item) for item in values)])
+def _chart_metric_tokens(values: list[Observation]) -> set[str]:
+    from adaptive_document_agent.document_model.series import metric_label
+
     ignored = {
         "and", "the", "reported", "values", "value", "analysis", "chart", "total",
         "cost", "costs", "profit", "profits", "expense", "expenses", "revenue",
         "loss", "losses", "income", "net", "gross", "financial", "operating",
         "trajectory", "trend", "performance", "group", "company", "information",
     }
-    return {
-        token
-        for token in re.findall(r"[^\W_]{2,}", labels.casefold(), flags=re.UNICODE)
-        if token not in ignored and len(token) >= 3
-    }
+    # Shared vocabulary must occur in every plotted metric, not in a proposed
+    # heading or in just one member of a multi-metric chart.
+    common: set[str] | None = None
+    for item in values:
+        tokens = {token for token in re.findall(r"[^\W_]{3,}", metric_label(item).casefold(), flags=re.UNICODE)
+                  if token not in ignored and not token.isdigit()}
+        common = tokens if common is None else common & tokens
+    return common or set()
 
 
 def _chart_group_title(plans: list[ChartPlan], index: DocumentIndex) -> str:
-    value_sets = [
-        [item for identifier in plan.observation_ids if (item := index.get(identifier)) and item.value is not None]
-        for plan in plans
-    ]
-    common_contexts: set[str] | None = None
-    display_contexts: dict[str, str] = {}
-    for values in value_sets:
-        contexts = _chart_contexts(values)
-        for item in values:
-            context = " ".join(item.dimensions.get("table_context", "").split())
-            if context:
-                display_contexts[context.casefold()] = context
-        common_contexts = contexts if common_contexts is None else common_contexts & contexts
-    if common_contexts:
-        context = display_contexts[next(iter(common_contexts))]
-        generic_context = re.sub(r"[^a-z0-9 ]", "", context.casefold()).strip()
-        if 4 <= len(context) <= 72 and generic_context not in {
-            "financial information",
-            "financial information section",
-            "financial results",
-            "analysis",
-        }:
-            return context
+    """Name all plotted measures completely; callers must fit or paginate them."""
+    from .presentation_labels import qualified_metric_name
 
-    titles = [_presentation_chart_title(plan.title, values) for plan, values in zip(plans, value_sets)]
-    if len(titles) == 2:
-        return _summary_text(f"{titles[0]} and {titles[1]}", 72)
-    if len(titles) >= 3:
-        return _summary_text(f"{titles[0]}, {titles[1]} and {titles[2]}", 72)
-    return _summary_text(titles[0] if titles else "Financial Overview", 72)
+    titles: list[str] = []
+    seen: set[str] = set()
+    for plan in plans:
+        for identifier in plan.observation_ids:
+            item = index.get(identifier)
+            if item is None or item.value is None:
+                continue
+            title = qualified_metric_name(item)
+            # Attached numeric footnotes are source markers, not metric data.
+            # Keep them on the observation and remove only audience-copy marks.
+            title = re.sub(r"(?<=[A-Za-z])\(\d{1,2}\)(?=\s|$)", "", title)
+            if title and title.casefold() not in seen:
+                titles.append(title)
+                seen.add(title.casefold())
+    if len(titles) > 1:
+        return ", ".join(titles[:-1]) + " and " + titles[-1]
+    return titles[0] if titles else "Reported measures"
 
 
 def _usable_charts(result: PipelineResult) -> list[ChartPlan]:
