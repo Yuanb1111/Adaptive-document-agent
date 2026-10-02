@@ -30,8 +30,14 @@ def gateway(*, local=False, concurrent=True):
 @pytest.mark.parametrize("local,concurrent", [(True, True), (False, False)])
 def test_local_and_stateful_clients_do_not_start_background_requests(monkeypatch, local, concurrent):
     calls = []
-    monkeypatch.setattr(introduction, "ensure_company_introduction", lambda *args: calls.append(get_ident()))
-    with introduction.prepare_company_introduction(gateway(local=local, concurrent=concurrent), sample()) as attach:
+    source = sample()
+    company = source.presentation_plan.company
+    source.presentation_plan = None
+    def generate(*args, **kwargs):
+        calls.append(get_ident())
+        args[2].company = company.model_copy(deep=True)
+    monkeypatch.setattr(introduction, "ensure_company_introduction", generate)
+    with introduction.prepare_company_introduction(gateway(local=local, concurrent=concurrent), source) as attach:
         assert calls == []
         attach(PresentationPlan(title="Deck"))
     assert calls == [get_ident()]
@@ -43,8 +49,9 @@ def test_cloud_intro_overlaps_planning_and_attaches_only_after_completion(monkey
     started, release = Event(), Event()
     caller = get_ident()
     source_name = result.document.safe_filename
+    result.presentation_plan = None
 
-    def generate(client, snapshot, draft):
+    def generate(client, snapshot, draft, **kwargs):
         assert get_ident() != caller
         started.set()
         assert release.wait(3)
@@ -67,10 +74,12 @@ def test_cloud_intro_overlaps_planning_and_attaches_only_after_completion(monkey
 
 
 def test_background_validation_failure_reaches_existing_failure_handler(monkeypatch):
-    def fail(*args):
+    def fail(*args, **kwargs):
         raise ValueError("Unsupported introduction evidence")
     monkeypatch.setattr(introduction, "ensure_company_introduction", fail)
-    with introduction.prepare_company_introduction(gateway(), sample()) as attach:
+    source = sample()
+    source.presentation_plan = None
+    with introduction.prepare_company_introduction(gateway(), source) as attach:
         with pytest.raises(ValueError, match="Unsupported introduction"):
             attach(PresentationPlan(title="Deck"))
 
@@ -78,7 +87,8 @@ def test_background_validation_failure_reaches_existing_failure_handler(monkeypa
 def test_prepared_intro_is_revalidated_if_source_changes_before_attach(monkeypatch):
     result = sample()
     expected = result.presentation_plan.company.model_copy(deep=True)
-    def generate(client, snapshot, draft):
+    result.presentation_plan = None
+    def generate(client, snapshot, draft, **kwargs):
         draft.company = expected
     monkeypatch.setattr(introduction, "ensure_company_introduction", generate)
     with introduction.prepare_company_introduction(gateway(), result) as attach:
@@ -90,7 +100,7 @@ def test_prepared_intro_is_revalidated_if_source_changes_before_attach(monkeypat
 def test_valid_existing_intro_survives_failure_of_optional_background_draft(monkeypatch):
     result = sample()
     expected = result.presentation_plan.company.model_copy(deep=True)
-    def fail(*args):
+    def fail(*args, **kwargs):
         raise ValueError("Unavailable optional draft")
     monkeypatch.setattr(introduction, "ensure_company_introduction", fail)
     with introduction.prepare_company_introduction(gateway(), result) as attach:

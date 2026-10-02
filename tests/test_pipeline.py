@@ -116,7 +116,22 @@ def test_conflicting_same_context_values_block_calculation() -> None:
     assert "conflict" in result.warnings[0].casefold()
 
 
-def test_complete_pipeline_with_mock_llm_controls_semantic_selection() -> None:
+@pytest.mark.parametrize('brief_outcome', ['normal', 'audit_success', 'audit_failure'])
+def test_complete_pipeline_with_mock_llm_controls_semantic_selection(monkeypatch, brief_outcome) -> None:
+    if brief_outcome != 'normal':
+        from adaptive_document_agent.agent.executive_brief import ExecutiveBriefWriter
+        generate = ExecutiveBriefWriter.generate
+
+        def audited_brief(self, snapshot):
+            brief = generate(self, snapshot)
+            issue = ValidationIssue(code='executive_brief_repair_audit', stage='report',
+                message='Original brief and item patch must survive the separate snapshot.')
+            snapshot.validation_warnings.extend([issue, issue])
+            if brief_outcome == 'audit_failure':
+                raise ValueError('Brief repair rejected after recording its audit.')
+            return brief
+
+        monkeypatch.setattr(ExecutiveBriefWriter, 'generate', audited_brief)
     pdf = synthetic_time_series_pdf()
     baseline = DocumentOrchestrator().analyse_pdf(pdf)
     candidate_ids = [item.id for item in baseline.candidates]
@@ -155,7 +170,14 @@ def test_complete_pipeline_with_mock_llm_controls_semantic_selection() -> None:
     assert result.presentation_plan.slides[1].title == "Document at a Glance"
     assert "## Revenue overview" in result.report_markdown
     assert len(client.calls) == 9  # Topics compile locally; final brief uses one source-bound call.
-    assert result.executive_brief.items[0].label == "Revenue"
+    if brief_outcome == 'audit_failure':
+        assert result.executive_brief is None
+        assert any(issue.code == 'executive_brief_unavailable' for issue in result.validation_warnings)
+    else:
+        assert result.executive_brief.items[0].label == "Revenue"
+    if brief_outcome != 'normal':
+        assert sum(issue.code == 'executive_brief_repair_audit' for issue in result.validation_warnings) == 1
+        assert result.model_validate_json(result.model_dump_json()).validation_warnings == result.validation_warnings
     assert result.presentation_plan.planning_origin == "topic_compilation"
     assert result.pipeline_total_ms >= max(result.timings_ms.values())
     assert {"insights", "report_outline", "topic_selection", "slide_plan"} <= result.stage_details_ms.keys()

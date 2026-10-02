@@ -206,6 +206,7 @@ def render_sidebar(st, *, public_deployment: bool | None = None) -> LLMSettings:
             discovery_chunk_tokens=defaults.discovery_chunk_tokens,
             semantic_batch_size=defaults.semantic_batch_size,
             discovery_thinking=defaults.discovery_thinking,
+            simple_task_reasoning=defaults.simple_task_reasoning,
             deepseek_price_band=defaults.deepseek_price_band,
             stage_models=stage_models,
             timeout_seconds=defaults.timeout_seconds,

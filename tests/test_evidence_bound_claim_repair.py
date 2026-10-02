@@ -161,6 +161,8 @@ def test_valid_existing_introduction_also_shortens_cover():
     result = sample()
     result.presentation_plan.company.name = 'Example Company'
     result.presentation_plan.company.identity_state = 'RESOLVED'
+    result.document.pages[1].text += '\nExample Company'
+    result.presentation_plan.company.field_source_pages['name'] = [5]
     result.presentation_plan.slides = [PresentationSlide(id='cover', slide_type='cover', title='An overly verbose title')]
     ensure_company_introduction(None, result, result.presentation_plan)
     assert result.presentation_plan.slides[0].title == 'Example Company'

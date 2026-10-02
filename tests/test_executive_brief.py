@@ -70,25 +70,25 @@ def test_cached_brief_cannot_borrow_numbers_or_change_currency_and_scale(change)
 def test_writer_repairs_only_once_without_silently_accepting_invalid_copy():
     source='Revenue was USD 4.6 billion in 2025.'
     bad=payload(source);bad['items'][0]['text']='Revenue was USD 99 billion in 2025.'
-    g,client=gateway([bad,payload(source)])
+    g,client=gateway([bad,{'item_0': payload(source)['items'][0]}])
     assert ExecutiveBriefWriter(g).generate(result_for([source])).items[0].text==source
     assert len(client.calls)==2
-    g,client=gateway([bad,bad])
+    g,client=gateway([bad,{'item_0': bad['items'][0]}])
     with pytest.raises(ValueError,match='evidence checks'):
         ExecutiveBriefWriter(g).generate(result_for([source]))
     assert len(client.calls)==2
 
 
-def test_schema_invalid_long_brief_gets_one_compact_source_checked_retry():
+def test_schema_invalid_brief_without_identifiable_items_fails_without_regeneration():
     source = 'Revenue was USD 4.6 billion in 2025.'
     result = result_for([source + ' Context.' * 800])
-    g, client = gateway([{}, {}, payload(source)])
-    brief = ExecutiveBriefWriter(g).generate(result)
-    assert brief.items[0].text == source
-    assert not validate_executive_brief(brief, result)
-    assert len(client.calls) == 3
-    assert 'at most four' in client.calls[2][0]['content']
-    assert len(client.calls[2][1]['content']) < len(client.calls[0][1]['content'])
+    g, client = gateway([{}, payload(source)])
+    with pytest.raises(ValueError, match='nonempty original items'):
+        ExecutiveBriefWriter(g).generate(result)
+    assert len(client.calls) == 1
+    audit = json.loads(result.validation_warnings[-1].message)
+    assert audit['outcome'] == 'rejected'
+    assert audit['original_response'] == '{}'
 
 
 def test_page_selection_can_find_a_late_narrative_constraint_without_a_chart():
@@ -117,7 +117,7 @@ def test_brief_retrieves_leading_selected_topic_pages_and_repairs_missing_covera
     second = {'title': 'Key takeaways', 'items': [
         first['items'][0], payload(texts[10], page=11, label='Second measure')['items'][0],
     ]}
-    g, client = gateway([{'pages': [1]}, first, second])
+    g, client = gateway([{'pages': [1]}, first, {'additions': [second['items'][1]]}])
     brief = ExecutiveBriefWriter(g).generate(result)
     assert len(brief.items) == 2
     assert len(client.calls) == 3
@@ -178,7 +178,7 @@ def test_invalid_item_does_not_discard_three_independently_verified_brief_items(
     ]
     items.append({'label': 'Invented', 'text': 'Debt was 99.',
                   'evidence': [{'page': 1, 'text': 'Revenue was 12.'}]})
-    g, client = gateway([{'title': 'Highlights', 'items': items}] * 2)
+    g, client = gateway([{'title': 'Highlights', 'items': items}, {'item_3': items[3]}])
     brief = ExecutiveBriefWriter(g).generate(r)
     assert [item.label for item in brief.items] == ['Revenue', 'Costs', 'Cash']
     assert not validate_executive_brief(brief, r)

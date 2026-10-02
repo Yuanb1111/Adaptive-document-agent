@@ -30,6 +30,7 @@ def _analysis_scope_key(raw_pdf: bytes, analysis_focus: str, settings) -> str:
                 str(sorted(settings.stage_models.items())),
                 str(settings.temperature),
                 str(settings.discovery_thinking),
+                str(settings.simple_task_reasoning),
                 str(settings.discovery_chunk_tokens),
                 str(settings.semantic_batch_size),
                 str(settings.deepseek_price_band),

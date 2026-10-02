@@ -3,11 +3,10 @@ import json
 from pydantic import BaseModel, Field
 from adaptive_document_agent.models import PipelineResult
 from adaptive_document_agent.models.executive_brief import ExecutiveBrief
-from adaptive_document_agent.services.executive_brief import validate_executive_brief
 from adaptive_document_agent.services.brief_context import adjacent_definition_excerpts
 from adaptive_document_agent.services.llm import LLMGateway
-from adaptive_document_agent.services.llm.exceptions import LLMResponseError, LLMTransportError
 from .prompting import load_prompt, untrusted_document_message
+from .brief_item_repair import generate_with_item_repair
 
 
 class BriefSourcePages(BaseModel):
@@ -29,17 +28,6 @@ def _selected_topic_pages(result: PipelineResult, available: set[int]) -> list[t
             break
     return topics
 
-
-def _topic_coverage_errors(brief: ExecutiveBrief, topics: list[tuple[str, list[int]]]) -> list[str]:
-    """Require a brief to cite more than one selected analytical subject."""
-    if len(topics) < 2:
-        return []
-    cited = {quote.page for item in brief.items for quote in item.evidence}
-    covered = sum(bool(cited.intersection(pages)) for _, pages in topics)
-    required = 2 if len(topics) >= 3 else 1
-    return [] if covered >= required else [
-        f'Brief cites {covered} of {len(topics)} selected analytical topics; at least {required} are required.'
-    ]
 
 
 class ExecutiveBriefWriter:
@@ -105,44 +93,5 @@ class ExecutiveBriefWriter:
                                        for p, text in excerpts.items()]}
         messages = [{'role': 'system', 'content': load_prompt('executive_brief.txt')},
                     untrusted_document_message(json.dumps(payload, ensure_ascii=False))]
-        for attempt in range(2):
-            try:
-                brief = self.gateway.generate_structured(messages, ExecutiveBrief, stage='report')
-            except LLMTransportError:
-                raise
-            except LLMResponseError:
-                if attempt:
-                    raise
-                # A schema-invalid long briefing may still contain useful
-                # evidence. Ask for a smaller fresh synthesis through the same
-                # privacy-enforcing gateway, then run the usual source checks.
-                compact = {page: text[:4000] for page, text in excerpts.items()}
-                excerpts = compact
-                messages = [
-                    {'role': 'system', 'content': load_prompt('executive_brief.txt')
-                     + '\nReturn at most four concise findings with short, literal quotes. '
-                       'Keep all required fields and use only the supplied excerpts.'},
-                    untrusted_document_message(json.dumps({**payload,
-                        'source_excerpts': [{'page': page, 'text': text,
-                                             'truncated': len(pages[page]) > len(text)}
-                                            for page, text in compact.items()]}, ensure_ascii=False)),
-                ]
-                continue
-            errors = [*validate_executive_brief(brief, result, excerpts=excerpts),
-                      *_topic_coverage_errors(brief, included_topics)]
-            if not errors:
-                return brief
-            if attempt == 0:
-                messages = [*messages, {'role': 'assistant', 'content': brief.model_dump_json()},
-                            {'role': 'user', 'content': 'Repair the source-bound briefing. Validation errors: '
-                             + json.dumps(errors, ensure_ascii=False) + '. Use only the supplied excerpts.'}]
-        # A rejected claim must not discard independently verified items. Keep
-        # only items whose own literal quotes and quantities pass the same gate.
-        verified = [item for item in brief.items if not validate_executive_brief(
-            ExecutiveBrief(title='Executive Summary', items=[item]), result, excerpts=excerpts)]
-        if len(verified) >= 3:
-            salvaged = ExecutiveBrief(title='Executive Summary', items=verified)
-            if (not validate_executive_brief(salvaged, result, excerpts=excerpts)
-                    and not _topic_coverage_errors(salvaged, included_topics)):
-                return salvaged
-        raise ValueError('Executive brief failed evidence checks: ' + '; '.join(errors))
+        return generate_with_item_repair(self.gateway, messages, result=result, excerpts=excerpts,
+                                         topics=included_topics, source_context=payload)

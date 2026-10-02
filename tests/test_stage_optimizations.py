@@ -130,6 +130,7 @@ def test_sidebar_connects_stage_models_and_does_not_carry_to_other_provider(monk
         provider=ProviderName.OPENAI,
         model="gpt-6-sol",
         stage_models={"discovery": "gpt-6-luna"},
+        simple_task_reasoning="provider_default",
     )
     monkeypatch.setattr(LLMSettings, "from_env", lambda: defaults)
     class UI:
@@ -150,6 +151,7 @@ def test_sidebar_connects_stage_models_and_does_not_carry_to_other_provider(monk
         def __getattr__(self, name):
             return lambda *args, **kwargs: None
     ui = UI()
+    assert render_sidebar(ui, public_deployment=False).simple_task_reasoning == "provider_default"
     assert render_sidebar(ui, public_deployment=False).stage_models == {"discovery": "gpt-6-luna"}
     ui.provider = "DeepSeek"
     assert render_sidebar(ui, public_deployment=False).stage_models == {}

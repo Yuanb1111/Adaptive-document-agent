@@ -27,6 +27,18 @@ class LLMClient(ABC):
         """Optional per-call policy scope; custom adapters retain their API."""
         return nullcontext()
 
+    def operation_context(self, *, operation: str):
+        """Optional operation policy scope, independent of legacy stage hooks."""
+        return nullcontext()
+
+    def policy_context(self, *, stage: str, operation: str, model: str, policy: dict[str, Any]):
+        """Optional frozen cache-policy scope; existing custom clients are unchanged."""
+        return nullcontext()
+
+    def request_policy(self, *, stage: str, operation: str, model: str) -> dict[str, Any]:
+        """Non-secret request policy identity for structured-response caching."""
+        return {}
+
     @abstractmethod
     def generate_text(
         self,

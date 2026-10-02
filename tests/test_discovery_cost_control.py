@@ -102,6 +102,18 @@ def test_cost_export_keeps_unknown_cells_and_json_evidence():
     assert exported["llm_cost_summary"]["by_stage"][0]["estimated_total_min"] is None
 
 
+def test_cost_export_preserves_requested_and_applied_reasoning_controls():
+    import csv
+    import io
+    policy = {"operation": "BriefSourcePages", "intent": "reduce",
+              "requested": {"reasoning_effort": "low"}, "applied": {},
+              "status": "compatibility_downgrade"}
+    records = [{"stage": "report", "reasoning_policy": policy}]
+    rows = list(csv.DictReader(io.StringIO(export_usage_csv(records).decode("utf-8-sig"))))
+    assert json.loads(rows[0]["reasoning_policy"]) == policy
+    assert records[0]["reasoning_policy"] == policy
+
+
 def test_cost_ui_exposes_partial_coverage_and_csv():
     from unittest.mock import Mock
     from contextlib import nullcontext

@@ -25,3 +25,7 @@ jobs:
         run: python -m pytest -ra
       - name: Synthetic latency comparison with real LibreOffice
         run: python -m scripts.benchmark_performance --real-renderer
+      - name: Offline generation request and scheduling benchmarks
+        run: |
+          python -m scripts.benchmark_generation_latency --repo . --repeats 10 > generation-latency.json
+          python -c "import json; r=json.load(open('generation-latency.json')); print({'mode': r['mode'], 'schedule_median_ms': r['schedule']['median_wall_ms'], 'components': {k: {'calls': r[k]['calls'], 'wire': r[k]['requests']} for k in ('reasoning', 'brief', 'scoring')}})"

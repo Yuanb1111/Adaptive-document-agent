@@ -19,6 +19,7 @@ def usage_rows(records: list[dict]) -> list[dict]:
     return [{"call": index, **{key: row.get(key) for key in fields},
              **{key: (row.get("cost_details") or {}).get(key) for key in costs},
              "cost_status": (row.get("cost_details") or {}).get("status", "unknown"),
+             "reasoning_policy": json.dumps(row.get("reasoning_policy", {}), ensure_ascii=False),
              "attempts": json.dumps(row.get("attempts", []), ensure_ascii=False)}
             for index, row in enumerate(records, 1)]
 
