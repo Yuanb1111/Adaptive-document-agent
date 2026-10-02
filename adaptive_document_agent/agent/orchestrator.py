@@ -1,6 +1,7 @@
 """End-to-end pipeline; UI and providers depend on this stable API."""
 
 from collections.abc import Callable
+from contextlib import ExitStack, nullcontext
 from typing import BinaryIO
 
 from adaptive_document_agent.document_model import DocumentIndex, DocumentModelBuilder
@@ -54,6 +55,24 @@ class DocumentOrchestrator:
         analysis_focus: str | None = None,
         scope: AnalysisScopePreview | None = None,
     ) -> PipelineResult:
+        # All background work belongs to this invocation, never to the reusable
+        # orchestrator/session. ExitStack also drains it on any primary failure.
+        with ExitStack() as resources:
+            return self._analyse_pdf(
+                file, settings, progress=progress, analysis_focus=analysis_focus,
+                scope=scope, resources=resources,
+            )
+
+    def _analyse_pdf(
+        self,
+        file: bytes | bytearray | BinaryIO,
+        settings: object | None = None,
+        *,
+        progress: ProgressCallback | None = None,
+        analysis_focus: str | None = None,
+        scope: AnalysisScopePreview | None = None,
+        resources: ExitStack,
+    ) -> PipelineResult:
         del settings  # Configuration is enforced when constructing the gateway.
         notify = progress or (lambda _: None)
         from time import perf_counter
@@ -77,6 +96,15 @@ class DocumentOrchestrator:
                 progress=notify,
                 routed_ranges=scope.page_ranges if scope else None,
             )
+
+        from .company_introduction import prepare_company_introduction
+        attach_introduction = None
+        if self.gateway and self.gateway.discovery_workers > 1:
+            # Discovery is the earliest stable source/profile boundary. Copy it
+            # before table extraction/recovery can mutate or replace document.
+            attach_introduction = resources.enter_context(prepare_company_introduction(
+                self.gateway, PipelineResult(document=document, profile=profile), timings=details,
+            ))
 
         notify("Extracting tables from selected sections")
         with record_timing(timings, "table_extraction"):
@@ -276,8 +304,10 @@ class DocumentOrchestrator:
                     presentation_topics=topic_selection,
                     validation_warnings=issues,
                 )
-                from .company_introduction import prepare_company_introduction
-                with prepare_company_introduction(self.gateway, planning_result) as attach_introduction:
+                # Serial/local clients retain their existing request order.
+                with (nullcontext(attach_introduction) if attach_introduction is not None
+                      else prepare_company_introduction(self.gateway, planning_result,
+                                                        timings=details)) as attach_introduction:
                     try:
                         with record_timing(details, "slide_plan"):
                             presentation_plan = PresentationPlanner(self.gateway).plan(planning_result)
@@ -330,7 +360,7 @@ class DocumentOrchestrator:
                     if presentation_plan:
                         try:
                             with record_timing(details, "company_introduction_wait"):
-                                attach_introduction(presentation_plan)
+                                attach_introduction(presentation_plan, planning_result)
                         except (LLMResponseError, ValueError) as exc:
                             from adaptive_document_agent.models.presentation import CompanyProfile
                             presentation_plan.company = CompanyProfile(
@@ -340,6 +370,10 @@ class DocumentOrchestrator:
                                 code="company_introduction_unavailable", severity="warning", stage="presentation",
                                 message="The independent company introduction could not be verified: " + str(exc)[:500],
                             ))
+                if presentation_plan is None:
+                    # No eventual consumer remains. Stop before another optional
+                    # introduction request while the executive brief is written.
+                    attach_introduction.close()
                 # Pydantic owns a separate warning list on this snapshot. Keep
                 # local recovery's original drafts and evidence decisions in
                 # the final JSON instead of losing them after planning.
@@ -391,7 +425,18 @@ class DocumentOrchestrator:
                 except (LLMResponseError, ValueError) as exc:
                     issues.append(ValidationIssue(code="executive_brief_unavailable", stage="report",
                         severity="warning", message="The final briefing could not be source-checked: " + str(exc)[:500]))
+                finally:
+                    # Brief repairs keep their original/patch evidence audit on
+                    # this separate snapshot, including rejected recoveries.
+                    recorded_issues = {issue.model_dump_json() for issue in issues}
+                    for issue in snapshot.validation_warnings:
+                        if issue.model_dump_json() not in recorded_issues:
+                            issues.append(issue)
+                            recorded_issues.add(issue.model_dump_json())
 
+        # Include cancellation/drain in wall time and capture all worker usage.
+        # In particular, a missing/valid final plan may never have awaited it.
+        resources.close()
         notify("Complete")
         from adaptive_document_agent.utils.pipeline_version import PIPELINE_VERSION
         return PipelineResult(

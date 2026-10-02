@@ -1,9 +1,11 @@
 """Recover an evidence-bound introduction independently of financial slide writing."""
 
 import json
-from collections.abc import Callable, Iterator
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Iterator
+from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from contextlib import contextmanager
+from threading import Event, get_ident
+from time import perf_counter
 
 from pydantic import BaseModel, Field
 
@@ -33,51 +35,143 @@ _RULES = (
 )
 
 
+class PreparedCompanyIntroduction:
+    """Run-owned draft, cancellation and single-consumer attachment state."""
+
+    def __init__(self, gateway, result: PipelineResult) -> None:
+        self._gateway = gateway
+        self._caller = get_ident()
+        self._cancelled = Event()
+        self._current = result
+        self._source = PipelineResult(
+            document=result.document.model_copy(deep=True),
+            profile=result.profile.model_copy(deep=True),
+        )
+        self._draft = PresentationPlan(title="Introduction draft")
+        self._future: Future | None = None
+        self._pool: ThreadPoolExecutor | None = None
+        self.duration_ms = 0
+        existing = result.presentation_plan
+        if existing and _has_valid_introduction(existing, result):
+            self._draft.company = existing.company.model_copy(deep=True)
+            self._future = Future()
+            self._future.set_result(None)
+        elif gateway.discovery_workers > 1:
+            self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="company-introduction")
+            self._future = self._pool.submit(self._generate)
+
+    def _generate(self) -> None:
+        started = perf_counter()
+        try:
+            _check_cancelled(self._cancelled)
+            ensure_company_introduction(self._gateway, self._source, self._draft,
+                                        cancelled=self._cancelled)
+            _check_cancelled(self._cancelled)
+        finally:
+            self.duration_ms = int((perf_counter() - started) * 1000)
+
+    def __call__(self, plan: PresentationPlan, current: PipelineResult | None = None) -> None:
+        """Attach only on the owner thread, validating the latest planning source."""
+        if get_ident() != self._caller:
+            raise RuntimeError("Only the pipeline caller may attach the company introduction")
+        _check_cancelled(self._cancelled)
+        current = current if current is not None else self._current
+        if (current.document.sha256, current.document.document_id) != (
+                self._source.document.sha256, self._source.document.document_id):
+            raise ValueError("Prepared introduction belongs to another source document")
+        if _has_valid_introduction(plan, current):
+            _shorten_cover(plan)
+            return
+        if self._future is None:
+            # Memoize failures as well as successes: a second attachment must
+            # never retry a paid request or consume another stateful response.
+            self._future = Future()
+            try:
+                self._generate()
+            except BaseException as exc:
+                self._future.set_exception(exc)
+            else:
+                self._future.set_result(None)
+        self._future.result()
+        _check_cancelled(self._cancelled)
+        errors = _introduction_errors(self._draft.company, current)
+        if not self._draft.company.summary_overview or not self._draft.company.summary_business:
+            errors.append("Both distinct introduction pages need source evidence")
+        if errors:
+            raise ValueError("Prepared introduction no longer matches the source: " + "; ".join(errors))
+        _check_cancelled(self._cancelled)
+        _apply_introduction(plan, self._draft.company.model_copy(deep=True))
+        from adaptive_document_agent.services.presentation_identity import reconcile_presentation_identity
+        reconcile_presentation_identity(plan, current)
+
+    def close(self) -> None:
+        """Stop subsequent requests and drain the bounded in-flight operation.
+
+        Synchronous provider calls cannot be forcibly killed. The gateway's
+        configured timeout/retry policy bounds the current operation; cancellation
+        checkpoints prevent starting another introduction request afterwards.
+        """
+        self._cancelled.set()
+        if self._future is not None:
+            self._future.cancel()
+        if self._pool is not None:
+            self._pool.shutdown(wait=True, cancel_futures=True)
+            self._pool = None
+
+
 @contextmanager
-def prepare_company_introduction(gateway, result: PipelineResult) -> Iterator[Callable[[PresentationPlan], None]]:
-    """Overlap independent cloud work; local and stateful clients remain serial.
+def prepare_company_introduction(
+    gateway, result: PipelineResult, *, timings: dict[str, int] | None = None,
+) -> Iterator[PreparedCompanyIntroduction]:
+    """Overlap cloud work without shared source mutations or orphan workers.
 
-    The worker owns its draft and source snapshot. Only the caller may attach
-    its validated output to the final plan, including a recovered slide plan.
+    Duration is worker execution time and overlaps pipeline stages. The separate
+    company_introduction_wait detail measures only caller-side attachment wait.
+    Local and stateful clients defer generation until the caller attaches.
     """
-    if gateway.discovery_workers <= 1:
-        yield lambda plan: ensure_company_introduction(gateway, result, plan)
-        return
-
-    source = PipelineResult(
-        document=result.document.model_copy(deep=True),
-        profile=result.profile.model_copy(deep=True),
-    )
-    draft = PresentationPlan(title="Introduction draft")
-    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="company-introduction") as pool:
-        future = pool.submit(ensure_company_introduction, gateway, source, draft)
-
-        def attach(plan: PresentationPlan) -> None:
-            if (plan.company.summary_overview and plan.company.summary_business
-                    and not validate_summary(plan.company, result)):
-                _shorten_cover(plan)
-                return
-            future.result()  # Propagate failure to the existing fail-safe handler.
-            errors = validate_summary(draft.company, result)
-            if errors:
-                raise ValueError("Prepared introduction no longer matches the source: " + "; ".join(errors))
-            _apply_introduction(plan, draft.company.model_copy(deep=True))
-
-        yield attach
+    prepared = PreparedCompanyIntroduction(gateway, result)
+    try:
+        yield prepared
+    finally:
+        prepared.close()
+        if timings is not None:
+            timings["company_introduction_duration"] = prepared.duration_ms
 
 
-def ensure_company_introduction(gateway, result, plan) -> None:
+def _check_cancelled(cancelled: Event | None) -> None:
+    if cancelled is not None and cancelled.is_set():
+        raise CancelledError("Company introduction was cancelled")
+
+
+def _introduction_errors(company: CompanyProfile, result: PipelineResult) -> list[str]:
+    errors = validate_summary(company, result)
+    if company.name:
+        norm = lambda text: " ".join(text.casefold().split())
+        pages = set(company.field_source_pages.get("name", []))
+        if not pages or not any(page.page_number in pages and norm(company.name) in norm(page.text)
+                                for page in result.document.pages):
+            errors.append("Company name is absent from its cited source pages")
+    return errors
+
+
+def _has_valid_introduction(plan: PresentationPlan, result: PipelineResult) -> bool:
+    return bool(plan.company.summary_overview and plan.company.summary_business
+                and not _introduction_errors(plan.company, result))
+
+
+def ensure_company_introduction(gateway, result, plan, *, cancelled: Event | None = None) -> None:
     """Keep valid introductions; otherwise select pages then extract two short pages.
 
     Both calls use the configured gateway and presentation-stage privacy policy.
     No provider, document type or issuer is special-cased. Failed extraction does
     not fall back to heuristic customer/identity labels.
     """
-    if (plan.company.summary_overview and plan.company.summary_business
-            and not validate_summary(plan.company, result)):
+    _check_cancelled(cancelled)
+    if _has_valid_introduction(plan, result):
         _shorten_cover(plan)
         return
     candidates = summary_excerpts(result.document, result.profile)
+    _check_cancelled(cancelled)
     selected = gateway.generate_structured([
         {"role": "system", "content": _RULES +
          "Select up to eight pages containing the document's introductory summary: "
@@ -88,7 +182,8 @@ def ensure_company_introduction(gateway, result, plan) -> None:
         untrusted_document_message(json.dumps([
             {"page": p["page"], "preview": p["text"][:1200]} for p in candidates
         ], ensure_ascii=False)),
-    ], IntroductionPages, stage="presentation")
+    ], IntroductionPages, stage="presentation", cancelled=cancelled)
+    _check_cancelled(cancelled)
     by_page = {p["page"]: p for p in candidates}
     if not selected.pages or not set(selected.pages) <= by_page.keys():
         raise ValueError("No supported introductory pages were selected")
@@ -114,8 +209,10 @@ def ensure_company_introduction(gateway, result, plan) -> None:
         untrusted_document_message(json.dumps(excerpts, ensure_ascii=False)),
     ]
     for attempt in range(2):
+        _check_cancelled(cancelled)
         draft = gateway.generate_structured(messages, IntroductionDraft,
-                                            stage="presentation", allow_repair=False)
+                                            stage="presentation", allow_repair=False, cancelled=cancelled)
+        _check_cancelled(cancelled)
         company = CompanyProfile(summary_overview=draft.overview, summary_business=draft.business,
                                  value_chain=draft.value_chain)
         errors = validate_summary(company, result)
@@ -140,6 +237,7 @@ def ensure_company_introduction(gateway, result, plan) -> None:
                                            for item in page.items for p in item.source_pages}
                                           | {p for item in draft.value_chain for p in item.source_pages}
                                           | ({draft.name_page} if draft.name else set()))
+            _check_cancelled(cancelled)
             _apply_introduction(plan, company)
             from adaptive_document_agent.services.presentation_identity import reconcile_presentation_identity
             reconcile_presentation_identity(plan, result)

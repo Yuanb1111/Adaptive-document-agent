@@ -9,6 +9,13 @@ from adaptive_document_agent.utils.caching import DiskCache
 from tests.test_streamlit_auto_flow import _Streamlit
 
 
+def test_simple_reasoning_policy_invalidates_completed_result_cache():
+    settings = LLMSettings(model="test", simple_task_reasoning="reduced")
+    reduced = app._analysis_scope_key(b"pdf", "", settings)
+    settings.simple_task_reasoning = "provider_default"
+    assert app._analysis_scope_key(b"pdf", "", settings) != reduced
+
+
 def test_new_output_contract_rebuilds_result_without_clearing_other_caches(tmp_path, monkeypatch):
     settings = LLMSettings(model="test")
     cache = DiskCache(tmp_path)

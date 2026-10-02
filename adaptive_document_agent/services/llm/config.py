@@ -37,6 +37,7 @@ class LLMSettings(BaseModel):
     discovery_chunk_tokens: int = Field(default=12000, ge=2000, le=24000)
     semantic_batch_size: int = Field(default=96, ge=24, le=128)
     discovery_thinking: Literal["disabled", "enabled", "provider_default"] = "disabled"
+    simple_task_reasoning: Literal["reduced", "provider_default"] = "reduced"
     # A range avoids guessing the provider's holiday / peak-time billing band.
     deepseek_price_band: Literal["range", "peak", "off_peak"] = "range"
 
@@ -85,6 +86,7 @@ class LLMSettings(BaseModel):
             discovery_chunk_tokens=int(os.getenv("LLM_DISCOVERY_CHUNK_TOKENS", "12000")),
             semantic_batch_size=int(os.getenv("LLM_SEMANTIC_BATCH_SIZE", "96")),
             discovery_thinking=os.getenv("LLM_DISCOVERY_THINKING", "disabled"),
+            simple_task_reasoning=os.getenv("LLM_SIMPLE_TASK_REASONING", "reduced"),
             deepseek_price_band=os.getenv("LLM_DEEPSEEK_PRICE_BAND", "range"),
         )
 

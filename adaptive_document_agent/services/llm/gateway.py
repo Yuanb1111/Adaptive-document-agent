@@ -1,7 +1,10 @@
 """Privacy-enforcing, structured-output-aware LLM gateway."""
 
 import json
-from threading import Lock
+from concurrent.futures import CancelledError
+from contextlib import contextmanager
+from copy import deepcopy
+from threading import BoundedSemaphore, Event, Lock
 from typing import Any, TypeVar
 
 from pydantic import BaseModel
@@ -33,6 +36,9 @@ class LLMGateway:
         self.cache_enabled = cache_enabled
         self.usage: list[dict[str, object]] = []
         self._usage_lock = Lock()
+        # Shared by every independent pipeline stage on this gateway, not by
+        # other sessions. Stage-local pools must not multiply provider pressure.
+        self._request_slots = BoundedSemaphore(self.discovery_workers)
         if settings.privacy_mode == PrivacyMode.LOCAL_ONLY and not settings.is_local:
             raise PrivacyViolationError("Local Only mode forbids cloud LLM providers.")
 
@@ -43,9 +49,21 @@ class LLMGateway:
             return 1
         return self.settings.discovery_workers
 
+    @contextmanager
+    def _request_admission(self, cancelled: Event | None = None):
+        """Bound actual calls, including repair, without charging cache hits.
+
+        A queued request checks cancellation after acquiring its slot. Provider
+        operations already in flight retain the configured timeout/retry bound.
+        """
+        with self._request_slots:
+            if cancelled is not None and cancelled.is_set():
+                raise CancelledError("LLM operation was cancelled before admission")
+            yield
+
     def generate_text(self, messages: list[dict[str, Any]], *, stage: str, max_tokens: int | None = None) -> str:
         try:
-            with self.client.request_context(stage=stage):
+            with self._request_admission(), self.client.request_context(stage=stage), self.client.operation_context(operation="text"):
                 response = self.client.generate_text(
                     messages,
                     temperature=self.settings.temperature,
@@ -66,15 +84,22 @@ class LLMGateway:
         stage: str,
         allow_repair: bool = True,
         request_metadata: dict[str, str | int] | None = None,
+        cancelled: Event | None = None,
     ) -> T:
         model_name = self.settings.model_for(stage)
         metadata = _request_metadata(request_metadata)
+        # Capture once before hashing. SDK metadata may change while queued or
+        # during an initial request; both physical calls must use this identity.
+        generation_policy = deepcopy(self.client.request_policy(stage=stage, operation=response_model.__name__, model=model_name))
+        repair_policy = deepcopy(self.client.request_policy(stage=stage, operation="format_repair", model=model_name)) if allow_repair else None
         # Full prompt + schema + routing/privacy identity. No API key on disk.
         key = sha256_bytes(json.dumps({
             "version": ANALYSIS_VERSION, "stage": stage, "model": model_name,
             "provider": self.settings.provider.value, "endpoint": self.settings.base_url,
             "privacy": self.settings.privacy_mode.value, "temperature": self.settings.temperature,
             "schema": response_model.model_json_schema(), "messages": messages,
+            "request_policy": generation_policy,
+            "repair_policy": repair_policy,
             "discovery_thinking": self.settings.discovery_thinking if stage == "discovery" else None,
         }, sort_keys=True, ensure_ascii=False).encode("utf-8"))
         if self.cache and self.cache_enabled:
@@ -83,7 +108,9 @@ class LLMGateway:
                 self.record_cache_hit(stage=stage, operation=response_model.__name__, request_metadata=metadata)
                 return cached
         try:
-            with self.client.request_context(stage=stage):
+            with (self._request_admission(cancelled), self.client.request_context(stage=stage),
+                  self.client.operation_context(operation=response_model.__name__),
+                  self.client.policy_context(stage=stage, operation=response_model.__name__, model=model_name, policy=generation_policy)):
                 value, response = self.client.generate_structured(
                     messages,
                     response_model,
@@ -111,7 +138,8 @@ class LLMGateway:
                 ) from exc
             if not allow_repair:
                 raise
-            value = self._repair_structured(exc.response.text, response_model, stage=stage, request_metadata=metadata)
+            value = self._repair_structured(exc.response.text, response_model, stage=stage, request_metadata=metadata,
+                                            cancelled=cancelled, repair_policy=repair_policy, model_name=model_name)
         except LLMTransportError as exc:
             self._record_failure(exc, stage, operation=response_model.__name__, request_metadata=metadata)
             raise
@@ -120,7 +148,11 @@ class LLMGateway:
         return value
 
     def _repair_structured(self, invalid_text: str, response_model: type[T], *, stage: str,
-                          request_metadata: dict[str, str | int] | None = None) -> T:
+                          request_metadata: dict[str, str | int] | None = None, cancelled: Event | None = None,
+                          repair_policy: dict[str, Any] | None = None, model_name: str | None = None) -> T:
+        model_name = model_name or self.settings.model_for(stage)
+        if repair_policy is None:
+            repair_policy = deepcopy(self.client.request_policy(stage=stage, operation="format_repair", model=model_name))
         schema = json.dumps(response_model.model_json_schema(), separators=(",", ":"))
         repair_messages = [
             {
@@ -135,12 +167,14 @@ class LLMGateway:
             {"role": "user", "content": "<untrusted_model_output>" + invalid_text + "</untrusted_model_output>"},
         ]
         try:
-            with self.client.request_context(stage=stage):
+            with (self._request_admission(cancelled), self.client.request_context(stage=stage),
+                  self.client.operation_context(operation="format_repair"),
+                  self.client.policy_context(stage=stage, operation="format_repair", model=model_name, policy=repair_policy)):
                 response = self.client.generate_text(
                     repair_messages,
                     temperature=0,
                     max_tokens=8_000 if stage == "presentation" else None,
-                    model=self.settings.model_for(stage),
+                    model=model_name,
                 )
             self._record(response, stage=stage, status="format_repair", operation=response_model.__name__,
                          request_metadata=request_metadata)

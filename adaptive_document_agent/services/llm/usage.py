@@ -19,6 +19,7 @@ class LLMUsage(BaseModel):
     total_tokens: int | None = Field(default=None, ge=0)
     finish_reason: str | None = None
     thinking_mode: str | None = None
+    reasoning_policy: dict = Field(default_factory=dict)
     request_chars: int | None = Field(default=None, ge=0)
     response_chars: int | None = Field(default=None, ge=0)
     cost_currency: str | None = None

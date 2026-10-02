@@ -1,0 +1,70 @@
+{
+  "source_reason": "The supplied observations identify the metric, periods, dimensions and source pages. These are possible analyses only; semantic usefulness, redundancy and all evidence qualifications still require individual review.",
+  "reason_catalog": [
+    {
+      "id": "comparable",
+      "text": "The identified observations have comparable periods and scope with traceable page-level evidence. Their confidence supports descriptive analysis, but the source does not establish causality or explain all drivers."
+    },
+    {
+      "id": "purpose",
+      "text": "The question is relevant to the document's stated purpose and adds an interpretable comparison. Keep the reported facts distinct from any deterministic calculation, and retain source-specific uncertainty in the final explanation."
+    },
+    {
+      "id": "redundant",
+      "text": "This proposed analysis substantially repeats a clearer candidate over the same evidence and adds little independent analytical value. Reject this candidate while retaining its decision, underlying observations and specific qualification for review."
+    }
+  ],
+  "cases": [
+    {
+      "metric": "Process duration",
+      "analysis_type": "absolute_change",
+      "score": 0.93,
+      "rejected": false,
+      "reason_refs": [
+        "comparable",
+        "purpose"
+      ],
+      "reasons": [
+        "Duration is measured in hours; one team's exception is explicitly excluded from the source total. The 2024 observation is restated, so preserve both the original source wording and this qualification."
+      ]
+    },
+    {
+      "metric": "Survey satisfaction",
+      "analysis_type": "percentage_change",
+      "score": 0.12,
+      "rejected": true,
+      "reason_refs": [
+        "redundant"
+      ],
+      "reasons": [
+        "The survey scale is bounded and the baseline changed. A relative percentage would obscure that unique denominator caveat; a direct comparison is more interpretable. Do not infer a population-wide improvement."
+      ]
+    },
+    {
+      "metric": "Energy consumption",
+      "analysis_type": "linear_trend",
+      "score": 0.84,
+      "rejected": false,
+      "reason_refs": [
+        "comparable",
+        "purpose"
+      ],
+      "reasons": [
+        "Keep the unusual 2025 maintenance shutdown visible. The final interval is an estimate marked approximately in the source, not an exact reading; three observations do not establish a persistent structural trend."
+      ]
+    },
+    {
+      "metric": "Service requests",
+      "analysis_type": "absolute_change",
+      "score": 0.77,
+      "rejected": false,
+      "reason_refs": [
+        "comparable",
+        "purpose"
+      ],
+      "reasons": [
+        "The exception applies only to the remote region, not the whole service network. Missing categories are unknown rather than zero, and the source footnote says provisional / 暂定. Preserve this caveat even when the candidate falls below the final cutoff."
+      ]
+    }
+  ]
+}

@@ -5,6 +5,7 @@ import re
 import time
 from contextvars import ContextVar
 from contextlib import contextmanager
+from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
 
@@ -18,10 +19,13 @@ from .exceptions import LLMConfigurationError, LLMTransportError, LLMStructuredO
 from .structured import validate_structured_text
 from .usage import LLMUsage
 from .usage_parser import get_field, usage_counters
-from .costs import direct_deepseek, estimate_cost
+from .costs import estimate_cost
+from .reasoning_policy import reasoning_parameters, request_reasoning_policy
 
 _attempts: ContextVar[list | None] = ContextVar("llm_attempts", default=None)
 _stage: ContextVar[str | None] = ContextVar("llm_stage", default=None)
+_operation: ContextVar[str] = ContextVar("llm_operation", default="text")
+_frozen_policy: ContextVar[tuple[object, str, str, str, dict[str, Any]] | None] = ContextVar("llm_frozen_policy", default=None)
 
 
 class LiteLLMProvider(LLMClient):
@@ -59,6 +63,28 @@ class LiteLLMProvider(LLMClient):
         finally:
             _stage.reset(token)
 
+    @contextmanager
+    def operation_context(self, *, operation: str):
+        token = _operation.set(operation)
+        try:
+            yield
+        finally:
+            _operation.reset(token)
+
+    @contextmanager
+    def policy_context(self, *, stage: str, operation: str, model: str, policy: dict[str, Any]):
+        token = _frozen_policy.set((self, stage, operation, model, deepcopy(policy)))
+        try:
+            yield
+        finally:
+            _frozen_policy.reset(token)
+
+    def request_policy(self, *, stage: str, operation: str, model: str) -> dict[str, Any]:
+        frozen = _frozen_policy.get()
+        if frozen is not None and frozen[0] is self and frozen[1:4] == (stage, operation, model):
+            return deepcopy(frozen[4])
+        return request_reasoning_policy(self.settings, stage=stage, operation=operation, model=model)
+
     def _completion(self, messages: list[dict[str, Any]], **kwargs: Any) -> Any:
         try:
             from litellm import completion
@@ -91,6 +117,7 @@ class LiteLLMProvider(LLMClient):
             event = {"attempt": transient_retries + int(compatibility_retry_used) + 1,
                      "started_at": datetime.now(timezone.utc).isoformat(),
                      "kind": "compatibility_retry" if compatibility_retry_used else "network_retry" if transient_retries else "initial"}
+            event["reasoning_parameters"] = reasoning_parameters(request_kwargs)
             try:
                 with self._request_client() as client_options:
                     result = completion(
@@ -110,8 +137,17 @@ class LiteLLMProvider(LLMClient):
                 event.update(status="failed", error_type=type(exc).__name__)
                 rejected_params = self._rejected_optional_params(exc, request_kwargs)
                 if rejected_params and not compatibility_retry_used:
+                    event["compatibility_downgrade"] = sorted(rejected_params)
                     for param in rejected_params:
-                        request_kwargs.pop(param, None)
+                        if param == "thinking":
+                            body = dict(request_kwargs.get("extra_body", {}))
+                            body.pop("thinking", None)
+                            if body:
+                                request_kwargs["extra_body"] = body
+                            else:
+                                request_kwargs.pop("extra_body", None)
+                        else:
+                            request_kwargs.pop(param, None)
                     compatibility_retry_used = True
                     continue
                 transient = any(marker in type(exc).__name__.casefold() for marker in ("timeout", "rate", "connection", "serviceunavailable"))
@@ -144,14 +180,57 @@ class LiteLLMProvider(LLMClient):
 
     @classmethod
     def _rejected_optional_params(cls, exc: Exception, request_kwargs: dict[str, Any]) -> set[str]:
+        if type(exc).__name__ == "BadRequestError":
+            return cls._server_rejected_reasoning_param(exc, request_kwargs)
         if type(exc).__name__ != "UnsupportedParamsError":
             return set()
         message = str(exc).casefold()
+        candidates = request_kwargs.keys() & cls._OPTIONAL_GENERATION_PARAMS
+        if "thinking" in request_kwargs.get("extra_body", {}):
+            candidates.add("thinking")
         return {
             param
-            for param in request_kwargs.keys() & cls._OPTIONAL_GENERATION_PARAMS
+            for param in candidates
             if re.search(rf"(?<![a-z0-9_]){re.escape(param)}(?![a-z0-9_])", message)
         }
+
+    @staticmethod
+    def _server_rejected_reasoning_param(exc: Exception, request_kwargs: dict[str, Any]) -> set[str]:
+        """Only explicit structured 400 parameter rejections permit downgrade.
+
+        No message matching: authentication, content-policy and generic invalid
+        requests must fail unchanged. Native SDKs expose body/code/param; LiteLLM
+        can instead retain the original HTTP response with the same JSON fields.
+        """
+        if getattr(exc, "status_code", None) != 400:
+            return set()
+        response = getattr(exc, "response", None)
+        if response is not None and getattr(response, "status_code", None) != 400:
+            return set()
+        body = getattr(exc, "body", None)
+        if body is None and response is not None:
+            try:
+                body = response.json()
+            except (ValueError, TypeError, AttributeError):
+                return set()
+        if body is None:
+            body = {"code": getattr(exc, "code", None), "param": getattr(exc, "param", None)}
+        if not isinstance(body, dict):
+            return set()
+        error = body.get("error", body)
+        if not isinstance(error, dict):
+            return set()
+        code = error.get("code")
+        if not isinstance(code, str) or code not in {"unsupported_parameter", "unknown_parameter"}:
+            return set()
+        param = error.get("param")
+        if param == "reasoning_effort" and "reasoning_effort" in request_kwargs:
+            return {"reasoning_effort"}
+        # extra_body is a client wrapper; the actual outgoing JSON field is
+        # thinking with its type child. Do not match arbitrary dotted prefixes.
+        if param in ("thinking", "thinking.type") and "thinking" in request_kwargs.get("extra_body", {}):
+            return {"thinking"}
+        return set()
 
     @property
     def _provider_route(self) -> str:
@@ -169,13 +248,15 @@ class LiteLLMProvider(LLMClient):
         attempt_log = []
         token = _attempts.set(attempt_log)
         try:
-            thinking = None
-            options = {}
-            if (_stage.get() == "discovery" and direct_deepseek(self.settings, model or self.settings.model)
-                    and self.settings.discovery_thinking != "provider_default"):
-                thinking = self.settings.discovery_thinking
-                options["extra_body"] = {"thinking": {"type": thinking}}
+            policy = self.request_policy(stage=_stage.get(), operation=_operation.get(), model=model or self.settings.model)
+            options = policy.pop("options")
             raw = self._completion(messages, temperature=temperature, max_tokens=max_tokens, model=model, **options)
+            # "applied" records controls on the successful LiteLLM call; actual
+            # reasoning consumption is separately reported by provider token usage.
+            policy["applied"] = (attempt_log[-1]["reasoning_parameters"] if attempt_log else dict(policy["requested"]))
+            if policy["applied"] != policy["requested"]:
+                policy["status"] = "compatibility_downgrade"
+            thinking = policy["applied"].get("thinking", {}).get("type")
             text = raw.choices[0].message.content or ""
             usage = LLMUsage(
                 provider=self.settings.provider.value,
@@ -186,6 +267,7 @@ class LiteLLMProvider(LLMClient):
                 completed_at=datetime.now(timezone.utc).isoformat(),
                 finish_reason=get_field(raw.choices[0], "finish_reason"),
                 thinking_mode=thinking,
+                reasoning_policy=policy,
                 request_chars=len(json.dumps(messages, ensure_ascii=False, separators=(",", ":"))),
                 response_chars=len(text),
                 latency_ms=int((time.perf_counter() - started) * 1000),
