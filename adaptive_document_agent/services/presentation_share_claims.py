@@ -81,6 +81,15 @@ def _row_mentions(selected, text):
             prefixes.setdefault(tuple(word.casefold() for word in words[:-1]), set()).add(row)
     for row, words in labels.items():
         forms = [words]
+        # Regular singular attributive forms retain the same explicit category
+        # ("sensors" -> "sensor"). Ambiguous aliases still resolve to several
+        # rows and fail the subject check below; no semantic synonym is added.
+        if words and len(words[-1]) > 3:
+            last = words[-1]
+            if last.casefold().endswith("ies"):
+                forms.append([*words[:-1], last[:-3] + "y"])
+            elif last.casefold().endswith("s") and not last.casefold().endswith(("ss", "us", "is")):
+                forms.append([*words[:-1], last[:-1]])
         prefix = tuple(word.casefold() for word in words[:-1])
         if prefix in prefixes and prefixes[prefix] == {row}:
             forms.append(words[:-1])
@@ -105,8 +114,11 @@ def share_claims(selected, text):
     if re.match(r"\s*(?:how|what|which)\b", text, re.I) and not any(share_motion(text)):
         return []
     mentions = _row_mentions(selected, text)
-    separators = [m for m in re.finditer(r"[,;!?]|(?<!\d)\.(?!\d)|\b(?:while|whereas|and|but)\b", text, re.I)
-                  if not any(start <= m.start() and m.end() <= end for start, end, _ in mentions)]
+    separators = [m for m in re.finditer(r"[,;!?]|(?<!\d)\.(?!\d)|\b(?:while|whereas|and|but|as)\b", text, re.I)
+                  if not any(start <= m.start() and m.end() <= end for start, end, _ in mentions)
+                  and (m.group().casefold() != "as" or (
+                      SHARE_WORD.search(text[:m.start()]) and SHARE_WORD.search(text[m.end():])
+                      and any(start >= m.end() for start, _, _ in mentions)))]
     bounds = [0, *[position for m in separators for position in (m.start(), m.end())], len(text)]
     claims, previous, previous_bare, previous_compound = [], "", False, False
     for start, end in zip(bounds[::2], bounds[1::2]):
@@ -160,6 +172,10 @@ def share_claims(selected, text):
             # must not quietly use a reported percentage of units instead.
             prefix = re.sub(r"^\s*['’]s\s*", "", clause[subject_end:share.start()]).strip()
             prefix = re.split(r"\b(?:its|their)\s+", prefix, flags=re.I)[-1]
+            motion = _UP.match(prefix) or _DOWN.match(prefix)
+            if motion:
+                prefix = prefix[motion.end():].strip()
+            prefix = re.sub(r"^(?:its|their)\b\s*", "", prefix, flags=re.I)
             if prefix and not any(share_motion(prefix)) and re.fullmatch(r"[\w-]+(?:\s+[\w-]+){0,3}", prefix):
                 denominator = normalized(prefix)
         claims.append(ShareClaim(subject, clause[subject_start:].strip(), denominator))

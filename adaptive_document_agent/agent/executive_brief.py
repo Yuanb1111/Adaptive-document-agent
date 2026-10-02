@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 from adaptive_document_agent.models import PipelineResult
 from adaptive_document_agent.models.executive_brief import ExecutiveBrief
 from adaptive_document_agent.services.executive_brief import validate_executive_brief
+from adaptive_document_agent.services.brief_context import adjacent_definition_excerpts
 from adaptive_document_agent.services.llm import LLMGateway
 from adaptive_document_agent.services.llm.exceptions import LLMResponseError, LLMTransportError
 from .prompting import load_prompt, untrusted_document_message
@@ -92,6 +93,7 @@ class ExecutiveBriefWriter:
                     anchors.append(page)
             selected = list(dict.fromkeys([*anchors, *selected]))[:10]
         excerpts = {p: pages[p][:9000] for p in selected}
+        excerpts.update(adjacent_definition_excerpts(pages, excerpts))
         included_topics = [(title, [page for page in source_pages if page in excerpts])
                            for title, source_pages in topic_pages]
         included_topics = [(title, source_pages) for title, source_pages in included_topics if source_pages]

@@ -99,6 +99,8 @@ def export_pptx_with_report(
     notify("Checking PowerPoint evidence")
     from adaptive_document_agent.agent.presentation_plan_recovery import PresentationPlanRecovery
     PresentationPlanRecovery().recover_missing_plan(result)
+    from .source_scope_completeness import prepare_cached_source_scopes
+    prepare_cached_source_scopes(result)
     from .presentation_claim_evidence import prepare_presentation_claims
     prepare_presentation_claims(result)
     qa = run_comprehensive_qa(result, auto_repair=True)

@@ -5,6 +5,77 @@ from __future__ import annotations
 import re
 
 
+def ratio_label_forms(label: str) -> set[str]:
+    """Derive ratio aliases from the source subject, without aliasing its inputs.
+
+    A source label such as ``Annual support and maintenance expenditure ratio
+    %`` also names ``S&M ratio``. Only a multi-word source prefix may elide a
+    trailing noun; shared shortened aliases must still resolve uniquely.
+    """
+    forms: set[str] = set()
+    clean = re.sub(r"\s*%\s*$", "", label).strip()
+    for form in source_label_forms(clean):
+        match = re.fullmatch(r"(.+?)\s+(ratio|share|percentage)(\b.*)", form, re.I)
+        if not match:
+            continue
+        forms.add(form)
+        words = match[1].split()
+        for end in range(1, len(words)):
+            prefix = " ".join(words[:end])
+            tokens = [word for word in re.findall(r"[a-z0-9]+", prefix.casefold())
+                      if word not in {"and", "the", "annual"}]
+            if len(tokens) >= 2 and words[end - 1].casefold() not in {"and", "&", "of", "to"}:
+                forms.add(f"{prefix} {match[2]}{match[3]}")
+    return forms
+
+
+def bind_compound_ratio_spans(
+    clause: str,
+    metric_spans: list[tuple[int, int, str]],
+    direction_spans: list[tuple[int, int, str]],
+    ambiguous_metric: str,
+) -> list[tuple[int, int, str]]:
+    """Keep ratio operands inside one subject before choosing its predicate.
+
+    This binds lexical subjects only; it neither calculates a missing ratio nor
+    establishes its denominator definition. An unknown ratio cannot borrow the
+    trend of a known numerator or denominator, even if their values appear.
+    """
+    # "Percentage points" is a delta unit, not a second ratio subject.
+    markers = re.compile(
+        r"\b(?:ratio|share|percentage(?![\s-]+points?\b)|rate|margin)\b|%\s+of\b|\s/\s", re.I,
+    )
+    connector = re.compile(
+        r"\s+(?:(?:as\s+)?(?:a\s+)?(?:percentage|percent|%|share)\s+of|"
+        r"relative\s+to|to|of)\s+", re.I,
+    )
+    result = list(metric_spans)
+    handled_until = -1
+    for marker in markers.finditer(clause):
+        if marker.start() < handled_until:
+            continue
+        covering = [(start, end, owner) for start, end, owner in result
+                    if start <= marker.start() and end >= marker.end()]
+        start = min((item[0] for item in covering), default=marker.start())
+        end = max((item[1] for item in covering), default=marker.end())
+        owners = {item[2] for item in covering} or {ambiguous_metric}
+        relation = connector.match(clause, end)
+        implicit_relation = marker.group().strip().startswith(('%', '/'))
+        if relation or implicit_relation:
+            # The predicate terminates the compound subject. Independent
+            # predicates have already been split by the caller.
+            end = next((ds for ds, _, _ in direction_spans if ds >= end), len(clause))
+        if not covering:
+            # Include the numerator too, so nearest-alias and single-metric
+            # fallbacks cannot attach the predicate to a component instead.
+            start = max((de for _, de, _ in direction_spans if de <= start), default=0)
+        result = [(ms, me, owner) for ms, me, owner in result
+                  if me <= start or ms >= end]
+        result.extend((start, end, owner) for owner in sorted(owners))
+        handled_until = end
+    return sorted(result, key=lambda item: item[0])
+
+
 def source_label_forms(label: str) -> set[str]:
     """Allow source-derived initialisms and an omitted annual qualifier."""
     forms = {label.strip()}

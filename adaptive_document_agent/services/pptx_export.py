@@ -145,6 +145,8 @@ def build_presentation(result: PipelineResult, template_path: str | Path | None 
     except ImportError as exc:  # pragma: no cover - deployment configuration failure
         raise RuntimeError("PowerPoint export requires python-pptx.") from exc
 
+    from .source_scope_completeness import prepare_cached_source_scopes
+    prepare_cached_source_scopes(result)
     from .presentation_claim_evidence import prepare_presentation_claims
     prepare_presentation_claims(result)
     resolved_path = _resolve_template_path(template_path)

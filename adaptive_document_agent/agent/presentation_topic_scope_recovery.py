@@ -24,6 +24,24 @@ def withheld_topic_ids(plan: PresentationPlan) -> set[str]:
     return identifiers
 
 
+def recover_cached_topic_claims(plan: PresentationPlan, result: PipelineResult) -> list[str]:
+    """Apply the compiler's ambiguity boundary to an already retained topic plan.
+
+    Source-bound share preparation can legitimately restore cached wording,
+    but that copy still needs the strict metric/category scope checks. Only
+    the retained plan is eligible; in-progress compilation keeps its existing
+    explicit validation boundary. Contradictions and other errors stay blocked.
+    """
+    if (plan is not result.presentation_plan or not result.presentation_topics
+            or plan.planning_origin not in {"topic_compilation", "topic_recovery"}):
+        return []
+    issues = ClaimValidator().validate_plan(plan, result.observations, result.charts,
+                                           insight_observation_ids=insight_inputs(result))
+    if not any(issue.code == "direction_scope_ambiguous" for issue in issues):
+        return []
+    return recover_unscoped_topic_claims(plan, result, issues)
+
+
 def validate_selected_topic_claims(plan: PresentationPlan, result: PipelineResult) -> PresentationPlan:
     """Use one strict claim-recovery boundary for compiled and fallback topics."""
     refs = insight_inputs(result)
@@ -96,6 +114,12 @@ def recover_unscoped_topic_claims(plan: PresentationPlan, result: PipelineResult
         }, ensure_ascii=False, sort_keys=True))
         slide.title = question
     rebuild_selected_topic_summary(result, candidate)
+    # Summary reconstruction can reintroduce exact repeated-source records
+    # from the retained topic catalog. Reapply the same provenance alignment
+    # used by final claim preparation before comparing the candidate's errors;
+    # this never merges conflicting values or relaxes the no-new-errors gate.
+    from adaptive_document_agent.validation.presentation_evidence_alignment import align_redundant_slide_evidence
+    notes.extend(align_redundant_slide_evidence(candidate, result.observations, result.charts))
     checked = ClaimValidator().validate_plan(candidate, result.observations, result.charts,
                                             insight_observation_ids=insight_inputs(result))
     key = lambda issue: (issue.code, issue.message, getattr(issue, "slide_id", None),

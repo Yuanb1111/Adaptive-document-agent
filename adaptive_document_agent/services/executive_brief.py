@@ -135,9 +135,15 @@ def brief_items(result: PipelineResult):
     errors = validate_executive_brief(brief, result)
     if errors:
         raise ValueError('Invalid executive brief: ' + '; '.join(errors))
-    return [BriefItem(item.label, restore_percentage_symbols(item.text, [q.text for q in item.evidence],
-                        source_percentages=_quoted_table_percentages(item, result)),
-                      sorted({q.page for q in item.evidence})) for item in brief.items]
+    from .brief_context import preserve_brief_context
+    pages = {page.page_number: page.text for page in result.document.pages}
+    items = []
+    for item in brief.items:
+        contextual = preserve_brief_context(item, pages)
+        text = restore_percentage_symbols(contextual.text, [q.text for q in contextual.evidence],
+                                          source_percentages=_quoted_table_percentages(item, result))
+        items.append(BriefItem(item.label, text, sorted({q.page for q in contextual.evidence})))
+    return items
 
 
 def display_brief(result: PipelineResult):

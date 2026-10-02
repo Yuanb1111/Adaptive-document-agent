@@ -14,6 +14,8 @@ def compile_topic_plan(result: PipelineResult) -> PresentationPlan:
     No model call, evidence check or review status is silently fabricated.
     """
     _, lookup = series_directory(result)
+    from adaptive_document_agent.services.source_scope_completeness import reconcile_source_scopes
+    reconcile_source_scopes(result, lookup)
     scope = {page for start, end in result.profile.analysis_page_ranges for page in range(start, end + 1)}
     PresentationTopicSelector._validate(result.presentation_topics, lookup, primary_pages=scope)
     plan = PresentationPlanRecovery().from_selected_topics(result, origin="topic_compilation")

@@ -49,7 +49,13 @@ from .direction_scope import (
     predicate_conjunctions,
     resolve_direction_scope,
 )
-from .presentation_metric_binding import coordinated_alias_owners, possessive_ratio_subject, source_label_forms
+from .presentation_metric_binding import (
+    bind_compound_ratio_spans,
+    coordinated_alias_owners,
+    possessive_ratio_subject,
+    ratio_label_forms,
+    source_label_forms,
+)
 
 
 class MetricSemanticFamily(str, Enum):
@@ -1320,6 +1326,7 @@ def extract_metric_aliases(
 
     for alias in list(aliases):
         aliases.update(source_label_forms(alias))
+        aliases.update(ratio_label_forms(alias))
 
     combined = f"{canonical_name or ''} {metric_name} {pres_label or ''}".casefold()
 
@@ -1493,6 +1500,10 @@ def _associate_clause_direction_spans(
         owners = alias_owners[alias.casefold()]
         if len(owners) == 1:
             return next(iter(owners))
+        if re.search(r"\b(?:ratio|share|percentage)\b", alias, re.I):
+            # A shared shortened ratio subject needs a fuller source label.
+            # Words in its denominator cannot disambiguate the numerator.
+            return None
         alias_words = set(re.findall(r"[a-z0-9]+", alias.casefold()))
         clause_words = set(re.findall(r"[a-z0-9]+", clause.casefold()))
         words_by_owner = {metric: set(re.findall(r"[a-z0-9]+", metric.casefold())) - alias_words
@@ -1536,6 +1547,8 @@ def _associate_clause_direction_spans(
 
     if not dir_spans:
         return []
+
+    metric_spans = bind_compound_ratio_spans(clause, metric_spans, dir_spans, ambiguous_metric)
 
     # If no metric name matched in clause, check if specific values match
     if not metric_spans and metric_values_map:
