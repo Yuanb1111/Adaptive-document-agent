@@ -185,6 +185,8 @@ def prepare_presentation_claims(result: PipelineResult, plan: PresentationPlan |
         from adaptive_document_agent.agent.presentation_summary_selection import rebuild_selected_topic_summary
         rebuild_selected_topic_summary(result, plan)
     reconcile_presentation_identity(plan, result)
+    from .composition_preservation import restore_selected_compositions, reconcile_composition_coverage
+    composition_notes = restore_selected_compositions(result, plan)
     ambiguous = ambiguous_source_table_ids(result)
     eligible = [item for item in result.observations if item.value is not None and isfinite(item.value)
                 and item.period and item.evidence and item.validation_status == "valid" and not item.anomaly_notes
@@ -198,7 +200,7 @@ def prepare_presentation_claims(result: PipelineResult, plan: PresentationPlan |
     totals = source_total_denominators(result)
     from .presentation_ratio_definitions import ratio_definitions, source_defined_possessive_share
     definitions = ratio_definitions(result)
-    notes, replacements, restored_titles = [], {}, defaultdict(set)
+    notes, replacements, restored_titles = list(composition_notes), {}, defaultdict(set)
     for slide in plan.slides:
         if slide.slide_type != "analysis":
             continue
@@ -322,5 +324,8 @@ def prepare_presentation_claims(result: PipelineResult, plan: PresentationPlan |
     # visible references before export and on every repeated preparation.
     from adaptive_document_agent.validation.presentation_evidence_alignment import align_redundant_slide_evidence
     notes.extend(align_redundant_slide_evidence(plan, result.observations, result.charts))
+    from adaptive_document_agent.agent.presentation_topic_scope_recovery import recover_cached_topic_claims
+    notes.extend(recover_cached_topic_claims(plan, result))
+    reconcile_composition_coverage(result, plan)
     plan.editorial_notes = list(dict.fromkeys([*plan.editorial_notes, *notes]))
     return notes

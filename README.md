@@ -650,3 +650,27 @@ labelled comparison contexts, and binds comparative wording to visible values.
 See [the v47 evidence and source-preview notes](docs/PRESENTATION_EVIDENCE_V47.md).
 
 The authoritative specification is [docs/MASTER_PROMPT.md](docs/MASTER_PROMPT.md). Repository-specific working instructions are in [AGENTS.md](AGENTS.md).
+
+### Source-bound content integrity (v76)
+
+Presentation repair now keeps each ratio predicate bound to the complete ratio
+subject instead of borrowing its numerator's or denominator's trend. Ambiguous
+compound subjects remain reviewable rather than acquiring an invented direction.
+
+Selected composition evidence survives optional visual enrichment and cached
+plan replay. Category matrices keep their dimensions; coverage describes the
+validated selected categories actually displayed. A complete source breakdown is
+restored only when literal source enumeration, exact retained table cells,
+compatible periods/units and reported totals agree. Explicit partial selections
+and exclusions are preserved, and missing or conflicting evidence is disclosed.
+
+Executive briefing preserves literal rate denominators and the complete cited
+conditional scenario relationship, including allocations and assumptions. This
+bounded adapter uses cited/adjacent definition text, preserves raw records, and
+refuses conflicting cadence or ambiguous scenario subjects. It does not make an
+additional model request. Unknown grammatical forms remain unmodified.
+
+Cached replay is a deterministic export of retained source evidence, not a fresh
+PDF extraction or live-model analysis. All financial, native package and local
+rendered export gates remain active. The pipeline/analysis contract advances to
+v76 / analysis-v40; the extraction contract is unchanged.

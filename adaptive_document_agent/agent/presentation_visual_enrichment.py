@@ -107,6 +107,16 @@ def enrich_selected_plan(gateway, result: PipelineResult, plan: PresentationPlan
                       if item.slide_type == "analysis" and item.theme_id == theme.id), None)
         if slide is None:
             continue
+        from adaptive_document_agent.services.presentation_claim_evidence import visible_observation_ids
+        charts = {chart.id: chart for chart in result.charts}
+        retained = set(visible_observation_ids(slide, charts))
+        retained.update(oid for cid in [*slide.chart_ids, *(c for b in slide.visual_blocks for c in b.chart_ids)]
+                        if cid in charts for oid in charts[cid].total_observation_ids)
+        # Optional styling cannot silently replace a selected composition or
+        # comparison with a strict subset. A changed evidence scope belongs to
+        # topic selection, not to a later choice of visual form.
+        if not retained <= selected:
+            continue
         slide.chart_ids = []
         slide.visual_blocks = [block]
         slide.observation_ids = []

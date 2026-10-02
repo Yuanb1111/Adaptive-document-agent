@@ -34,7 +34,9 @@ def series_directory(result: PipelineResult) -> tuple[list[dict[str, object]], d
         item for item in result.observations
         if not observation_uses_ambiguous_table(item, ambiguous_tables)
     ]
-    for group in evidence_groups(eligible):
+    from adaptive_document_agent.services.source_scope_completeness import declared_scope_series
+    groups = [*evidence_groups(eligible), *declared_scope_series(result, eligible)]
+    for group in groups:
         if not any(item.value is not None and item.evidence for item in group):
             continue
         by_period: dict[str, set[float]] = {}
@@ -46,6 +48,8 @@ def series_directory(result: PipelineResult) -> tuple[list[dict[str, object]], d
             # impossible to interpret as a single coherent measure.
             continue
         identifier = stable_id("presentation_series", *(item.id for item in group))
+        if identifier in lookup:
+            continue
         lookup[identifier] = group
         first = group[0]
         pages = sorted({e.page for item in group for e in item.evidence})
