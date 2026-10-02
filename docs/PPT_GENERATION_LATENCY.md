@@ -64,7 +64,9 @@ synthetic stub with no real-provider fallback, credentials or paid requests.
   and response schema. Expanded scores, reasons, rejection decisions, ordering,
   selected analyses and observation references are identical.
 - Scheduling: the comparison records per-stage durations, call intervals, wall
-  time and output hashes. Each run must contain exactly one introduction-page
+  time and output hashes. Ten alternating pairs measured 228.1 ms baseline versus
+  128.3 ms optimized median (43.7% in this fixed-delay simulation only). Each run
+  must contain exactly one introduction-page
   call and one introduction-draft call. Detailed paired results are recorded in
   `benchmarks/ppt-generation-latency-20261002.json`.
 
