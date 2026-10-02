@@ -169,6 +169,15 @@ class PresentationTopicSelector:
             PresentationTopicSelection,
             stage="presentation",
         )
+        from adaptive_document_agent.validation.topic_period_consistency import reconcile_topic_periods
+        # The model owns the question; exact source-row rebinding follows its
+        # explicit periods without another model request or changing raw facts.
+        previous = result.presentation_topics
+        result.presentation_topics = selection
+        try:
+            reconcile_topic_periods(result, lookup)
+        finally:
+            result.presentation_topics = previous
         from .topic_selection_repair import retain_valid_topics
         return retain_valid_topics(selection, lookup, primary_pages, result, self.gateway, self._validate)
 
@@ -226,6 +235,10 @@ class PresentationTopicSelector:
             ))
             if claimed - allowed:
                 raise ValueError(f"Topic {topic.id} contains unsupported numeric claims: {sorted(claimed - allowed)}")
+            from adaptive_document_agent.validation.topic_period_consistency import topic_period_errors
+            period_errors = topic_period_errors(topic, lookup)
+            if period_errors:
+                raise ValueError(" ".join(period_errors))
             selected.update(topic.series_ids)
         for omission in selection.omissions:
             if omission.series_id not in lookup or omission.series_id in selected or not omission.reason.strip():

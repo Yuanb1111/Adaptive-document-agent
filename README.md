@@ -674,3 +674,31 @@ Cached replay is a deterministic export of retained source evidence, not a fresh
 PDF extraction or live-model analysis. All financial, native package and local
 rendered export gates remain active. The pipeline/analysis contract advances to
 v76 / analysis-v40; the extraction contract is unchanged.
+
+
+### Topic periods and fallback metric grouping (v77)
+
+A single explicitly shared comparison range is checked against every selected
+series, rather than accepting a year merely because it occurs elsewhere in the
+topic. A period-specific series reference can be rebound offline only when the
+retained catalog contains one eligible alternative for the exact same source
+table, row, metric, entity, unit, currency and category. Explicit omissions and
+ambiguous or invalid alternatives prevent rebinding. Original selections and
+replacement references remain in the validation audit; observations and values
+are never rewritten. Cached recovery commits the corrected topic references
+with the validated plan, so repeat exports do not restore the rejected scope.
+
+This bounded recovery recognizes a shared terminal period range in one question
+clause. Independently labelled ranges, separate questions and separately scoped
+panels remain independent. Continuations cite only their displayed evidence and
+check full period labels as well as numeric tokens, so an annual question cannot
+borrow the same year digits from an interim panel. Unresolved selections remain
+subject to the existing model correction and strict validation gates.
+
+Evidence-only fallback grouping uses all plotted metric identities and retained
+source-table relationships. A broad section heading or a proposed chart title
+cannot manufacture a relationship. Fallback headings retain every qualified
+metric label, and multi-chart groups split before the existing heading capacity
+rules would truncate a metric. Financial, native-preflight and rendered export
+gates remain mandatory. The presentation/output contract is v77; analysis and
+extraction cache contracts are unchanged.

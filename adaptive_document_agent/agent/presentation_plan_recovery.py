@@ -79,6 +79,7 @@ class PresentationPlanRecovery:
                 ))
             return False
         result.presentation_plan = plan
+        result.presentation_topics = snapshot.presentation_topics
         result.charts = snapshot.charts
         result.validation_warnings = snapshot.validation_warnings
         result.validation_warnings.append(ValidationIssue(
@@ -108,6 +109,8 @@ class PresentationPlanRecovery:
             base.editorial_notes.extend(note for note in result.presentation_plan.editorial_notes
                                         if note.startswith(_WITHHELD_PREFIX))
         _, series_by_id = series_directory(result)
+        from adaptive_document_agent.validation.topic_period_consistency import reconcile_topic_periods
+        reconcile_topic_periods(result, series_by_id)
         from adaptive_document_agent.document_model import period_sort_key
         observation_by_id = {item.id: item for item in result.observations}
         from adaptive_document_agent.services.pptx_export import _usable_charts
@@ -244,18 +247,21 @@ class PresentationPlanRecovery:
                     for oid in [*chart.observation_ids, *chart.total_observation_ids]}
                 local_pages = sorted({e.page for oid in local_ids if oid in observation_by_id
                                       for e in observation_by_id[oid].evidence})
+                from adaptive_document_agent.validation.topic_period_consistency import continuation_copy
+                local_question, local_reason = continuation_copy(safe_question, safe_reason,
+                    [observation_by_id[oid] for oid in sorted(local_ids) if oid in observation_by_id])
                 analysis_slides.append(PresentationSlide(
                     id=f"topic_{topic.id}" if part == 0 else f"topic_{topic.id}_part_{part + 1}",
-                    slide_type="analysis", title=safe_question if paginate else safe_title,
+                    slide_type="analysis", title=local_question if paginate else safe_title,
                     section_id=topic.id, section_title=topic.title,
                     slide_role="overview" if part == 0 else "deep_dive",
                     layout="three_up" if len(group) == 3 else "two_up" if len(group) == 2
                            else "chart_with_data" if group and support else "single" if group else "data_overview",
-                    message=safe_question, chart_ids=group, observation_ids=support,
+                    message=local_question, chart_ids=group, observation_ids=support,
                     visual_blocks=[PresentationVisualBlock(role="table", observation_ids=support[start:start + 12])
                                    for start in range(0, len(support), 12)],
-                    theme_id=topic.id, analytical_question=safe_question,
-                    selection_reason=safe_reason, comparison_mode="parallel" if len(group) > 1 else "context",
+                    theme_id=topic.id, analytical_question=local_question,
+                    selection_reason=local_reason, comparison_mode="parallel" if len(group) > 1 else "context",
                     source_pages=local_pages,
                 ))
         if not analysis_slides:
@@ -400,7 +406,7 @@ class PresentationPlanRecovery:
                 )
                 for idx, chart in enumerate(group)
             ]
-            clean_title = sanitize_metric_for_title(re.sub(r"(?i)\s+and\s+related\s+measures\b", "", group_title).strip(), max_length=48)
+            clean_title = re.sub(r"(?i)\s+and\s+related\s+measures\b", "", group_title).strip()
             clean_title = re.sub(r"(?i)\s+analysis\b", "", clean_title).strip()
             from adaptive_document_agent.services.language_qa import polish_slide_title
 
