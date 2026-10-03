@@ -85,6 +85,7 @@ def test_period_markers_and_compact_amounts_are_distinguished() -> None:
 
 @pytest.mark.parametrize("amount", [
     "$3M", "$6m", "USD 9M", "usd12m", "RMB 3.5M", "EUR6.25m", "£ 12M", "HK$9m",
+    "USD -6M", "USD +6M", "USD −6M", "$-6M", "USD (6M)", "USD - 6M", "6M USD",
 ])
 def test_currency_context_prevents_million_amount_from_being_masked_as_period(amount) -> None:
     numbers = PresentationPlanValidator._numbers(amount)
@@ -120,6 +121,8 @@ def test_currency_six_million_cannot_hide_unsupported_amount(claim) -> None:
     ("Revenue was USD 6M.", "Revenue was USD6M."),
     ("Revenue was $6m.", "Revenue was $ 6M."),
     ("Revenue was RMB 3.5M.", "Revenue was RMB3.5m."),
+    ("Net cash flow was USD -6M.", "Net cash flow was USD − 6m."),
+    ("Net cash flow was USD (6M).", "Net cash flow was -6M USD."),
 ])
 def test_equivalent_compact_million_amount_forms_remain_supported(source, claim) -> None:
     result = PipelineResult(
@@ -131,6 +134,22 @@ def test_equivalent_compact_million_amount_forms_remain_supported(source, claim)
         "label": "Revenue", "text": claim, "evidence": [{"page": 1, "text": source}],
     }]})
     assert validate_executive_brief(brief, result) == []
+
+
+def test_signed_compact_amount_cannot_be_cleaned_before_validation() -> None:
+    source = "Net cash flow was USD -4.6 million."
+    result = PipelineResult(
+        document=ParsedDocument(document_id="amount", sha256="b" * 64, safe_filename="synthetic.pdf",
+                                page_count=1, pages=[DocumentPage(page_number=1, text=source)]),
+        profile=DocumentProfile(),
+    )
+    brief = ExecutiveBrief.model_validate({"title": "Findings", "items": [{
+        "label": "Net cash flow", "text": "Net cash flow was USD -6M.",
+        "evidence": [{"page": 1, "text": source}],
+    }]})
+    errors = validate_executive_brief(brief, result)
+    assert any("unsupported numeric claims" in error for error in errors)
+    assert any("currency or magnitude" in error for error in errors)
 
 
 def test_real_unsupported_number_and_changed_unit_still_fail() -> None:
@@ -252,6 +271,29 @@ def test_same_row_equal_amount_and_share_requires_quoted_column() -> None:
     assert validate_executive_brief(share_claim, result) == []
 
 
+@pytest.mark.parametrize("amount_cell", ["$50.5", "USD (50.5)", "50.5(1)", "$ 50.5[a]"])
+def test_formatted_amount_cell_remains_a_competing_same_value_candidate(amount_cell) -> None:
+    result = _percentage_result()
+    result.document.pages[0].text = f"Revenue amount {amount_cell}. Revenue share 50.5."
+    result.document.pages[0].tables = [ExtractedTable(
+        table_id="revenue", page=1, headers=["Metric", "Amount", "Share (%)"],
+        column_types=["unknown", "amount", "percentage"],
+        rows=[TableRow(cells=["Revenue", amount_cell, "50.5"], page=1)],
+    )]
+    result.observations = [Observation(
+        id="share", metric_original="Revenue", raw_value="50.5", value=50.5,
+        unit="percent", unit_family="percentage", confidence=.99,
+        table_id="revenue", row_id=0, column_id=2,
+        evidence=[SourceEvidence(page=1, text="50.5", table_id="revenue", row_label="Revenue",
+                                 column_label="Share (%)", extraction_method="synthetic", confidence=.99)],
+    )]
+    brief = ExecutiveBrief.model_validate({"title": "Findings", "items": [{
+        "label": "Revenue amount", "text": "Revenue amount was 50.5%.",
+        "evidence": [{"page": 1, "text": f"Revenue amount {amount_cell}"}],
+    }]})
+    assert any("unsupported numeric claims" in error for error in validate_executive_brief(brief, result))
+
+
 def test_same_metric_across_tables_and_periods_fails_closed_without_exact_context() -> None:
     result = _percentage_result()
     result.document.pages[0].text = "FY2024 Revenue share 50.5. FY2025 Revenue share 50.5."
@@ -304,6 +346,9 @@ def test_retained_total_does_not_erase_detail_or_supplier_limitations() -> None:
 @pytest.mark.parametrize("note", [
     "Others is shown; Europe is not shown.",
     "Others is not shown for FY2024 or FY2025.",
+    "Others is shown. Europe is not shown.",
+    "Europe is not shown alongside Others.",
+    "Europe and Others are not shown.",
 ])
 def test_complex_absence_statement_is_preserved_as_a_whole(note) -> None:
     result = _percentage_result()

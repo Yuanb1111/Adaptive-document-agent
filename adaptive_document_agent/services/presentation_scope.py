@@ -51,13 +51,12 @@ def scope_items(result):
     return items
 
 
-_DIRECT_ABSENCE = re.compile(
-    r"(?i)\b(?:not|no|omit(?:s|ted)?|exclude(?:s|d)?)\b.{0,35}\b(?:display(?:ed)?|show(?:n)?|present(?:ed)?)\b"
-    r"|\b(?:display(?:ed)?|show(?:n)?|present(?:ed)?)\b.{0,35}\b(?:not|no|omit(?:s|ted)?|exclude(?:s|d)?)\b"
+_ABSENCE_STATEMENT = re.compile(
+    r"(?ix)^\s*(?:the\s+)?(?P<subject>[^.;:]+?)(?:\s+category)?\s+"
+    r"(?:is|was)\s+not\s+(?:shown|displayed|presented)"
+    r"(?:\s+for\s+(?P<period>(?:FY\s*)?(?:19|20)\d{2}|(?:3|6|9|12)M\s*(?:19|20)\d{2}))?\s*[.]?\s*$"
 )
 _DETAIL_SCOPE = re.compile(r"(?i)\b(?:detail(?:ed|s)?|breakdown|supplier|vendor|customer|subcategor(?:y|ies))\b")
-_PERIOD = re.compile(r"(?i)\b(?:FY\s*)?(?:19|20)\d{2}\b|\b(?:3|6|9|12)M\s*(?:19|20)\d{2}\b")
-_COMPLEX_SCOPE = re.compile(r"(?i)[;:]|\b(?:and|or|but|while|whereas|except)\b")
 
 
 def _contradicted_by_retained_content(note, result) -> bool:
@@ -67,8 +66,8 @@ def _contradicted_by_retained_content(note, result) -> bool:
     narrow stale-plan case where a note says a category is not shown after the
     final plan/chart has retained that exact category.
     """
-    if (not _DIRECT_ABSENCE.search(note) or _DETAIL_SCOPE.search(note)
-            or _COMPLEX_SCOPE.search(note)):
+    statement = _ABSENCE_STATEMENT.fullmatch(note)
+    if statement is None or _DETAIL_SCOPE.search(note):
         return False
     plan = result.presentation_plan
     retained_ids = {
@@ -79,21 +78,19 @@ def _contradicted_by_retained_content(note, result) -> bool:
     }
     chart_ids = {identifier for slide in plan.slides for identifier in slide.chart_ids}
     retained_ids.update(oid for chart in result.charts if chart.id in chart_ids for oid in chart.observation_ids)
-    normalized_note = " ".join(str(note).casefold().split())
-    note_periods = {re.sub(r"\s+", "", match.group(0)).casefold() for match in _PERIOD.finditer(note)}
-    if len(note_periods) > 1:
-        return False
+    subject = " ".join(statement['subject'].casefold().split())
+    note_period = re.sub(r"\s+", "", statement['period'] or "").casefold()
     for observation in result.observations:
         if observation.id not in retained_ids:
             continue
-        if note_periods:
+        if note_period:
             observation_period = re.sub(r"\s+", "", observation.period or "").casefold()
-            if observation_period not in note_periods:
+            if observation_period != note_period:
                 continue
         labels = [observation.metric_original, observation.metric_canonical or "",
                   *observation.category_dimensions.values()]
         for label in labels:
-            subject = " ".join(str(label).casefold().split()).strip()
-            if len(subject) >= 3 and re.search(rf"(?<!\w){re.escape(subject)}(?!\w)", normalized_note):
+            retained_subject = " ".join(str(label).casefold().split()).strip()
+            if len(retained_subject) >= 3 and retained_subject == subject:
                 return True
     return False

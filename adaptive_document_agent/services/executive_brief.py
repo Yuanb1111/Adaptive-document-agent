@@ -25,12 +25,32 @@ _QUANTITY = re.compile(
     r"(?P<currency_suffix>美元|港元|欧元|人民币|元)?(?![A-Za-z0-9_])"
 )
 
+_MONEY_QUANTITY = re.compile(
+    r"(?ix)(?<![A-Za-z0-9_.])"
+    r"(?:(?P<prefix>US\$|HK\$|RMB|CNY|CNH|USD|HKD|SGD|GBP|EUR|JPY|AUD|CAD|CHF|[$€£¥￥])\s*)?"
+    r"(?P<open>\()?\s*(?P<sign>[+\-\u2212])?\s*"
+    r"(?P<value>(?>\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s*"
+    r"(?P<unit>trillion|billion|million|thousand|bn|mn|[mkb])\b\s*(?(open)\))\s*"
+    r"(?P<suffix>US\$|HK\$|RMB|CNY|CNH|USD|HKD|SGD|GBP|EUR|JPY|AUD|CAD|CHF|[$€£¥￥])?"
+    r"(?![A-Za-z0-9_])"
+)
+
 
 def _quantities(text: str) -> set[tuple[str, str, str]]:
     text = PresentationPlanValidator._without_period_durations(text)
-    return {((m['currency'] or m['currency_suffix'] or '').casefold(),
-             PresentationPlanValidator._normalize_number(m['value']),
-             (m['unit'] or '').casefold()) for m in _QUANTITY.finditer(text)}
+    money_matches = list(_MONEY_QUANTITY.finditer(text))
+    money_spans = [match.span() for match in money_matches]
+    output = {((match['currency'] or match['currency_suffix'] or '').casefold(),
+               PresentationPlanValidator._normalize_number(match['value']),
+               (match['unit'] or '').casefold()) for match in _QUANTITY.finditer(text)
+              if not any(start <= match.start() and match.end() <= end for start, end in money_spans)}
+    for match in money_matches:
+        value = PresentationPlanValidator._normalize_number(match['value'])
+        if match['sign'] in {'-', '−'} or match['open']:
+            value = '-' + value.lstrip('-')
+        output.add(((match['prefix'] or match['suffix'] or '').casefold(), value,
+                    match['unit'].casefold()))
+    return output
 
 
 def restore_percentage_symbols(text: str, quotes: list[str], *, source_percentages=frozenset()) -> str:
@@ -122,11 +142,14 @@ def _quote_selects_cell(quote, key, page_number, table_id, row_id, column_id, pa
     """Require a quote to select one exact same-valued cell on its page."""
     from decimal import Decimal, InvalidOperation
 
-    def number(cell):
-        try:
-            return Decimal(str(cell).strip().replace(',', '').rstrip('%'))
-        except (InvalidOperation, AttributeError):
-            return None
+    def numbers(cell):
+        values = set()
+        for _, value, _ in _quantities(str(cell)):
+            try:
+                values.add(Decimal(value))
+            except InvalidOperation:
+                continue
+        return values
 
     try:
         wanted = Decimal(key)
@@ -146,11 +169,11 @@ def _quote_selects_cell(quote, key, page_number, table_id, row_id, column_id, pa
     for table in page.tables:
         for row_index, row in enumerate(table.rows):
             row_labels = [normalized(str(cell)) for cell in row.cells
-                          if cell and number(cell) is None and len(normalized(str(cell))) >= 3]
+                          if cell and not numbers(cell) and len(normalized(str(cell))) >= 3]
             if row_labels and not any(label in quote_text for label in row_labels):
                 continue
             for column_index, cell in enumerate(row.cells):
-                if number(cell) != wanted:
+                if wanted not in numbers(cell):
                     continue
                 descriptors = []
                 if column_index < len(table.headers):
