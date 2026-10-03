@@ -431,6 +431,8 @@ class PresentationPlanValidator:
 
     @staticmethod
     def _numbers(value: str) -> set[str]:
+        value = PresentationPlanValidator._without_period_durations(value)
+        value = PresentationPlanValidator._canonicalize_money_signs(value)
         # Separate explicit currency/fiscal prefixes before tokenising. Otherwise
         # RMB286.7m used to be read as just '7' after the decimal point.
         currency = r"(?:RMB|CNY|CNH|USD|HKD|SGD|GBP|EUR|JPY|AUD|CAD|CHF)"
@@ -439,7 +441,13 @@ class PresentationPlanValidator:
         # An interim label such as 6M2023 is one period marker. Its leading
         # duration is not a standalone numerical claim, while the year must
         # remain available for provenance checks.
-        value = re.sub(r"(?i)\b\d{1,2}M(?=\d{4}\b)", " ", value)
+        # ``6M``/``9M`` are period-duration markers, whether or not the year is
+        # attached (``6M2024``) or supplied elsewhere (``6M period``).  They do
+        # not assert the standalone numbers 6/9.
+        # Magnitude suffixes remain numeric claims.  The quantity validator
+        # separately checks their meaning; the numeric-token gate compares the
+        # complete decimal value rather than dropping a compact USD99M claim.
+        value = re.sub(r"(?i)(?<=\d)(?:trillion|billion|million|thousand|bn|mn|[mkb])\b", " ", value)
         grouped_or_decimal = re.compile(
             r"(?<![A-Za-z0-9_.,])[+-]?(?:"
             r"\d{1,3}(?:[, '\u00a0\u202f\u2019]\d{3})+(?:\.\d+)?"
@@ -450,6 +458,52 @@ class PresentationPlanValidator:
             PresentationPlanValidator._normalize_number(match)
             for match in grouped_or_decimal.findall(value)
         }
+
+    @staticmethod
+    def _without_period_durations(value: str) -> str:
+        """Remove duration tokens only when they are not compact money.
+
+        Currency context is inspected before currency prefixes are separated,
+        so ``$6M``, ``USD 6M`` and ``USD6M`` remain monetary quantities. A bare
+        ``6M`` is deliberately left ambiguous and validated as a quantity;
+        ``6M2025`` or ``6M period`` supplies explicit period context.
+        """
+        pattern = re.compile(
+            r"(?i)(?<![A-Za-z0-9_.])(?:3|6|9|12)M"
+            r"(?:(?P<year>\d{4})\b|(?=\s+(?:period|ended|ending)\b))"
+        )
+        money_spans = PresentationPlanValidator._money_spans(value)
+
+        def replace(match):
+            if any(start <= match.start() and match.end() <= end for start, end in money_spans):
+                return match.group(0)
+            return " " + (match["year"] or " ")
+
+        return pattern.sub(replace, value)
+
+    @staticmethod
+    def _money_spans(value: str) -> list[tuple[int, int]]:
+        """Locate compact magnitude amounts before period normalization."""
+        currency = r"(?:US\$|HK\$|RMB|CNY|CNH|USD|HKD|SGD|GBP|EUR|JPY|AUD|CAD|CHF|[$€£¥￥])"
+        number = r"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
+        magnitude = r"(?:trillion|billion|million|thousand|bn|mn|[mkb])"
+        decoration = r"(?:\s*[+\-\u2212]?\s*|\s*\(\s*[+\-\u2212]?\s*)"
+        closing = r"\s*\)?"
+        patterns = (
+            re.compile(rf"(?i){currency}{decoration}{number}\s*{magnitude}\b{closing}"),
+            re.compile(rf"(?i)(?<![A-Za-z0-9_.]){decoration}{number}\s*{magnitude}\b{closing}\s*{currency}"),
+        )
+        return sorted({match.span() for pattern in patterns for match in pattern.finditer(value)})
+
+    @staticmethod
+    def _canonicalize_money_signs(value: str) -> str:
+        """Normalize signed/accounting amount notation before tokenization."""
+        value = value.replace("\u2212", "-")
+        currency = r"(?:US\$|HK\$|RMB|CNY|CNH|USD|HKD|SGD|GBP|EUR|JPY|AUD|CAD|CHF|[$€£¥￥])"
+        amount = r"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?\s*(?:trillion|billion|million|thousand|bn|mn|[mkb])"
+        value = re.sub(rf"(?i)({currency})\s*\(\s*({amount})\s*\)", r"\1 -\2", value)
+        value = re.sub(rf"(?i)\(\s*({amount})\s*\)\s*({currency})", r"-\1 \2", value)
+        return re.sub(r"(?<![A-Za-z0-9_])([+-])\s+(?=\d)", r"\1", value)
 
     @staticmethod
     def _normalize_number(value: str) -> str:

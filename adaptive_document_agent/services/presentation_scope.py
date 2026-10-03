@@ -1,6 +1,7 @@
 """Audience-visible coverage boundaries, separate from the raw validation audit."""
 
 import json
+import re
 from .presentation_brief import BriefItem
 from .presentation_identity import current_identity_copy
 
@@ -29,7 +30,8 @@ def scope_items(result):
                 add("Not covered: " + topic.get("title", "Selected topic"),
                     "This selected topic could not be safely presented. " + str(draft.get("error", "Source validation failed.")))
     for note in plan.coverage_notes:
-        add("Coverage boundary", note)
+        if not _contradicted_by_retained_content(note, result):
+            add("Coverage boundary", note)
     for theme in plan.themes:
         for caveat in theme.caveats:
             add(theme.title, caveat, theme.source_pages)
@@ -47,3 +49,48 @@ def scope_items(result):
         return []
     add("Reading scope", "This presentation covers retained, source-validated evidence and does not represent every topic or table in the document. Original diagnostics remain in the analysis JSON.")
     return items
+
+
+_ABSENCE_STATEMENT = re.compile(
+    r"(?ix)^\s*(?:the\s+)?(?P<subject>[^.;:]+?)(?:\s+category)?\s+"
+    r"(?:is|was)\s+not\s+(?:shown|displayed|presented)"
+    r"(?:\s+for\s+(?P<period>(?:FY\s*)?(?:19|20)\d{2}|(?:3|6|9|12)M\s*(?:19|20)\d{2}))?\s*[.]?\s*$"
+)
+_DETAIL_SCOPE = re.compile(r"(?i)\b(?:detail(?:ed|s)?|breakdown|supplier|vendor|customer|subcategor(?:y|ies))\b")
+
+
+def _contradicted_by_retained_content(note, result) -> bool:
+    """Drop an absence claim only when its named subject is visibly retained.
+
+    This deliberately does not rewrite broad limitations.  It handles the
+    narrow stale-plan case where a note says a category is not shown after the
+    final plan/chart has retained that exact category.
+    """
+    statement = _ABSENCE_STATEMENT.fullmatch(note)
+    if statement is None or _DETAIL_SCOPE.search(note):
+        return False
+    plan = result.presentation_plan
+    retained_ids = {
+        identifier
+        for slide in plan.slides
+        for identifier in [*slide.observation_ids,
+                           *(oid for block in slide.visual_blocks for oid in block.observation_ids)]
+    }
+    chart_ids = {identifier for slide in plan.slides for identifier in slide.chart_ids}
+    retained_ids.update(oid for chart in result.charts if chart.id in chart_ids for oid in chart.observation_ids)
+    subject = " ".join(statement['subject'].casefold().split())
+    note_period = re.sub(r"\s+", "", statement['period'] or "").casefold()
+    for observation in result.observations:
+        if observation.id not in retained_ids:
+            continue
+        if note_period:
+            observation_period = re.sub(r"\s+", "", observation.period or "").casefold()
+            if observation_period != note_period:
+                continue
+        labels = [observation.metric_original, observation.metric_canonical or "",
+                  *observation.category_dimensions.values()]
+        for label in labels:
+            retained_subject = " ".join(str(label).casefold().split()).strip()
+            if len(retained_subject) >= 3 and retained_subject == subject:
+                return True
+    return False

@@ -9,20 +9,48 @@ def normalized(text: str) -> str:
     return " ".join(text.casefold().split())
 
 
+_UNIT_ONLY_LABEL = re.compile(
+    r"(?ix)^\s*(?:in\s+)?(?:RMB|CNY|CNH|USD|HKD|SGD|GBP|EUR|JPY|AUD|CAD|CHF|US\$|HK\$|[$€£¥￥])?\s*"
+    r"(?:in\s+)?(?:trillions?|billions?|millions?|thousands?|bn|mn|[mkb]|['’]000s?)"
+    r"(?:\s*(?:per|/)\s*\w+)?\s*$"
+)
+
+
 # Preserve explicit magnitudes and currencies as well as numeric tokens. A
 # matching 7.3 is not permission to turn millions into billions or USD into RMB.
 _QUANTITY = re.compile(
     r"(?i)(?<![A-Za-z0-9_.])(?P<currency>US\$|HK\$|RMB|CNY|USD|HKD|EUR|GBP|人民币|美元|港元|欧元|\$|€|£|¥|￥)?\s*"
-    r"(?P<value>[+-]?\d+(?:,\d{3})*(?:\.\d+)?)\s*"
-    r"(?P<unit>trillion|billion|million|thousand|bn|[mkb](?!\w)|%|percent\b|万亿|亿|万|千)?"
-    r"(?P<currency_suffix>美元|港元|欧元|人民币|元)?"
+    r"(?P<value>(?>[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?))\s*"
+    r"(?P<unit>trillion|billion|million|thousand|bn|mn|[mkb]|%|percent\b|万亿|亿|万|千)?"
+    r"(?P<currency_suffix>美元|港元|欧元|人民币|元)?(?![A-Za-z0-9_])"
+)
+
+_MONEY_QUANTITY = re.compile(
+    r"(?ix)(?<![A-Za-z0-9_.])"
+    r"(?:(?P<prefix>US\$|HK\$|RMB|CNY|CNH|USD|HKD|SGD|GBP|EUR|JPY|AUD|CAD|CHF|[$€£¥￥])\s*)?"
+    r"(?P<open>\()?\s*(?P<sign>[+\-\u2212])?\s*"
+    r"(?P<value>(?>\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s*"
+    r"(?P<unit>trillion|billion|million|thousand|bn|mn|[mkb])\b\s*(?(open)\))\s*"
+    r"(?P<suffix>US\$|HK\$|RMB|CNY|CNH|USD|HKD|SGD|GBP|EUR|JPY|AUD|CAD|CHF|[$€£¥￥])?"
+    r"(?![A-Za-z0-9_])"
 )
 
 
 def _quantities(text: str) -> set[tuple[str, str, str]]:
-    return {((m['currency'] or m['currency_suffix'] or '').casefold(),
-             PresentationPlanValidator._normalize_number(m['value']),
-             (m['unit'] or '').casefold()) for m in _QUANTITY.finditer(text)}
+    text = PresentationPlanValidator._without_period_durations(text)
+    money_matches = list(_MONEY_QUANTITY.finditer(text))
+    money_spans = [match.span() for match in money_matches]
+    output = {((match['currency'] or match['currency_suffix'] or '').casefold(),
+               PresentationPlanValidator._normalize_number(match['value']),
+               (match['unit'] or '').casefold()) for match in _QUANTITY.finditer(text)
+              if not any(start <= match.start() and match.end() <= end for start, end in money_spans)}
+    for match in money_matches:
+        value = PresentationPlanValidator._normalize_number(match['value'])
+        if match['sign'] in {'-', '−'} or match['open']:
+            value = '-' + value.lstrip('-')
+        output.add(((match['prefix'] or match['suffix'] or '').casefold(), value,
+                    match['unit'].casefold()))
+    return output
 
 
 def restore_percentage_symbols(text: str, quotes: list[str], *, source_percentages=frozenset()) -> str:
@@ -50,15 +78,34 @@ def _quoted_table_percentages(item, result):
     from decimal import Decimal, InvalidOperation
     pages = {p.page_number: p for p in result.document.pages}
     kinds = defaultdict(set)
+    bound_cells = set()
     for observation in result.observations:
         if observation.value is None or observation.validation_status != 'valid' or observation.anomaly_notes:
             continue
         key = PresentationPlanValidator._normalize_number(observation.raw_value)
         for evidence in observation.evidence:
             quotes = [q.text for q in item.evidence if q.page == evidence.page]
-            if not any(key in {v for _, v, _ in _quantities(quote)} for quote in quotes):
+            value_quotes = [quote for quote in quotes if key in {v for _, v, _ in _quantities(quote)}]
+            if value_quotes:
+                # A same-page/same-value observation with another unit keeps
+                # the value ambiguous even when it has no resolved table cell.
+                kinds[key].add(observation.unit_family if observation.unit_family != 'generic' else observation.unit)
+            page = pages.get(evidence.page)
+            table = next((t for t in page.tables if t.table_id == evidence.table_id), None) if page else None
+            row, col = observation.row_id, observation.column_id
+            if (table is None or row is None or col is None or not 0 <= row < len(table.rows)
+                    or not 0 <= col < len(table.column_types) or col >= len(table.rows[row].cells)):
                 continue
-            kinds[key].add(observation.unit_family if observation.unit_family != 'generic' else observation.unit)
+            labels = [evidence.row_label, observation.metric_original, observation.metric_canonical]
+            labels.extend(cell for index, cell in enumerate(table.rows[row].cells)
+                          if index != col and cell and not _quantities(str(cell)))
+            normalized_labels = {normalized(str(label)) for label in labels if label and len(normalized(str(label))) >= 3}
+            matching_quotes = [quote for quote in value_quotes
+                               if any(label in normalized(quote) for label in normalized_labels)
+                               and _quote_selects_cell(quote, key, evidence.page, table.table_id, row, col, page)]
+            if not matching_quotes:
+                continue
+            bound_cells.add((observation.id, evidence.page, evidence.table_id, row, col))
     percentages = set()
     for observation in result.observations:
         if (observation.validation_status != 'valid' or observation.anomaly_notes
@@ -68,6 +115,9 @@ def _quoted_table_percentages(item, result):
         if not kinds.get(key) or kinds[key] - {'percentage', 'percent'}:
             continue
         for evidence in observation.evidence:
+            if (observation.id, evidence.page, evidence.table_id,
+                    observation.row_id, observation.column_id) not in bound_cells:
+                continue
             if evidence.page not in {q.page for q in item.evidence}:
                 continue
             page = pages.get(evidence.page)
@@ -88,6 +138,61 @@ def _quoted_table_percentages(item, result):
     return percentages
 
 
+def _quote_selects_cell(quote, key, page_number, table_id, row_id, column_id, page) -> bool:
+    """Require a quote to select one exact same-valued cell on its page."""
+    from decimal import Decimal, InvalidOperation
+
+    def numbers(cell):
+        values = set()
+        for _, value, _ in _quantities(str(cell)):
+            try:
+                values.add(Decimal(value))
+            except InvalidOperation:
+                continue
+        return values
+
+    try:
+        wanted = Decimal(key)
+    except InvalidOperation:
+        return False
+    quote_text = normalized(quote)
+    quote_terms = " ".join(re.sub(r"[^a-z0-9]+", " ", quote.casefold()).split())
+
+    def descriptor_matches(value) -> bool:
+        if not value:
+            return False
+        literal = normalized(str(value))
+        terms = " ".join(re.sub(r"[^a-z0-9]+", " ", str(value).casefold()).split())
+        return literal in quote_text or bool(terms and terms in quote_terms)
+
+    candidates = []
+    for table in page.tables:
+        for row_index, row in enumerate(table.rows):
+            row_labels = [normalized(str(cell)) for cell in row.cells
+                          if cell and not numbers(cell) and len(normalized(str(cell))) >= 3]
+            if row_labels and not any(label in quote_text for label in row_labels):
+                continue
+            for column_index, cell in enumerate(row.cells):
+                if wanted not in numbers(cell):
+                    continue
+                descriptors = []
+                if column_index < len(table.headers):
+                    descriptors.append(table.headers[column_index])
+                if column_index < len(table.column_periods):
+                    descriptors.append(table.column_periods[column_index])
+                descriptors.extend((table.table_title, table.context_label))
+                score = sum(descriptor_matches(value) for value in descriptors)
+                candidates.append((score, table.table_id, row_index, column_index))
+    target = (table_id, row_id, column_id)
+    if not candidates:
+        return False
+    if len(candidates) == 1:
+        return candidates[0][1:] == target
+    best = max(score for score, *_ in candidates)
+    selected = [candidate[1:] for candidate in candidates if candidate[0] == best]
+    return best > 0 and selected == [target]
+
+
 def validate_executive_brief(brief: ExecutiveBrief, result: PipelineResult, *,
                              excerpts: dict[int, str] | None = None) -> list[str]:
     """Check each item's own quotations and numeric scope, including cached exports.
@@ -102,6 +207,8 @@ def validate_executive_brief(brief: ExecutiveBrief, result: PipelineResult, *,
     for item in brief.items:
         if not item.label.strip() or not item.text.strip():
             errors.append('Brief labels and text must be nonempty.')
+        elif _UNIT_ONLY_LABEL.fullmatch(item.label):
+            errors.append(f'{item.label}: label is a unit header, not a finding or metric name.')
         key = normalized(item.text)
         if key in seen:
             errors.append('Brief repeats a finding.')
@@ -113,10 +220,21 @@ def validate_executive_brief(brief: ExecutiveBrief, result: PipelineResult, *,
                 errors.append(f'{item.label}: quote not found on cited page {quote.page}.')
             allowed.update(PresentationPlanValidator._numbers(quote.text))
             quantities.update(_quantities(quote.text))
+        source_percentages = _quoted_table_percentages(item, result)
+        # The deterministic table model supplies a unit that a body-cell quote
+        # cannot repeat.  Add only the exact resolved values, not every number
+        # from a percentage-bearing page.
+        allowed.update(value + '%' for value in source_percentages)
         claimed = PresentationPlanValidator._numbers(item.label + ' ' + item.text)
         if claimed - allowed:
             errors.append(f'{item.label}: unsupported numeric claims {sorted(claimed - allowed)}.')
         for currency, value, unit in _quantities(item.label + ' ' + item.text):
+            # A PDF table often stores the percentage sign once in its column
+            # header.  The source quote then legitimately contains a bare cell
+            # such as 50.5.  Accept the percent suffix only when extraction has
+            # resolved this exact cited cell as a percentage column.
+            if unit in {'%', 'percent'} and not currency and value in source_percentages:
+                continue
             if (currency or unit) and not any(value == v and (not currency or currency == c)
                                               and (not unit or unit == u) for c, v, u in quantities):
                 errors.append(f'{item.label}: amount changes a source currency or magnitude.')
