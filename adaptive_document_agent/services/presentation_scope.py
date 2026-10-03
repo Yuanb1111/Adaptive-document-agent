@@ -57,6 +57,7 @@ _DIRECT_ABSENCE = re.compile(
 )
 _DETAIL_SCOPE = re.compile(r"(?i)\b(?:detail(?:ed|s)?|breakdown|supplier|vendor|customer|subcategor(?:y|ies))\b")
 _PERIOD = re.compile(r"(?i)\b(?:FY\s*)?(?:19|20)\d{2}\b|\b(?:3|6|9|12)M\s*(?:19|20)\d{2}\b")
+_COMPLEX_SCOPE = re.compile(r"(?i)[;:]|\b(?:and|or|but|while|whereas|except)\b")
 
 
 def _contradicted_by_retained_content(note, result) -> bool:
@@ -66,7 +67,8 @@ def _contradicted_by_retained_content(note, result) -> bool:
     narrow stale-plan case where a note says a category is not shown after the
     final plan/chart has retained that exact category.
     """
-    if not _DIRECT_ABSENCE.search(note) or _DETAIL_SCOPE.search(note):
+    if (not _DIRECT_ABSENCE.search(note) or _DETAIL_SCOPE.search(note)
+            or _COMPLEX_SCOPE.search(note)):
         return False
     plan = result.presentation_plan
     retained_ids = {
@@ -79,6 +81,8 @@ def _contradicted_by_retained_content(note, result) -> bool:
     retained_ids.update(oid for chart in result.charts if chart.id in chart_ids for oid in chart.observation_ids)
     normalized_note = " ".join(str(note).casefold().split())
     note_periods = {re.sub(r"\s+", "", match.group(0)).casefold() for match in _PERIOD.finditer(note)}
+    if len(note_periods) > 1:
+        return False
     for observation in result.observations:
         if observation.id not in retained_ids:
             continue

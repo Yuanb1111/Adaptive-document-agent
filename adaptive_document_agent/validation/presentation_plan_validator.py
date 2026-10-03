@@ -431,6 +431,7 @@ class PresentationPlanValidator:
 
     @staticmethod
     def _numbers(value: str) -> set[str]:
+        value = PresentationPlanValidator._without_period_durations(value)
         # Separate explicit currency/fiscal prefixes before tokenising. Otherwise
         # RMB286.7m used to be read as just '7' after the decimal point.
         currency = r"(?:RMB|CNY|CNH|USD|HKD|SGD|GBP|EUR|JPY|AUD|CAD|CHF)"
@@ -442,10 +443,6 @@ class PresentationPlanValidator:
         # ``6M``/``9M`` are period-duration markers, whether or not the year is
         # attached (``6M2024``) or supplied elsewhere (``6M period``).  They do
         # not assert the standalone numbers 6/9.
-        value = re.sub(
-            r"(?i)(?<![A-Za-z0-9_.])(?:3|6|9|12)M(?P<year>\d{4})?(?=\b|\s+(?:period|ended|ending)\b)",
-            lambda match: " " + (match["year"] or " "), value,
-        )
         # Magnitude suffixes remain numeric claims.  The quantity validator
         # separately checks their meaning; the numeric-token gate compares the
         # complete decimal value rather than dropping a compact USD99M claim.
@@ -460,6 +457,28 @@ class PresentationPlanValidator:
             PresentationPlanValidator._normalize_number(match)
             for match in grouped_or_decimal.findall(value)
         }
+
+    @staticmethod
+    def _without_period_durations(value: str) -> str:
+        """Remove duration tokens only when they are not compact money.
+
+        Currency context is inspected before currency prefixes are separated,
+        so ``$6M``, ``USD 6M`` and ``USD6M`` remain monetary quantities while
+        standalone ``6M`` and ``6M2025`` remain period expressions.
+        """
+        pattern = re.compile(
+            r"(?i)(?<![A-Za-z0-9_.])(?:3|6|9|12)M(?P<year>\d{4})?(?=\b|\s+(?:period|ended|ending)\b)"
+        )
+        currencies = re.compile(
+            r"(?i)(?:US\$|HK\$|RMB|CNY|CNH|USD|HKD|SGD|GBP|EUR|JPY|AUD|CAD|CHF|[$€£¥￥])\s*$"
+        )
+
+        def replace(match):
+            if currencies.search(value[:match.start()]):
+                return match.group(0)
+            return " " + (match["year"] or " ")
+
+        return pattern.sub(replace, value)
 
     @staticmethod
     def _normalize_number(value: str) -> str:

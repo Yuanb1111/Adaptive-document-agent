@@ -27,10 +27,7 @@ _QUANTITY = re.compile(
 
 
 def _quantities(text: str) -> set[tuple[str, str, str]]:
-    text = re.sub(
-        r"(?i)(?<![A-Za-z0-9_.])(?:3|6|9|12)M(?P<year>\d{4})?(?=\b|\s+(?:period|ended|ending)\b)",
-        lambda match: " " + (match["year"] or " "), text,
-    )
+    text = PresentationPlanValidator._without_period_durations(text)
     return {((m['currency'] or m['currency_suffix'] or '').casefold(),
              PresentationPlanValidator._normalize_number(m['value']),
              (m['unit'] or '').casefold()) for m in _QUANTITY.finditer(text)}
@@ -84,7 +81,8 @@ def _quoted_table_percentages(item, result):
                           if index != col and cell and not _quantities(str(cell)))
             normalized_labels = {normalized(str(label)) for label in labels if label and len(normalized(str(label))) >= 3}
             matching_quotes = [quote for quote in value_quotes
-                               if any(label in normalized(quote) for label in normalized_labels)]
+                               if any(label in normalized(quote) for label in normalized_labels)
+                               and _quote_selects_cell(quote, key, evidence.page, table.table_id, row, col, page)]
             if not matching_quotes:
                 continue
             bound_cells.add((observation.id, evidence.page, evidence.table_id, row, col))
@@ -118,6 +116,58 @@ def _quoted_table_percentages(item, result):
             if value == raw:
                 percentages.add(key)
     return percentages
+
+
+def _quote_selects_cell(quote, key, page_number, table_id, row_id, column_id, page) -> bool:
+    """Require a quote to select one exact same-valued cell on its page."""
+    from decimal import Decimal, InvalidOperation
+
+    def number(cell):
+        try:
+            return Decimal(str(cell).strip().replace(',', '').rstrip('%'))
+        except (InvalidOperation, AttributeError):
+            return None
+
+    try:
+        wanted = Decimal(key)
+    except InvalidOperation:
+        return False
+    quote_text = normalized(quote)
+    quote_terms = " ".join(re.sub(r"[^a-z0-9]+", " ", quote.casefold()).split())
+
+    def descriptor_matches(value) -> bool:
+        if not value:
+            return False
+        literal = normalized(str(value))
+        terms = " ".join(re.sub(r"[^a-z0-9]+", " ", str(value).casefold()).split())
+        return literal in quote_text or bool(terms and terms in quote_terms)
+
+    candidates = []
+    for table in page.tables:
+        for row_index, row in enumerate(table.rows):
+            row_labels = [normalized(str(cell)) for cell in row.cells
+                          if cell and number(cell) is None and len(normalized(str(cell))) >= 3]
+            if row_labels and not any(label in quote_text for label in row_labels):
+                continue
+            for column_index, cell in enumerate(row.cells):
+                if number(cell) != wanted:
+                    continue
+                descriptors = []
+                if column_index < len(table.headers):
+                    descriptors.append(table.headers[column_index])
+                if column_index < len(table.column_periods):
+                    descriptors.append(table.column_periods[column_index])
+                descriptors.extend((table.table_title, table.context_label))
+                score = sum(descriptor_matches(value) for value in descriptors)
+                candidates.append((score, table.table_id, row_index, column_index))
+    target = (table_id, row_id, column_id)
+    if not candidates:
+        return False
+    if len(candidates) == 1:
+        return candidates[0][1:] == target
+    best = max(score for score, *_ in candidates)
+    selected = [candidate[1:] for candidate in candidates if candidate[0] == best]
+    return best > 0 and selected == [target]
 
 
 def validate_executive_brief(brief: ExecutiveBrief, result: PipelineResult, *,

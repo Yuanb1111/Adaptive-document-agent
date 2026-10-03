@@ -1,11 +1,13 @@
 """Synthetic reproductions for reported v78 review symptoms; no private data."""
 
+import pytest
+
 from adaptive_document_agent.models import (
     ChartPlan, DocumentPage, DocumentProfile, ExtractedTable, Observation, ParsedDocument,
     PipelineResult, PresentationPlan, PresentationSlide, SourceEvidence, TableRow,
 )
 from adaptive_document_agent.models.executive_brief import ExecutiveBrief
-from adaptive_document_agent.services.executive_brief import validate_executive_brief
+from adaptive_document_agent.services.executive_brief import _quantities, validate_executive_brief
 from adaptive_document_agent.services.presentation_scope import scope_items
 from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
 
@@ -79,6 +81,56 @@ def test_period_markers_and_compact_amounts_are_distinguished() -> None:
     assert numbers("6M2025") == {"2025"}
     assert numbers("USD99M") == {"99"}
     assert numbers("RMB43.5m") == {"43.5"}
+
+
+@pytest.mark.parametrize("amount", [
+    "$3M", "$6m", "USD 9M", "usd12m", "RMB 3.5M", "EUR6.25m", "£ 12M", "HK$9m",
+])
+def test_currency_context_prevents_million_amount_from_being_masked_as_period(amount) -> None:
+    numbers = PresentationPlanValidator._numbers(amount)
+    assert numbers
+    assert _quantities(amount)
+
+
+@pytest.mark.parametrize("period, expected", [
+    ("3M", set()), ("6m period", set()), ("9M2025", {"2025"}), ("12M ended", set()),
+])
+def test_true_duration_context_is_still_excluded(period, expected) -> None:
+    assert PresentationPlanValidator._numbers(period) == expected
+    assert not {value for currency, value, unit in _quantities(period) if unit == "m"}
+
+
+@pytest.mark.parametrize("claim", ["Revenue was $6M.", "Revenue was USD 6M."])
+def test_currency_six_million_cannot_hide_unsupported_amount(claim) -> None:
+    source = "Revenue was USD 4.6 billion in 2025."
+    result = PipelineResult(
+        document=ParsedDocument(document_id="amount", sha256="b" * 64, safe_filename="synthetic.pdf",
+                                page_count=1, pages=[DocumentPage(page_number=1, text=source)]),
+        profile=DocumentProfile(),
+    )
+    brief = ExecutiveBrief.model_validate({"title": "Findings", "items": [{
+        "label": "Revenue", "text": claim, "evidence": [{"page": 1, "text": source}],
+    }]})
+    errors = validate_executive_brief(brief, result)
+    assert any("unsupported numeric claims" in error for error in errors)
+    assert any("currency or magnitude" in error for error in errors)
+
+
+@pytest.mark.parametrize("source, claim", [
+    ("Revenue was USD 6M.", "Revenue was USD6M."),
+    ("Revenue was $6m.", "Revenue was $ 6M."),
+    ("Revenue was RMB 3.5M.", "Revenue was RMB3.5m."),
+])
+def test_equivalent_compact_million_amount_forms_remain_supported(source, claim) -> None:
+    result = PipelineResult(
+        document=ParsedDocument(document_id="amount", sha256="b" * 64, safe_filename="synthetic.pdf",
+                                page_count=1, pages=[DocumentPage(page_number=1, text=source)]),
+        profile=DocumentProfile(),
+    )
+    brief = ExecutiveBrief.model_validate({"title": "Findings", "items": [{
+        "label": "Revenue", "text": claim, "evidence": [{"page": 1, "text": source}],
+    }]})
+    assert validate_executive_brief(brief, result) == []
 
 
 def test_real_unsupported_number_and_changed_unit_still_fail() -> None:
@@ -172,6 +224,66 @@ def test_mixed_columns_bind_percentage_only_to_quoted_row_and_cell() -> None:
     assert validate_executive_brief(brief, result) == []
 
 
+def test_same_row_equal_amount_and_share_requires_quoted_column() -> None:
+    result = _percentage_result()
+    result.document.pages[0].text = "Revenue amount 50.5. Revenue share 50.5."
+    result.document.pages[0].tables = [ExtractedTable(
+        table_id="revenue", page=1, headers=["Metric", "Amount", "Share (%)"],
+        column_types=["unknown", "amount", "percentage"],
+        rows=[TableRow(cells=["Revenue", "50.5", "50.5"], page=1)],
+    )]
+    result.observations = [Observation(
+        id="share", metric_original="Revenue", raw_value="50.5", value=50.5,
+        unit="percent", unit_family="percentage", confidence=.99,
+        table_id="revenue", row_id=0, column_id=2,
+        evidence=[SourceEvidence(page=1, text="50.5", table_id="revenue", row_label="Revenue",
+                                 column_label="Share (%)", extraction_method="synthetic", confidence=.99)],
+    )]
+    amount_claim = ExecutiveBrief.model_validate({"title": "Findings", "items": [{
+        "label": "Revenue amount", "text": "Revenue amount was 50.5%.",
+        "evidence": [{"page": 1, "text": "Revenue amount 50.5"}],
+    }]})
+    assert any("unsupported numeric claims" in error
+               for error in validate_executive_brief(amount_claim, result))
+    share_claim = ExecutiveBrief.model_validate({"title": "Findings", "items": [{
+        "label": "Revenue share", "text": "Revenue share was 50.5%.",
+        "evidence": [{"page": 1, "text": "Revenue share 50.5"}],
+    }]})
+    assert validate_executive_brief(share_claim, result) == []
+
+
+def test_same_metric_across_tables_and_periods_fails_closed_without_exact_context() -> None:
+    result = _percentage_result()
+    result.document.pages[0].text = "FY2024 Revenue share 50.5. FY2025 Revenue share 50.5."
+    result.document.pages[0].tables = [
+        ExtractedTable(table_id=period, page=1, table_title=period,
+                       headers=["Metric", "Share (%)"], column_types=["unknown", "percentage"],
+                       column_periods=[None, period],
+                       rows=[TableRow(cells=["Revenue", "50.5"], page=1)])
+        for period in ("FY2024", "FY2025")
+    ]
+    # Only one percentage observation was extracted; raw table cells must
+    # still prevent it from borrowing the unobserved period's identical cell.
+    result.observations = [Observation(
+        id="share-2025", metric_original="Revenue share", raw_value="50.5", value=50.5,
+        period="FY2025", unit="percent", unit_family="percentage", confidence=.99,
+        table_id="FY2025", row_id=0, column_id=1,
+        evidence=[SourceEvidence(page=1, text="50.5", table_id="FY2025", row_label="Revenue",
+                                 column_label="Share (%)", extraction_method="synthetic", confidence=.99)],
+    )]
+    ambiguous = ExecutiveBrief.model_validate({"title": "Findings", "items": [{
+        "label": "Revenue share", "text": "Revenue share was 50.5%.",
+        "evidence": [{"page": 1, "text": "Revenue share 50.5"}],
+    }]})
+    assert any("unsupported numeric claims" in error
+               for error in validate_executive_brief(ambiguous, result))
+    scoped = ExecutiveBrief.model_validate({"title": "Findings", "items": [{
+        "label": "Revenue share", "text": "FY2025 Revenue share was 50.5%.",
+        "evidence": [{"page": 1, "text": "FY2025 Revenue share 50.5"}],
+    }]})
+    assert validate_executive_brief(scoped, result) == []
+
+
 def test_retained_total_does_not_erase_detail_or_supplier_limitations() -> None:
     result = _percentage_result()
     result.observations[1].category_dimensions = {"product": "Others"}
@@ -187,3 +299,21 @@ def test_retained_total_does_not_erase_detail_or_supplier_limitations() -> None:
     assert "Supplier-level breakdown of Others is not shown." in text
     assert "Others is shown; supplier-level detail is not shown." in text
     assert "The Others category is not shown for FY2024." in text
+
+
+@pytest.mark.parametrize("note", [
+    "Others is shown; Europe is not shown.",
+    "Others is not shown for FY2024 or FY2025.",
+])
+def test_complex_absence_statement_is_preserved_as_a_whole(note) -> None:
+    result = _percentage_result()
+    result.observations[1].category_dimensions = {"product": "Others"}
+    result.observations[1].period = "FY2025"
+    result.charts = [ChartPlan(id="mix-chart", title="Product mix", question="Composition", chart_type="bar",
+                               observation_ids=["share-1"])]
+    result.presentation_plan = PresentationPlan(
+        title="Review", coverage_notes=[note],
+        slides=[PresentationSlide(id="mix", slide_type="analysis", title="Product mix",
+                                  chart_ids=["mix-chart"])],
+    )
+    assert note in [item.text for item in scope_items(result)]
