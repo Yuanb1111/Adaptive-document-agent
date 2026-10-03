@@ -9,11 +9,18 @@ def normalized(text: str) -> str:
     return " ".join(text.casefold().split())
 
 
+_UNIT_ONLY_LABEL = re.compile(
+    r"(?ix)^\s*(?:in\s+)?(?:RMB|CNY|CNH|USD|HKD|SGD|GBP|EUR|JPY|AUD|CAD|CHF|US\$|HK\$|[$€£¥￥])?\s*"
+    r"(?:in\s+)?(?:trillions?|billions?|millions?|thousands?|bn|mn|[mkb]|['’]000s?)"
+    r"(?:\s*(?:per|/)\s*\w+)?\s*$"
+)
+
+
 # Preserve explicit magnitudes and currencies as well as numeric tokens. A
 # matching 7.3 is not permission to turn millions into billions or USD into RMB.
 _QUANTITY = re.compile(
     r"(?i)(?<![A-Za-z0-9_.])(?P<currency>US\$|HK\$|RMB|CNY|USD|HKD|EUR|GBP|人民币|美元|港元|欧元|\$|€|£|¥|￥)?\s*"
-    r"(?P<value>[+-]?\d+(?:,\d{3})*(?:\.\d+)?)\s*"
+    r"(?P<value>[+-]?\d+(?:,\d{3})*(?:\.\d+)?)(?![A-Za-z0-9_])\s*"
     r"(?P<unit>trillion|billion|million|thousand|bn|[mkb](?!\w)|%|percent\b|万亿|亿|万|千)?"
     r"(?P<currency_suffix>美元|港元|欧元|人民币|元)?"
 )
@@ -102,6 +109,8 @@ def validate_executive_brief(brief: ExecutiveBrief, result: PipelineResult, *,
     for item in brief.items:
         if not item.label.strip() or not item.text.strip():
             errors.append('Brief labels and text must be nonempty.')
+        elif _UNIT_ONLY_LABEL.fullmatch(item.label):
+            errors.append(f'{item.label}: label is a unit header, not a finding or metric name.')
         key = normalized(item.text)
         if key in seen:
             errors.append('Brief repeats a finding.')
@@ -113,10 +122,21 @@ def validate_executive_brief(brief: ExecutiveBrief, result: PipelineResult, *,
                 errors.append(f'{item.label}: quote not found on cited page {quote.page}.')
             allowed.update(PresentationPlanValidator._numbers(quote.text))
             quantities.update(_quantities(quote.text))
+        source_percentages = _quoted_table_percentages(item, result)
+        # The deterministic table model supplies a unit that a body-cell quote
+        # cannot repeat.  Add only the exact resolved values, not every number
+        # from a percentage-bearing page.
+        allowed.update(value + '%' for value in source_percentages)
         claimed = PresentationPlanValidator._numbers(item.label + ' ' + item.text)
         if claimed - allowed:
             errors.append(f'{item.label}: unsupported numeric claims {sorted(claimed - allowed)}.')
         for currency, value, unit in _quantities(item.label + ' ' + item.text):
+            # A PDF table often stores the percentage sign once in its column
+            # header.  The source quote then legitimately contains a bare cell
+            # such as 50.5.  Accept the percent suffix only when extraction has
+            # resolved this exact cited cell as a percentage column.
+            if unit in {'%', 'percent'} and not currency and value in source_percentages:
+                continue
             if (currency or unit) and not any(value == v and (not currency or currency == c)
                                               and (not unit or unit == u) for c, v, u in quantities):
                 errors.append(f'{item.label}: amount changes a source currency or magnitude.')

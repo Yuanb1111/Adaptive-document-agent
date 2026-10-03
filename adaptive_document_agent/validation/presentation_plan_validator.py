@@ -439,7 +439,10 @@ class PresentationPlanValidator:
         # An interim label such as 6M2023 is one period marker. Its leading
         # duration is not a standalone numerical claim, while the year must
         # remain available for provenance checks.
-        value = re.sub(r"(?i)\b\d{1,2}M(?=\d{4}\b)", " ", value)
+        # ``6M``/``9M`` are period-duration markers, whether or not the year is
+        # attached (``6M2024``) or supplied elsewhere (``6M period``).  They do
+        # not assert the standalone numbers 6/9.
+        value = re.sub(r"(?i)(?<![A-Za-z0-9_.])\d{1,2}M(?=\d{4}\b|\b)", " ", value)
         grouped_or_decimal = re.compile(
             r"(?<![A-Za-z0-9_.,])[+-]?(?:"
             r"\d{1,3}(?:[, '\u00a0\u202f\u2019]\d{3})+(?:\.\d+)?"

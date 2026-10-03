@@ -405,6 +405,8 @@ python -m pytest
 
 Coverage includes PDF validation and routing, OCR detection, bordered and borderless tables, table reconstruction, numeric parsing, semantic conservatism, observation indexing, planners and tools, structured-output recovery, privacy and public deployment, financial fact normalization, period and sign semantics, claim repair, cross-slide consistency, chart selection, PowerPoint layout/preflight, PDF/PPTX exports, and end-to-end pipeline and presentation regressions.
 
+For repeatable quality reviews, use the privacy-safe run-record command and human review template in [`docs/EVALUATION_PROTOCOL.md`](docs/EVALUATION_PROTOCOL.md). It explicitly separates fix samples from untouched holdouts and first runs from cached runs; it does not invoke a model or invent evaluation scores.
+
 ### Shared executive briefing
 
 After analysis, the configured LLM selects material source pages and writes 3–7 concise, labelled findings for both the web Overview and PowerPoint Executive Summary. Numbers retain their source currency, magnitude and period; explanations and caveats stay alongside the fact they qualify. Topics follow the document rather than a fixed financial checklist, and narrative constraints may be included without a chart.
