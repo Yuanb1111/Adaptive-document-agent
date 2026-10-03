@@ -20,13 +20,17 @@ _UNIT_ONLY_LABEL = re.compile(
 # matching 7.3 is not permission to turn millions into billions or USD into RMB.
 _QUANTITY = re.compile(
     r"(?i)(?<![A-Za-z0-9_.])(?P<currency>US\$|HK\$|RMB|CNY|USD|HKD|EUR|GBP|人民币|美元|港元|欧元|\$|€|£|¥|￥)?\s*"
-    r"(?P<value>[+-]?\d+(?:,\d{3})*(?:\.\d+)?)(?![A-Za-z0-9_])\s*"
-    r"(?P<unit>trillion|billion|million|thousand|bn|[mkb](?!\w)|%|percent\b|万亿|亿|万|千)?"
-    r"(?P<currency_suffix>美元|港元|欧元|人民币|元)?"
+    r"(?P<value>(?>[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?))\s*"
+    r"(?P<unit>trillion|billion|million|thousand|bn|mn|[mkb]|%|percent\b|万亿|亿|万|千)?"
+    r"(?P<currency_suffix>美元|港元|欧元|人民币|元)?(?![A-Za-z0-9_])"
 )
 
 
 def _quantities(text: str) -> set[tuple[str, str, str]]:
+    text = re.sub(
+        r"(?i)(?<![A-Za-z0-9_.])(?:3|6|9|12)M(?P<year>\d{4})?(?=\b|\s+(?:period|ended|ending)\b)",
+        lambda match: " " + (match["year"] or " "), text,
+    )
     return {((m['currency'] or m['currency_suffix'] or '').casefold(),
              PresentationPlanValidator._normalize_number(m['value']),
              (m['unit'] or '').casefold()) for m in _QUANTITY.finditer(text)}
@@ -57,15 +61,33 @@ def _quoted_table_percentages(item, result):
     from decimal import Decimal, InvalidOperation
     pages = {p.page_number: p for p in result.document.pages}
     kinds = defaultdict(set)
+    bound_cells = set()
     for observation in result.observations:
         if observation.value is None or observation.validation_status != 'valid' or observation.anomaly_notes:
             continue
         key = PresentationPlanValidator._normalize_number(observation.raw_value)
         for evidence in observation.evidence:
             quotes = [q.text for q in item.evidence if q.page == evidence.page]
-            if not any(key in {v for _, v, _ in _quantities(quote)} for quote in quotes):
+            value_quotes = [quote for quote in quotes if key in {v for _, v, _ in _quantities(quote)}]
+            if value_quotes:
+                # A same-page/same-value observation with another unit keeps
+                # the value ambiguous even when it has no resolved table cell.
+                kinds[key].add(observation.unit_family if observation.unit_family != 'generic' else observation.unit)
+            page = pages.get(evidence.page)
+            table = next((t for t in page.tables if t.table_id == evidence.table_id), None) if page else None
+            row, col = observation.row_id, observation.column_id
+            if (table is None or row is None or col is None or not 0 <= row < len(table.rows)
+                    or not 0 <= col < len(table.column_types) or col >= len(table.rows[row].cells)):
                 continue
-            kinds[key].add(observation.unit_family if observation.unit_family != 'generic' else observation.unit)
+            labels = [evidence.row_label, observation.metric_original, observation.metric_canonical]
+            labels.extend(cell for index, cell in enumerate(table.rows[row].cells)
+                          if index != col and cell and not _quantities(str(cell)))
+            normalized_labels = {normalized(str(label)) for label in labels if label and len(normalized(str(label))) >= 3}
+            matching_quotes = [quote for quote in value_quotes
+                               if any(label in normalized(quote) for label in normalized_labels)]
+            if not matching_quotes:
+                continue
+            bound_cells.add((observation.id, evidence.page, evidence.table_id, row, col))
     percentages = set()
     for observation in result.observations:
         if (observation.validation_status != 'valid' or observation.anomaly_notes
@@ -75,6 +97,9 @@ def _quoted_table_percentages(item, result):
         if not kinds.get(key) or kinds[key] - {'percentage', 'percent'}:
             continue
         for evidence in observation.evidence:
+            if (observation.id, evidence.page, evidence.table_id,
+                    observation.row_id, observation.column_id) not in bound_cells:
+                continue
             if evidence.page not in {q.page for q in item.evidence}:
                 continue
             page = pages.get(evidence.page)

@@ -51,12 +51,12 @@ def scope_items(result):
     return items
 
 
-_ABSENCE = re.compile(
-    r"(?i)\b(?:not|no|without|lack(?:s|ing|ed)?|omit(?:s|ted)?|exclude(?:s|d)?)\b.{0,45}"
-    r"\b(?:detail(?:ed|s)?|display(?:ed)?|show(?:n)?|present(?:ed)?|breakdown|coverage)\b"
-    r"|\b(?:detail(?:ed|s)?|display(?:ed)?|show(?:n)?|present(?:ed)?|breakdown|coverage)\b.{0,45}"
-    r"\b(?:not|no|without|omit(?:s|ted)?|exclude(?:s|d)?)\b"
+_DIRECT_ABSENCE = re.compile(
+    r"(?i)\b(?:not|no|omit(?:s|ted)?|exclude(?:s|d)?)\b.{0,35}\b(?:display(?:ed)?|show(?:n)?|present(?:ed)?)\b"
+    r"|\b(?:display(?:ed)?|show(?:n)?|present(?:ed)?)\b.{0,35}\b(?:not|no|omit(?:s|ted)?|exclude(?:s|d)?)\b"
 )
+_DETAIL_SCOPE = re.compile(r"(?i)\b(?:detail(?:ed|s)?|breakdown|supplier|vendor|customer|subcategor(?:y|ies))\b")
+_PERIOD = re.compile(r"(?i)\b(?:FY\s*)?(?:19|20)\d{2}\b|\b(?:3|6|9|12)M\s*(?:19|20)\d{2}\b")
 
 
 def _contradicted_by_retained_content(note, result) -> bool:
@@ -66,7 +66,7 @@ def _contradicted_by_retained_content(note, result) -> bool:
     narrow stale-plan case where a note says a category is not shown after the
     final plan/chart has retained that exact category.
     """
-    if not _ABSENCE.search(note):
+    if not _DIRECT_ABSENCE.search(note) or _DETAIL_SCOPE.search(note):
         return False
     plan = result.presentation_plan
     retained_ids = {
@@ -78,9 +78,14 @@ def _contradicted_by_retained_content(note, result) -> bool:
     chart_ids = {identifier for slide in plan.slides for identifier in slide.chart_ids}
     retained_ids.update(oid for chart in result.charts if chart.id in chart_ids for oid in chart.observation_ids)
     normalized_note = " ".join(str(note).casefold().split())
+    note_periods = {re.sub(r"\s+", "", match.group(0)).casefold() for match in _PERIOD.finditer(note)}
     for observation in result.observations:
         if observation.id not in retained_ids:
             continue
+        if note_periods:
+            observation_period = re.sub(r"\s+", "", observation.period or "").casefold()
+            if observation_period not in note_periods:
+                continue
         labels = [observation.metric_original, observation.metric_canonical or "",
                   *observation.category_dimensions.values()]
         for label in labels:

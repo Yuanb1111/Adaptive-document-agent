@@ -442,7 +442,14 @@ class PresentationPlanValidator:
         # ``6M``/``9M`` are period-duration markers, whether or not the year is
         # attached (``6M2024``) or supplied elsewhere (``6M period``).  They do
         # not assert the standalone numbers 6/9.
-        value = re.sub(r"(?i)(?<![A-Za-z0-9_.])\d{1,2}M(?=\d{4}\b|\b)", " ", value)
+        value = re.sub(
+            r"(?i)(?<![A-Za-z0-9_.])(?:3|6|9|12)M(?P<year>\d{4})?(?=\b|\s+(?:period|ended|ending)\b)",
+            lambda match: " " + (match["year"] or " "), value,
+        )
+        # Magnitude suffixes remain numeric claims.  The quantity validator
+        # separately checks their meaning; the numeric-token gate compares the
+        # complete decimal value rather than dropping a compact USD99M claim.
+        value = re.sub(r"(?i)(?<=\d)(?:trillion|billion|million|thousand|bn|mn|[mkb])\b", " ", value)
         grouped_or_decimal = re.compile(
             r"(?<![A-Za-z0-9_.,])[+-]?(?:"
             r"\d{1,3}(?:[, '\u00a0\u202f\u2019]\d{3})+(?:\.\d+)?"
