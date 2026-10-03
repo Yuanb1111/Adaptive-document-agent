@@ -464,11 +464,13 @@ class PresentationPlanValidator:
         """Remove duration tokens only when they are not compact money.
 
         Currency context is inspected before currency prefixes are separated,
-        so ``$6M``, ``USD 6M`` and ``USD6M`` remain monetary quantities while
-        standalone ``6M`` and ``6M2025`` remain period expressions.
+        so ``$6M``, ``USD 6M`` and ``USD6M`` remain monetary quantities. A bare
+        ``6M`` is deliberately left ambiguous and validated as a quantity;
+        ``6M2025`` or ``6M period`` supplies explicit period context.
         """
         pattern = re.compile(
-            r"(?i)(?<![A-Za-z0-9_.])(?:3|6|9|12)M(?P<year>\d{4})?(?=\b|\s+(?:period|ended|ending)\b)"
+            r"(?i)(?<![A-Za-z0-9_.])(?:3|6|9|12)M"
+            r"(?:(?P<year>\d{4})\b|(?=\s+(?:period|ended|ending)\b))"
         )
         money_spans = PresentationPlanValidator._money_spans(value)
 

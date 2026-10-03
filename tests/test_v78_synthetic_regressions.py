@@ -76,7 +76,9 @@ def test_compact_decimal_amount_cannot_change_magnitude() -> None:
 
 def test_period_markers_and_compact_amounts_are_distinguished() -> None:
     numbers = PresentationPlanValidator._numbers
-    assert numbers("6M") == set()
+    # A bare token is ambiguous in prose and must remain visible to numeric
+    # validation; only explicit period context may remove its duration count.
+    assert numbers("6M") == {"6"}
     assert numbers("9M period") == set()
     assert numbers("6M2025") == {"2025"}
     assert numbers("USD99M") == {"99"}
@@ -94,11 +96,37 @@ def test_currency_context_prevents_million_amount_from_being_masked_as_period(am
 
 
 @pytest.mark.parametrize("period, expected", [
-    ("3M", set()), ("6m period", set()), ("9M2025", {"2025"}), ("12M ended", set()),
+    ("3M period", set()), ("6m period", set()), ("9M2025", {"2025"}), ("12M ended", set()),
 ])
 def test_true_duration_context_is_still_excluded(period, expected) -> None:
     assert PresentationPlanValidator._numbers(period) == expected
     assert not {value for currency, value, unit in _quantities(period) if unit == "m"}
+
+
+def test_bare_compact_magnitude_is_validated_instead_of_assumed_to_be_a_period() -> None:
+    source = "Revenue was 7M."
+    result = PipelineResult(
+        document=ParsedDocument(document_id="amount", sha256="b" * 64, safe_filename="synthetic.pdf",
+                                page_count=1, pages=[DocumentPage(page_number=1, text=source)]),
+        profile=DocumentProfile(),
+    )
+    changed = ExecutiveBrief.model_validate({"title": "Findings", "items": [{
+        "label": "Revenue", "text": "Revenue was 6M.",
+        "evidence": [{"page": 1, "text": source}],
+    }]})
+    errors = validate_executive_brief(changed, result)
+    assert any("unsupported numeric claims" in error for error in errors)
+    equal_source = "Revenue was 6M."
+    equal_result = PipelineResult(
+        document=ParsedDocument(document_id="equal", sha256="c" * 64, safe_filename="synthetic.pdf",
+                                page_count=1, pages=[DocumentPage(page_number=1, text=equal_source)]),
+        profile=DocumentProfile(),
+    )
+    equivalent = ExecutiveBrief.model_validate({"title": "Findings", "items": [{
+        "label": "Revenue", "text": "Revenue was 6M.",
+        "evidence": [{"page": 1, "text": equal_source}],
+    }]})
+    assert validate_executive_brief(equivalent, equal_result) == []
 
 
 @pytest.mark.parametrize("claim", ["Revenue was $6M.", "Revenue was USD 6M."])
