@@ -472,6 +472,8 @@ class PresentationPlanValidator:
             r"(?i)(?<![A-Za-z0-9_.])(?:3|6|9|12)M"
             r"(?:(?P<year>\d{4})\b|(?=\s+(?:period|ended|ending)\b))"
         )
+        if not pattern.search(value):
+            return value
         money_spans = PresentationPlanValidator._money_spans(value)
 
         def replace(match):
@@ -487,11 +489,16 @@ class PresentationPlanValidator:
         currency = r"(?:US\$|HK\$|RMB|CNY|CNH|USD|HKD|SGD|GBP|EUR|JPY|AUD|CAD|CHF|[$€£¥￥])"
         number = r"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
         magnitude = r"(?:trillion|billion|million|thousand|bn|mn|[mkb])"
-        decoration = r"(?:\s*[+\-\u2212]?\s*|\s*\(\s*[+\-\u2212]?\s*)"
-        closing = r"\s*\)?"
+        # PDF text can contain thousands of consecutive layout spaces. Never
+        # partition that whitespace between overlapping optional groups, or
+        # start a suffix-currency search at every position in the same run.
+        # Possessive whitespace is safe: the following tokens are non-space.
+        decoration = r"\s*+(?:\(\s*+)?(?:[+\-\u2212]\s*+)?"
+        closing = r"\s*+\)?"
         patterns = (
-            re.compile(rf"(?i){currency}{decoration}{number}\s*{magnitude}\b{closing}"),
-            re.compile(rf"(?i)(?<![A-Za-z0-9_.]){decoration}{number}\s*{magnitude}\b{closing}\s*{currency}"),
+            re.compile(rf"(?i){currency}{decoration}{number}\s*+{magnitude}\b{closing}"),
+            re.compile(rf"(?i)(?<![A-Za-z0-9_.])(?=[+\-\u2212(\d])"
+                       rf"{decoration}{number}\s*+{magnitude}\b{closing}\s*+{currency}"),
         )
         return sorted({match.span() for pattern in patterns for match in pattern.finditer(value)})
 

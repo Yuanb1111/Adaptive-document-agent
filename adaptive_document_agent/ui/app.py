@@ -1,5 +1,9 @@
 """Professional Streamlit shell over the stable orchestration API."""
 
+import logging
+from threading import Lock
+from uuid import uuid4
+
 from adaptive_document_agent.agent.orchestrator import DocumentOrchestrator
 from adaptive_document_agent.document_model import DocumentIndex
 from adaptive_document_agent.services.llm import LLMGateway
@@ -11,6 +15,9 @@ from . import analysis, branding, data, deliverables, overview, quality, sources
 from .charts import chart_rows, render_chart
 from .deployment import cache_for_session, is_public_deployment
 from .sidebar import render_sidebar
+
+_LOGGER = logging.getLogger("adaptive_document_agent.timing.analysis_attempt")
+_ATTEMPT_LOCK = Lock()
 
 
 def _analysis_scope_key(raw_pdf: bytes, analysis_focus: str, settings) -> str:
@@ -40,6 +47,9 @@ def _analysis_scope_key(raw_pdf: bytes, analysis_focus: str, settings) -> str:
 
 
 def _analysis_failure(st, scope_key):
+    attempt = st.session_state.get("analysis_attempts", {}).get(scope_key)
+    if attempt and attempt["state"] in {"failed", "interrupted"}:
+        return attempt["failure"]
     failure = st.session_state.get("analysis_failure")
     return failure if failure and failure["scope_key"] == scope_key else None
 
@@ -57,8 +67,21 @@ def _retry_analysis_button(st, scope_key):
     return st.button("Retry analysis (reuse successful cache)", key=f"retry_analysis_{scope_key}")
 
 
+def _render_active_attempt(st, attempt, progress):
+    if progress:
+        progress.update(attempt["stage"])
+    st.info("This analysis is still running. Wait for it to finish before retrying.")
+
+
 def _analyse_upload(st, raw_pdf, *, scope_key, analysis_focus, settings, cache, scope=None, force=False, retry=False, progress=None):
     """Run one upload through discovery and analysis, reusing it on widget reruns."""
+    with _ATTEMPT_LOCK:
+        attempts = st.session_state.setdefault("analysis_attempts", {})
+        active = attempts.get(scope_key)
+        active = active if active and active["state"] == "running" else None
+    if active:
+        _render_active_attempt(st, active, progress)
+        return None
     failure = _analysis_failure(st, scope_key)
     if failure and not (force or retry):
         _render_analysis_failure(st, failure, progress)
@@ -87,11 +110,37 @@ def _analyse_upload(st, raw_pdf, *, scope_key, analysis_focus, settings, cache, 
             progress.fail("Configure a model before analysis")
         st.error("Configure a model before analysis.")
         return None
-    if progress:
-        progress.reset()
+    # Streamlit may overlap script runners during a rerun. Claim the attempt
+    # after cache lookup, before the first UI write that can interrupt it.
+    with _ATTEMPT_LOCK:
+        previous = attempts.get(scope_key)
+        active = previous if previous and previous["state"] == "running" else None
+        # Another runner can finish or be interrupted during our cache lookup.
+        failure = (previous["failure"] if previous and previous["state"] in {"failed", "interrupted"}
+                   and not (force or retry) else None)
+        completed = (st.session_state.get("analysis_result")
+                     if not (force or retry) and st.session_state.get("analysis_result_key") == scope_key
+                     else None)
+        if active is None and failure is None and completed is None:
+            attempt = {"id": uuid4().hex, "state": "running", "stage": "Starting analysis"}
+            attempts[scope_key] = attempt
+    if active:
+        _render_active_attempt(st, active, progress)
+        return None
+    if failure:
+        _render_analysis_failure(st, failure, progress)
+        return None
+    if completed is not None:
+        st.session_state["analysis_result_reused"] = True
+        if progress:
+            progress.update("Complete")
+        return completed
     status = None
     gateway = None
     try:
+        _LOGGER.info("Analysis attempt %s started", attempt["id"])
+        if progress:
+            progress.reset()
         gateway = LLMGateway(create_llm_client(settings), settings, cache_enabled=not force)
         pending_scope = st.session_state.get("analysis_scope_usage_pending")
         if scope is not None and pending_scope and pending_scope["key"] == scope_key:
@@ -100,6 +149,8 @@ def _analyse_upload(st, raw_pdf, *, scope_key, analysis_focus, settings, cache, 
         status = st.status("Analysing PDF and preparing presentation…", expanded=True)
 
         def update(stage: str) -> None:
+            attempt["stage"] = stage
+            _LOGGER.info("Analysis attempt %s stage: %s", attempt["id"], stage)
             status.write(stage)
             if progress:
                 progress.update(stage)
@@ -117,20 +168,36 @@ def _analyse_upload(st, raw_pdf, *, scope_key, analysis_focus, settings, cache, 
             cache.set_model(f"analysis-result-{scope_key}", result)
         if _analysis_failure(st, scope_key):
             del st.session_state["analysis_failure"]
+        attempt["state"] = "complete"
+        _LOGGER.info("Analysis attempt %s completed", attempt["id"])
         status.update(label="Analysis complete", state="complete", expanded=False)
         return result
     except Exception as exc:
-        if status is not None:
-            status.update(label="Analysis failed", state="error", expanded=True)
         usage = list(getattr(gateway, "usage", []))
         # Replace this attempt's ledger; widget reruns only display it and must
         # never add its paid requests to another attempt's costs.
-        st.session_state["failed_llm_usage"] = usage
         failure = {"scope_key": scope_key, "scope": scope,
                    "message": f"Analysis could not be completed: {exc}", "usage": usage}
+        # Save the failure before UI updates, which can themselves be interrupted.
+        attempt.update(state="failed", failure=failure)
+        st.session_state["failed_llm_usage"] = usage
         st.session_state["analysis_failure"] = failure
+        _LOGGER.info("Analysis attempt %s failed at %s", attempt["id"], attempt["stage"])
+        if status is not None:
+            status.update(label="Analysis failed", state="error", expanded=True)
         _render_analysis_failure(st, failure, progress)
         return None
+    except BaseException:
+        # Streamlit stop/rerun exceptions must propagate. Mutate the already
+        # stored record directly: session_state writes can trigger another stop.
+        if attempt["state"] == "running":
+            attempt.update(state="interrupted", failure={
+                "scope_key": scope_key, "scope": scope,
+                "message": "Analysis was interrupted. Retry to reuse successful cached work.",
+                "usage": list(getattr(gateway, "usage", [])),
+            })
+            _LOGGER.info("Analysis attempt %s interrupted at %s", attempt["id"], attempt["stage"])
+        raise
 
 
 def run_app() -> None:
