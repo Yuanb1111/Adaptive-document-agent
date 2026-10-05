@@ -19,6 +19,10 @@ COMMENTARY_PT = 16
 COMMENTARY_LINE_PT = 20
 
 
+class _ChartCapacityError(ValueError):
+    """Readable chart geometry needs fewer panels on the physical page."""
+
+
 @dataclass(frozen=True)
 class Rect:
     x: float
@@ -118,7 +122,7 @@ def compose_geometry(width: float, height: float, top: float, chart_count: int, 
             cw = (total - GUTTER * (chart_count - 1)) / max(chart_count, 1)
             charts = [Rect(left + i * (cw + GUTTER), top, cw, chart_bottom - top) for i in range(chart_count)]
     if any(r.h < 1.4 or r.w < 2.4 for r in charts):
-        raise ValueError("Slide composition cannot fit readable charts; split the evidence into additional pages.")
+        raise _ChartCapacityError("Slide composition cannot fit readable charts; split the evidence into additional pages.")
     return CompositionGeometry(charts, support, commentary, footer)
 
 
@@ -207,6 +211,54 @@ def _split_header_subtitle(subtitle: str) -> tuple[str, str]:
 
 def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: list[ChartPlan],
                           result: PipelineResult, index) -> list:
+    """Paginate capacity failures without changing the planned evidence contract."""
+    start = len(presentation.slides)
+    try:
+        return _render_composed_slide(presentation, slide_plan, charts, result, index)
+    except _ChartCapacityError:
+        # Roll back only pages created by this attempt, including any charts
+        # already drawn before a later panel failed. Never leave partial pages.
+        for slide_id in list(presentation.slides._sldIdLst)[start:]:
+            presentation.part.drop_rel(slide_id.rId)
+            presentation.slides._sldIdLst.remove(slide_id)
+        if len(charts) <= 1:
+            raise
+        ordered_ids = list(dict.fromkeys(
+            [cid for b in slide_plan.visual_blocks if b.role == "hero" for cid in b.chart_ids]
+            + [c.id for c in charts]))
+        lookup = {c.id: c for c in charts}
+        ordered = [lookup[cid] for cid in ordered_ids if cid in lookup]
+        if len(ordered) <= 1:
+            raise
+        split = max(1, len(ordered) - 1)
+        return _paginate_chart_slide(presentation, slide_plan,
+                                     (ordered[:split], ordered[split:]), result, index)
+
+
+def _paginate_chart_slide(presentation, slide_plan: PresentationSlide,
+                          groups: tuple[list[ChartPlan], list[ChartPlan]],
+                          result: PipelineResult, index) -> list:
+    """Keep support/commentary once and retain every selected chart in order."""
+    rendered = []
+    for part, group in enumerate(groups):
+        cids = {c.id for c in group}
+        blocks = [b.model_copy(update={"chart_ids": [cid for cid in b.chart_ids if cid in cids]})
+                  for b in slide_plan.visual_blocks
+                  if any(cid in cids for cid in b.chart_ids) or (not part and not b.chart_ids)]
+        physical = slide_plan.model_copy(update={
+            "chart_ids": [c.id for c in group], "visual_blocks": blocks,
+            "title": slide_plan.title + (" (continued)" if part else ""),
+            "bullets": [] if part else slide_plan.bullets,
+            "bullet_observation_ids": [] if part else slide_plan.bullet_observation_ids,
+            "insight_ids": [] if part else slide_plan.insight_ids,
+            "observation_ids": [] if part else slide_plan.observation_ids,
+            "layout": "two_up" if len(group) > 1 else "chart_plus_commentary"})
+        rendered.extend(render_composed_slide(presentation, physical, group, result, index))
+    return rendered
+
+
+def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: list[ChartPlan],
+                           result: PipelineResult, index) -> list:
     """Render all requested charts, explicit KPI/table facts and retained commentary."""
     from .pptx_export import _add_native_chart, _source_footer, _unit_label, _display_source_unit
     from adaptive_document_agent.document_model.metric_semantic_classifier import classify_metric, format_metric_display_value
@@ -219,21 +271,7 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
     if slide_plan.theme_id and len(charts) == 3:
         from adaptive_document_agent.validation.layout_qa import _is_cramped_multi_chart_slide
         if _is_cramped_multi_chart_slide(slide_plan, by_id, index):
-            rendered = []
-            for part, group in enumerate((charts[:2], charts[2:])):
-                cids = {c.id for c in group}
-                blocks = [b.model_copy(update={"chart_ids": [cid for cid in b.chart_ids if cid in cids]})
-                          for b in slide_plan.visual_blocks
-                          if any(cid in cids for cid in b.chart_ids) or (not part and not b.chart_ids)]
-                physical = slide_plan.model_copy(update={
-                    "chart_ids": [c.id for c in group], "visual_blocks": blocks,
-                    "title": slide_plan.title + (" (continued)" if part else ""),
-                    "bullets": [] if part else slide_plan.bullets,
-                    "insight_ids": [] if part else slide_plan.insight_ids,
-                    "observation_ids": [] if part else slide_plan.observation_ids,
-                    "layout": "two_up" if not part else "chart_plus_commentary"})
-                rendered.extend(render_composed_slide(presentation, physical, group, result, index))
-            return rendered
+            return _paginate_chart_slide(presentation, slide_plan, (charts[:2], charts[2:]), result, index)
     chart_obs = {oid for c in charts for oid in c.observation_ids}
     explicit = [oid for b in slide_plan.visual_blocks if b.role in {"kpi", "table"} for oid in b.observation_ids]
     # References establish provenance, not a request to display every raw row.
@@ -331,7 +369,7 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
                                        composition=uses_composition_data(chart))
         title_lines = _lines(title, rect.w, CHART_TITLE_PT)
         if len(title_lines) > 3:
-            raise ValueError(f"Chart title exceeds readable capacity: {chart.id}")
+            raise _ChartCapacityError(f"Chart title exceeds readable capacity: {chart.id}")
         heading_h = shared_heading_h
         _put_text(slide, title, Rect(rect.x, rect.y, rect.w, heading_h), size=CHART_TITLE_PT)
         totals = [index.get(oid) for oid in chart.total_observation_ids if index.get(oid)]
@@ -345,7 +383,7 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
         chart_offset = heading_h + .22 + (change_h + .06 if change else 0)
         bounds = (rect.x, rect.y + chart_offset, rect.w, rect.h - chart_offset)
         if bounds[3] < 1.25:
-            raise ValueError("Chart labels cannot fit; split the planned charts into additional slides.")
+            raise _ChartCapacityError(f"Chart labels cannot fit on slide {slide_plan.id}: {chart.id}; split the planned charts into additional slides.")
         scale, scale_label = _add_native_chart(slide, chart, values, bounds, compact=rect.w < 4.5, totals=totals)
         unit = "Share (%)" if chart.chart_type == "stacked_percent" else _unit_label(values, scale_label)
         if chart.chart_type in {"doughnut", "pie"}:
