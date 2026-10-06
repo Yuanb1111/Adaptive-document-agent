@@ -5,7 +5,9 @@ import json
 
 from adaptive_document_agent.models import PresentationSlide
 
-from .slide_compositor import Rect, _base, _lines, _put_commentary, _put_text, _split_header_subtitle
+from .slide_compositor import (
+    COMMENTARY_LINE_PT, Rect, _base, _lines, _put_commentary, _put_text, _split_header_subtitle,
+)
 from .presentation_style import FOOTNOTE_PT, MUTED
 
 
@@ -41,7 +43,12 @@ def append_header_commentary(presentation, plan: PresentationSlide, header: Visu
     pages = sorted(set(source_pages) | set(plan.source_pages))
     notes = json.dumps({**evidence_notes, "slide_plan": plan.model_dump(mode="json"),
                         "source_pages": pages}, ensure_ascii=False)
-    if inline_slide is not None and inline_rect is not None and inline_rect.h >= .45:
+    # Use the same point-based line budget and padding as _put_commentary.
+    # A short definition can fit below a matrix even when a fixed minimum
+    # textbox height would send it to an otherwise empty continuation page.
+    inline_lines = (int((inline_rect.h - .10) * 72 / COMMENTARY_LINE_PT)
+                    if inline_rect is not None else 0)
+    if inline_slide is not None and inline_lines > 0:
         # A definition or short evidence sentence belongs beside the matrix.
         # Reuse existing whitespace before creating a prose-only page.
         remaining = _put_commentary(inline_slide, remaining, inline_rect)

@@ -108,27 +108,69 @@ class TopicRelationValidator:
 
     def _adjacent_sum(self, item, subtotal, tables, page_number):
         # A source-ordered three-row subtotal can prove a relationship without
-        # a financial taxonomy. Require the same column, unit and exact scope.
-        if item.row_id is None or subtotal.row_id != item.row_id + 1 or item.column_id is None:
+        # a financial taxonomy. Either preceding addend has the same support
+        # relation, provided both signed values reconcile to the final row.
+        if (item.row_id is None or subtotal.row_id is None or subtotal.row_id < 2
+                or item.row_id not in (subtotal.row_id - 2, subtotal.row_id - 1)
+                or item.column_id is None):
             return None
-        if item.column_id != subtotal.column_id or (item.unit, item.currency, item.raw_unit, item.unit_scale) != (
-                subtotal.unit, subtotal.currency, subtotal.raw_unit, subtotal.unit_scale):
+        if item.column_id != subtotal.column_id or not self._same_sum_scope(item, subtotal):
             return None
+        table_id = item.effective_table_id
+        if table_id not in tables or subtotal.effective_table_id != table_id:
+            return None
+        source_tables = [t for t in self.pages[page_number].tables if t.table_id == table_id]
+        if len(source_tables) != 1:
+            return None
+        table = source_tables[0]
+        if not self._source_cell(item, table, page_number) or not self._source_cell(subtotal, table, page_number):
+            return None
+        peer_row = subtotal.row_id - 1 if item.row_id == subtotal.row_id - 2 else subtotal.row_id - 2
         peers = [o for o in self.result.observations if self._valid(o)
-                 and o.effective_table_id in tables and o.row_id == item.row_id - 1
-                 and o.column_id == item.column_id and o.period == item.period
-                 and o.period_basis == item.period_basis and o.entity == item.entity
-                 and o.category_dimensions == item.category_dimensions
-                 and (o.unit, o.currency, o.raw_unit, o.unit_scale) == (item.unit, item.currency, item.raw_unit, item.unit_scale)]
+                 and o.effective_table_id == table_id and o.row_id == peer_row
+                 and o.column_id == item.column_id and self._same_sum_scope(o, item)]
         if len({o.value for o in peers}) != 1:
             return None
-        first = peers[0]
-        table = next((t for t in self.pages[page_number].tables if t.table_id in tables), None)
-        if table is None or not (0 <= first.row_id < item.row_id < subtotal.row_id < len(table.rows)):
+        if any(not self._source_cell(o, table, page_number) for o in peers):
             return None
-        if any(t.rows[o.row_id].alignment_status == "ambiguous" for t in [table] for o in (first, item, subtotal)):
-            return None
+        first, second = sorted((item, peers[0]), key=lambda o: o.row_id)
         tolerance = .15 if item.unit_family == "percentage" else max(1e-7, abs(subtotal.value) * 1e-6)
-        if abs(first.value + item.value - subtotal.value) > tolerance:
+        if abs(first.value + second.value - subtotal.value) > tolerance:
             return None
-        return SourceTopicRelation("source_adjacent_subtotal", (first.id, item.id, subtotal.id), (page_number,))
+        return SourceTopicRelation("source_adjacent_subtotal", (first.id, second.id, subtotal.id), (page_number,))
+
+    @staticmethod
+    def _same_sum_scope(first, second):
+        fields = ("unit", "unit_family", "currency", "raw_unit", "unit_scale", "period", "period_basis",
+                  "period_start", "period_end", "as_of_date", "entity", "category_dimensions",
+                  "parent_section", "dimensions", "ifrs_status", "audited_status")
+        return all(getattr(first, field) == getattr(second, field) for field in fields)
+
+    @staticmethod
+    def _source_cell(item, table, page_number):
+        """Bind a signed observation to the resolved source row and cell."""
+        from adaptive_document_agent.extraction.numeric_parser import parse_number
+
+        if (item.row_id is None or item.column_id is None
+                or not 0 <= item.row_id < len(table.rows)):
+            return False
+        row = table.rows[item.row_id]
+        if (row.page != page_number or row.alignment_status != "resolved"
+                or not 0 < item.column_id < len(row.cells) or not row.cells[0]):
+            return False
+        source_label = " ".join(row.cells[0].split()).casefold()
+        if not any(e.page == page_number and e.table_id == table.table_id and e.row_label
+                   and " ".join(e.row_label.split()).casefold() == source_label for e in item.evidence):
+            return False
+        cell = row.cells[item.column_id]
+        if cell is None or " ".join(cell.split()) != " ".join(item.raw_value.split()):
+            return False
+        parsed = parse_number(cell)
+        if parsed is None:
+            return False
+        # Raw cells without a scale suffix use the observation's retained
+        # table scale. A literal suffix has already been applied by the parser.
+        scale = item.unit_scale if parsed.scale == 1 and item.unit_scale is not None else 1
+        expected = parsed.value * scale
+        return (math.isfinite(expected)
+                and math.isclose(expected, item.value, rel_tol=1e-9, abs_tol=1e-7))

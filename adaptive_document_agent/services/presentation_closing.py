@@ -130,13 +130,14 @@ def _render_linked_pages(presentation, result, plan, groups, records, notes):
             break
         bundles.append((identity, copy, subtitle, tables))
     else:
-        # Join short linked findings with matching complete table signatures,
+        # Pack linked findings with matching complete period headers,
         # even when the selected copy interleaves different period groups.
         # First appearance sets page order; the union of source IDs regenerates
-        # each table so shared rows are shown once.
+        # each table so shared rows are shown once. Different units keep their
+        # own labelled tables while participating in the same measured paging.
         batches = {}
         for bundle in bundles:
-            signature = tuple(key for key, _ in bundle[3])
+            signature = tuple(sorted({key[0] for key, _ in bundle[3]}))
             batches.setdefault(signature, []).append(bundle)
 
         def merge_batch(batch):

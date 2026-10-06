@@ -178,3 +178,43 @@ def test_overflow_does_not_hide_invalid_special_visual_evidence(kind):
     }[kind]):
         _render(kind, deck, plan, block, index, document)
     assert len(deck.slides) == 0
+
+
+@pytest.mark.parametrize(("height", "width", "page_count"), [
+    (.44, 11.49, 1),
+    (.36, 11.49, 2),
+    (.44, 3.0, 2),
+])
+def test_inline_definition_uses_actual_line_capacity_and_retains_source_copy(height, width, page_count):
+    from adaptive_document_agent.services.presentation_header_overflow import VisualHeader, append_header_commentary
+    from adaptive_document_agent.services.slide_compositor import Rect, _base
+
+    definition = "Regional markets include the source-defined countries and exclude the domestic category."
+    plan = PresentationSlide(id="source-definition", slide_type="analysis",
+        title="Regional measures", message=definition, source_pages=[7])
+    header = VisualHeader(plan.title, "", definition)
+    evidence = {"source_observations": [{"id": "source-observation", "raw_value": "12.500", "page": 7}]}
+    deck = blank_deck()
+    first, _ = _base(deck, plan.title, "")
+    rect = Rect(.55, 4.0, width, height)
+    before = plan.model_dump(mode="json")
+
+    append_header_commentary(deck, plan, header, [7], evidence,
+                            inline_slide=first, inline_rect=rect)
+
+    assert len(deck.slides) == page_count
+    text_shapes = [shape for slide in deck.slides for shape in slide.shapes
+                   if shape.name.startswith("composed:text:") and shape.text in definition]
+    assert "".join(shape.text for shape in text_shapes) == definition
+    inline = [shape for shape in first.shapes if shape in text_shapes]
+    if height == .36:
+        assert not inline  # smaller than the rendered line plus its padding
+    else:
+        assert inline
+        assert all(shape.top.inches + shape.height.inches <= rect.y + rect.h + 1e-6 for shape in inline)
+    for slide in deck.slides:
+        if any(shape in text_shapes for shape in slide.shapes):
+            notes = json.loads(slide.notes_slide.notes_text_frame.text)
+            assert notes["source_observations"] == evidence["source_observations"]
+            assert notes["source_pages"] == [7]
+    assert plan.model_dump(mode="json") == before

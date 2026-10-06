@@ -8,7 +8,8 @@ from adaptive_document_agent.models import PipelineResult
 from adaptive_document_agent.services.export import export_csv, export_json, export_markdown, export_pdf
 
 
-def render_report_downloads(st: Any, result: PipelineResult, columns: tuple[Any, ...], *, pdf_cache: dict | None = None) -> None:
+def render_report_downloads(st: Any, result: PipelineResult, columns: tuple[Any, ...], *, pdf_cache: dict | None = None,
+                            pptx_export_diagnostics: dict | None = None) -> None:
     formats = (
         ("Markdown", "Download Markdown", export_markdown, "analysis_report.md", "text/markdown"),
         ("PDF", "Download report (.pdf)", export_pdf, "analysis_report.pdf", "application/pdf"),
@@ -30,7 +31,10 @@ def render_report_downloads(st: Any, result: PipelineResult, columns: tuple[Any,
                         st.caption("Optional: generated only when requested, so PPT need not wait for PDF.")
                         continue
             try:
-                payload = pdf_cache[pdf_key] if pdf_key is not None and pdf_key in pdf_cache else exporter(result)
+                if kind == "JSON" and pptx_export_diagnostics is not None:
+                    payload = exporter(result, pptx_export_diagnostics=pptx_export_diagnostics)
+                else:
+                    payload = pdf_cache[pdf_key] if pdf_key is not None and pdf_key in pdf_cache else exporter(result)
                 if pdf_key is not None:
                     pdf_cache[pdf_key] = payload
             except Exception as exc:

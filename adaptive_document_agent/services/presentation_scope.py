@@ -51,10 +51,9 @@ def scope_items(result):
     withheld = {w.code for w in result.validation_warnings}
     if "conflicting_values" in withheld:
         add("Source validation limit", "The analysis retains unresolved source-conflict warnings. Only validated selected evidence is shown; the original analysis records the remaining warnings.")
-    if "presentation_closing_claim_withheld" in withheld or "presentation_topic_claims_withheld" in withheld:
-        add("Interpretation limit", "Some proposed conclusions were withheld because their claims could not be supported within their own evidence scope.")
-    if "presentation_topic_claim_withheld" in withheld:
-        add("Interpretation limit", "Unsupported takeaways were replaced with analytical questions; the retained source values remain available.")
+    # Rejected draft wording is an internal validation event, not a source
+    # limitation. Claim-withheld diagnostics remain in scope_audit_notes; real
+    # coverage boundaries, missing topics and source conflicts stay visible.
     if not any(items):
         return []
     return items

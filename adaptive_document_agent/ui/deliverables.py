@@ -135,6 +135,15 @@ def render(st, result: PipelineResult, raw_pdf: bytes, progress) -> None:
         progress.finish()
         from .completion_notification import notify_export_ready
         notify_export_ready(st, verified)
+    qa = None
+    if qa_error:
+        progress.fail("PowerPoint export blocked")
+        from adaptive_document_agent.services.export_diagnostics import export_diagnostics
+
+        # Capture this attempt before analysis JSON is serialized. The same
+        # snapshot is used by the separate QA download, without changing the
+        # analysis result or the inputs used by the native build cache.
+        qa = export_diagnostics(result, qa_error, visual_report, preflight_report)
     with st.expander("Other formats · Markdown, PDF, CSV & JSON", expanded=False):
         st.caption("Read the report separately or work with the extracted data and source evidence.")
         render_report_downloads(
@@ -142,13 +151,10 @@ def render(st, result: PipelineResult, raw_pdf: bytes, progress) -> None:
             result,
             tuple(st.columns(3)),
             pdf_cache=st.session_state.setdefault("pdf_export_cache", {}),
+            pptx_export_diagnostics=qa,
         )
 
-    if qa_error:
-        progress.fail("PowerPoint export blocked")
-        from adaptive_document_agent.services.export_diagnostics import export_diagnostics
-
-        qa = export_diagnostics(result, qa_error, visual_report, preflight_report)
+    if qa is not None:
         stage = qa["export_error"]["stage"]
         st.error(
             f"PowerPoint export blocked at the {stage} check. "

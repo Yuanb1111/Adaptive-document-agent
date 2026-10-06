@@ -21,10 +21,13 @@ def export_markdown(result: PipelineResult) -> bytes:
     return result.report_markdown.encode("utf-8")
 
 
-def export_json(result: PipelineResult) -> bytes:
+def export_json(result: PipelineResult, *, pptx_export_diagnostics: dict | None = None) -> bytes:
+    """Serialize analysis and optional findings from the current PPT export attempt."""
     from .llm.costs import summarize_usage
     data = result.model_dump(mode="json")
     data["llm_cost_summary"] = summarize_usage(result.llm_usage)
+    if pptx_export_diagnostics is not None:
+        data["pptx_export_diagnostics"] = pptx_export_diagnostics
     return json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
 
 
