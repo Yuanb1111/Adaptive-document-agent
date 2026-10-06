@@ -54,11 +54,13 @@ def render_waterfall(presentation, slide_plan, block, index):
 
     from .pptx_export import _source_footer, _text, FOURIER_BG_CARD, FOURIER_DARK, FOURIER_MUTED, FOURIER_PURPLE
     from .slide_compositor import _base
+    from .presentation_header_overflow import visual_header, append_header_commentary
     from .presentation_style import FONT
 
     bridge = waterfall_data(block, index)
     items, levels = bridge.observations, bridge.levels
-    slide, top = _base(presentation, slide_plan.title, slide_plan.message)
+    header = visual_header(slide_plan)
+    slide, top = _base(presentation, header.title, header.subtitle)
     slide.name = "evidence_waterfall"
     width = presentation.slide_width.inches - 1.1
     labels = [item.metric_original for item in items]
@@ -143,8 +145,10 @@ def render_waterfall(presentation, slide_plan, block, index):
     pages = sorted({e.page for item in items for e in item.evidence})
     _text(slide, _source_footer(pages), .55, presentation.slide_height.inches - .82,
           width, .20, size=9, color=FOURIER_MUTED)
-    slide.notes_slide.notes_text_frame.text = json.dumps({
+    notes = {
         "ordered_reconciliation_ids": [item.id for item in items],
         "source_observations": [item.model_dump(mode="json") for item in items],
-    }, ensure_ascii=False)
+    }
+    slide.notes_slide.notes_text_frame.text = json.dumps(notes, ensure_ascii=False)
+    append_header_commentary(presentation, slide_plan, header, pages, notes)
     return slide

@@ -100,6 +100,7 @@ def render_matrix(presentation, slide_plan, block, index):
     from pptx.util import Inches, Pt
     from .pptx_export import _source_footer, _text, _rgb, FOURIER_DARK, FOURIER_MUTED, FOURIER_PURPLE
     from .slide_compositor import _base, _lines
+    from .presentation_header_overflow import visual_header, append_header_commentary
     from .presentation_style import FONT
     from .fourier_brand import WHITE
 
@@ -121,7 +122,8 @@ def render_matrix(presentation, slide_plan, block, index):
                                for value, cell_width in zip(row, widths)) * 18 / 72 + .12)
                    for row in rows]
     header_h = .85
-    first_slide, top = _base(presentation, slide_plan.title, slide_plan.message)
+    header = visual_header(slide_plan)
+    first_slide, top = _base(presentation, header.title, header.subtitle)
     available = presentation.slide_height.inches - 1.02 - top - .08
     if any(header_h + row_h > available for row_h in row_heights):
         raise ValueError("Matrix row exceeds readable slide capacity.")
@@ -135,7 +137,7 @@ def render_matrix(presentation, slide_plan, block, index):
     ranges.append((start, len(rows)))
 
     for page, (start, end) in enumerate(ranges):
-        slide = first_slide if page == 0 else _base(presentation, slide_plan.title, slide_plan.message)[0]
+        slide = first_slide if page == 0 else _base(presentation, header.title, header.subtitle)[0]
         slide.name = "evidence_comparison_matrix"
         observations = [item for records in matrix.cells[start:end] for item in records]
         heights = [header_h, *row_heights[start:end]]
@@ -175,5 +177,10 @@ def render_matrix(presentation, slide_plan, block, index):
             "matrix_dimension": block.matrix_dimension,
             "source_observations": [item.model_dump(mode="json") for item in observations],
         }, ensure_ascii=False)
+    append_header_commentary(presentation, slide_plan, header,
+        sorted({source.page for item in matrix.observations for source in item.evidence}), {
+            "matrix_dimension": block.matrix_dimension,
+            "source_observations": [item.model_dump(mode="json") for item in matrix.observations],
+        })
     # Existing callers that inspect a single-page matrix still receive its slide.
     return first_slide

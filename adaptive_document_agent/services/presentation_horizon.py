@@ -45,9 +45,11 @@ def horizon_data(block, index, document):
 def render_horizon(presentation, slide_plan, block, index, document):
     from .pptx_export import _source_footer, _text, FOURIER_DARK, FOURIER_MUTED, FOURIER_PURPLE
     from .slide_compositor import _base, _lines
+    from .presentation_header_overflow import visual_header, append_header_commentary
 
     entries = horizon_data(block, index, document)
-    slide, top = _base(presentation, slide_plan.title, slide_plan.message)
+    header = visual_header(slide_plan)
+    slide, top = _base(presentation, header.title, header.subtitle)
     slide.name = "evidence_horizon"
     width = presentation.slide_width.inches - 1.1
     gap = .35
@@ -82,8 +84,10 @@ def render_horizon(presentation, slide_plan, block, index, document):
     pages = sorted({page for item, _ in entries for page in item.source_pages})
     _text(slide, _source_footer(pages), .55, presentation.slide_height.inches - .82,
           width, .20, size=9, color=FOURIER_MUTED)
-    slide.notes_slide.notes_text_frame.text = json.dumps({
+    notes = {
         "horizon_items": [item.model_dump(mode="json") for item, _ in entries],
         "source_observations": [obs.model_dump(mode="json") for _, obs in entries if obs],
-    }, ensure_ascii=False)
+    }
+    slide.notes_slide.notes_text_frame.text = json.dumps(notes, ensure_ascii=False)
+    append_header_commentary(presentation, slide_plan, header, pages, notes)
     return slide
