@@ -169,6 +169,8 @@ class PresentationTopicSelector:
             PresentationTopicSelection,
             stage="presentation",
         )
+        from adaptive_document_agent.services.presentation_ratio_definitions import prepare_topic_ratio_definitions
+        prepare_topic_ratio_definitions(selection, lookup, result)
         from adaptive_document_agent.validation.topic_period_consistency import reconcile_topic_periods
         # The model owns the question; exact source-row rebinding follows its
         # explicit periods without another model request or changing raw facts.
@@ -179,7 +181,9 @@ class PresentationTopicSelector:
         finally:
             result.presentation_topics = previous
         from .topic_selection_repair import retain_valid_topics
-        return retain_valid_topics(selection, lookup, primary_pages, result, self.gateway, self._validate)
+        retained = retain_valid_topics(selection, lookup, primary_pages, result, self.gateway, self._validate)
+        prepare_topic_ratio_definitions(retained, lookup, result)
+        return retained
 
     @staticmethod
     def _validate(

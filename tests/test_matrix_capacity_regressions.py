@@ -54,15 +54,15 @@ def _assert_readable(deck):
                 assert all(paragraph.font.size.pt == font_size for paragraph in cell.text_frame.paragraphs)
 
 
-def test_four_row_matrix_continues_below_a_tall_valid_header():
+def test_four_row_matrix_uses_measured_rows_below_a_tall_valid_header():
     items, block, plan = _matrix(row_count=4)
     before = [item.model_dump(mode="json") for item in items]
     deck = blank_deck()
     first = render_matrix(deck, plan, block, {item.id: item for item in items})
 
     assert first == deck.slides[0]
-    assert len(deck.slides) == 2
-    assert [len(shape.table.rows) - 1 for shape in _tables(deck)] == [3, 1]
+    assert len(deck.slides) == 1
+    assert [len(shape.table.rows) - 1 for shape in _tables(deck)] == [4]
     assert [item.model_dump(mode="json") for item in items] == before
     _assert_readable(deck)
 
@@ -98,8 +98,8 @@ def test_wrapped_labels_and_raw_values_get_height_instead_of_clipping():
     deck = blank_deck()
     render_matrix(deck, plan, block, {item.id: item for item in items})
     tables = _tables(deck)
-    assert len(tables) > 1
-    assert any(row.height.inches > .78 for shape in tables for row in list(shape.table.rows)[1:])
+    assert len(tables) == 1  # wider measured label column avoids a sparse tail
+    assert any(row.height.inches > .52 for shape in tables for row in list(shape.table.rows)[1:])
     assert [row.cells[0].text for shape in tables for row in list(shape.table.rows)[1:]] == labels
     assert all(cell.text == "12.500 (reported estimate)%"
                for shape in tables for row in list(shape.table.rows)[1:] for cell in list(row.cells)[1:])

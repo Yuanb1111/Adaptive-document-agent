@@ -490,7 +490,9 @@ class DocumentOrchestrator:
         issues = list(issues)
         details: dict[str, int] = {}
         with record_timing(details, "insights"):
-            insights = InsightGenerator(self.gateway).generate(results, index.observations)
+            insight_generator = InsightGenerator(self.gateway)
+            insights = insight_generator.generate(results, index.observations)
+            issues.extend(insight_generator.validation_issues)
         notify("Selecting presentation questions before chart generation")
         output = PipelineResult(
             document=document, profile=profile, observations=index.observations,

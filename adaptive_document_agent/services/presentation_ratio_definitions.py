@@ -1,6 +1,6 @@
 """Bind ratio copy to explicit source row footnotes, without inferring formulas.
 
-Only the documented ``Calculated by dividing X by Y`` construction is parsed.
+Only explicit division definitions with a source-bound row marker are parsed.
 Its footnote marker must belong to the selected ratio row on the same page.
 Unknown definitions remain unknown; observations and model output stay intact.
 """
@@ -19,6 +19,37 @@ from .presentation_evidence import ambiguous_source_table_ids, observation_uses_
 
 def _key(value):
     return " ".join(re.findall(r"[^\W_]+", value.casefold()))
+
+
+def _literal_definitions(text, marker, label):
+    """Parse literal division grammar; never supply a financial formula by name."""
+    found = []
+    pattern = (r"\(" + re.escape(marker) + r"\)\s*(?:"
+               r"Calculated\s+by\s+dividing\s+|The\s+calculation\s+of\s+)"
+               r".*?(?:\.(?!\d)|;|$)")
+    for match in re.finditer(pattern, text, re.I | re.S):
+        quote = " ".join(match[0].split())
+        body = re.sub(r"^\(\d+\)\s*", "", quote).rstrip(".;")
+        divided = re.fullmatch(r"Calculated by dividing (.+?) by (.+)", body, re.I)
+        if divided:
+            numerator, denominator = divided.groups()
+        else:
+            defined = re.fullmatch(r"The calculation of (.+?) is based on (.+?) divided by (.+)", body, re.I)
+            if not defined or _key(defined[1]) != _key(label):
+                continue
+            numerator, denominator = defined[2], defined[3]
+        multiplier = None
+        scaled = re.fullmatch(r"(.+?) and multiplied by (\d+(?:\.\d+)?)%?", denominator, re.I)
+        if scaled:
+            # Percent observations can use only a literally stated 100 factor.
+            # Other multipliers need an explicit representation contract.
+            if float(scaled[2]) != 100:
+                continue
+            denominator, multiplier = scaled[1], 100
+        if not numerator or not denominator or max(len(numerator), len(denominator)) > 180:
+            continue
+        found.append((match.start(), numerator, denominator, quote, multiplier))
+    return found
 
 
 def ratio_definitions(result):
@@ -44,25 +75,23 @@ def ratio_definitions(result):
         if len(anchors) != 1:
             continue
         anchor = anchors[0]
-        definitions = list(re.finditer(
-            r"\(" + re.escape(anchor[1]) + r"\)\s*Calculated\s+by\s+dividing\s+"
-            r"([^.;]+?)\s+by\s+([^.;]+?)(?:\.|;|$)", text[anchor.end():], re.I))
+        definitions = _literal_definitions(text[anchor.end():], anchor[1], label)
         if len(definitions) != 1:
             continue
         definition = definitions[0]
-        intervening = text[anchor.end():anchor.end() + definition.start()]
+        intervening = text[anchor.end():anchor.end() + definition[0]]
         if re.search(r"\(" + re.escape(anchor[1]) + r"\)", intervening):
             # Footnote numbers restart between tables. The later row must not
             # lend its definition to an earlier table's same-number marker.
             continue
-        numerator, denominator = (" ".join(definition[i].split()) for i in (1, 2))
-        if not numerator or not denominator or max(len(numerator), len(denominator)) > 180:
-            continue
+        _, numerator, denominator, quote, multiplier = definition
         found[(page, table, label)] = {
             "metric": label, "numerator": numerator, "denominator": denominator,
-            "page": page, "table_id": table, "quote": " ".join(definition[0].split()),
+            "page": page, "table_id": table, "quote": quote,
             "observation_ids": list(dict.fromkeys(ids)),
         }
+        if multiplier is not None:
+            found[(page, table, label)]["multiplier"] = multiplier
     return list(found.values())
 
 
@@ -176,6 +205,7 @@ def _rewrite(text, definition, known_labels):
     """Replace an explicit ratio denominator only within a single bound ratio."""
     denominator = definition["denominator"]
     caption = f"Ratio denominator: {denominator} (see source pages)."
+    text = reconcile_missing_definition(text, definition)
     if len(re.findall(r"\bratios?\b", text, re.I)) > 1:
         return text
     if re.search(r"\bratio\b", text, re.I) and not _bound_subject(text, definition):
@@ -197,6 +227,54 @@ def _rewrite(text, definition, known_labels):
         if re.search(pattern, text, re.I):
             return caption
     return text
+
+
+_MISSING_DEFINITION = re.compile(
+    r"\b(?:source\s+)?(?:denominator|definition|formula)\s+(?:is\s+|was\s+)?"
+    r"(?:not\s+(?:supplied|provided|disclosed|available|defined|specified)|unknown|unavailable)\b", re.I)
+
+
+def reconcile_missing_definition(text, definition):
+    """Replace only an explicit absence claim for the bound metric, preserving other caveats."""
+    if not _MISSING_DEFINITION.search(text):
+        return text
+    # A literal metric name (or an unqualified standalone absence clause) is
+    # required. Another named measure must not borrow this definition.
+    denial = _MISSING_DEFINITION.search(text)
+    prefix = text[:denial.start()].strip(" ;,.")
+    prefix = re.sub(r"^(?:reported|source|the)\s+", "", _key(prefix))
+    prefix = re.sub(r"\s+only$", "", prefix)
+    if prefix and prefix != _key(definition["metric"]):
+        return text
+    replacement = (f"Source definition for {definition['metric']}: numerator {definition['numerator']}; "
+                   f"denominator {definition['denominator']}")
+    return _MISSING_DEFINITION.sub(replacement, text)
+
+
+def prepare_topic_ratio_definitions(selection, lookup, result):
+    """Supply source definitions before theme compilation, retaining original model caveats."""
+    definitions = ratio_definitions(result)
+    for topic in selection.topics:
+        ids = {item.id for sid in topic.series_ids for item in lookup.get(sid, [])}
+        bound = [d for d in definitions if ids.intersection(d["observation_ids"])]
+        for definition in bound:
+            original = list(topic.caveats)
+            topic.caveats = [reconcile_missing_definition(text, definition)
+                            if len(bound) == 1 or _key(definition["metric"]) in _key(text) else text
+                            for text in original]
+            if topic.caveats == original:
+                continue
+            message = json.dumps({"topic_id": topic.id, "original_caveats": original,
+                                  "display_caveats": topic.caveats, "definition": definition}, ensure_ascii=False)
+            if not any(w.code == "presentation_topic_definition" and w.message == message
+                       for w in result.validation_warnings):
+                result.validation_warnings.append(ValidationIssue(
+                    code="presentation_topic_definition", stage="presentation", severity="info",
+                    message=message, related_ids=[topic.id, *definition["observation_ids"]],
+                    evidence=[SourceEvidence(page=definition["page"], table_id=definition["table_id"],
+                        row_label=definition["metric"], text=definition["quote"],
+                        extraction_method="explicit_ratio_footnote", confidence=1.0)],
+                ))
 
 
 def prepare_presentation_ratio_definitions(result, plan=None):

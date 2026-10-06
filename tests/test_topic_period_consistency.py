@@ -1,6 +1,7 @@
 """Selected comparison periods bind to each source series, not a pooled year bag."""
 from copy import deepcopy
 import json
+import re
 
 import pytest
 
@@ -112,8 +113,27 @@ def test_separately_labeled_mixed_period_questions_remain_valid_and_pages_use_lo
     assert len(plan.themes)==1
     slides=[s for s in plan.slides if s.slide_type=='analysis']
     assert len(slides)==2
-    last=slides[-1]
-    assert 'FY2022' not in ' '.join((last.title,last.message,last.analytical_question,last.selection_reason))
+    # Balanced pagination is now 2+2: each page contains one FY series and
+    # one 6M series. Test each page's actual evidence, not the former 3+1 tail.
+    assert [len(slide.chart_ids) for slide in slides] == [2, 2]
+    charts = {chart.id: chart for chart in result.charts}
+    observations = {item.id: item for item in result.observations}
+    from adaptive_document_agent.validation.topic_period_consistency import _period_matches
+    for slide in slides:
+        series = [[observations[oid] for oid in charts[cid].observation_ids]
+                  for cid in slide.chart_ids]
+        local = [item for group in series for item in group]
+        for copy in (slide.title, slide.message, slide.analytical_question, slide.selection_reason):
+            periods = re.findall(r'\b(?:FY|6M)\d{4}\b', copy)
+            assert all(any(_period_matches(period, item) for item in local) for period in periods)
+        # A period from another local panel still cannot authorize a wrong
+        # range for this panel's explicitly named subject.
+        for group in series:
+            clauses = [clause for clause in slide.analytical_question.split('?')
+                       if group[0].metric_original in clause]
+            assert clauses
+            assert all(any(_period_matches(period, item) for item in group)
+                       for clause in clauses for period in re.findall(r'\b(?:FY|6M)\d{4}\b', clause))
     assert not any(w.code=='presentation_topic_period_rebound' for w in result.validation_warnings)
 
 

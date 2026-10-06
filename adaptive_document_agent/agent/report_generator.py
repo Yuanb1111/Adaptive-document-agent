@@ -175,6 +175,14 @@ class ReportGenerator:
         counts: dict[str, int] = {}
         omitted: dict[str, int] = {}
         for warning in warnings:
+            if warning.code == "insight_source_context":
+                warning = warning.model_copy(update={"message":
+                    "A finding was withheld because it omitted the source metric's parent or category scope. "
+                    "The original draft and source evidence remain in the technical audit."})
+            elif warning.code in {"presentation_topic_definition", "presentation_ratio_definition"}:
+                warning = warning.model_copy(update={"message":
+                    "A ratio description was reconciled with its explicit source definition. "
+                    "The original wording and source evidence remain in the technical audit."})
             count = counts.get(warning.code, 0)
             if count < maximum_per_code:
                 output.append(warning)

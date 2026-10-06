@@ -9,7 +9,7 @@ from time import perf_counter
 
 from pydantic import BaseModel, Field
 
-from adaptive_document_agent.models import PipelineResult, PresentationPlan
+from adaptive_document_agent.models import PipelineResult, PresentationPlan, ValidationIssue
 from adaptive_document_agent.models.presentation import CompanyProfile, CompanySummaryItem, CompanySummaryPage
 from adaptive_document_agent.services.company_summary import summary_excerpts, validate_summary
 from .prompting import untrusted_document_message
@@ -92,11 +92,16 @@ class PreparedCompanyIntroduction:
                 self._future.set_exception(exc)
             else:
                 self._future.set_result(None)
-        self._future.result()
+        try:
+            self._future.result()
+        finally:
+            for issue in self._source.validation_warnings:
+                if issue.code.startswith("company_introduction_") and issue not in current.validation_warnings:
+                    current.validation_warnings.append(issue.model_copy(deep=True))
         _check_cancelled(self._cancelled)
         errors = _introduction_errors(self._draft.company, current)
-        if not self._draft.company.summary_overview or not self._draft.company.summary_business:
-            errors.append("Both distinct introduction pages need source evidence")
+        if not self._draft.company.summary_overview and not self._draft.company.summary_business:
+            errors.append("At least one introduction page needs source evidence")
         if errors:
             raise ValueError("Prepared introduction no longer matches the source: " + "; ".join(errors))
         _check_cancelled(self._cancelled)
@@ -155,7 +160,7 @@ def _introduction_errors(company: CompanyProfile, result: PipelineResult) -> lis
 
 
 def _has_valid_introduction(plan: PresentationPlan, result: PipelineResult) -> bool:
-    return bool(plan.company.summary_overview and plan.company.summary_business
+    return bool((plan.company.summary_overview or plan.company.summary_business)
                 and not _introduction_errors(plan.company, result))
 
 
@@ -208,6 +213,7 @@ def ensure_company_introduction(gateway, result, plan, *, cancelled: Event | Non
          "or force a flow for documents without one; otherwise return an empty list."},
         untrusted_document_message(json.dumps(excerpts, ensure_ascii=False)),
     ]
+    drafts = []
     for attempt in range(2):
         _check_cancelled(cancelled)
         draft = gateway.generate_structured(messages, IntroductionDraft,
@@ -242,9 +248,48 @@ def ensure_company_introduction(gateway, result, plan, *, cancelled: Event | Non
             from adaptive_document_agent.services.presentation_identity import reconcile_presentation_identity
             reconcile_presentation_identity(plan, result)
             return
+        drafts.append({"draft": draft.model_dump(mode="json"), "errors": list(errors)})
         if attempt == 0:
             messages += [untrusted_document_message(draft.model_dump_json()),
                          {"role": "system", "content": "Correct the following validation failures using only supplied evidence: " + "; ".join(errors)}]
+    # Preserve independently verified model-authored items after the bounded
+    # repair. A rejected product sentence must not erase a valid overview.
+    retained = company.model_copy(deep=True)
+    for field in ("summary_overview", "summary_business"):
+        setattr(retained, field, None)
+        draft_field = "overview" if field == "summary_overview" else "business"
+        for attempt_record in reversed(drafts):
+            source_page = attempt_record["draft"][draft_field]
+            page = CompanySummaryPage.model_validate(source_page) if source_page else None
+            valid = []
+            for item in page.items if page else []:
+                probe = CompanyProfile(**{field: page.model_copy(update={"items": [item]})})
+                if set(item.source_pages) <= set(selected.pages) and not validate_summary(probe, result):
+                    valid.append(item)
+            if valid:
+                setattr(retained, field, page.model_copy(update={"items": valid}))
+                break
+    retained.value_chain = []
+    if retained.summary_overview or retained.summary_business:
+        retained.source_pages = sorted({number for page in (retained.summary_overview, retained.summary_business)
+                                         if page for item in page.items for number in item.source_pages}
+                                        | set(retained.field_source_pages.get("name", [])))
+        result.validation_warnings.append(ValidationIssue(
+            code="company_introduction_partial", severity="warning", stage="presentation",
+            message="Some introductory claims failed source checks; independently verified items were retained.",
+        ))
+        result.validation_warnings.append(ValidationIssue(
+            code="company_introduction_repair_audit", severity="info", stage="presentation",
+            message=json.dumps({"attempts": drafts, "outcome": "partial"}, ensure_ascii=False),
+        ))
+        _apply_introduction(plan, retained)
+        from adaptive_document_agent.services.presentation_identity import reconcile_presentation_identity
+        reconcile_presentation_identity(plan, result)
+        return
+    result.validation_warnings.append(ValidationIssue(
+        code="company_introduction_repair_audit", severity="warning", stage="presentation",
+        message=json.dumps({"attempts": drafts, "outcome": "rejected"}, ensure_ascii=False),
+    ))
     raise ValueError("Company introduction could not be verified: " + "; ".join(errors))
 
 

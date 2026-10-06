@@ -186,6 +186,17 @@ def format_compact_currency(
 
     is_negative = val < 0
     abs_val = abs(val)
+    _, basis = split_unit_basis(raw_unit)
+
+    if basis:
+        # A price/rate's small change must survive compact display. Ordinary
+        # monetary totals keep their established rounding below.
+        factor, suffix = next(((factor, suffix) for factor, suffix in (
+            (1_000_000_000, "bn"), (1_000_000, "m"), (1000, "k"))
+            if abs_val >= factor), (1, ""))
+        number = format(abs_val / factor, ".15g")
+        formatted = f"{curr} {number}{suffix}/{basis}".strip()
+        return f"-{formatted}" if is_negative else formatted
 
     if abs_val >= 1_000_000_000:
         scaled = abs_val / 1_000_000_000.0
@@ -203,9 +214,6 @@ def format_compact_currency(
         formatted = f"{curr} {abs_val:,.0f}"
 
     formatted = formatted.strip()
-    _, basis = split_unit_basis(raw_unit)
-    if basis:
-        formatted += f"/{basis}"
     return f"-{formatted}" if is_negative else formatted
 
 

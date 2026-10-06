@@ -95,36 +95,56 @@ def _matrix_value(item) -> str:
     return value
 
 
-def render_matrix(presentation, slide_plan, block, index):
+def render_matrix(presentation, slide_plan, block, index, *, context_notes=()):
     """Continue complete matrix rows on readable, independently cited pages."""
     from pptx.util import Inches, Pt
     from .pptx_export import _source_footer, _text, _rgb, FOURIER_DARK, FOURIER_MUTED, FOURIER_PURPLE
-    from .slide_compositor import _base, _lines
+    from .slide_compositor import _base, _lines, Rect
     from .presentation_header_overflow import visual_header, append_header_commentary
     from .presentation_style import FONT
     from .fourier_brand import WHITE
 
     matrix = comparison_matrix(block, index)
     width = presentation.slide_width.inches - 1.1
-    first_width = width * .22
-    data_width = (width - first_width) / len(matrix.column_labels)
-    widths = [first_width, *([data_width] * len(matrix.column_labels))]
     headers = ["Metric" if block.matrix_dimension == "source_metric" else block.matrix_dimension,
                *matrix.column_labels]
+    rows = [[label, *(_matrix_value(item) for item in records)]
+            for label, records in zip(matrix.row_labels, matrix.cells)]
+    # A category label often needs more space than a numeric period column.
+    # Choose measured widths before creating a mostly empty continuation.
+    candidates = []
+    for fraction in (.22, .26, .30, .34, .38, .42, .46):
+        candidate_widths = [width * fraction] + [width * (1 - fraction) / len(matrix.column_labels)] * len(matrix.column_labels)
+        header_lines = [len(_lines(value, cell_width - .20, 12))
+                        for value, cell_width in zip(headers, candidate_widths)]
+        if max(header_lines) > 3:
+            continue
+        heights = [max(.52, max(len(_lines(value, cell_width - .20, 14))
+                                   for value, cell_width in zip(row, candidate_widths)) * 18 / 72 + .14)
+                   for row in rows]
+        heading_height = max(.48, max(header_lines) * 15 / 72 + .14)
+        candidates.append((sum(heights) + heading_height, abs(fraction - .22), candidate_widths))
+    if not candidates:
+        raise ValueError("Matrix column heading exceeds readable capacity.")
+    widths = min(candidates, key=lambda candidate: candidate[:2])[2]
     if any(len(_lines(label, cell_width - .20, 12)) > 3
            for label, cell_width in zip(headers, widths)):
         raise ValueError("Matrix column heading exceeds readable capacity.")
-    rows = [[label, *(_matrix_value(item) for item in records)]
-            for label, records in zip(matrix.row_labels, matrix.cells)]
     # Match the explicit cell margins and line spacing below. A long category
     # or raw value gets more height, never a smaller font or truncated copy.
-    row_heights = [max(.78, max(len(_lines(value, cell_width - .20, 14))
-                               for value, cell_width in zip(row, widths)) * 18 / 72 + .12)
+    row_heights = [max(.52, max(len(_lines(value, cell_width - .20, 14))
+                               for value, cell_width in zip(row, widths)) * 18 / 72 + .14)
                    for row in rows]
-    header_h = .85
+    header_h = max(.48, max(len(_lines(value, cell_width - .20, 12))
+                           for value, cell_width in zip(headers, widths)) * 15 / 72 + .14)
     header = visual_header(slide_plan)
     first_slide, top = _base(presentation, header.title, header.subtitle)
-    available = presentation.slide_height.inches - 1.02 - top - .08
+    # The header may already contain a complete source definition. Avoid
+    # printing the exact same sentence again in its local context band.
+    context_copy = "\n".join(note for note in dict.fromkeys(context_notes)
+                             if note not in slide_plan.message)
+    context_h = (len(_lines(context_copy, width, 11)) * 14 / 72 + .12) if context_copy else 0
+    available = presentation.slide_height.inches - 1.02 - top - .08 - context_h
     if any(header_h + row_h > available for row_h in row_heights):
         raise ValueError("Matrix row exceeds readable slide capacity.")
     ranges = []
@@ -177,10 +197,20 @@ def render_matrix(presentation, slide_plan, block, index):
             "matrix_dimension": block.matrix_dimension,
             "source_observations": [item.model_dump(mode="json") for item in observations],
         }, ensure_ascii=False)
+        if context_copy:
+            context = _text(slide, context_copy, .55,
+                           presentation.slide_height.inches - 1.02 - context_h + .04,
+                           width, context_h - .04, size=11, color=FOURIER_MUTED)
+            context.name = "source_context:definitions_and_limits"
+            for paragraph in context.text_frame.paragraphs:
+                paragraph.line_spacing = Pt(14)
+    inline_top = top + .08 + sum(heights) + .16
+    inline_bottom = presentation.slide_height.inches - 1.02 - context_h
     append_header_commentary(presentation, slide_plan, header,
         sorted({source.page for item in matrix.observations for source in item.evidence}), {
             "matrix_dimension": block.matrix_dimension,
             "source_observations": [item.model_dump(mode="json") for item in matrix.observations],
-        })
+        }, inline_slide=slide,
+        inline_rect=Rect(.55, inline_top, width, inline_bottom - inline_top))
     # Existing callers that inspect a single-page matrix still receive its slide.
     return first_slide

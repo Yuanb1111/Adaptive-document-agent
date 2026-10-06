@@ -230,7 +230,7 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
         ordered = [lookup[cid] for cid in ordered_ids if cid in lookup]
         if len(ordered) <= 1:
             raise
-        split = max(1, len(ordered) - 1)
+        split = max(1, (len(ordered) + 1) // 2)
         return _paginate_chart_slide(presentation, slide_plan,
                                      (ordered[:split], ordered[split:]), result, index)
 
@@ -331,6 +331,12 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
     subtitle, subtitle_overflow = _split_header_subtitle(subtitle)
     if subtitle_overflow:
         text = "\n".join(part for part in (subtitle_overflow, text) if part)
+    from .presentation_context_notes import slide_context_notes
+    context_notes = slide_context_notes(result, slide_plan, charts, index,
+                                      definitions=getattr(presentation, "_ada_ratio_definitions", None))
+    context_copy = "\n".join(context_notes)
+    context_h = (len(_lines(context_copy, presentation.slide_width.inches - 1.1, 11))
+                 * 14 / 72 + .12) if context_copy else 0
     page_title = heading
     slide, top = _base(presentation, page_title, subtitle)
     slide.name = f"composed_{slide_plan.layout}"
@@ -339,17 +345,30 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
     reference_ids.update(oid for c in charts for oid in c.total_observation_ids)
     # Keep exact values, qualifiers and page-level evidence recoverable without
     # turning supporting references into duplicate audience-facing pages.
-    slide.notes_slide.notes_text_frame.text = json.dumps({
+    note_record = {
         "slide_id": slide_plan.id,
         "planned_title": slide_plan.title,
         "analytical_question": slide_plan.message,
         "observations": [index.get(oid).model_dump(mode="json") for oid in sorted(reference_ids) if index.get(oid)],
         "insights": [insight_map[i].model_dump(mode="json") for i in insight_ids if i in insight_map],
         "source_pages": pages,
-    }, ensure_ascii=False, indent=2)
+        "context_notes": context_notes,
+    }
+    from .presentation_display_plan import corroboration_record
+    corroborating = corroboration_record(slide_plan, index)
+    if corroborating:
+        note_record["corroborating_evidence"] = corroborating
+    slide.notes_slide.notes_text_frame.text = json.dumps(note_record, ensure_ascii=False, indent=2)
     geometry = compose_geometry(presentation.slide_width.inches, presentation.slide_height.inches, top, len(charts),
         layout=slide_plan.layout, has_support=bool(support), has_commentary=bool(text), commentary_text=text,
-        bottom_reserve=convention_h)
+        bottom_reserve=convention_h + context_h)
+    if context_h:
+        context = _put_text(slide, context_copy,
+            Rect(.55, presentation.slide_height.inches - 1.02 - context_h - convention_h + .04,
+                 presentation.slide_width.inches - 1.1, context_h - .04), size=11, color=MUTED)
+        context.name = "source_context:definitions_and_limits"
+        for paragraph in context.text_frame.paragraphs:
+            paragraph.line_spacing = Pt(14)
     if convention_h:
         _put_text(slide, convention, Rect(.55, presentation.slide_height.inches - 1.02 - convention_h + .06,
                   presentation.slide_width.inches - 1.1, convention_h - .06), size=12, color=MUTED)

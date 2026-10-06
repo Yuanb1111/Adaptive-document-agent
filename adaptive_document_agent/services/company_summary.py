@@ -1,6 +1,7 @@
 """Retrieve Summary context without issuer-specific headings or business templates."""
 
 import re
+from .source_quotes import normalize_quote
 
 from adaptive_document_agent.models import DocumentProfile, ParsedDocument
 
@@ -55,11 +56,16 @@ def validate_summary(company, result) -> list[str]:
 
     errors = []
     candidate_text = {p["page"]: p["text"] for p in summary_excerpts(result.document, result.profile)}
-    normalize = lambda text: " ".join(text.casefold().split())
+    normalize = normalize_quote
     for field in ("summary_overview", "summary_business"):
         page = getattr(company, field)
         if page is None:
             continue
+        title_numbers = PresentationPlanValidator._numbers(page.title)
+        quoted_numbers = set().union(*(PresentationPlanValidator._numbers(item.source_quote)
+                                      for item in page.items))
+        if title_numbers - quoted_numbers:
+            errors.append(f"{field}: page title contains unsupported numeric claims {sorted(title_numbers - quoted_numbers)}")
         for item in page.items:
             if not set(item.source_pages) <= candidate_text.keys():
                 errors.append(f"{field}: citations must belong to supplied company introduction candidates")
@@ -82,6 +88,4 @@ def validate_summary(company, result) -> list[str]:
         allowed = PresentationPlanValidator._numbers(item.source_quote)
         if claimed - allowed:
             errors.append(f"value_chain: unsupported numeric claims {sorted(claimed - allowed)}")
-    if bool(company.summary_overview) != bool(company.summary_business):
-        errors.append("company Summary introduction requires both overview and business pages")
     return errors

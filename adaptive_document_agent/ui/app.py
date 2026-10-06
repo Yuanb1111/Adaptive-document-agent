@@ -233,6 +233,8 @@ def run_app() -> None:
     if not readiness["ready"]:
         st.warning("PowerPoint export is currently unavailable. Analysis and other download formats remain available.")
     cache = cache_for_session(st.session_state, public_deployment=public_deployment)
+    from .completion_notification import render_settings as render_notification_settings
+    render_notification_settings(st)
     with st.container(border=True):
         branding.section_label(st, "01", "Upload your document")
         with st.expander("Analysis options (optional)", expanded=False):
@@ -361,6 +363,8 @@ def run_app() -> None:
         if st.button("Regenerate PowerPoint only"):
             st.session_state["ppt_build_cache"] = {}
             st.session_state["ppt_visual_cache"] = {}
+            from .completion_notification import begin_export_run
+            begin_export_run(st, scope_key)
             st.caption("Reusing the existing analysis; rebuilding PowerPoint and rerunning export checks.")
 
     deliverables.render(st, result, raw_pdf, progress)

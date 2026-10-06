@@ -138,18 +138,20 @@ def _render_linked_pages(presentation, result, plan, groups, records, notes):
         for bundle in bundles:
             signature = tuple(key for key, _ in bundle[3])
             batches.setdefault(signature, []).append(bundle)
-        candidates = []
-        for batch in batches.values():
-            candidate = batch[0]
-            if len(batch) > 1:
-                identity = sorted({oid for item in batch for oid in item[0]})
-                evidence_plan = plan.model_copy(update={"insight_ids": [], "observation_ids": identity})
-                merged_tables, _ = closing_evidence(result, evidence_plan)
-                merged_copy = [[item for bundle in batch for item in bundle[1][column]] for column in (0, 1)]
-                candidate = (tuple(identity), merged_copy,
-                             "Reported values supporting the conclusions", merged_tables)
-            candidates.append((candidate, batch))
-        packed = _render_linked_bundle_pages(presentation, plan.title, candidates, notes)
+
+        def merge_batch(batch):
+            if len(batch) == 1:
+                return batch[0]
+            identity = sorted({oid for item in batch for oid in item[0]})
+            evidence_plan = plan.model_copy(update={"insight_ids": [], "observation_ids": identity})
+            merged_tables, _ = closing_evidence(result, evidence_plan)
+            merged_copy = [[item for bundle in batch for item in bundle[1][column]] for column in (0, 1)]
+            return (tuple(identity), merged_copy,
+                    "Reported values supporting the conclusions", merged_tables)
+
+        candidates = [(merge_batch(batch), batch) for batch in batches.values()]
+        packed = _render_linked_bundle_pages(presentation, plan.title, candidates, notes,
+                                            merge_batch=merge_batch)
         if packed is not None:
             slides, shown_ids = packed
             # Explicit additional facts remain visible; all raw records also
@@ -172,7 +174,7 @@ def _drop_last_slide(presentation):
     presentation.slides._sldIdLst.remove(slide_id)
 
 
-def _render_linked_bundle_pages(presentation, title, candidates, notes):
+def _render_linked_bundle_pages(presentation, title, candidates, notes, *, merge_batch):
     """Pack short linked findings while retaining separate table headers."""
     from .closing_evidence import evidence_table_layout, render_evidence_table
     from .pptx_export import _source_footer, _text, FOURIER_DARK, FOURIER_MUTED, FOURIER_PURPLE
@@ -212,8 +214,28 @@ def _render_linked_bundle_pages(presentation, title, candidates, notes):
     for candidate, originals in candidates:
         if dimensions(candidate)[0] <= bottom - top:
             bundles.append(candidate)
-        elif len(originals) > 1 and all(dimensions(item)[0] <= bottom - top for item in originals):
-            bundles.extend(originals)
+        elif len(originals) > 1:
+            # A whole compatible batch may be too tall although two complete
+            # subgroups fit. Minimize pages, then balance measured whitespace;
+            # regenerate each subgroup's table from its full original IDs.
+            capacity = bottom - top
+            best = [(0, 0.0, [])] + [None] * len(originals)
+            for end in range(1, len(originals) + 1):
+                for start in range(end):
+                    if best[start] is None:
+                        continue
+                    merged = merge_batch(originals[start:end])
+                    needed = dimensions(merged)[0]
+                    if needed > capacity:
+                        continue
+                    previous = best[start]
+                    option = (previous[0] + 1, previous[1] + (capacity - needed) ** 2,
+                              [*previous[2], merged])
+                    if best[end] is None or option[:2] < best[end][:2]:
+                        best[end] = option
+            if best[-1] is None:
+                return None
+            bundles.extend(best[-1][2])
         else:
             return None
 

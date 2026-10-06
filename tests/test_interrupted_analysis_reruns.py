@@ -168,3 +168,35 @@ def test_attempt_finishing_during_cache_lookup_does_not_start_again(flow, outcom
     flow.kwargs["cache"].get_model = lookup
     assert run(flow) is (flow.result if outcome == "complete" else None)
     flow.orchestrator.analyse_pdf.assert_not_called()
+
+
+def test_completion_identity_changes_only_for_actual_new_analysis_attempts(flow, monkeypatch):
+    from adaptive_document_agent.ui import completion_notification
+
+    events = []
+    monkeypatch.setattr(completion_notification, "_component", lambda: lambda **kw: events.append(kw["data"]))
+    verified = SimpleNamespace(payload=b"identical-presentation", report=SimpleNamespace(status="passed"))
+    assert run(flow) is flow.result
+    completion_notification.notify_export_ready(flow.st, verified)
+    assert run(flow) is flow.result  # Widget rerun reuses the result and attempt.
+    completion_notification.notify_export_ready(flow.st, verified)
+    assert events[1] == events[0]
+    assert run(flow, force=True) is flow.result
+    completion_notification.notify_export_ready(flow.st, verified)
+    assert events[2]["event_id"] == events[0]["event_id"]
+    assert events[2]["run_id"] != events[0]["run_id"]
+    flow.orchestrator.analyse_pdf.side_effect = ValueError("failed new attempt")
+    assert run(flow, force=True) is None
+    flow.orchestrator.analyse_pdf.side_effect = None
+    assert run(flow, retry=True) is flow.result
+    completion_notification.notify_export_ready(flow.st, verified)
+    assert events[3]["run_id"] not in {events[0]["run_id"], events[2]["run_id"]}
+    # A new server session may restore only the disk-cached result. The browser
+    # recovers the last run for this event_id, without a made-up new attempt.
+    flow.st.session_state.clear()
+    starts = flow.orchestrator.analyse_pdf.call_count
+    assert run(flow) is flow.result
+    completion_notification.notify_export_ready(flow.st, verified)
+    assert events[4]["run_id"] is None
+    assert events[4]["event_id"] == events[3]["event_id"]
+    assert flow.orchestrator.analyse_pdf.call_count == starts

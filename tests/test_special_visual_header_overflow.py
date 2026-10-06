@@ -113,7 +113,10 @@ def test_special_visual_overflow_retains_message_data_and_evidence(kind, message
     first = _render(kind, deck, plan, block, index, document)
 
     assert first == deck.slides[0]
-    assert len(deck.slides) > 1
+    if kind == "matrix" and message != MANY_SENTENCES:
+        assert len(deck.slides) == 1  # spare matrix space holds the complete copy
+    else:
+        assert len(deck.slides) > 1
     if message == MANY_SENTENCES:
         assert len(deck.slides) > 2
     assert _retained_message(deck, message) == " ".join(message.split())

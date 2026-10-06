@@ -115,3 +115,73 @@ def test_generic_source_initialism_and_its_subject_bind_without_metric_alias_lis
         "A&B utilisation rose while its ratio to scheduled capacity declined.")
     assert _rewrite("The A&B ratio is presented as a percentage of available capacity and not of scheduled capacity.",
                     definition, {"Available capacity"}) == "Ratio denominator: scheduled capacity (see source pages)."
+
+
+def _named_definition_sample():
+    result = _sample()
+    result.document.pages[0].text = (
+        "Service utilisation ratio(1) 34.3% 28.1%\n"
+        "(1) The calculation of service utilisation ratio is based on occupied hours for the period "
+        "divided by total scheduled hours for the respective period and multiplied by 100.0%.\n")
+    result.presentation_plan.themes[0].caveats = [
+        "Reported service utilisation ratio only; source denominator not supplied. Estimates remain unaudited."]
+    return result
+
+
+def test_named_source_definition_binds_multiplier_without_decimal_truncation():
+    definitions = ratio_definitions(_named_definition_sample())
+    assert len(definitions) == 1
+    assert definitions[0]["denominator"] == "total scheduled hours for the respective period"
+    assert definitions[0]["numerator"] == "occupied hours for the period"
+    assert definitions[0]["multiplier"] == 100
+    assert definitions[0]["quote"].endswith("100.0%.")
+
+
+def test_named_source_subject_must_match_bound_row_and_multiplier_must_match_percent_contract():
+    for old, new in (("calculation of service utilisation ratio", "calculation of rejection ratio"),
+                     ("100.0%", "1000.0%")):
+        result = _named_definition_sample()
+        result.document.pages[0].text = result.document.pages[0].text.replace(old, new)
+        assert ratio_definitions(result) == []
+
+
+def test_source_absence_caveat_is_reconciled_without_dropping_other_qualifications():
+    result = _named_definition_sample()
+    original = result.presentation_plan.themes[0].caveats[0]
+    prepare_presentation_ratio_definitions(result)
+    caveat = result.presentation_plan.themes[0].caveats[0]
+    assert "not supplied" not in caveat
+    assert "denominator total scheduled hours for the respective period" in caveat
+    assert "Estimates remain unaudited." in caveat
+    assert any(original in w.message for w in result.validation_warnings)
+
+
+def test_false_absence_is_corrected_before_topic_compilation_and_definition_is_in_directory():
+    from adaptive_document_agent.agent.presentation_topic_selector import series_directory
+    from adaptive_document_agent.models import PresentationTopic, PresentationTopicSelection
+    from adaptive_document_agent.services.presentation_ratio_definitions import prepare_topic_ratio_definitions
+    result = _named_definition_sample()
+    directory, lookup = series_directory(result)
+    source = next(item for item in directory if item["ratio_definitions"])
+    selection = PresentationTopicSelection(topics=[PresentationTopic(
+        id="use", title="Utilisation", question="What changed?", rationale="Disclosed measure",
+        series_ids=[source["id"]], caveats=result.presentation_plan.themes[0].caveats)])
+    prepare_topic_ratio_definitions(selection, lookup, result)
+    assert "not supplied" not in selection.topics[0].caveats[0]
+    assert source["ratio_definitions"][0]["multiplier"] == 100
+    assert result.validation_warnings[-1].code == "presentation_topic_definition"
+
+
+def test_unrelated_named_absence_cannot_borrow_selected_ratio_definition():
+    from adaptive_document_agent.services.presentation_ratio_definitions import reconcile_missing_definition
+    definition = ratio_definitions(_named_definition_sample())[0]
+    for original in ("Other measure denominator not provided.",
+                     "Service utilisation ratio and rejection ratio source denominator not provided."):
+        assert reconcile_missing_definition(original, definition) == original
+
+
+def test_repeated_same_marker_after_another_row_does_not_lend_definition():
+    result = _named_definition_sample()
+    result.document.pages[0].text = result.document.pages[0].text.replace(
+        "(1) The calculation", "Another ratio(1) 12%\n(1) The calculation")
+    assert ratio_definitions(result) == []

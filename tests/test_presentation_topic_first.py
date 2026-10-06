@@ -382,7 +382,7 @@ def test_conclusion_precedes_data_index_and_final_thank_you() -> None:
     assert "THANK YOU" in last_text
 
 
-def test_closing_reserves_space_for_lower_ranked_watch_items():
+def test_closing_prioritizes_verified_findings_over_generic_watch_items():
     result = _result()
     template = result.insights[0]
     result.insights = [template.model_copy(update={
@@ -393,12 +393,14 @@ def test_closing_reserves_space_for_lower_ranked_watch_items():
     closing = PresentationPlanRecovery._risks_slide(
         result, PresentationSlide(id="summary", slide_type="executive_summary", title="Summary"),
     )
-    assert "Monitor the pace of reported changes." in closing.bullets
+    assert "Monitor the pace of reported changes." not in closing.bullets
+    assert all(label + " remains relevant to the reported performance." in closing.bullets
+               for label in ("Demand", "Costs", "Capacity", "Liquidity"))
     from adaptive_document_agent.services.presentation_closing import render_closing
     deck = Presentation()
     render_closing(deck, result, closing)
     text = " ".join(shape.text for slide in deck.slides for shape in slide.shapes if shape.has_text_frame)
-    assert "What to monitor" in text
+    assert closing.title == "Conclusions"
     assert all(bullet in text for bullet in closing.bullets)
 
 

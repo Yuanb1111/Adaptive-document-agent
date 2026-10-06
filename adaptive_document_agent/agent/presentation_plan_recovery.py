@@ -236,7 +236,8 @@ class PresentationPlanRecovery:
             if not paginate:
                 groups = [(chart_ids, supporting_ids)]
             else:
-                groups = [(chart_ids[start:start + 3], []) for start in range(0, len(chart_ids), 3)]
+                from adaptive_document_agent.services.presentation_display_plan import balanced_groups
+                groups = [(group, []) for group in balanced_groups(chart_ids)]
                 groups += [([], visible_support_ids[start:start + 12])
                            for start in range(0, len(visible_support_ids), 12)]
             for part, (group, support) in enumerate(groups):
@@ -612,8 +613,8 @@ class PresentationPlanRecovery:
         bullets: list[str] = []
         selected_ids: list[str] = []
         pages: set[int] = set()
-        # Reserve space for findings and monitoring points instead of filling
-        # all four slots with implications before considering watch items.
+        # Validate findings and optional monitoring points independently before
+        # selecting the most informative closing copy.
         groups = []
         seen = set(summary_copy)
         from adaptive_document_agent.validation.claim_validator import ClaimValidator
@@ -659,9 +660,9 @@ class PresentationPlanRecovery:
                 seen.add(normalize(statement))
                 candidates.append((item, statement))
             groups.append(candidates)
-        # Prefer concrete model-written follow-ups when available, while
-        # retaining the leading evidence-grounded implication.
-        ordered = groups[0][:1] + groups[1][:3] + groups[0][1:] + groups[1][3:]
+        # Lead with validated findings. A generic monitoring sentence must not
+        # displace an already verified outcome just to fill a watch-item quota.
+        ordered = groups[0] + groups[1]
         has_watch_item = any(candidate in groups[1] for candidate in ordered[:4])
         for item, statement in ordered[:4]:
             bullets.append(statement)

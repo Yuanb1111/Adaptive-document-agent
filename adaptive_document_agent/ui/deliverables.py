@@ -72,11 +72,12 @@ def render(st, result: PipelineResult, raw_pdf: bytes, progress) -> None:
                 progress=progress.update,
             )
         pptx_bytes = verified.payload
+        if not pptx_bytes:
+            raise ValueError("The verified export returned an empty presentation")
         visual_report = verified.report
         preflight_report = getattr(verified, "preflight_report", None)
         export_timings = verified.timings_ms
         result.export_timings_ms = dict(export_timings)
-        progress.finish()
 
     except VisualQAError as exc:
         qa_error = exc
@@ -130,6 +131,10 @@ def render(st, result: PipelineResult, raw_pdf: bytes, progress) -> None:
                     use_container_width=True,
                     help="Export blocked by Critical QA",
                 )
+    if pptx_bytes and qa_error is None:
+        progress.finish()
+        from .completion_notification import notify_export_ready
+        notify_export_ready(st, verified)
     with st.expander("Other formats · Markdown, PDF, CSV & JSON", expanded=False):
         st.caption("Read the report separately or work with the extracted data and source evidence.")
         render_report_downloads(

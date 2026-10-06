@@ -30,9 +30,19 @@ def scope_items(result):
                 add("Not covered: " + topic.get("title", "Selected topic"),
                     "The available source evidence did not support a verified presentation of this topic.")
     for note in plan.coverage_notes:
-        if not _contradicted_by_retained_content(note, result):
+        if not _editorial_omission(note, result) and not _contradicted_by_retained_content(note, result):
             add("Coverage boundary", note)
+    first_pages = {}
+    for slide in plan.slides:
+        if slide.slide_type == "analysis" and slide.theme_id:
+            first_pages.setdefault(slide.theme_id, slide)
+    displayed_themes = {theme_id for theme_id, slide in first_pages.items()
+                        if not any(block.role in {"horizon", "waterfall"} for block in slide.visual_blocks)}
     for theme in plan.themes:
+        if theme.id in displayed_themes:
+            # These accompany the corresponding visual, where a reader can
+            # interpret the measure without hunting through a scope appendix.
+            continue
         for caveat in theme.caveats:
             add(theme.title, caveat, theme.source_pages)
     from .company_extractor import is_company_identity_resolved
@@ -47,8 +57,27 @@ def scope_items(result):
         add("Interpretation limit", "Unsupported takeaways were replaced with analytical questions; the retained source values remain available.")
     if not any(items):
         return []
-    add("Reading scope", "This presentation covers selected evidence from the source document and does not represent every topic or table in it.")
     return items
+
+
+def _editorial_omission(note, result):
+    """Selection priorities are audit data, not source-data limitations."""
+    selection = result.presentation_topics
+    if selection and any(note.endswith(": " + item.reason) for item in selection.omissions):
+        return True
+    return bool(re.search(r"(?i)\b(?:secondary|redundant|weaker relevance|already explained|"
+                          r"omitted to (?:keep|avoid)|does not directly answer)\b", note))
+
+
+def scope_audit_notes(result):
+    plan = result.presentation_plan
+    if plan is None:
+        return ""
+    return json.dumps({"coverage_notes": plan.coverage_notes,
+                       "theme_caveats": {theme.id: theme.caveats for theme in plan.themes},
+                       "validation_warnings": [issue.model_dump(mode="json")
+                                               for issue in result.validation_warnings]},
+                      ensure_ascii=False)
 
 
 _ABSENCE_STATEMENT = re.compile(

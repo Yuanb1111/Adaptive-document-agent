@@ -1,0 +1,9 @@
+.completion-notice { color: var(--st-text-color); font: inherit; }
+.notice-controls { display: flex; align-items: center; flex-wrap: wrap; gap: .6rem 1rem; }
+button { background: var(--st-secondary-background-color, #f5f5f5); color: inherit; border: 1px solid #8885; border-radius: .5rem; padding: .4rem .7rem; font: inherit; font-size: .875rem; cursor: pointer; }
+button:hover { border-color: var(--st-primary-color, #7635ff); }
+button:disabled, input:disabled { cursor: default; opacity: .55; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--st-primary-color, #7635ff); outline-offset: 2px; }
+label { display: flex; align-items: center; gap: .4rem; font-size: .875rem; }
+p { margin: .35rem 0; font-size: .8rem; line-height: 1.5; }
+.notice-help { opacity: .7; }

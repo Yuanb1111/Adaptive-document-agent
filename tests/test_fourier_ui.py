@@ -71,6 +71,11 @@ def test_result_widgets_keep_downloads_evidence_and_export_gate(monkeypatch, blo
                                timings_ms={"ppt_export_total": 123}, build_cache_hit=False, preflight_report=native)
 
     monkeypatch.setattr(deliverables, "export_pptx_with_report", export)
+    from adaptive_document_agent.ui import completion_notification
+    notifications = []
+    def notify(ui, verified):
+        notifications.append(verified.payload)
+    monkeypatch.setattr(completion_notification, "notify_export_ready", notify)
     page = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "app.py"), default_timeout=30).run()
     assert not page.exception, page.exception
     assert [tab.label for tab in page.tabs] == ["Overview", "Analysis", "Charts", "Extracted Data", "Sources", "Data Quality", "Technical Details"]
@@ -85,9 +90,22 @@ def test_result_widgets_keep_downloads_evidence_and_export_gate(monkeypatch, blo
         assert any("Native preflight:" in item.value for item in page.caption)
         assert any("Native finding detail" in item.value for item in page.markdown)
     if blocked:
+        assert notifications == []
         assert "Download presentation (.pptx)" not in downloads
         assert any(item.label == "Download presentation (.pptx)" and item.disabled for item in page.button)
         assert 'aria-valuenow="100"' not in progress
     else:
+        assert notifications == [b"verified-test-payload"]
         assert "Download presentation (.pptx)" in downloads
         assert 'aria-valuenow="100"' in progress
+        # A deliberate export click creates a cycle; ordinary reruns retain it.
+        next(item for item in page.button if item.label == "Regenerate PowerPoint only").click().run()
+        assert not page.exception, page.exception
+        export_runs = page.session_state["ppt_notification_export_runs"]
+        first_cycle = next(iter(export_runs.values()))["id"]
+        page.run()
+        assert not page.exception, page.exception
+        assert next(iter(page.session_state["ppt_notification_export_runs"].values()))["id"] == first_cycle
+        next(item for item in page.button if item.label == "Regenerate PowerPoint only").click().run()
+        assert not page.exception, page.exception
+        assert next(iter(page.session_state["ppt_notification_export_runs"].values()))["id"] != first_cycle

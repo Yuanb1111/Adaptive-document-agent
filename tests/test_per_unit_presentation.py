@@ -49,3 +49,11 @@ def test_unknown_price_basis_is_not_guessed_from_metric_name():
 def test_compact_monetary_rate_retains_explicit_denominator():
     assert format_compact_currency(21000, raw_unit="USD/unit", is_base_value=True) == "US$ 21k/unit"
     assert format_compact_currency(21000, raw_unit="USD / unit", is_base_value=True) == "US$ 21k/unit"
+
+
+@pytest.mark.parametrize(("value", "expected"), [
+    (8200, "RMB 8.2k/unit"), (8100, "RMB 8.1k/unit"), (8400, "RMB 8.4k/unit"),
+    (65900, "RMB 65.9k/unit"), (-61250, "-RMB 61.25k/unit"),
+])
+def test_unit_prices_do_not_collapse_distinct_reported_values(value, expected):
+    assert format_compact_currency(value, raw_unit="RMB/unit", is_base_value=True) == expected

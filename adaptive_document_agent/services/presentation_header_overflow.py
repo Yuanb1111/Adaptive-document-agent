@@ -30,7 +30,8 @@ def visual_header(plan: PresentationSlide) -> VisualHeader:
 
 
 def append_header_commentary(presentation, plan: PresentationSlide, header: VisualHeader,
-                             source_pages: list[int], evidence_notes: dict) -> None:
+                             source_pages: list[int], evidence_notes: dict, *,
+                             inline_slide=None, inline_rect=None) -> None:
     """Append readable, cited pages while keeping the visual renderer's return value."""
     from .pptx_export import _source_footer
 
@@ -40,6 +41,11 @@ def append_header_commentary(presentation, plan: PresentationSlide, header: Visu
     pages = sorted(set(source_pages) | set(plan.source_pages))
     notes = json.dumps({**evidence_notes, "slide_plan": plan.model_dump(mode="json"),
                         "source_pages": pages}, ensure_ascii=False)
+    if inline_slide is not None and inline_rect is not None and inline_rect.h >= .45:
+        # A definition or short evidence sentence belongs beside the matrix.
+        # Reuse existing whitespace before creating a prose-only page.
+        remaining = _put_commentary(inline_slide, remaining, inline_rect)
+        inline_slide.notes_slide.notes_text_frame.text = notes
     width = presentation.slide_width.inches - 1.1
     bottom = presentation.slide_height.inches - 1.02
     while remaining:

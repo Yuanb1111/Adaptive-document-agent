@@ -2,7 +2,7 @@
 
 from pydantic import BaseModel, Field
 
-from adaptive_document_agent.models import AnalysisResult, Insight, Observation
+from adaptive_document_agent.models import AnalysisResult, Insight, Observation, ValidationIssue
 from adaptive_document_agent.services.llm import LLMGateway
 from adaptive_document_agent.utils.ids import stable_id
 
@@ -16,21 +16,25 @@ class InsightList(BaseModel):
 class InsightGenerator:
     def __init__(self, gateway: LLMGateway | None = None) -> None:
         self.gateway = gateway
+        self.validation_issues: list[ValidationIssue] = []
 
     def generate(self, results: list[AnalysisResult], observations: list[Observation] | None = None) -> list[Insight]:
         valid = [result for result in results if result.result is not None and result.evidence]
+        self.validation_issues = []
+        from adaptive_document_agent.validation.insight_context import qualified_metric_label, validate_insight_contexts
         if not self.gateway:
-            return [self._deterministic(result) for result in valid]
+            return [self._deterministic(result, observations) for result in valid]
         # Retain bounded source text so a claimed driver can actually be grounded.
         import json
         by_id = {o.id: o for o in observations or []}
         payload = json.dumps([{**r.model_dump(mode="json", exclude={"evidence"}),
             # Explicit units and periods prevent prose from describing unlabelled
             # tool dictionaries or mixing base currency with source thousands.
-            "input_observations": [by_id[oid].model_dump(mode="json", include={
+            "input_observations": [{**by_id[oid].model_dump(mode="json", include={
                 "id", "metric_original", "metric_canonical", "value", "raw_value", "unit",
                 "unit_family", "raw_unit", "unit_scale", "currency", "period", "period_type",
-                "entity", "dimensions", "category_dimensions"})
+                "entity", "dimensions", "category_dimensions", "parent_section", "source_table", "table_id"}),
+                "qualified_metric_label": qualified_metric_label(by_id[oid])}
                 for oid in r.input_observation_ids if oid in by_id],
             "evidence": [{**e.model_dump(mode="json"), "text": (e.text or "")[:1200]} for e in r.evidence[:4]]}
             for r in valid], ensure_ascii=False)
@@ -42,6 +46,7 @@ class InsightGenerator:
             InsightList,
             stage="insight",
         ).insights
+        generated, self.validation_issues = validate_insight_contexts(generated, valid, observations or [])
         evidence_by_task = {result.task_id: result.evidence for result in valid}
         accepted = []
         by_task = {r.task_id: r for r in valid}
@@ -53,17 +58,20 @@ class InsightGenerator:
                 quote = " ".join((insight.driver_quote or "").split())
                 if not quote or not any(e.page == insight.driver_source_page and quote in " ".join((e.text or "").split()) for e in insight.evidence):
                     # Do not leave an unsupported driver embedded in its narrative.
-                    accepted.extend(self._deterministic(by_task[rid]) for rid in insight.result_ids)
+                    accepted.extend(self._deterministic(by_task[rid], observations) for rid in insight.result_ids)
                     continue
             accepted.append(insight)
-        return list({i.id: i for i in accepted if i.evidence}.values()) or [self._deterministic(r) for r in valid]
+        return list({i.id: i for i in accepted if i.evidence}.values()) or [self._deterministic(r, observations) for r in valid]
 
     @staticmethod
-    def _deterministic(result: AnalysisResult) -> Insight:
+    def _deterministic(result: AnalysisResult, observations: list[Observation] | None = None) -> Insight:
         from adaptive_document_agent.services.language_qa import clean_metric_label
         from adaptive_document_agent.services.movement_formatter import analyze_trajectory
 
-        metric_name = clean_metric_label(result.title)
+        from adaptive_document_agent.validation.insight_context import qualified_metric_label
+        labels = list(dict.fromkeys(qualified_metric_label(item) for item in observations or []
+                                  if item.id in result.input_observation_ids))
+        metric_name = "; ".join(labels) if labels else clean_metric_label(result.title)
         res_str = str(result.result) if result.result is not None else "reported levels"
         movement = f"{metric_name} stood at {res_str}"
         if isinstance(result.result, list) and len(result.result) >= 3:
@@ -82,7 +90,7 @@ class InsightGenerator:
 
         return Insight(
             id=stable_id("insight", result.task_id),
-            title=result.title,
+            title=metric_name if labels else result.title,
             narrative=narrative,
             kind="calculated_result",
             importance=min(1.0, result.confidence),

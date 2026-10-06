@@ -85,7 +85,7 @@ def test_independent_introduction_attaches_sourced_operating_flow():
     ]
 
 
-def test_introduction_rejects_invented_quotation_after_one_repair():
+def test_introduction_rejects_only_invented_items_after_one_repair():
     result = sample()
     original = result.presentation_plan.company.model_copy(deep=True)
     original.summary_business.items[0].source_quote = "An invented product quotation"
@@ -93,15 +93,17 @@ def test_introduction_rejects_invented_quotation_after_one_repair():
     result.presentation_plan.company.summary_business = None
     draft = IntroductionDraft(overview=original.summary_overview, business=original.summary_business)
     gateway = Gateway([IntroductionPages(pages=[5,18]), draft, draft])
-    with pytest.raises(ValueError, match="could not be verified"):
-        ensure_company_introduction(gateway, result, result.presentation_plan)
-    assert result.presentation_plan.company.summary_overview is None
+    ensure_company_introduction(gateway, result, result.presentation_plan)
+    assert result.presentation_plan.company.summary_overview == original.summary_overview
+    assert result.presentation_plan.company.summary_business is None
+    assert any(issue.code == "company_introduction_partial" for issue in result.validation_warnings)
     assert len(gateway.calls) == 3
 
 
 def test_introduction_rejects_unsupplied_selection_without_extracting():
     result = sample()
     result.presentation_plan.company.summary_overview = None
+    result.presentation_plan.company.summary_business = None
     gateway = Gateway([IntroductionPages(pages=[999])])
     with pytest.raises(ValueError, match="No supported"):
         ensure_company_introduction(gateway, result, result.presentation_plan)

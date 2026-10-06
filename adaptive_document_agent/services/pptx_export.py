@@ -310,6 +310,9 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
     key_figures = select_key_figures(result, list(chart_by_id.values()))
     from .presentation_ratio_definitions import ratio_definitions
     source_ratio_definitions = ratio_definitions(result)
+    presentation._ada_ratio_definitions = source_ratio_definitions
+    from .presentation_display_plan import display_slides
+    physical_slides = display_slides(plan, chart_by_id, index)
     from .presentation_value_chain import can_render_value_chain
     value_chain = can_render_value_chain(plan.company, presentation.slide_width.inches)
     slides_by_type = {slide.slide_type: slide for slide in plan.slides}
@@ -327,7 +330,7 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
     from .presentation_scope import scope_items
     if not scope_items(result):
         contents_slides = [s for s in contents_slides if s.slide_type != "data_quality"]
-    if plan.company.summary_business:
+    if plan.company.summary_overview and plan.company.summary_business:
         company_index = next((i for i, s in enumerate(contents_slides) if s.slide_type == "company_overview"), None)
         if company_index is not None:
             contents_slides.insert(company_index + 1, contents_slides[company_index].model_copy(update={
@@ -370,7 +373,7 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
 
     rendered_charts: list[ChartPlan] = []
     ordinal = 0
-    for slide_plan in plan.slides[3:]:
+    for slide_plan in physical_slides[3:]:
         if slide_plan.slide_type == "analysis":
             horizon = [block for block in slide_plan.visual_blocks if block.role == "horizon"]
             if horizon:
@@ -381,7 +384,9 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
             matrix = [block for block in slide_plan.visual_blocks if block.role == "matrix"]
             if matrix:
                 from .presentation_matrix import render_matrix
-                render_matrix(presentation, slide_plan, matrix[0], index)
+                from .presentation_context_notes import slide_context_notes
+                render_matrix(presentation, slide_plan, matrix[0], index,
+                              context_notes=slide_context_notes(result, slide_plan, [], index))
                 ordinal += 1
                 continue
             waterfall = [block for block in slide_plan.visual_blocks if block.role == "waterfall"]
@@ -477,11 +482,14 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
         elif slide_plan.slide_type == "risks":
             _add_planned_text_slide(presentation, result, slide_plan)
         elif slide_plan.slide_type == "data_quality":
-            from .presentation_scope import scope_items
-            from .presentation_brief import render_profile
+            from .presentation_scope import scope_items, scope_audit_notes
+            from .presentation_summary import render_complete_summary
             limits = scope_items(result)
             if limits:
-                render_profile(presentation, "Coverage and limits", limits)
+                render_complete_summary(presentation, "Coverage and limits", limits,
+                                        notes=scope_audit_notes(result))
+            elif len(presentation.slides):
+                presentation.slides[-1].notes_slide.notes_text_frame.text += "\n\n" + scope_audit_notes(result)
             continue
         elif slide_plan.slide_type == "appendix":
             previous_slide_count = len(presentation.slides)
@@ -649,7 +657,10 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
     if plan is None:  # pragma: no cover - guarded by caller
         return
 
-    if any(issue.code == "company_introduction_unavailable" for issue in result.validation_warnings):
+    available_summaries = [summary for summary in
+                           (plan.company.summary_overview, plan.company.summary_business) if summary]
+    if (not available_summaries
+            and any(issue.code == "company_introduction_unavailable" for issue in result.validation_warnings)):
         from .presentation_brief import BriefItem, render_profile
         items = [BriefItem(
             "Evidence limitation", "A source-verified company introduction could not be generated in this run.", []
@@ -663,7 +674,7 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
                            notes="See company_introduction_unavailable in the analysis diagnostics.")
         return
 
-    if plan.company.summary_overview and plan.company.summary_business:
+    if available_summaries:
         from .company_summary import validate_summary
         from .presentation_brief import BriefItem, render_profile
 
@@ -671,7 +682,7 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
         if errors:
             raise ValueError("Invalid company Summary introduction: " + "; ".join(errors))
         company_name, identity_pages = _presentation_company_identity(result)
-        for page_index, summary in enumerate((plan.company.summary_overview, plan.company.summary_business)):
+        for page_index, summary in enumerate(available_summaries):
             items = [BriefItem(item.label, item.text, item.source_pages) for item in summary.items]
             title = summary.title
             notes = summary.model_dump_json(indent=2)

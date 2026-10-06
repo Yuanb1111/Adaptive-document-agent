@@ -3,10 +3,11 @@ import re
 from adaptive_document_agent.models import PipelineResult
 from adaptive_document_agent.models.executive_brief import ExecutiveBrief
 from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
+from .source_quotes import normalize_quote
 
 
 def normalized(text: str) -> str:
-    return " ".join(text.casefold().split())
+    return normalize_quote(text)
 
 
 _UNIT_ONLY_LABEL = re.compile(
@@ -221,14 +222,25 @@ def validate_executive_brief(brief: ExecutiveBrief, result: PipelineResult, *,
             allowed.update(PresentationPlanValidator._numbers(quote.text))
             quantities.update(_quantities(quote.text))
         source_percentages = _quoted_table_percentages(item, result)
+        from .brief_table_evidence import quoted_table_context, canonical_quantity
+        table_context = quoted_table_context(item, result, excerpts=excerpts)
+        # Accounting parentheses in a complete source row are signs, never
+        # authorization to publish a positive amount with the same digits.
+        allowed.difference_update(table_context.misparsed_positive_numbers)
+        allowed.update(table_context.signed_numbers)
+        quantities = {q for q in quantities if q[1] not in table_context.misparsed_positive_numbers}
+        quantities.update(table_context.quantities)
+        quantities = {canonical_quantity(*quantity) for quantity in quantities}
+        errors.extend(f'{item.label}: {error}.' for error in table_context.basis_errors(item.label + ' ' + item.text))
         # The deterministic table model supplies a unit that a body-cell quote
         # cannot repeat.  Add only the exact resolved values, not every number
         # from a percentage-bearing page.
         allowed.update(value + '%' for value in source_percentages)
-        claimed = PresentationPlanValidator._numbers(item.label + ' ' + item.text)
+        claimed = PresentationPlanValidator._numbers(table_context.numeric_claim_text(item.label + ' ' + item.text))
         if claimed - allowed:
             errors.append(f'{item.label}: unsupported numeric claims {sorted(claimed - allowed)}.')
         for currency, value, unit in _quantities(item.label + ' ' + item.text):
+            currency, value, unit = canonical_quantity(currency, value, unit)
             # A PDF table often stores the percentage sign once in its column
             # header.  The source quote then legitimately contains a bare cell
             # such as 50.5.  Accept the percent suffix only when extraction has
@@ -282,27 +294,67 @@ def display_brief(result: PipelineResult):
     index = DocumentIndex(result.observations)
     charts = {chart.id: chart for chart in result.charts}
     items = []
+    topics = {}
     for slide in plan.slides:
         if slide.slide_type != 'analysis':
             continue
-        facts = [_brief_fact_for_chart(charts[cid], index) for cid in slide.chart_ids if cid in charts]
-        facts = [fact for fact in facts if fact is not None][:3]
-        if not facts:
-            continue
-        pages = sorted({page for fact in facts for page in fact[1]})
         label = slide.section_title or slide.title
-        items.append(BriefItem(label, ' '.join(fact[0] for fact in facts), pages))
-        if len(items) >= 6:
-            break
+        key = slide.section_id or normalized(label)
+        if key not in topics:
+            topics[key] = (label, {})
+        for cid in slide.chart_ids:
+            if cid not in charts:
+                continue
+            chart = charts[cid]
+            fact = _brief_fact_for_chart(chart, index)
+            if fact is not None:
+                signature = _brief_chart_signature(chart, index)
+                retained = topics[key][1].setdefault(signature,
+                    {"chart": chart, "text": fact[0], "pages": set()})
+                retained["pages"].update(fact[1])
+    for label, facts in topics.values():
+        if facts:
+            # Rounded display copy cannot prove that source facts are equal.
+            # When it masks a source difference, show exact levels for every
+            # period, including an otherwise omitted intermediate point.
+            text_counts = {}
+            for fact in facts.values():
+                text_counts[fact["text"]] = text_counts.get(fact["text"], 0) + 1
+            for fact in facts.values():
+                if text_counts[fact["text"]] > 1:
+                    exact = _brief_fact_for_chart(fact["chart"], index, exact=True)
+                    if exact is not None:
+                        fact["text"] = exact[0]
+                        fact["pages"].update(exact[1])
+            pages = sorted({page for fact in facts.values() for page in fact["pages"]})
+            items.append(BriefItem(label, ' '.join(fact["text"] for fact in facts.values()), pages))
     return 'Executive Summary', items
 
 
-def _brief_fact_for_chart(chart, index):
+def _brief_chart_signature(chart, index):
+    """Compare complete fact scope and source precision, not rounded prose."""
+    from adaptive_document_agent.document_model.series import metric_identity_key
+    return frozenset((metric_identity_key(item), item.metric_original, item.metric_canonical,
+        item.parent_section, item.unit, item.raw_unit, item.unit_scale, item.raw_value, item.value,
+        item.period, item.period_basis, item.period_type, item.period_start, item.period_end,
+        item.as_of_date, item.audited_status, item.fact_type)
+        for identifier in chart.observation_ids if (item := index.get(identifier)) is not None)
+
+
+def _brief_exact_number(number):
+    """Decimal spelling of a normalized number, without binary float tails."""
+    from decimal import Decimal
+    shown = format(Decimal(str(number)), ",f")
+    return shown.rstrip('0').rstrip('.') if '.' in shown else shown
+
+
+def _brief_fact_for_chart(chart, index, *, exact=False):
     """Render a selected, comparable series as exact levels and periods."""
-    from adaptive_document_agent.document_model import display_metric_name, period_sort_key
+    from adaptive_document_agent.document_model import period_sort_key
+    from .presentation_labels import qualified_metric_name
     from adaptive_document_agent.document_model.period_semantic_validator import format_canonical_period
     from .composition_data import uses_composition_data
-    from .financial_formatter import format_compact_currency
+    from .financial_formatter import format_compact_currency, split_unit_basis
     from .pptx_export import _chart_findings
     from .language_qa import clean_display_copy
 
@@ -318,8 +370,8 @@ def _brief_fact_for_chart(chart, index):
     ordered = sorted(unique.values(), key=lambda item: period_sort_key(item.period))
     if len(ordered) < 2:
         return None
-    points = [ordered[0], ordered[-1]]
-    if len(ordered) >= 3:
+    points = ordered if exact else [ordered[0], ordered[-1]]
+    if len(ordered) >= 3 and not exact:
         values = [float(item.value) for item in ordered]
         turning = [i for i in range(1, len(values)-1)
                    if (values[i]-values[i-1]) * (values[i+1]-values[i]) < 0]
@@ -331,16 +383,35 @@ def _brief_fact_for_chart(chart, index):
     def value(item):
         number = float(item.value)
         if item.currency:
+            _, basis = split_unit_basis(item.raw_unit)
+            if basis:
+                # Prices/rates need their reported differences visible. Do not
+                # round all small per-unit values to the same integer thousand.
+                return f'{item.currency} {_brief_exact_number(number)}/{basis}'
+            if exact:
+                return f'{item.currency} {_brief_exact_number(number)}'
             shown = format_compact_currency(number, raw_unit=item.raw_unit,
                                             currency=item.currency, is_base_value=True)
             return shown.replace('-'+item.currency, item.currency+' -', 1)
         if item.unit in {'percent', '%'} or item.raw_unit == '%':
+            if exact:
+                return f'{_brief_exact_number(number)}%'
             return f'{number:,.1f}%'
         if item.unit in {'count', 'units'}:
+            if exact:
+                return f'{_brief_exact_number(number)} units'
             return f'{number:,.0f} units'
+        if exact:
+            return f'{_brief_exact_number(number)} {item.unit or item.raw_unit or ""}'.strip()
         return f'{number:,.1f} {item.unit or item.raw_unit or ""}'.strip()
 
-    label = clean_display_copy(display_metric_name(ordered[0]))
-    levels = '; '.join(f'{format_canonical_period(item)} {value(item)}' for item in points)
+    label = clean_display_copy(qualified_metric_name(ordered[0]))
+    def period(item):
+        label = format_canonical_period(item)
+        # The shared summary may appear on the web without a slide footer.
+        # Keep an explicit source assurance label beside each affected date.
+        return label.rstrip('*') + ' (unaudited)' if item.audited_status == 'unaudited' else label
+
+    levels = '; '.join(f'{period(item)} {value(item)}' for item in points)
     pages = sorted({e.page for item in points for e in item.evidence})
     return f'{label}: {levels}.', pages
