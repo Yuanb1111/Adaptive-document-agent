@@ -308,6 +308,8 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
     chart_by_id = {item.id: item for item in _usable_charts(result)}
     from .presentation_key_figures import select_key_figures
     key_figures = select_key_figures(result, list(chart_by_id.values()))
+    from .presentation_ratio_definitions import ratio_definitions
+    source_ratio_definitions = ratio_definitions(result)
     from .presentation_value_chain import can_render_value_chain
     value_chain = can_render_value_chain(plan.company, presentation.slide_width.inches)
     slides_by_type = {slide.slide_type: slide for slide in plan.slides}
@@ -331,7 +333,20 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
             contents_slides.insert(company_index + 1, contents_slides[company_index].model_copy(update={
                 "section_title": plan.company.summary_business.title,
             }))
-    _add_planned_contents(presentation, contents_slides, include_key_figures=bool(key_figures),
+    from .presentation_labels import composition_heading
+    from .composition_data import uses_composition_data
+    scoped_contents = []
+    for entry in contents_slides:
+        requests = _planned_chart_requests(entry)
+        if entry.slide_type == "analysis" and len(requests) == 1:
+            chart = chart_by_id.get(requests[0][0])
+            if chart is not None and uses_composition_data(chart):
+                heading = composition_heading(entry.section_title or entry.title, chart,
+                    [index.get(oid) for oid in chart.observation_ids if index.get(oid)],
+                    [index.get(oid) for oid in chart.total_observation_ids if index.get(oid)])
+                entry = entry.model_copy(update={"section_title": heading})
+        scoped_contents.append(entry)
+    _add_planned_contents(presentation, scoped_contents, include_key_figures=bool(key_figures),
                           include_value_chain=value_chain)
     _add_company_at_a_glance(presentation, result, slides_by_type["company_overview"])
     if value_chain:
@@ -425,7 +440,15 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
                     observation_ids=[o.id for o in single.observations],
                     source_pages=sorted({e.page for o in single.observations for e in o.evidence}),
                 )
-                add_single_metric_slide(presentation, hero, single, title=slide_plan.title, narrative=slide_plan.message)
+                series_ids = {item.id for item in single.observations}
+                definitions = [definition for definition in source_ratio_definitions
+                               if series_ids <= set(definition["observation_ids"])]
+                from .presentation_source_context import source_table_context
+                add_single_metric_slide(presentation, hero, single, title=slide_plan.title,
+                                        narrative=slide_plan.message,
+                                        definition=definitions[0] if len(definitions) == 1 else None,
+                                        source_context=source_table_context(single.observations, result.document)
+                                        if single.is_percentage and not definitions else "")
                 rendered_charts.append(hero)
                 ordinal += 1
                 continue
@@ -519,6 +542,7 @@ def _add_planned_contents(
     include_key_figures: bool = False,
     include_value_chain: bool = False,
 ) -> None:
+    """Use authored section labels, grouping only sections with the same label."""
     entries: list[str] = []
     seen: set[str] = set()
     defaults = {
@@ -535,8 +559,11 @@ def _add_planned_contents(
             continue
         if evidence_in_notes and item.slide_type == "appendix":
             continue
+        section_label = item.section_title.strip()
         label = ("Data Index" if item.slide_type == "appendix" else defaults[item.slide_type]
-                 if item.slide_type == "data_quality" else item.section_title or defaults[item.slide_type]).strip()
+                 if item.slide_type == "data_quality" else section_label
+                 or (item.title.strip() or defaults[item.slide_type]
+                     if item.slide_type == "analysis" else defaults[item.slide_type]))
         key = label.casefold()
         if key not in seen:
             seen.add(key)
@@ -552,23 +579,24 @@ def _add_planned_contents(
 
 
 def _render_contents_entries(presentation: Any, entries: list[str], subtitle: str) -> None:
-    """Wrap complete section labels and continue the directory when needed."""
+    """Fit complete labels in measured, balanced columns before adding pages."""
     from .text_capacity import wrap_copy
 
-    top, gap = 1.50, .12
+    top, gap = 1.50, .10
     capacity = presentation.slide_height.inches - 1.0 - top
-    column_width = (presentation.slide_width.inches - 1.20) / 2
-    text_width = column_width - .94
-    line_height = 13.5 / 72 * 1.22
-    max_lines = max(1, int((capacity - .24) / line_height))
+    column_width = (presentation.slide_width.inches - 1.40) / 2
+    text_width = column_width - .60
+    font_size, line_spacing = 16, 19.5
+    line_height = line_spacing / 72
+    max_lines = max(1, int((capacity - .08) / line_height))
     rows = []
     for number, label in enumerate(entries, start=1):
-        lines = wrap_copy(label, text_width, 13.5)
+        lines = wrap_copy(label, text_width, font_size)
         for start in range(0, len(lines), max_lines):
             part = lines[start:start + max_lines]
             # Capacity wrapping retains characters; only page/column breaks
             # split exceptionally long labels, never a character-count cap.
-            rows.append((number, "".join(part), max(.55, len(part) * line_height + .24)))
+            rows.append((number, "".join(part), max(.46, len(part) * line_height + .08)))
 
     def height(items):
         return sum(row[2] for row in items) + max(0, len(items) - 1) * gap
@@ -588,16 +616,20 @@ def _render_contents_entries(presentation: Any, entries: list[str], subtitle: st
         slide = _base_slide(presentation, "Contents" + (" (continued)" if pages else ""), subtitle)
         selected, rows = rows[:best_count], rows[best_count:]
         for column, items in enumerate((selected[:best_cut], selected[best_cut:])):
-            left = .45 + column * (column_width + .30)
+            left = .55 + column * (column_width + .30)
             y = top
-            for number, label, card_h in items:
-                _panel(slide, left, y, column_width, card_h, fill=FOURIER_BG_CARD)
-                _text(slide, f"{number:02d}", left + .20, y + .12, .58, card_h - .20,
-                      size=14, color=FOURIER_PURPLE, bold=True)
-                shape = _text(slide, label, left + .78, y + .12, text_width, card_h - .20,
-                              size=13.5, color=FOURIER_DARK, bold=True)
+            for number, label, row_h in items:
+                # The agenda is a reading list. Removing card padding leaves
+                # room for more complete labels at a larger, fixed text size.
+                _text(slide, f"{number:02d}", left, y + .02, .46, row_h - .04,
+                      size=font_size, color=FOURIER_PURPLE, bold=True)
+                shape = _text(slide, label, left + .60, y + .02, text_width, row_h - .04,
+                              size=font_size, color=FOURIER_DARK)
+                for paragraph in shape.text_frame.paragraphs:
+                    paragraph.line_spacing = Pt(line_spacing)
+                    paragraph.space_before = paragraph.space_after = Pt(0)
                 shape.name = f"contents:entry:{number}"
-                y += card_h + gap
+                y += row_h + gap
         pages += 1
 
 
@@ -1984,7 +2016,10 @@ def _classify_financial_theme(metric_name: str, parent_section: str = "") -> str
         return "Capital Structure & Indebtedness"
     if any(k in combined for k in ("inventor", "receiv", "payab", "turnover day", "turnover period", "days sales", "contract asset")):
         return "Working Capital & Operations"
-    if any(k in combined for k in ("cash and cash", "cash equivalent", "bank balance", "liquid", "current asset", "current liabilit", "quick ratio", "current ratio", "working capital")):
+    # Do not match "current assets" inside a non-current balance. Preserve the
+    # stronger cash-flow, debt and source-context classifications above.
+    noncurrent = re.search(r"\bnon[ -]?current\s+(?:assets?|liabilit(?:y|ies))\b", metric_name, re.I)
+    if not noncurrent and any(k in combined for k in ("cash and cash", "cash equivalent", "bank balance", "liquid", "current asset", "current liabilit", "quick ratio", "current ratio", "working capital")):
         return "Liquidity"
     if any(k in combined for k in ("revenue", "turnover", "gross profit", "operating profit", "operating loss", "profit for the", "loss for the", "net profit", "net loss", "ebit", "margin", "cost of sales", "selling expense", "administrative expense", "r&d", "research and dev")):
         return "Financial Performance"

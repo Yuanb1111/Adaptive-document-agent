@@ -118,7 +118,7 @@ def test_contents_paginate_complete_labels_without_shrinking_or_dropping_entries
     assert len(deck.slides) > 1
     assert [shape.text for shape in entries] == labels
     assert [shape.name for shape in entries] == [f"contents:entry:{index}" for index in range(1, 19)]
-    assert all(shape.text_frame.paragraphs[0].font.size.pt == 13.5 for shape in entries)
+    assert all(shape.text_frame.paragraphs[0].font.size.pt == 16 for shape in entries)
     assert all(shape.top.inches + shape.height.inches <= deck.slide_height.inches - 1.0 + .001
                for shape in entries)
     assert "Contents (continued)" in _text(deck.slides[1])

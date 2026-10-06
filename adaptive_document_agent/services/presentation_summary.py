@@ -24,18 +24,19 @@ class _Cell:
 
 
 def _rows(items: list[BriefItem], width: float, columns: int, *, body_pt: int = BODY_PT,
-          compact: bool = False) -> list[list[_Cell]]:
+          compact: bool = False, column_fraction: float = .5) -> list[list[_Cell]]:
     """Pair findings in reading order; let an odd final finding use the full width."""
     rows = []
     for offset in range(0, len(items), columns):
         group = items[offset:offset + columns]
-        cell_width = (width - .30 * (len(group) - 1)) / len(group)
+        widths = ([width] if len(group) == 1 else
+                  [(width - .30) * column_fraction, (width - .30) * (1 - column_fraction)])
         rows.append([
-            _Cell(item, .65 + column * (cell_width + .30), cell_width,
+            _Cell(item, .65 + sum(widths[:column]) + column * .30, cell_width,
                   _heading_height(item.title, cell_width),
                   _copy_height(item.text, cell_width, body_pt) + (.03 if compact else .08),
                   .04 if compact else .06)
-            for column, item in enumerate(group)
+            for column, (item, cell_width) in enumerate(zip(group, widths))
         ])
     return rows
 
@@ -96,13 +97,21 @@ def render_complete_summary(presentation: Any, title: str, items: list[BriefItem
         rows = []
         selected_count = 0
         body_pt = BODY_PT
-        # Three or four long editorial findings can often share a single
-        # readable page at 14 pt. Use this only when all copy actually fits;
-        # otherwise retain the normal-size continuation layout.
+        # Balance complete findings before adding a sparse continuation. Search
+        # readable sizes from largest to smallest and use one shared column
+        # split across rows; never shorten evidence or its qualifications.
         if single_column and 3 <= len(remaining) <= 4:
-            compact_rows = _rows(remaining, width, 2, body_pt=14, compact=True)
-            if _height(compact_rows, compact=True) <= capacity:
-                rows, selected_count, body_pt = compact_rows, len(remaining), 14
+            for size in (BODY_PT, 15, 14):
+                candidates = [(_rows(remaining, width, 1, body_pt=size, compact=True), 0)]
+                candidates.extend((_rows(remaining, width, 2, body_pt=size, compact=True,
+                                         column_fraction=fraction), abs(fraction - .5))
+                                  for fraction in (.4, .45, .5, .55, .6))
+                fitting = [(candidate, balance) for candidate, balance in candidates
+                           if _height(candidate, compact=True) <= capacity]
+                if fitting:
+                    rows = min(fitting, key=lambda pair: (_height(pair[0], compact=True), pair[1]))[0]
+                    selected_count, body_pt = len(remaining), size
+                    break
         # Bound the geometric search, not the content: remaining findings always
         # continue on another page. Eight short findings can use four paired rows.
         if not rows:
@@ -122,8 +131,9 @@ def render_complete_summary(presentation: Any, title: str, items: list[BriefItem
             remaining = remaining[selected_count:]
 
         used = sum(max(cell.height for cell in row) for row in rows)
-        gap = min(.34, max(.14 if body_pt == 14 else .16,
-                            (capacity - used) / max(1, len(rows) - 1)))
+        # The minimum gap was already included in the selected layout's fit.
+        # Do not add a larger default gap back after choosing compact geometry.
+        gap = min(.34, max(0, (capacity - used) / max(1, len(rows) - 1)))
         y = top
         for row in rows:
             for cell in row:

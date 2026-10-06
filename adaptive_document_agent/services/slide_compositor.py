@@ -297,8 +297,16 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
     convention = signed_expense_note(support + [index.get(oid) for oid in chart_obs if index.get(oid)])
     from .presentation_trajectory import scoped_direction_title, supported_subtitle
     display_message = (slide_plan.message if support else supported_subtitle(slide_plan, charts, index))
-    subtitle = "\n".join(part for part in (display_message, convention) if part)
     scoped_title = scoped_direction_title(slide_plan.title, charts, index)
+    from .composition_data import uses_composition_data
+    from .presentation_labels import composition_heading, composition_message
+    if len(charts) == 1 and uses_composition_data(charts[0]):
+        chart = charts[0]
+        values = [index.get(oid) for oid in chart.observation_ids if index.get(oid)]
+        totals = [index.get(oid) for oid in chart.total_observation_ids if index.get(oid)]
+        scoped_title = composition_heading(scoped_title, chart, values, totals)
+        display_message = composition_message(display_message, chart, values, totals)
+    subtitle = "\n".join(part for part in (display_message, convention) if part)
     heading = scoped_title
     # A complete analytical claim may not fit the template's 32 pt title role.
     # Reuse the planner's section heading and place the claim in the subtitle
@@ -309,6 +317,8 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
         # visibly below it; never truncate an analytical statement to fit.
         heading = (slide_plan.section_title if slide_plan.section_title
                    and len(_lines(slide_plan.section_title, 8.91, 32)) <= 2 else "Analysis")
+        if len(charts) == 1 and uses_composition_data(charts[0]):
+            heading = composition_heading(heading, charts[0], values, totals)
         if slide_plan.title.endswith(" (continued)"):
             heading += " (continued)"
         subtitle = "\n".join(part for part in (
@@ -351,6 +361,9 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
         if len(qualified) == 1 and not any(o.category_dimensions for o in values) and any(o.parent_section or o.dimensions.get("section") for o in values):
             heading = next(iter(qualified))
         from .composition_data import uses_composition_data
+        if uses_composition_data(chart):
+            totals = [index.get(oid) for oid in chart.total_observation_ids if index.get(oid)]
+            heading = composition_heading(heading, chart, values, totals)
         heading = readable_chart_heading(qualify_heading(heading, values),
                                          composition=uses_composition_data(chart))
         heading = re.sub(r"(?i)^Adjusted for Adjusted\b", "Adjusted", heading)

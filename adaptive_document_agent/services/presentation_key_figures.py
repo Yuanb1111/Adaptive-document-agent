@@ -24,6 +24,7 @@ class KeyFigure:
     topic: str
     pages: tuple[int, ...]
     observation_ids: tuple[str, ...]
+    prior_period: str = ""
 
 
 def _figure(chart, observations, topic: str) -> KeyFigure | None:
@@ -73,6 +74,7 @@ def _figure(chart, observations, topic: str) -> KeyFigure | None:
         period=format_observation_period(latest),
         comparison=comparison,
         topic=topic, pages=pages, observation_ids=(earlier.id, latest.id),
+        prior_period=prior_period,
     )
 
 
@@ -147,7 +149,13 @@ def render_key_figures(presentation, figures: list[KeyFigure]):
         _text(slide, figure.comparison, x + .18, y + label_h + 1.17,
               width - .36, .54, size=11, color=FOURIER_MUTED).name = 'key_figure:comparison'
     pages = sorted({page for figure in figures for page in figure.pages})
-    _text(slide, _source_footer(pages), .55, presentation.slide_height.inches - .82,
+    # A source marker in either displayed period needs the same explanation
+    # used on the detailed charts. Stars in metric names are unrelated.
+    unaudited = any("*" in figure.period or (
+        "*" in figure.prior_period and figure.prior_period in figure.comparison
+    ) for figure in figures)
+    footer = _source_footer(pages) + (" | * Unaudited" if unaudited else "")
+    _text(slide, footer, .55, presentation.slide_height.inches - .82,
           total, .20, size=9, color=FOURIER_MUTED)
     slide.notes_slide.notes_text_frame.text = '\n'.join(
         f'{figure.topic}: {figure.label}; {figure.value} in {figure.period}; '

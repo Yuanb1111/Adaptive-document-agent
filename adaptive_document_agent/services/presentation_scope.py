@@ -28,7 +28,7 @@ def scope_items(result):
                 continue
             if draft.get("phase") == "initial" and topic.get("id") not in retained:
                 add("Not covered: " + topic.get("title", "Selected topic"),
-                    "This selected topic could not be safely presented. " + str(draft.get("error", "Source validation failed.")))
+                    "The available source evidence did not support a verified presentation of this topic.")
     for note in plan.coverage_notes:
         if not _contradicted_by_retained_content(note, result):
             add("Coverage boundary", note)
@@ -47,7 +47,7 @@ def scope_items(result):
         add("Interpretation limit", "Unsupported takeaways were replaced with analytical questions; the retained source values remain available.")
     if not any(items):
         return []
-    add("Reading scope", "This presentation covers retained, source-validated evidence and does not represent every topic or table in the document. Original diagnostics remain in the analysis JSON.")
+    add("Reading scope", "This presentation covers selected evidence from the source document and does not represent every topic or table in it.")
     return items
 
 

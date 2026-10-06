@@ -1,6 +1,9 @@
 """Visible numeric support for conclusions, resolved through analysis input IDs."""
 
 from collections import defaultdict
+from decimal import Decimal
+from math import isfinite, ulp
+import re
 
 from adaptive_document_agent.document_model import display_metric_name
 from adaptive_document_agent.document_model.series import metric_identity_key
@@ -12,12 +15,12 @@ from .single_metric_analysis import single_metric_analysis
 
 
 def closing_evidence(result, plan):
-    """Return compatible endpoint tables and all original records for notes.
+    """Return complete selected series and all original records for notes.
 
     No metric search or page-based inference can add inputs to a conclusion.
     Incompatible or conflicting series remain individual reported values.
     """
-    from .pptx_export import _appendix_display_unit, _appendix_display_value
+    from .pptx_export import _appendix_display_unit
     links = insight_inputs(result)
     ids = set(plan.observation_ids)
     ids.update(oid for iid in plan.insight_ids for oid in links.get(iid, []))
@@ -30,7 +33,12 @@ def closing_evidence(result, plan):
     for scope in scopes.values():
         for group in evidence_groups(scope):
             analysis = single_metric_analysis(group)
-            pairs = [[analysis.observations[0], analysis.observations[-1]]] if analysis else [[o] for o in group]
+            # Endpoint-only tables can hide an explicitly described peak or
+            # reversal. Keep every selected point, continuing complete period
+            # columns rather than asking Python to reinterpret the prose.
+            series = analysis.observations if analysis else None
+            pairs = ([series[start:start + 5] for start in range(0, len(series), 5)]
+                     if series else [[o] for o in group])
             for pair in pairs:
                 periods = tuple(format_observation_period(o) or "Period unspecified" for o in pair)
                 source_labels = {e.row_label.strip() for o in pair for e in o.evidence if e.row_label and e.row_label.strip()}
@@ -44,10 +52,72 @@ def closing_evidence(result, plan):
                 semantic = classify_metric(display_metric_name(pair[0]), value=pair[0].value,
                                            raw_unit=pair[0].raw_unit, unit=pair[0].unit)
                 unit = _appendix_display_unit(pair[0], semantic)
-                values = [_appendix_display_value(o, semantic) for o in pair]
+                values = [_exact_closing_value(o, semantic) for o in pair]
                 pages = sorted({e.page for o in pair for e in o.evidence})
                 tables[(periods, unit)].append((label, values, pages))
     return list(tables.items()), records
+
+
+def _exact_closing_value(item, semantic) -> str:
+    """Keep numeric precision in the existing displayed monetary unit.
+
+    Closing evidence must support the accompanying claims. The appendix's
+    compact rounding is unsuitable here: distinct reported points may collapse
+    to the same visible integer. Decimal scaling adds no inferred precision.
+    """
+    from .financial_formatter import normalize_raw_unit, split_unit_basis
+    from .pptx_export import _appendix_display_value
+
+    if not semantic.is_currency or item.value is None or split_unit_basis(item.raw_unit)[1]:
+        return _appendix_display_value(item, semantic)
+    value = Decimal(str(item.value))
+    source_unit = normalize_raw_unit(item.raw_unit, default_currency=item.currency).casefold()
+    source_scale = (1_000 if "'000" in source_unit or "thousand" in source_unit
+                    else 1_000_000_000 if "billion" in source_unit
+                    else 1_000_000 if "million" in source_unit else 1)
+    if (item.unit_scale or 1.0) <= 1.0:
+        # Follow the same explicit source-scale convention as the unit/value
+        # formatter; normalized observations already contain base amounts.
+        value *= source_scale
+    raw = _consistent_source_decimal(item, value, source_scale)
+    if raw is not None:
+        value = raw
+    text = format(value / Decimal(1_000_000), ",f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+def _consistent_source_decimal(item, base_value: Decimal, source_scale: int) -> Decimal | None:
+    """Recover source digits only when they agree with the normalized amount.
+
+    The established parser validates the full raw token and its sign/scale.
+    Reading its original decimal digits avoids displaying multiplication noise
+    such as 0.29 thousand becoming 289.99999999999994 base units. A materially
+    different source value cannot overwrite the normalized observation.
+    """
+    from adaptive_document_agent.extraction.numeric_parser import parse_number
+
+    parsed = parse_number(item.raw_value)
+    if parsed is None:
+        return None
+    text = item.raw_value.replace("\u00a0", " ").replace(",", "")
+    text = re.sub(r"(?<=\d)\s+(?=\d{3}(?:\D|$))", "", text)
+    tokens = re.findall(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)", text)
+    if len(tokens) != 1:
+        return None
+    number = Decimal(tokens[0])
+    if parsed.value < 0 and number > 0:
+        number = -number
+    scale = (parsed.scale if parsed.scale > 1 else item.unit_scale
+             if (item.unit_scale or 1) > 1 else source_scale)
+    candidate = number * Decimal(str(scale))
+    expected, actual = float(base_value), float(candidate)
+    if not isfinite(expected) or not isfinite(actual):
+        return None
+    # Allow only floating-point representation noise, not a decimal rounding
+    # tolerance that could erase genuinely different retained source values.
+    if abs(expected - actual) <= 4 * max(ulp(expected), ulp(actual)):
+        return candidate
+    return None
 
 
 def evidence_table_layout(table_spec, width):

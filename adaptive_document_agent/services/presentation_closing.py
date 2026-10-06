@@ -113,7 +113,7 @@ def render_closing(presentation, result, plan):
 
 
 def _render_linked_pages(presentation, result, plan, groups, records, notes):
-    """Keep each linked conclusion beside complete, compatible endpoint tables.
+    """Keep each linked conclusion beside complete, compatible reported series.
 
     Distinct units retain separate tables. Different period headers are never
     joined or selected away to make a combined layout fit. If a linked bundle
@@ -188,20 +188,25 @@ def _render_linked_bundle_pages(presentation, title, candidates, notes):
 
     def dimensions(bundle):
         _, groups, heading, tables = bundle
-        watch_only = bool(groups[1]) and not groups[0] and heading != subtitle
-        topic_height = (len(wrap_copy(heading, copy_width if watch_only else full_width, 16)) * .25 + .10
+        stacked = any(len(key[0]) > 2 for key, _ in tables)
+        text_width = full_width if stacked else copy_width
+        evidence_width = full_width if stacked else table_width
+        watch_only = bool(groups[1]) and not groups[0] and heading != subtitle and not stacked
+        topic_height = (len(wrap_copy(heading, text_width if watch_only else full_width, 16)) * .25 + .10
                         if heading != subtitle else 0.0)
-        table_height = sum(sum(evidence_table_layout(table, table_width)[2]) + .10 for table in tables)
+        table_height = sum(sum(evidence_table_layout(table, evidence_width)[2]) + .10 for table in tables)
         copy_height = topic_height if watch_only else 0.0
         for column, items in enumerate(groups):
             if not items:
                 continue
             if column and groups[0]:
                 copy_height += .08
-            copy_height += sum(len(wrap_copy(item.text, copy_width - .10, 15)) * .245 + .18
+            copy_height += sum(len(wrap_copy(item.text, text_width - .10, 15)) * .245 + .18
                                for item in items)
+        if stacked:
+            return topic_height + table_height + .14 + copy_height, topic_height, watch_only, stacked
         return (max(table_height, copy_height) if watch_only
-                else topic_height + max(table_height, copy_height)), topic_height, watch_only
+                else topic_height + max(table_height, copy_height)), topic_height, watch_only, stacked
 
     bundles = []
     for candidate, originals in candidates:
@@ -224,7 +229,7 @@ def _render_linked_bundle_pages(presentation, title, candidates, notes):
         slides.append(slide)
 
     for identity, groups, heading, tables in bundles:
-        height, topic_height, watch_only = dimensions((identity, groups, heading, tables))
+        height, topic_height, watch_only, stacked = dimensions((identity, groups, heading, tables))
         if y > top and y + height > bottom:
             finish_page()
             slide, top = _base(presentation, title + " (continued)", subtitle)
@@ -237,14 +242,16 @@ def _render_linked_bundle_pages(presentation, title, candidates, notes):
         row_top = y + (0 if watch_only else topic_height)
         table_y = row_top
         for table in tables:
-            shape = render_evidence_table(slide, table, x=.55, y=table_y, width=table_width)
+            shape = render_evidence_table(slide, table, x=.55, y=table_y,
+                                          width=full_width if stacked else table_width)
             # Artifact import renumbers native tables; unique names retain
             # one-to-one provenance checks for every editable table.
             shape.name = f"closing:evidence:{shape.shape_id}"
             table_y += shape.height.inches + .10
             pages.update(page for _, _, sources in table[1] for page in sources)
             unaudited |= any("*" in period for period in table[0][0])
-        copy_y = row_top
+        copy_y = table_y + .14 if stacked else row_top
+        copy_x, current_copy_width = (.55, full_width) if stacked else (right, copy_width)
         if watch_only:
             _text(slide, heading, right, copy_y, copy_width, topic_height,
                   size=16, bold=True, color=FOURIER_PURPLE)
@@ -255,8 +262,8 @@ def _render_linked_bundle_pages(presentation, title, candidates, notes):
             if column and groups[0]:
                 copy_y += .08
             for item in items:
-                body_height = len(wrap_copy(item.text, copy_width - .10, 15)) * .245 + .08
-                _text(slide, item.text, right, copy_y, copy_width, body_height,
+                body_height = len(wrap_copy(item.text, current_copy_width - .10, 15)) * .245 + .08
+                _text(slide, item.text, copy_x, copy_y, current_copy_width, body_height,
                       size=15, color=FOURIER_PURPLE if column else FOURIER_DARK).name = "closing:body"
                 copy_y += body_height + .10
                 pages.update(item.pages)

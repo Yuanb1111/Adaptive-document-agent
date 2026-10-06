@@ -152,3 +152,46 @@ def test_summary_introduction_no_longer_bypasses_source_preview():
     assert "Source document, p. 1" not in first_text
     assert "Source: Document disclosures (p. 1, 5)" in first_text
     assert result.model_dump() == original
+
+
+@pytest.mark.parametrize("image_size", [(1000, 1000), (1200, 800), (700, 1000)])
+def test_three_qualified_profile_sections_keep_a_readable_column_beside_source_image(image_size):
+    from adaptive_document_agent.services.presentation_brief import BriefItem
+    from adaptive_document_agent.services.presentation_source_visual import SourceVisual, render_profile_with_source
+    from tests.test_presentation_identity_contents import _deck
+
+    image = io.BytesIO()
+    Image.new("RGB", image_size, (54, 96, 145)).save(image, format="PNG")
+    items = [
+        BriefItem("Activity", "Develops and supplies inspection instruments for industrial users, including "
+                  "sensors and software used to monitor production equipment.", [3]),
+        BriefItem("Reported reach", "The source reports deployment in 23 markets as of December 2025, "
+                  "according to the cited survey; this is a shipment measure and does not establish revenue share.", [4]),
+        BriefItem("Product scope", "The reported range includes 18 product models across four series for "
+                  "research, manufacturing and training; the description applies only to the stated reporting date.", [5]),
+    ]
+    before = [(item.title, item.text, list(item.pages)) for item in items]
+    deck = _deck()
+    slides = render_profile_with_source(deck, "Instrument company", items,
+                                       SourceVisual(image.getvalue(), 1, "embedded_image"), notes="Author evidence record")
+
+    assert len(slides) == 1
+    slide = slides[0]
+    bodies = [shape for shape in slide.shapes if shape.name == "brief:body"]
+    picture = next(shape for shape in slide.shapes if shape.name == "source_document_image:p1")
+    assert [shape.text for shape in bodies] == [item.text for item in items]
+    assert len({shape.left for shape in bodies}) == 1
+    assert all(shape.width.inches >= 6 for shape in bodies)
+    assert picture.width.inches * picture.height.inches > 8
+    assert picture.width / picture.height == pytest.approx(image_size[0] / image_size[1], rel=1e-5)
+    assert all(getattr(picture, name) == 0 for name in ("crop_left", "crop_right", "crop_top", "crop_bottom"))
+    assert all(shape.left + shape.width < picture.left for shape in bodies)
+    assert all(shape.top + shape.height < deck.slide_height - 914400 for shape in bodies)
+    for first, second in zip(bodies, bodies[1:]):
+        assert first.top + first.height < second.top
+    visible = "\n".join(shape.text for shape in slide.shapes if shape.has_text_frame)
+    assert "Source: Document disclosures (p. 1, 3-5)" in visible
+    notes = slide.notes_slide.notes_text_frame.text
+    assert "Author evidence record" in notes
+    assert all(item.text in notes for item in items)
+    assert [(item.title, item.text, item.pages) for item in items] == before

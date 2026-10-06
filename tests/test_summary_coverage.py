@@ -55,9 +55,28 @@ def test_three_long_editorial_findings_use_one_complete_readable_page():
     slides = render_complete_summary(deck, "Executive Summary", items, single_column=True)
     assert len(slides) == 1
     assert [shape.text for shape in _bodies(slides)] == [item.text for item in items]
-    assert all(shape.text_frame.paragraphs[0].font.size.pt == 14 for shape in _bodies(slides))
+    assert all(14 <= shape.text_frame.paragraphs[0].font.size.pt <= 16 for shape in _bodies(slides))
     assert all(shape.top.inches + shape.height.inches <= deck.slide_height.inches - 1.02
                for shape in _bodies(slides))
+
+
+def test_editorial_summary_balances_unequal_copy_before_creating_sparse_continuation():
+    items = [
+        BriefItem("Measured output", "The source reports measured output for the disclosed population. " * 6, [2]),
+        BriefItem("Share of activity within the explicitly reported measurement boundary",
+                  "The share uses the measured activity as its numerator and total activity as its denominator. " * 5, [3]),
+        BriefItem("Operating scope", "The comparison retains the original reporting scope and its source qualifications. " * 4, [4]),
+    ]
+    before = deepcopy(items)
+    deck = blank_deck()
+    slides = render_complete_summary(deck, "Selected findings", items, single_column=True)
+    assert len(slides) == 1
+    assert [shape.text for shape in _bodies(slides)] == [item.text for item in items]
+    assert items == before
+    assert all(14 <= shape.text_frame.paragraphs[0].font.size.pt <= 16 for shape in _bodies(slides))
+    for shape in _bodies(slides):
+        assert shape.top.inches + shape.height.inches <= deck.slide_height.inches - 1.02 + .001
+    assert all(item.text in slides[0].notes_slide.notes_text_frame.text for item in items)
 
 
 @pytest.mark.parametrize("count", [1, 3, 4, 6, 7, 9, 17])

@@ -1,12 +1,15 @@
 """Native, editable hero chart layout using the application's existing template."""
 
+import re
+
 from adaptive_document_agent.models import ChartPlan
 
 from .single_metric_analysis import SingleMetricAnalysis
 from .presentation_labels import qualified_metric_name, qualify_heading
 
 
-def add_single_metric_slide(presentation, plan: ChartPlan, analysis: SingleMetricAnalysis, *, title: str, narrative: str):
+def add_single_metric_slide(presentation, plan: ChartPlan, analysis: SingleMetricAnalysis, *, title: str,
+                            narrative: str, definition: dict | None = None, source_context: str = ""):
     # Reuse the established renderer and theme; no provider or document-specific layout.
     from .pptx_export import (
         _add_native_chart, _display_scale, _panel, _source_footer,
@@ -16,7 +19,9 @@ def add_single_metric_slide(presentation, plan: ChartPlan, analysis: SingleMetri
     original_title, original_narrative = title, narrative
     series = analysis.observations
     first, last = series[0], series[-1]
-    metric_label = qualified_metric_name(first)
+    metric_label = re.sub(r"%\s*of\b", "% of", qualified_metric_name(first), flags=re.I)
+    title = re.sub(r"%\s*of\b", "% of", title, flags=re.I)
+    narrative = re.sub(r"%\s*of\b", "% of", narrative, flags=re.I)
     if first.parent_section or first.dimensions.get("section"):
         qualified = metric_label
         if (first.parent_section or first.dimensions.get("section", "")).casefold() not in title.casefold():
@@ -31,11 +36,14 @@ def add_single_metric_slide(presentation, plan: ChartPlan, analysis: SingleMetri
     elif scale_label and (first.unit_family == "count" or first.unit == "count"):
         unit = f"{scale_label} of units"
 
-    def value(number: float, *, signed: bool = False) -> str:
-        return f"{number / scale:+,.1f}" if signed else f"{number / scale:,.1f}"
+    def value(number: float, *, signed: bool = False, level: bool = False) -> str:
+        text = f"{number / scale:+,.1f}" if signed else f"{number / scale:,.1f}"
+        return text + "%" if level and analysis.is_percentage else text
 
     if not narrative.strip():
-        narrative = f"{metric_label} moved from {value(first.value)} to {value(last.value)} {unit} between {first.period} and {last.period}."
+        values = (f"{value(first.value, level=True)} to {value(last.value, level=True)}"
+                  if analysis.is_percentage else f"{value(first.value)} to {value(last.value)} {unit}")
+        narrative = f"{metric_label} moved from {values} between {first.period} and {last.period}."
     from .slide_compositor import _base, _lines
     if len(_lines(title, 8.91, 32)) > 2:
         # Use the existing metric label for the title role, retaining the full
@@ -45,15 +53,31 @@ def add_single_metric_slide(presentation, plan: ChartPlan, analysis: SingleMetri
     import json
     slide.notes_slide.notes_text_frame.text = json.dumps({
         "planned_title": original_title, "narrative": original_narrative,
+        "source_ratio_definition": definition,
+        "source_table_context": source_context,
     }, ensure_ascii=False)
     slide.name = "single_metric_hero"
     height = 6.25 - top
-    _text(slide, f"{metric_label} ({unit})", 0.60, top, 11.35, 0.24,
-          size=10, color=FOURIER_MUTED)
+    from .text_capacity import wrap_copy
+    caption = metric_label if unit == "%" and "%" in metric_label else f"{metric_label} ({unit})"
+    # Only a unique, row-bound source footnote may name the denominator. Unknown
+    # bases remain unknown; a percentage label alone cannot establish a formula.
+    if definition:
+        caption += f"\nDefinition: {definition['numerator']} / {definition['denominator']}"
+    elif source_context:
+        caption += "\n" + source_context
+    caption_height = max(.24, len(wrap_copy(caption, 11.35, 10)) * 12.5 / 72 + .06)
+    caption_shape = _text(slide, caption, 0.60, top, 11.35, caption_height,
+                          size=10, color=FOURIER_MUTED)
+    caption_shape.name = "single_metric:definition" if definition else "single_metric:measure"
+    from pptx.util import Pt
+    for paragraph in caption_shape.text_frame.paragraphs:
+        paragraph.line_spacing = Pt(12.5)
     # Leave dedicated slots for four KPIs, annotations and evidence footer.
-    chart_height = height - 2.03
+    chart_offset = caption_height + .02
+    chart_height = height - 2.03 - (caption_height - .24)
     hero = plan.model_copy(update={"chart_type": "line" if len(series) >= 3 else "bar", "title": metric_label})
-    _add_native_chart(slide, hero, series, (0.60, top + 0.26, 11.35, chart_height))
+    _add_native_chart(slide, hero, series, (0.60, top + chart_offset, 11.35, chart_height))
     chart_shape = next(shape for shape in slide.shapes if shape.has_chart)
     chart_shape.name = "single_metric_hero_chart"
 
@@ -62,14 +86,14 @@ def add_single_metric_slide(presentation, plan: ChartPlan, analysis: SingleMetri
     elif analysis.percentage_change is not None:
         rate_label, rate_value, rate_period = "Percentage change", f"{analysis.percentage_change:+.1f}%", f"{first.period} to {last.period}"
     else:
-        rate_label, rate_value, rate_period = "Peak reported value", value(analysis.peak.value), analysis.peak.period
+        rate_label, rate_value, rate_period = "Peak reported value", value(analysis.peak.value, level=True), analysis.peak.period
     cards = [
-        ("Start value", value(first.value), first.period),
-        ("End value", value(last.value), last.period),
+        ("Start value", value(first.value, level=True), first.period),
+        ("End value", value(last.value, level=True), last.period),
         ("Change (pp)" if analysis.is_percentage else "Absolute change", value(analysis.absolute_change, signed=True), "percentage points" if analysis.is_percentage else unit),
         (rate_label, rate_value, rate_period),
     ]
-    cards_top = top + chart_height + 0.38
+    cards_top = top + chart_offset + chart_height + .12
     for i, (label, number, caption) in enumerate(cards):
         left = 0.60 + i * 2.88
         _panel(slide, left, cards_top, 2.70, 0.92, fill=FOURIER_BG_CARD)
@@ -86,7 +110,7 @@ def add_single_metric_slide(presentation, plan: ChartPlan, analysis: SingleMetri
             detail = f"{value(change.absolute_change, signed=True)} {unit}"
         changes.append(f"{change.end_period} {'YoY' if change.is_yoy else 'vs ' + change.start_period}: {detail}")
     _text(slide, "   /   ".join(changes), 0.60, cards_top + 1.02, 11.35, 0.26, size=10.5, color=FOURIER_DARK)
-    callout = f"Peak: {analysis.peak.period} ({value(analysis.peak.value)}). Low: {analysis.trough.period} ({value(analysis.trough.value)})."
+    callout = f"Peak: {analysis.peak.period} ({value(analysis.peak.value, level=True)}). Low: {analysis.trough.period} ({value(analysis.trough.value, level=True)})."
     if analysis.turning_periods:
         callout += " Turning point: " + ", ".join(analysis.turning_periods[:2]) + "."
     _text(slide, callout, 0.60, cards_top + 1.30, 11.35, 0.25, size=10, color=FOURIER_MUTED)

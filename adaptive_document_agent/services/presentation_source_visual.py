@@ -64,13 +64,52 @@ def select_company_source_visual(pdf_bytes: bytes, result: PipelineResult) -> So
     return SourceVisual(payload=payload, page=1)
 
 
+@dataclass(frozen=True)
+class _ProfileLayout:
+    columns: int
+    text_width: float
+    image_width: float
+    column_width: float
+    heights: list[tuple[float, float]]
+    row_heights: list[float]
+    gap: float
+
+
+def _profile_layout(items, width: float, height: float) -> _ProfileLayout | None:
+    """Measure complete authored sections before choosing text/image columns.
+
+    A vertical reading order is preferable to narrow text cards. Try it with
+    progressively more text space before considering a compact two-column grid.
+    The picture keeps a substantial share of the page in every candidate.
+    """
+    from .presentation_brief import _copy_height, _heading_height
+
+    for columns in (1, 2):
+        if columns == 2 and not 3 <= len(items) <= 4:
+            continue
+        for image_fraction in (.36, .32, .28):
+            image_width = width * image_fraction
+            text_width = width - image_width - .40
+            column_width = (text_width - .30 * (columns - 1)) / columns
+            heights = [(_heading_height(item.title, column_width),
+                        _copy_height(item.text, column_width, 16) + .06) for item in items]
+            row_heights = [max(h + b + .06 for h, b in heights[i:i + columns])
+                           for i in range(0, len(heights), columns)]
+            needed = sum(row_heights) + max(0, len(row_heights) - 1) * .22
+            if items and needed <= height:
+                gap = min(.34, .22 + (height - needed) / max(len(row_heights) - 1, 1))
+                return _ProfileLayout(columns, text_width, image_width, column_width,
+                                      heights, row_heights, gap)
+    return None
+
+
 def render_profile_with_source(presentation, title, items, visual: SourceVisual, *, notes=""):
     """Keep complete introductory copy beside uncropped source artwork.
 
     A long introduction retains its existing pagination. The source image is
     omitted when it would require an otherwise empty preview page.
     """
-    from .presentation_brief import _copy_height, _heading_height, render_profile
+    from .presentation_brief import render_profile
     from .presentation_artwork import _picture
     from .pptx_export import _source_footer, _text
     from .presentation_style import DARK, MUTED, PURPLE
@@ -80,17 +119,9 @@ def render_profile_with_source(presentation, title, items, visual: SourceVisual,
     slide.name = "source_document_profile"
     width, height = presentation.slide_width.inches, presentation.slide_height.inches
     bottom = height - 1.24
-    image_width = min(2.6, (width - 1.3) * .28)
-    text_width = width - 1.3 - image_width - .35
     retained = [item for item in items if item.text.strip()]
-    columns = 2 if 3 <= len(retained) <= 4 else 1
-    column_width = (text_width - .26 * (columns - 1)) / columns
-    heights = [(_heading_height(item.title, column_width),
-                _copy_height(item.text, column_width, 16) + .04) for item in retained]
-    row_heights = [max(h + b + .04 for h, b in heights[i:i + columns])
-                   for i in range(0, len(heights), columns)]
-    needed = sum(row_heights) + max(0, len(row_heights) - 1) * .20
-    fits = bool(retained) and needed <= bottom - top
+    layout = _profile_layout(retained, width - 1.3, bottom - top)
+    fits = layout is not None
     if not retained:
         image_rect = Rect(.65, top, width - 1.3, bottom - top - .30)
     elif not fits:
@@ -115,20 +146,25 @@ def render_profile_with_source(presentation, title, items, visual: SourceVisual,
                 f'\n\nOriginal image from uploaded PDF page {visual.page}; context artwork only.')
         return pages
     else:
-        y = top
-        gap = .20 + min(.15, max(0, (bottom - top - needed) / max(len(row_heights), 1)))
-        for index, (item, (heading_h, body_h)) in enumerate(zip(retained, heights)):
-            column, row = index % columns, index // columns
-            x = .65 + column * (column_width + .26)
-            y = top + sum(row_heights[:row]) + row * gap
+        from pptx.util import Pt
+
+        for index, (item, (heading_h, body_h)) in enumerate(zip(retained, layout.heights)):
+            column, row = index % layout.columns, index // layout.columns
+            x = .65 + column * (layout.column_width + .30)
+            y = top + sum(layout.row_heights[:row]) + row * layout.gap
             if item.title:
-                shape = _text(slide, item.title, x, y, column_width, heading_h,
+                shape = _text(slide, item.title, x, y, layout.column_width, heading_h,
                               size=18, bold=True, color=PURPLE)
                 shape.name = "brief:heading"
-            shape = _text(slide, item.text, x, y + heading_h + .04, column_width,
+                for paragraph in shape.text_frame.paragraphs:
+                    paragraph.line_spacing = Pt(22.5)
+            shape = _text(slide, item.text, x, y + heading_h + .06, layout.column_width,
                           body_h, size=16, color=DARK)
             shape.name = "brief:body"
-        image_rect = Rect(.65 + text_width + .35, top, image_width, bottom - top - .30)
+            for paragraph in shape.text_frame.paragraphs:
+                paragraph.line_spacing = Pt(20)
+        image_rect = Rect(.65 + layout.text_width + .40, top,
+                          layout.image_width, bottom - top)
     picture = _picture(slide, visual.payload, image_rect)
     picture.name = f"source_document_image:p{visual.page}"
     shown_items = retained if fits else []
