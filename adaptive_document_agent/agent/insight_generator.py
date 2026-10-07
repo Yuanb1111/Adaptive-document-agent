@@ -1,12 +1,15 @@
 """Evidence-grounded insight generation after validation."""
 
+import json
+
 from pydantic import BaseModel, Field
 
-from adaptive_document_agent.models import AnalysisResult, Insight, Observation, ValidationIssue
+from adaptive_document_agent.models import AnalysisResult, Insight, Observation, ParsedDocument, ValidationIssue
 from adaptive_document_agent.services.llm import LLMGateway
 from adaptive_document_agent.utils.ids import stable_id
 
 from .prompting import load_prompt, untrusted_document_message
+from .insight_source_context import build_source_contexts, matched_driver_evidence
 
 
 class InsightList(BaseModel):
@@ -18,14 +21,16 @@ class InsightGenerator:
         self.gateway = gateway
         self.validation_issues: list[ValidationIssue] = []
 
-    def generate(self, results: list[AnalysisResult], observations: list[Observation] | None = None) -> list[Insight]:
+    def generate(
+        self, results: list[AnalysisResult], observations: list[Observation] | None = None,
+        *, document: ParsedDocument | None = None,
+    ) -> list[Insight]:
         valid = [result for result in results if result.result is not None and result.evidence]
         self.validation_issues = []
         from adaptive_document_agent.validation.insight_context import qualified_metric_label, validate_insight_contexts
-        if not self.gateway:
+        if not self.gateway or not valid:
             return [self._deterministic(result, observations) for result in valid]
-        # Retain bounded source text so a claimed driver can actually be grounded.
-        import json
+        contexts = build_source_contexts(valid, observations or [], document)
         by_id = {o.id: o for o in observations or []}
         payload = json.dumps([{**r.model_dump(mode="json", exclude={"evidence"}),
             # Explicit units and periods prevent prose from describing unlabelled
@@ -36,7 +41,13 @@ class InsightGenerator:
                 "entity", "dimensions", "category_dimensions", "parent_section", "source_table", "table_id"}),
                 "qualified_metric_label": qualified_metric_label(by_id[oid])}
                 for oid in r.input_observation_ids if oid in by_id],
-            "evidence": [{**e.model_dump(mode="json"), "text": (e.text or "")[:1200]} for e in r.evidence[:4]]}
+            "evidence": [{**e.model_dump(mode="json"), "text": (e.text or "")[:1200]} for e in r.evidence[:4]],
+            "source_context": {
+                "coverage": "Bounded source excerpts; not a complete review of the document.",
+                "selection": "Source pages, adjacent pages, and lexical matches; relevance is not established.",
+                "driver_citation_source": "excerpts" if document is not None else "evidence",
+                "excerpts": [excerpt.payload() for excerpt in contexts[r.task_id]],
+            }}
             for r in valid], ensure_ascii=False)
         generated = self.gateway.generate_structured(
             [
@@ -54,12 +65,31 @@ class InsightGenerator:
             if not insight.result_ids or any(rid not in evidence_by_task for rid in insight.result_ids):
                 continue
             insight.evidence = [source for identifier in insight.result_ids for source in evidence_by_task[identifier]]
-            if insight.driver:
-                quote = " ".join((insight.driver_quote or "").split())
-                if not quote or not any(e.page == insight.driver_source_page and quote in " ".join((e.text or "").split()) for e in insight.evidence):
+            if insight.driver or insight.driver_quote or insight.driver_source_page is not None:
+                # Validate against exactly the windows supplied for this result.
+                # A quote elsewhere in the PDF or another task is not sufficient.
+                excerpts = [excerpt for rid in insight.result_ids for excerpt in contexts[rid]]
+                legacy = [source.model_copy(update={"text": (source.text or "")[:1200]})
+                          for rid in insight.result_ids for source in evidence_by_task[rid][:4]]
+                driver_source = matched_driver_evidence(
+                    insight.driver_quote, insight.driver_source_page, excerpts,
+                    legacy_evidence=legacy if document is None else None,
+                ) if insight.driver else None
+                if driver_source is None:
                     # Do not leave an unsupported driver embedded in its narrative.
+                    self.validation_issues.append(ValidationIssue(
+                        code="insight_driver_evidence", stage="insight", severity="warning",
+                        message="A reported explanation could not be matched to its supplied source page; "
+                                "the draft was replaced with the validated calculation.",
+                        related_ids=[insight.id, *insight.result_ids], evidence=insight.evidence,
+                    ))
                     accepted.extend(self._deterministic(by_task[rid], observations) for rid in insight.result_ids)
                     continue
+                if driver_source not in insight.evidence:
+                    insight.evidence.append(driver_source)
+                insight.driver_quote = driver_source.text
+                insight.confidence = min(insight.confidence, driver_source.confidence,
+                                         *(by_task[rid].confidence for rid in insight.result_ids))
             accepted.append(insight)
         return list({i.id: i for i in accepted if i.evidence}.values()) or [self._deterministic(r, observations) for r in valid]
 

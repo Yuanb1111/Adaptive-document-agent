@@ -52,11 +52,16 @@ def _caption_subject(table: ExtractedTable) -> str | None:
 def table_comparison_contexts(table: ExtractedTable) -> dict[int, tuple[str | None, str | None]]:
     """Map source row indexes to an evidenced (parent, table subject)."""
     headings = {_clean(line).casefold() for line in table.raw_body_lines}
+    # The first group heading may be retained as the last header line instead
+    # of a body row. It is a parent only if a matching named total bounds that
+    # exact first group; a caption or familiar metric name is not enough.
+    header_tail = next((_clean(line) for line in reversed(table.raw_header_lines)
+                        if _clean(line)), "")
     labels = [_clean(row.cells[0] or "") if row.cells else "" for row in table.rows]
     parents: dict[int, str] = {}
     previous_total = -1
     for end, label in enumerate(labels):
-        subtotal = re.fullmatch(r"(?i)sub\s*total\s+(?:of\s+)?(.+)", label)
+        subtotal = re.fullmatch(r"(?i)(?:sub\s*total|total)\s+(?:of\s+)?(.+)", label)
         if not subtotal:
             continue
         parent = _clean(subtotal.group(1))
@@ -69,6 +74,15 @@ def table_comparison_contexts(table: ExtractedTable) -> dict[int, tuple[str | No
                 for index in range(starts[0], end):
                     if table.rows[index].alignment_status == "resolved":
                         parents[index] = parent
+        if previous_total == -1 and header_tail.casefold() == folded and end > 0:
+            group = table.rows[:end]
+            # A second heading, source-page boundary, or unresolved row breaks
+            # the source-copy contract. Never propagate a header across it.
+            if all(row.alignment_status == "resolved" and row.page == table.page
+                   and any(cell and cell.strip() for cell in row.cells[1:])
+                   for row in group):
+                for index in range(end):
+                    parents[index] = header_tail
         previous_total = end
 
     subject = _caption_subject(table)

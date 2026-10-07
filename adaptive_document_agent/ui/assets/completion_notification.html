@@ -1,9 +1,21 @@
 <div class="completion-notice" hidden>
-  <div class="notice-controls">
-    <button type="button" class="notice-enable">Enable completion notifications</button>
-    <label><input type="checkbox" class="notice-sound"> Play a short sound</label>
-    <button type="button" class="notice-test">Test notification</button>
+  <div class="notice-layout">
+    <div class="notice-icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/>
+      </svg>
+    </div>
+    <div class="notice-copy">
+      <div class="notice-title">Completion notifications</div>
+      <p class="notice-status" role="status" aria-live="polite"></p>
+    </div>
+    <div class="notice-controls">
+      <button type="button" class="notice-test">Send test</button>
+      <button type="button" class="notice-enable" role="switch" aria-label="Completion notifications" aria-checked="false">
+        <span class="notice-switch" aria-hidden="true"><span class="notice-thumb"></span></span>
+        <span class="notice-toggle-text">Off</span>
+      </button>
+    </div>
   </div>
-  <p class="notice-status" role="status" aria-live="polite"></p>
-  <p class="notice-help">Keep this tab open and connected; you can switch to another tab. Closing it stops notifications. Browser and system notification settings apply.</p>
+  <p class="notice-help">Keep this tab open. You can switch tabs while generation runs.</p>
 </div>

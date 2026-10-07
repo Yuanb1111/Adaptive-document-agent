@@ -106,6 +106,14 @@ def series_directory(result: PipelineResult) -> tuple[list[dict[str, object]], d
         })
     for item in directory:
         item.setdefault("visual_kind", "series")
+        group = lookup[item["id"]]
+        # Endpoints alone hide reversals and can conceal a recent comparison.
+        item["reported_points"] = [
+            [o.id, o.period, o.raw_value, o.value, o.unit_scale, o.period_basis,
+             o.period_type, o.period_start, o.period_end, o.ifrs_status,
+             o.audited_status, o.validation_status, sorted({e.page for e in o.evidence})]
+            for o in group
+        ]
     return directory, lookup
 
 
@@ -139,6 +147,7 @@ class PresentationTopicSelector:
             "source_sections", "source_pages", "observation_count",
             "first_reported_value", "last_reported_value", "evidence_status",
             "visual_kind",
+            "reported_points",
         )
         payload = {
             "document_purpose": result.profile.document_purpose,
@@ -146,6 +155,9 @@ class PresentationTopicSelector:
             "primary_analysis_ranges": result.profile.analysis_page_ranges,
             "important_sections": result.profile.important_sections,
             "series_columns": columns,
+            "reported_point_columns": ["observation_id", "period", "raw_value", "value", "unit_scale",
+                "period_basis", "period_type", "period_start", "period_end", "definition_basis",
+                "audited_status", "validation_status", "source_pages"],
             "all_extracted_series": [[item[column] for column in columns] for item in directory],
             "ratio_definitions": [
                 {"series_id": item["id"], "definitions": item["ratio_definitions"]}
@@ -160,6 +172,8 @@ class PresentationTopicSelector:
             ],
             "background_page_excerpts": context_pages,
         }
+        from .topic_coverage_review import source_period_views, review_topic_coverage
+        payload["same_source_row_period_views"] = source_period_views(lookup)
         messages = [
             {"role": "system", "content": load_prompt("presentation_topic_selection.txt")},
             untrusted_document_message(json.dumps(payload, ensure_ascii=False, separators=(",", ":"))),
@@ -182,6 +196,8 @@ class PresentationTopicSelector:
             result.presentation_topics = previous
         from .topic_selection_repair import retain_valid_topics
         retained = retain_valid_topics(selection, lookup, primary_pages, result, self.gateway, self._validate)
+        retained = review_topic_coverage(retained, result, lookup, primary_pages, payload,
+                                         self.gateway, self._validate)
         prepare_topic_ratio_definitions(retained, lookup, result)
         return retained
 

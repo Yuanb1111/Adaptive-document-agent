@@ -29,7 +29,7 @@ def _component():
 
 
 def render_settings(st) -> None:
-    """Mount before upload so consent and optional sound can be armed first."""
+    """Mount before upload so the user can opt into silent completion notices."""
     try:
         renderer = _component()
     except ImportError:

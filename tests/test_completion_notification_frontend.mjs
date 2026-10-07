@@ -3,7 +3,8 @@ import { test } from "node:test";
 import render from "../adaptive_document_agent/ui/assets/completion_notification.mjs";
 
 class Element {
-  constructor() { this.events = new Map(); this.children = new Map(); }
+  constructor() { this.events = new Map(); this.children = new Map(); this.dataset = {}; this.attributes = new Map(); }
+  setAttribute(name, value) { this.attributes.set(name, value); }
   querySelector(selector) { return this.children.get(selector); }
   addEventListener(type, fn) { if (!this.events.has(type)) this.events.set(type, new Set()); this.events.get(type).add(fn); }
   removeEventListener(type, fn) { this.events.get(type)?.delete(fn); }
@@ -13,7 +14,7 @@ function root() {
   const wrapper = new Element();
   const element = new Element();
   wrapper.children.set(".completion-notice", element);
-  for (const selector of [".notice-enable", ".notice-sound", ".notice-test", ".notice-status"]) element.children.set(selector, new Element());
+  for (const selector of [".notice-enable", ".notice-toggle-text", ".notice-test", ".notice-status"]) element.children.set(selector, new Element());
   return { wrapper, element, get: selector => element.querySelector(selector) };
 }
 function browser({ saved = new Map(), permission = "default", allowed = "granted", requestThrows = false, unsupported = false } = {}) {
@@ -140,23 +141,25 @@ test("synchronous permission restrictions are handled and do not emit a success"
   assert.match(r.get(".notice-status").textContent, /Open the app directly/);
 });
 
-test("optional sound is enabled by a gesture and only played with a successful notification", async () => {
-  const b = browser();
-  let tones = 0;
-  let contexts = 0;
-  b.win.AudioContext = class {
-    constructor() { contexts++; this.state = "running"; this.currentTime = 0; }
-    createOscillator() { return { frequency: { setValueAtTime() {} }, connect: () => ({ connect() {} }), start() { tones++; }, stop() {}, disconnect() {} }; }
-    createGain() { return { gain: { setValueAtTime() {}, linearRampToValueAtTime() {}, exponentialRampToValueAtTime() {} }, disconnect() {} }; }
+test("legacy sound preferences cannot create audio; test and completion messages are silent", async () => {
+  const saved = new Map([["ada:completion:v1:/", JSON.stringify({ enabled: true, sound: true })]]);
+  const b = browser({ saved, permission: "granted" });
+  b.win[Symbol.for("adaptive-document-agent.completion-notice.v1")] = {
+    complete() { assert.fail("An old controller with audio must not be reused"); },
   };
+  Object.defineProperty(b.win, "AudioContext", { get() { assert.fail("Audio API must not be accessed"); } });
   const r = root();
   render({ parentElement: r.wrapper, data: { mode: "settings" } });
-  assert.equal(contexts, 0);
-  r.get(".notice-enable").fire("click"); await flush();
-  r.get(".notice-sound").checked = true;
-  r.get(".notice-sound").fire("change");
-  assert.equal(contexts, 1);
+  assert.equal(r.get(".notice-enable").attributes.get("aria-checked"), "true");
+  assert.equal(r.get(".notice-toggle-text").textContent, "On");
+  assert.equal(r.element.dataset.state, "on");
+  r.get(".notice-test").fire("click");
+  assert.match(r.get(".notice-status").textContent, /Test message sent/);
   finish("sound-run"); finish("sound-run");
-  assert.equal(tones, 1);
-  assert.equal(b.notices.length, 1);
+  assert.equal(b.notices.length, 2);
+  assert.ok(b.notices.every(notice => notice.options.silent === true));
+  assert.ok(!("sound" in JSON.parse(b.saved.get("ada:completion:v1:/"))));
+  r.get(".notice-enable").fire("click");
+  assert.equal(r.get(".notice-enable").attributes.get("aria-checked"), "false");
+  assert.equal(r.get(".notice-test").disabled, true);
 });

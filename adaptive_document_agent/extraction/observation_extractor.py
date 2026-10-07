@@ -75,14 +75,21 @@ class ObservationExtractor:
                 continue
             if not row.cells:
                 continue
-            label = self._row_label(row.cells[0])
             numeric_columns = [column for column, raw in enumerate(row.cells[1:], start=1) if raw and parse_number(raw)]
+            # Generic words can be explicit scope headings (e.g. "Current" or
+            # "Other"). They are insufficient standalone metrics, but must not
+            # disappear from the identity of the following source rows.
+            label = self._row_label(row.cells[0], allow_generic=not numeric_columns)
             if label and not numeric_columns:
                 # Operators are not semantic parent metrics. Keep their raw
                 # source row without prefixing all subsequent results with Add.
                 current_section = None if re.fullmatch(r"(?i)(?:add|less|adjustments?|加|减|调整)[:：]?", label.strip()) else label.rstrip(":")
                 continue
             if not label:
+                # Bare totals are intentionally not emitted as observations;
+                # they still close the preceding source group.
+                if (row.cells[0] or "").strip().casefold() in {"total", "grand total", "合计", "总计"}:
+                    current_section = None
                 continue
 
             # Deduction detection ("Less:", "减：")
@@ -412,7 +419,7 @@ class ObservationExtractor:
         )
 
     @staticmethod
-    def _row_label(value: str | None) -> str | None:
+    def _row_label(value: str | None, *, allow_generic: bool = False) -> str | None:
         if not value:
             return None
         label = " ".join(value.split()).strip()
@@ -422,7 +429,7 @@ class ObservationExtractor:
         letters = re.findall(r"[A-Za-z\u3400-\u9fff\u00c0-\u024f]", label)
         if len(letters) < 2:
             return None
-        if label.casefold().rstrip(":") in _GENERIC_LABELS:
+        if not allow_generic and label.casefold().rstrip(":") in _GENERIC_LABELS:
             return None
         return label
 

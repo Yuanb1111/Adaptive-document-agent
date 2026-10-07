@@ -36,10 +36,11 @@ page numbers, industry workflows, or source values are embedded in the implement
 
 ## Browser completion notifications
 
-Streamlit 1.53+ is required for the frameless component. The user enables notifications
-with **Enable completion notifications**, accepts the browser permission, and can enable
-**Play a short sound**. **Test notification** verifies settings and re-arms sound after
-a refresh. Permission is requested only from the user's button click.
+Streamlit 1.53+ is required for the frameless component. As updated in v85, the user
+enables notifications with the **Completion notifications** switch and accepts the
+browser permission. **Send test** verifies delivery. All messages are silent; the
+sound preference and audio playback have been removed. Permission is requested only
+from the user's switch click.
 
 Notifications fire after the PowerPoint passes export checks, the download button is
 available, and progress reaches 100%. A failed export never emits a completion event.

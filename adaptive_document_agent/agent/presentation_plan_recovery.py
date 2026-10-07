@@ -308,6 +308,7 @@ class PresentationPlanRecovery:
         closing = self._risks_slide(
             result, base.slides[2], allowed_insight_ids=topic_insight_ids,
             include_summary_insights=True,
+            topic_observation_groups=[set(theme.observation_ids) for theme in themes],
         )
         base.slides = [
             *base.slides[:3], *analysis_slides,
@@ -597,6 +598,7 @@ class PresentationPlanRecovery:
         cls, result: PipelineResult, summary: PresentationSlide,
         *, allowed_insight_ids: set[str] | None = None,
         include_summary_insights: bool = False,
+        topic_observation_groups: list[set[str]] | None = None,
     ) -> PresentationSlide | None:
         """Close with sourced implications and monitoring points, not metric names."""
         summary_ids = set(summary.insight_ids)
@@ -662,6 +664,21 @@ class PresentationPlanRecovery:
             groups.append(candidates)
         # Lead with validated findings. A generic monitoring sentence must not
         # displace an already verified outcome just to fill a watch-item quota.
+        if topic_observation_groups:
+            # Preserve model priority while giving distinct model-selected
+            # questions a representative conclusion before repeated findings
+            # on one question consume the closing capacity.
+            covered = set()
+            representatives, repeated = [], []
+            for item, statement in groups[0]:
+                inputs = set(links.get(item.id, []))
+                memberships = {i for i, ids in enumerate(topic_observation_groups) if inputs & ids}
+                if memberships - covered:
+                    representatives.append((item, statement))
+                    covered.update(memberships)
+                else:
+                    repeated.append((item, statement))
+            groups[0] = representatives + repeated
         ordered = groups[0] + groups[1]
         has_watch_item = any(candidate in groups[1] for candidate in ordered[:4])
         for item, statement in ordered[:4]:

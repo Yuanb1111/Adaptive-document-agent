@@ -277,7 +277,7 @@ def brief_items(result: PipelineResult):
 
 
 def display_brief(result: PipelineResult):
-    """Use the editorial brief or evidence-bound facts from selected charts.
+    """Use the editorial brief or facts from the model-selected evidence.
 
     The presentation plan selects topics semantically. This fallback only
     formats the selected, comparable observations when model copy cannot pass
@@ -302,10 +302,9 @@ def display_brief(result: PipelineResult):
         key = slide.section_id or normalized(label)
         if key not in topics:
             topics[key] = (label, {})
-        for cid in slide.chart_ids:
-            if cid not in charts:
-                continue
-            chart = charts[cid]
+        selected = [charts[cid] for cid in slide.chart_ids if cid in charts]
+        selected.extend(_selected_table_series(slide, index, result))
+        for chart in selected:
             fact = _brief_fact_for_chart(chart, index)
             if fact is not None:
                 signature = _brief_chart_signature(chart, index)
@@ -329,6 +328,47 @@ def display_brief(result: PipelineResult):
             pages = sorted({page for fact in facts.values() for page in fact["pages"]})
             items.append(BriefItem(label, ' '.join(fact["text"] for fact in facts.values()), pages))
     return 'Executive Summary', items
+
+
+def _selected_table_series(slide, index, result):
+    """Adapt selected table cells to the same comparable-series fact checks.
+
+    Presentation format does not determine summary eligibility. Each series
+    still needs valid, page-bound values and a consistent source scope; no
+    unrelated observation is retrieved just to fill a summary.
+    """
+    from collections import defaultdict
+    from adaptive_document_agent.models import ChartPlan
+    from adaptive_document_agent.document_model.series import metric_identity_key
+    from .presentation_evidence import (
+        ambiguous_source_table_ids, evidence_groups, observation_uses_ambiguous_table,
+    )
+
+    ids = list(slide.observation_ids)
+    ids.extend(oid for block in slide.visual_blocks for oid in block.observation_ids)
+    ambiguous = ambiguous_source_table_ids(result)
+    scopes = defaultdict(list)
+    for identifier in dict.fromkeys(ids):
+        item = index.get(identifier)
+        if (item is None or item.value is None or not item.evidence
+                or item.validation_status != 'valid' or item.anomaly_notes
+                or observation_uses_ambiguous_table(item, ambiguous)):
+            continue
+        scopes[(metric_identity_key(item), item.parent_section)].append(item)
+    series = []
+    for scope in scopes.values():
+        for group in evidence_groups(scope):
+            # Conflicting observations stay in the data, never silently choose
+            # the more confident cell as a summary endpoint.
+            values = defaultdict(set)
+            for item in group:
+                values[item.period].add(item.value)
+            if any(len(points) > 1 for points in values.values()):
+                continue
+            series.append(ChartPlan(id=f'brief-table-{len(series)}', title=slide.title,
+                chart_type='table', question=slide.message or slide.title,
+                observation_ids=[item.id for item in group]))
+    return series
 
 
 def _brief_chart_signature(chart, index):

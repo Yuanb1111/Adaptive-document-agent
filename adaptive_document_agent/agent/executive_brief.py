@@ -2,7 +2,7 @@
 import json
 from pydantic import BaseModel, Field
 from adaptive_document_agent.models import PipelineResult
-from adaptive_document_agent.models.executive_brief import ExecutiveBrief
+from adaptive_document_agent.models.executive_brief import BriefQuote, ExecutiveBrief, ExecutiveBriefItem
 from adaptive_document_agent.services.brief_context import adjacent_definition_excerpts
 from adaptive_document_agent.services.llm import LLMGateway
 from .prompting import load_prompt, untrusted_document_message
@@ -18,14 +18,21 @@ def _selected_topic_pages(result: PipelineResult, available: set[int]) -> list[t
     if result.presentation_plan is None:
         return []
     topics = []
+    positions = {}
     for slide in result.presentation_plan.slides:
         if slide.slide_type != 'analysis':
             continue
+        identity = slide.section_id or slide.theme_id or slide.section_title or slide.title
         source_pages = [page for page in slide.source_pages if page in available]
+        if identity in positions:
+            retained = topics[positions[identity]][1]
+            retained.extend(page for page in source_pages if page not in retained)
+            continue
         if source_pages:
+            if len(topics) >= 10:
+                continue
+            positions[identity] = len(topics)
             topics.append((slide.section_title or slide.title, source_pages))
-        if len(topics) == 4:
-            break
     return topics
 
 
@@ -87,11 +94,55 @@ class ExecutiveBriefWriter:
         included_topics = [(title, source_pages) for title, source_pages in included_topics if source_pages]
         payload = {'user_focus': result.profile.analysis_focus,
                    'analysis_scope': result.profile.analysis_page_ranges,
+                   'output_limits': {
+                       'label_characters': ExecutiveBriefItem.model_json_schema()['properties']['label']['maxLength'],
+                       'text_characters': ExecutiveBriefItem.model_json_schema()['properties']['text']['maxLength'],
+                       'quote_characters': BriefQuote.model_json_schema()['properties']['text']['maxLength'],
+                       'quotes_per_item': ExecutiveBriefItem.model_json_schema()['properties']['evidence']['maxItems'],
+                   },
                    'selected_analysis_topics': [{'title': title, 'pages': source_pages}
                                                 for title, source_pages in included_topics],
+                   'source_table_guide': _table_evidence_guide(result, excerpts),
                    'source_excerpts': [{'page': p, 'text': text, 'truncated': len(pages[p]) > len(text)}
                                        for p, text in excerpts.items()]}
         messages = [{'role': 'system', 'content': load_prompt('executive_brief.txt')},
                     untrusted_document_message(json.dumps(payload, ensure_ascii=False))]
         return generate_with_item_repair(self.gateway, messages, result=result, excerpts=excerpts,
                                          topics=included_topics, source_context=payload)
+
+
+def _table_evidence_guide(result: PipelineResult, excerpts: dict[int, str]) -> list[dict]:
+    """Expose source-native row/header bindings, never computed briefing copy.
+
+    A guide entry is included only when its complete ordered cells are present
+    in the exact excerpt. It cannot authorize a claim by itself: literal quotes
+    and the existing table-unit/date validation are still required.
+    """
+    from adaptive_document_agent.services.source_quotes import normalize_quote
+
+    guide = []
+    remaining = 16000
+    for page in result.document.pages:
+        if page.page_number not in excerpts:
+            continue
+        text = normalize_quote(excerpts[page.page_number])
+        for table in page.tables:
+            headers = [line for line in table.raw_header_lines
+                       if line.strip() and normalize_quote(line) in text]
+            rows = []
+            for row in table.rows:
+                cells = [str(cell).strip() for cell in row.cells if cell and str(cell).strip()]
+                if (row.alignment_status != 'resolved' or len(cells) < 2
+                        or normalize_quote(' '.join(cells)) not in text):
+                    continue
+                cost = sum(map(len, cells))
+                if cost > remaining:
+                    continue
+                rows.append(cells)
+                remaining -= cost
+            if rows:
+                guide.append({'page': page.page_number, 'table_id': table.table_id,
+                              'literal_header_lines': headers, 'ordered_source_rows': rows})
+            if remaining <= 0:
+                return guide
+    return guide

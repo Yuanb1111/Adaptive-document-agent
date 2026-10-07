@@ -36,6 +36,11 @@ def compile_topic_plan(result: PipelineResult) -> PresentationPlan:
     PresentationPlanValidator().validate(plan, result)
     plan = stamp_editorial_review(plan, result, origin="topic_compilation")
     for issue in result.validation_warnings:
+        if issue.code == "presentation_topic_coverage_unresolved":
+            from .topic_coverage_review import coverage_review_pending
+            if coverage_review_pending(result):
+                plan.editorial_status = "needs_review"
+            continue  # The concise editorial finding links to the full audit.
         if issue.code in {"presentation_topics_unavailable", "presentation_topic_claims_withheld",
                           "presentation_closing_claim_withheld"}:
             plan.editorial_status = "needs_review"
