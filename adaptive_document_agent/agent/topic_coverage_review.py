@@ -18,6 +18,7 @@ from adaptive_document_agent.services.llm.exceptions import LLMResponseError, LL
 from .prompting import load_prompt, untrusted_document_message
 
 MAX_REVIEW_CHARACTERS = 120_000
+MAX_REVIEW_BATCHES = 8
 
 
 class CoverageDecision(BaseModel):
@@ -102,10 +103,8 @@ def review_topic_coverage(
             message=json.dumps({**audit, **details}, ensure_ascii=False)))
 
     if len(encoded) > MAX_REVIEW_CHARACTERS:
-        record("presentation_topic_coverage_unresolved", "warning", {
-            "reason": "Complete coverage context exceeds the bounded review budget; no series was silently sampled.",
-            "context_characters": len(encoded), "limit": MAX_REVIEW_CHARACTERS})
-        return selection
+        return _review_bounded(selection, candidates, lookup, primary_pages,
+                               review_payload, gateway, validate, record)
     reviewed = None
     try:
         reviewed = gateway.generate_structured([
@@ -146,3 +145,107 @@ def review_topic_coverage(
             omitted.add(decision.series_id)
     record("presentation_topic_coverage_review", "info", {"review": reviewed.model_dump(mode="json")})
     return revised
+
+
+def _review_bounded(selection, candidates, lookup, primary_pages, payload, gateway, validate, record):
+    """Review all facts in bounded batches and commit only a complete valid merge."""
+    from .coverage_review_context import compact_context, batch_context, encode
+    compact = compact_context(payload)
+    current = selection.model_copy(deep=True)
+    remaining = list(candidates)
+    decisions = {}
+    batches = []
+    try:
+        while remaining:
+            represented = {o.id for topic in current.topics for sid in topic.series_ids for o in lookup[sid]}
+            # Exact overlapping views are already structurally represented by
+            # accepted semantic choices, not chosen by a Python importance rank.
+            covered = [sid for sid in remaining if {o.id for o in lookup[sid]} <= represented]
+            for sid in covered:
+                decisions[sid] = CoverageDecision(series_id=sid, decision='include',
+                    reason='All source observations are represented in an accepted model-selected view.')
+            remaining = [sid for sid in remaining if sid not in set(covered)]
+            if not remaining:
+                break
+            if len(batches) >= MAX_REVIEW_BATCHES:
+                raise ValueError('Complete coverage review exceeds the bounded batch count; no series was silently sampled.')
+            if len(encode(compact)) <= MAX_REVIEW_CHARACTERS and not batches:
+                requested = remaining[:]
+                context = {**compact, 'current_selection': current.model_dump(mode='json'),
+                           'series_requiring_coverage_decision': requested}
+            else:
+                requested = []
+                for sid in remaining:
+                    proposal = batch_context(compact, current, [*requested, sid])
+                    if len(encode(proposal)) > MAX_REVIEW_CHARACTERS:
+                        break
+                    requested.append(sid)
+                if not requested:
+                    raise ValueError('One complete series and accepted context exceed the bounded review budget; no series was silently sampled.')
+                context = batch_context(compact, current, requested)
+            encoded = encode(context)
+            reviewed = gateway.generate_structured([
+                {'role': 'system', 'content': load_prompt('presentation_topic_selection.txt') + '\n\n'
+                 + load_prompt('presentation_topic_coverage_review.txt') + '\n'
+                 'For a bounded batch, retain every current selected source observation. '
+                 'Choose only series with full evidence in this request; deferred catalog entries have no decision yet. '
+                 'Read point_encoding when present; factored constants apply to every ordered point.'},
+                untrusted_document_message(encoded),
+            ], TopicCoverageReview, stage='presentation', allow_repair=False)
+            batches.append({'series_ids': requested, 'context_characters': len(encoded),
+                            'review': reviewed.model_dump(mode='json')})
+            revised = PresentationTopicSelection(topics=reviewed.topics, omissions=reviewed.omissions)
+            validate(revised, lookup, primary_pages=primary_pages)
+            previous_ids = {sid for topic in current.topics for sid in topic.series_ids}
+            final_ids = {sid for topic in revised.topics for sid in topic.series_ids}
+            if final_ids - previous_ids - set(requested):
+                raise ValueError('Batch review selected deferred evidence without its complete context.')
+            final_observations = {o.id for sid in final_ids for o in lookup[sid]}
+            if not represented <= final_observations:
+                raise ValueError('Batch review removed accepted source evidence.')
+            local = {d.series_id: d for d in reviewed.coverage_decisions}
+            if len(local) != len(reviewed.coverage_decisions) or set(local) != set(requested):
+                raise ValueError('Coverage review must decide each requested series exactly once.')
+            for sid, decision in local.items():
+                included = {o.id for o in lookup[sid]} <= final_observations
+                if not decision.reason.strip() or (decision.decision == 'include') != included:
+                    raise ValueError('Coverage decision must match the evidence actually selected.')
+            decisions.update(local)
+            # Carry model-authored reasons forward, including earlier batches.
+            omitted = {o.series_id for o in revised.omissions}
+            for omission in current.omissions:
+                if len(revised.omissions) >= 12:
+                    break
+                if omission.series_id not in final_ids and omission.series_id not in omitted:
+                    revised.omissions.append(omission.model_copy(deep=True))
+                    omitted.add(omission.series_id)
+            current = revised
+            remaining = [sid for sid in remaining if sid not in local]
+        final_ids = {sid for topic in current.topics for sid in topic.series_ids}
+        represented = {o.id for sid in final_ids for o in lookup[sid]}
+        for sid, decision in list(decisions.items()):
+            if decision.decision == 'omit' and {o.id for o in lookup[sid]} <= represented:
+                # A later accepted complete composition can represent an earlier
+                # excluded individual view. Keep its semantic decision in the
+                # batch audit and reconcile only final structural coverage.
+                decisions[sid] = CoverageDecision(series_id=sid, decision='include',
+                    reason='Represented by a later model-selected complete view; original review: ' + decision.reason)
+        if set(decisions) != set(candidates):
+            raise ValueError('Complete coverage review left series without a decision.')
+        omitted = {o.series_id for o in current.omissions}
+        for decision in decisions.values():
+            if len(current.omissions) >= 12:
+                break
+            if decision.decision == 'omit' and decision.series_id not in omitted:
+                current.omissions.append(PresentationOmission(series_id=decision.series_id, reason=decision.reason))
+                omitted.add(decision.series_id)
+        validate(current, lookup, primary_pages=primary_pages)
+    except (LLMResponseError, LLMTransportError, ValueError) as exc:
+        record('presentation_topic_coverage_unresolved', 'warning', {
+            'reason': str(exc), 'batches': batches, 'unreviewed_series_ids': remaining,
+            'context_characters': len(encode(payload)), 'limit': MAX_REVIEW_CHARACTERS})
+        return selection
+    record('presentation_topic_coverage_review', 'info', {'batches': batches,
+        'review': {**current.model_dump(mode='json'),
+                   'coverage_decisions': [decisions[sid].model_dump(mode='json') for sid in candidates]}})
+    return current

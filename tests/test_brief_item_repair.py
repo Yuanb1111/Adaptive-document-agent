@@ -14,7 +14,9 @@ from tests.test_executive_brief import gateway, payload, result_for
 
 
 def item(text, page=1, label='Finding'):
-    return payload(text, page, label)['items'][0]
+    value = payload(text, page, label)['items'][0]
+    value['quantity_representations'] = []
+    return value
 
 
 def audited(result):

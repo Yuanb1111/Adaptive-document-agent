@@ -84,6 +84,17 @@ def select_key_figures(result: PipelineResult, charts: list) -> list[KeyFigure]:
         return []
     by_chart = {chart.id: chart for chart in charts}
     observations = {item.id: item for item in result.observations}
+    from adaptive_document_agent.validation.topic_period_consistency import _source_row
+    selected_chart_ids = {cid for slide in result.presentation_plan.slides if slide.slide_type == 'analysis'
+                          for cid in slide.chart_ids}
+    selected_views = {}
+    for cid in selected_chart_ids:
+        chart = by_chart.get(cid)
+        if chart:
+            group = [observations[oid] for oid in chart.observation_ids if oid in observations]
+            row = _source_row(group) if group else None
+            if row is not None:
+                selected_views.setdefault(row, []).append(chart)
     output, seen = [], set()
     for slide in result.presentation_plan.slides:
         if slide.slide_type != 'analysis':
@@ -95,6 +106,15 @@ def select_key_figures(result: PipelineResult, charts: list) -> list[KeyFigure]:
             figure = _figure(chart, observations, slide.section_title or slide.title)
             if figure is None:
                 continue
+            row = _source_row([observations[oid] for oid in chart.observation_ids if oid in observations])
+            peers = [_figure(view, observations, figure.topic) for view in selected_views.get(row, [])]
+            peers = [peer for peer in peers if peer is not None]
+            if peers:
+                # Keep the model-selected measure; prefer its latest selected,
+                # internally comparable view. Never retrieve an unselected row
+                # or compare an annual value directly with an interim value.
+                figure = max([figure, *peers], key=lambda candidate: period_sort_key(
+                    observations[candidate.observation_ids[-1]].period))
             identity = figure.label.casefold(), figure.period, figure.value
             if identity in seen:
                 continue
@@ -124,7 +144,7 @@ def render_key_figures(presentation, figures: list[KeyFigure]):
 
     if not 4 <= len(figures) <= 6:
         raise ValueError('Key Figures requires four to six supported measures.')
-    slide, top = _base(presentation, 'Key Figures', 'Latest reported levels and comparable prior values')
+    slide, top = _base(presentation, 'Key Figures', 'Latest selected levels and comparable prior values')
     columns = 2 if len(figures) == 4 else 3
     rows = (len(figures) + columns - 1) // columns
     left, gap_x, gap_y = .55, .25, .24

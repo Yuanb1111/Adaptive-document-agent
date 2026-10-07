@@ -26,6 +26,8 @@ def result_for(texts):
 
 def payload(text, page=1, label='Performance'):
     return {'title':'Key takeaways','items':[{'label':label,'text':text,
+                                            'quantity_representations': [],
+                                            'comparison_table': None,
                                             'evidence':[{'page':page,'text':text}]}]}
 
 

@@ -85,6 +85,23 @@ def render_complete_summary(presentation: Any, title: str, items: list[BriefItem
     from .slide_compositor import _base
     from .pptx_export import _source_footer, _text, FOURIER_DARK, FOURIER_MUTED, FOURIER_PURPLE
 
+    if any(item.table for item in items):
+        from .brief_comparison_rendering import render_comparison
+        slides, pending = [], []
+        for item in items:
+            if not item.table:
+                pending.append(item)
+                continue
+            if pending:
+                slides.extend(render_complete_summary(presentation, title, pending, notes=notes,
+                                                      single_column=single_column))
+                pending = []
+            slides.extend(render_comparison(presentation, title, item, notes=notes))
+        if pending:
+            slides.extend(render_complete_summary(presentation, title, pending, notes=notes,
+                                                  single_column=single_column))
+        return slides
+
     remaining = [item for item in items if item.title.strip() or item.text.strip()]
     full_copy = "\n\n".join(f"{item.title}\n{item.text}\n{_source_footer(item.pages)}" for item in items)
     full_notes = "\n\n".join(value for value in (notes, full_copy) if value)

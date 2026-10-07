@@ -543,6 +543,13 @@ This gate does not certify visual taste, exact glyph clipping, PowerPoint/Google
 - Successful schema-validated gateway outputs (including global merge, semantic mappings, insights and planning) are checkpointed using the full request, schema, stage, model, endpoint, privacy and temperature. Downstream evidence validation still runs on replay. Completed analyses also have a checkpoint. **Regenerate PowerPoint only** reuses analysis but clears native/render caches and reruns export gates; **Reanalyse PDF (ignore model cache)** forces new model work while reusing PDF/table extraction. `EXTRACTION_VERSION`, `ANALYSIS_VERSION`, and `PIPELINE_VERSION` separate extraction, analysis and presentation invalidation; bump the applicable contract when changing its behavior. Public deployment checkpoints stay in the existing per-session temporary directory: they are not cross-user or guaranteed to survive a reboot/new session.
 
 The v85 Agent improvements preserve source headings, retrieve bounded narrative context, and ask the model to review evidence omitted from its topic selection. Table topics remain eligible for the fallback executive summary. See [evidence context and coverage](docs/PPT_AGENT_REVIEW_V85.md) for limits and cache versions. Completion notifications now use a compact switch card and silent messages only.
+
+The v86 presentation update preserves unrelated validated copy during local claim
+repair, reviews complete large catalogs in bounded transactional batches, supports
+explicit source-bound magnitude wording and editable briefing comparison tables,
+and shows the latest selected comparable view of a measure in Key Figures. See
+[local repair and bounded coverage](docs/PPT_AGENT_REVIEW_V86.md) for validation
+contracts, remaining limits and how to regenerate existing results.
 - Transport failures receive at most one transient retry and never trigger format repair. Invalid structured output gets at most one format-only repair containing the failed output/schema, not the full original document. Evidence-specific repairs remain explicit at the validator caller. `llm_usage` records stage, format status, cache hits, and individual transport attempts with durations and exception types; no request text or credentials are logged. Token counts for failed transport attempts may be unavailable.
 
 These changes reduce redundant calls and waiting; they do not guarantee an end-to-end duration. Compare the same PDF/model settings on cold runs separately from cached re-exports, and review analytical quality before choosing faster stage models.

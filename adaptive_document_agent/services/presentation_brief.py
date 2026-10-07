@@ -19,6 +19,7 @@ class BriefItem:
     text: str
     pages: list[int] = field(default_factory=list)
     short_title: str = ""
+    table: Any | None = None
 
 
 def omit_redundant_summary(plan: Any, summary: Any) -> bool:

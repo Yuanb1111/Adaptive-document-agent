@@ -86,7 +86,8 @@ def add_single_metric_slide(presentation, plan: ChartPlan, analysis: SingleMetri
     elif analysis.percentage_change is not None:
         rate_label, rate_value, rate_period = "Percentage change", f"{analysis.percentage_change:+.1f}%", f"{first.period} to {last.period}"
     else:
-        rate_label, rate_value, rate_period = "Peak reported value", value(analysis.peak.value, level=True), analysis.peak.period
+        rate_label, rate_value, rate_period = "Reported range", (
+            value(analysis.trough.value, level=True) + ' to ' + value(analysis.peak.value, level=True)), 'Within displayed periods'
     cards = [
         ("Start value", value(first.value, level=True), first.period),
         ("End value", value(last.value, level=True), last.period),

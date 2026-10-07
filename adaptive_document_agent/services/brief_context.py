@@ -236,7 +236,7 @@ def preserve_brief_context(item: ExecutiveBriefItem, pages: dict[int, str]) -> C
     source page. The authoring schema's copy budget never truncates display text;
     the existing renderer paginates this complete copy at its fixed line spacing.
     """
-    text = _complete_scenarios(item.text, item.evidence)
+    text = item.text if item.comparison_table else _complete_scenarios(item.text, item.evidence)
     text, additions = _restore_cadence(text, item.evidence, pages)
     return ContextualBriefCopy(text, [*item.evidence, *additions])
 

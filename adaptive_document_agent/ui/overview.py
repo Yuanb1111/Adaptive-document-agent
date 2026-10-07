@@ -18,6 +18,12 @@ def render(st, result: PipelineResult) -> None:
         st.subheader(_literal(title))
         for item in items:
             st.markdown(f"**{_literal(item.title)}** — {_literal(item.text)}")
+            if item.table:
+                # Escape all document-derived cells; Markdown cannot load media.
+                header = '| ' + ' | '.join(_literal(c) for c in item.table.headers) + ' |'
+                divider = '| ' + ' | '.join('---' for _ in item.table.headers) + ' |'
+                rows = ['| ' + ' | '.join(_literal(c) for c in row) + ' |' for row in item.table.rows]
+                st.markdown('\n'.join([header, divider, *rows]))
             st.caption("Source pages: " + ", ".join(map(str, item.pages)))
         with st.expander("Document context and analysis coverage", expanded=False):
             _context(st, result)

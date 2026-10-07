@@ -210,10 +210,26 @@ def validate_executive_brief(brief: ExecutiveBrief, result: PipelineResult, *,
             errors.append('Brief labels and text must be nonempty.')
         elif _UNIT_ONLY_LABEL.fullmatch(item.label):
             errors.append(f'{item.label}: label is a unit header, not a finding or metric name.')
-        key = normalized(item.text)
+        from adaptive_document_agent.models.executive_brief import brief_claim_text
+        key = normalized(brief_claim_text(item, include_label=False))
         if key in seen:
             errors.append('Brief repeats a finding.')
         seen.add(key)
+        if item.comparison_table:
+            # A table's semantic organisation belongs to the model. Its cells
+            # must remain literal item-bound source passages, including units
+            # and assumptions, rather than reformulated or calculated values.
+            for row in item.comparison_table.rows:
+                for cell in row:
+                    if not any(normalized(cell) in normalized(q.text) for q in item.evidence):
+                        errors.append(f'{item.label}: comparison table cell lacks literal item-bound evidence.')
+            from .brief_context import _CONDITION, _outcomes
+            shown = _outcomes(brief_claim_text(item))
+            for quote in item.evidence:
+                if len(_CONDITION.findall(quote.text)) < 2:
+                    continue
+                if any(not values <= shown.get(unit, set()) for unit, values in _outcomes(quote.text).items()):
+                    errors.append(f'{item.label}: comparison table omits a quoted conditional outcome or its unit.')
         allowed = set()
         quantities = set()
         for quote in item.evidence:
@@ -231,15 +247,18 @@ def validate_executive_brief(brief: ExecutiveBrief, result: PipelineResult, *,
         quantities = {q for q in quantities if q[1] not in table_context.misparsed_positive_numbers}
         quantities.update(table_context.quantities)
         quantities = {canonical_quantity(*quantity) for quantity in quantities}
-        errors.extend(f'{item.label}: {error}.' for error in table_context.basis_errors(item.label + ' ' + item.text))
+        from .brief_quantity_representation import magnitude_claim_text
+        claim_text, representation_errors = magnitude_claim_text(item, table_context, quantities)
+        errors.extend(f'{item.label}: {error}.' for error in representation_errors)
+        errors.extend(f'{item.label}: {error}.' for error in table_context.basis_errors(claim_text))
         # The deterministic table model supplies a unit that a body-cell quote
         # cannot repeat.  Add only the exact resolved values, not every number
         # from a percentage-bearing page.
         allowed.update(value + '%' for value in source_percentages)
-        claimed = PresentationPlanValidator._numbers(table_context.numeric_claim_text(item.label + ' ' + item.text))
+        claimed = PresentationPlanValidator._numbers(table_context.numeric_claim_text(claim_text))
         if claimed - allowed:
             errors.append(f'{item.label}: unsupported numeric claims {sorted(claimed - allowed)}.')
-        for currency, value, unit in _quantities(item.label + ' ' + item.text):
+        for currency, value, unit in _quantities(claim_text):
             currency, value, unit = canonical_quantity(currency, value, unit)
             # A PDF table often stores the percentage sign once in its column
             # header.  The source quote then legitimately contains a bare cell
@@ -272,7 +291,8 @@ def brief_items(result: PipelineResult):
         contextual = preserve_brief_context(item, pages)
         text = restore_percentage_symbols(contextual.text, [q.text for q in contextual.evidence],
                                           source_percentages=_quoted_table_percentages(item, result))
-        items.append(BriefItem(item.label, text, sorted({q.page for q in contextual.evidence})))
+        items.append(BriefItem(item.label, text, sorted({q.page for q in contextual.evidence}),
+                               table=item.comparison_table))
     return items
 
 

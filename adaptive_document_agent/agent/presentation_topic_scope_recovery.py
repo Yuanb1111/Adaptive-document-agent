@@ -114,6 +114,22 @@ def recover_unscoped_topic_claims(plan: PresentationPlan, result: PipelineResult
         }, ensure_ascii=False, sort_keys=True))
         slide.title = question
     rebuild_selected_topic_summary(result, candidate)
+    # A local withdrawal must not rebuild unrelated, already repaired summary
+    # claims from the raw takeaways. That can revive another rejected scope
+    # and make the no-new-errors gate reject every otherwise valid topic.
+    ordered_topics = [topic for topic in result.presentation_topics.topics
+                      if topic.id in {theme.id for theme in candidate.themes}]
+    for summary in candidate.slides:
+        original = summaries.get(summary.id)
+        if (original is None or len(summary.bullets) != len(original.bullets)
+                or len(summary.bullets) != len(ordered_topics)):
+            continue
+        for index, topic in enumerate(ordered_topics):
+            if topic.id not in affected:
+                summary.bullets[index] = original.bullets[index]
+                if (len(original.bullet_observation_ids) == len(original.bullets)
+                        and len(summary.bullet_observation_ids) == len(summary.bullets)):
+                    summary.bullet_observation_ids[index] = list(original.bullet_observation_ids[index])
     # Summary reconstruction can reintroduce exact repeated-source records
     # from the retained topic catalog. Reapply the same provenance alignment
     # used by final claim preparation before comparing the candidate's errors;

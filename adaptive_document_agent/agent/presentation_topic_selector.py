@@ -60,6 +60,8 @@ def series_directory(result: PipelineResult) -> tuple[list[dict[str, object]], d
             "canonical_metric": first.metric_canonical if first.metric_canonical != first.metric_original else None,
             "periods": periods,
             "unit": first.unit,
+            "raw_unit": first.raw_unit,
+            "parent_section": first.parent_section,
             "currency": first.currency,
             "entity": first.entity,
             "dimensions": {
@@ -93,6 +95,7 @@ def series_directory(result: PipelineResult) -> tuple[list[dict[str, object]], d
         directory.append({
             "id": identifier, "metric": chart.title, "canonical_metric": None,
             "periods": matrix.periods, "unit": members[0].unit, "currency": members[0].currency,
+            "raw_unit": members[0].raw_unit, "parent_section": members[0].parent_section,
             "entity": members[0].entity,
             "dimensions": {"composition_categories": matrix.categories,
                            "source_tables": sorted({o.source_table for o in members if o.source_table}),
@@ -143,7 +146,7 @@ class PresentationTopicSelector:
             and page.page_number not in primary_pages and page.text.strip()
         ]
         columns = (
-            "id", "metric", "periods", "unit", "currency", "entity", "dimensions",
+            "id", "metric", "periods", "unit", "raw_unit", "parent_section", "currency", "entity", "dimensions",
             "source_sections", "source_pages", "observation_count",
             "first_reported_value", "last_reported_value", "evidence_status",
             "visual_kind",

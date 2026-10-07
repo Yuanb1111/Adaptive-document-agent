@@ -8,7 +8,7 @@ from typing import Annotated, Any
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError, create_model
 
 from adaptive_document_agent.models import PipelineResult, ValidationIssue
-from adaptive_document_agent.models.executive_brief import ExecutiveBrief, ExecutiveBriefItem
+from adaptive_document_agent.models.executive_brief import ExecutiveBrief, ExecutiveBriefItem, brief_claim_text
 from adaptive_document_agent.services.executive_brief import normalized, validate_executive_brief
 from adaptive_document_agent.services.llm import LLMGateway
 from adaptive_document_agent.services.llm.exceptions import (
@@ -82,7 +82,7 @@ def _classify(original: dict[str, Any], result: PipelineResult, excerpts: dict[i
             if normalized(quote.text) in normalized(excerpts.get(quote.page, '')):
                 supported_numbers.update(PresentationPlanValidator._numbers(quote.text))
         errors = _item_errors(item, result, excerpts)
-        key = normalized(item.text)
+        key = normalized(brief_claim_text(item, include_label=False))
         if key in seen:
             errors.append('Brief repeats a finding.')
         if errors:
@@ -116,7 +116,7 @@ def _salvage(values: list[Any], locked: dict[int, ExecutiveBriefItem], title: An
              result: PipelineResult, excerpts: dict[int, str], topics):
     """Preserve every lock; a patch can never displace it through duplication."""
     retained = {}
-    seen = {normalized(item.text) for item in locked.values()}
+    seen = {normalized(brief_claim_text(item, include_label=False)) for item in locked.values()}
     for index, value in enumerate(values):
         if index in locked:
             retained[index] = locked[index]
@@ -125,9 +125,9 @@ def _salvage(values: list[Any], locked: dict[int, ExecutiveBriefItem], title: An
             item = ExecutiveBriefItem.model_validate(value)
         except ValidationError:
             continue
-        if not _item_errors(item, result, excerpts) and normalized(item.text) not in seen:
+        if not _item_errors(item, result, excerpts) and normalized(brief_claim_text(item, include_label=False)) not in seen:
             retained[index] = item
-            seen.add(normalized(item.text))
+            seen.add(normalized(brief_claim_text(item, include_label=False)))
     if not 3 <= len(retained) <= 7:
         return None, []
     # The existing salvage path permits a neutral title when the original title

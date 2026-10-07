@@ -360,3 +360,37 @@ def test_summary_only_ambiguity_is_preserved_in_withheld_audit_errors():
     assert entry["errors"]
     assert any("slide_executive_summary" in message and "no unique source metric" in message
                for message in entry["errors"])
+
+
+def test_nonnumeric_research_question_with_direction_words_cannot_drop_topics():
+    result = _synthetic_result('metric_alias')
+    topic = result.presentation_topics.topics[1]
+    topic.takeaway = 'Units rose through FY2025.'
+    topic.question = 'How did Units increase over the reported periods?'
+    original = result.model_dump(include=_SOURCE_FIELDS)
+    plan = compile_topic_plan(result)
+    assert {t.id for t in plan.themes} == {'scope', 'volume'}
+    analysis = _analysis(plan, 'volume')
+    assert analysis.analytical_question == topic.question
+    assert analysis.title in {topic.title, topic.question}
+    assert not ClaimValidator().validate_plan(plan, result.observations, result.charts)
+    assert any(topic.takeaway in note for note in plan.editorial_notes)
+    assert result.model_dump(include=_SOURCE_FIELDS) == original
+
+
+def test_local_withdrawal_keeps_unrelated_approved_summary_copy():
+    from adaptive_document_agent.agent.presentation_topic_scope_recovery import recover_unscoped_topic_claims
+    result = _synthetic_result('metric_alias')
+    plan = compile_topic_plan(result)
+    topic, other = result.presentation_topics.topics
+    other.takeaway = 'Units rose.'
+    summary = next(s for s in plan.slides if s.slide_type == 'executive_summary')
+    summary.bullets = [topic.takeaway, other.title]
+    _analysis(plan).title = topic.takeaway
+    issues = ClaimValidator().validate_plan(plan, result.observations, result.charts)
+    assert issues
+    original = result.model_dump(include=_SOURCE_FIELDS)
+    assert recover_unscoped_topic_claims(plan, result, issues)
+    assert next(s for s in plan.slides if s.id == summary.id).bullets == [topic.question, other.title]
+    assert not ClaimValidator().validate_plan(plan, result.observations, result.charts)
+    assert result.model_dump(include=_SOURCE_FIELDS) == original
