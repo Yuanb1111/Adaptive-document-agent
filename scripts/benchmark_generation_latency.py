@@ -36,6 +36,7 @@ def run(args):
     from adaptive_document_agent.models import (
         AnalysisCandidate, DocumentPage, DocumentProfile, Observation, ParsedDocument, PipelineResult, SourceEvidence,
     )
+    from adaptive_document_agent.models.executive_brief import ExecutiveBrief
     from adaptive_document_agent.services.llm import LLMGateway, LLMSettings
     from adaptive_document_agent.services.llm.litellm_provider import LiteLLMProvider
 
@@ -129,7 +130,11 @@ def run(args):
         return answer
 
     output["brief"] = measured(lambda gateway: ExecutiveBriefWriter(gateway).generate(result), [bad, repair_response])
-    assert output["brief"]["result"] == good
+    # Compare the complete model output using the measured revision's defaults.
+    # Keep replay responses unchanged so old/new request-volume comparisons use
+    # identical fixtures; no returned facts or evidence are excluded from checks.
+    expected_brief = ExecutiveBrief.model_validate(good).model_dump(mode="json")
+    assert output["brief"]["result"] == expected_brief
 
     fixture_path = Path(__file__).resolve().parents[1] / "tests/fixtures/candidate_scoring_rationales.json"
     fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
