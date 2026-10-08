@@ -9,6 +9,26 @@ from .presentation_brief import BriefItem, _item_height, _split_profile_item, re
 
 
 def render_closing(presentation, result, plan):
+    # The final source-validated briefing supersedes earlier insight drafts.
+    # Reuse its model-authored findings so a stale watch question cannot
+    # contradict the summary. Comparisons already have dedicated body pages.
+    if result.executive_brief is not None:
+        from .executive_brief import brief_items
+        from .presentation_summary import render_complete_summary
+        findings = [item for item in brief_items(result) if item.table is None]
+        if findings:
+            from adaptive_document_agent.agent.topic_coverage_review import coverage_review_pending
+            pending = coverage_review_pending(result)
+            notes = json.dumps({'executive_brief': result.executive_brief.model_dump(mode='json'),
+                                'superseded_closing_plan': plan.model_dump(mode='json'),
+                                'coverage_review_pending': pending}, ensure_ascii=False)
+            slides = render_complete_summary(presentation, 'Conclusions', findings, notes=notes)
+            if pending:
+                from .pptx_export import _text, FOURIER_MUTED
+                _text(slides[0], 'Coverage review incomplete. Material omissions may remain; complete review before final use.',
+                      .65, 1.05, presentation.slide_width.inches - 1.3, .32,
+                      size=12, color=FOURIER_MUTED).name = 'brief:coverage_status'
+            return slides
     from .pptx_export import (
         _sanitize_investor_narrative, _source_footer, _text,
         FOURIER_DARK, FOURIER_MUTED, FOURIER_PURPLE,

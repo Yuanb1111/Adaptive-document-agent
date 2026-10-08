@@ -29,8 +29,16 @@ try {
   for (const [index, slide] of deck.slides.items.entries()) {
     const layout = await slide.export({format: 'layout'});
     const data = JSON.parse(await layout.text());
-    const frame = data.slide?.frame;
+    const frame = data.slide?.frame || data.slide?.position;
     if (!frame || frame.width * frame.height > 8000000) throw new Error('Pixel limit');
+    data.slide.frame = frame;
+    if (data.schema === 'openai.presentation.layout/v5') {
+      for (const element of data.elements) {
+        const p = element.position;
+        if (p) element.bbox = [p.left, p.top, p.width, p.height];
+        if (element.kind === 'textbox') element.kind = 'shape';
+      }
+    }
     const png = await deck.export({slide, format: 'png', scale: 1});
     await fs.writeFile(path.join(output, `slide-${index + 1}.png`), new Uint8Array(await png.arrayBuffer()));
     await fs.writeFile(path.join(output, `slide-${index + 1}.json`), JSON.stringify(data));

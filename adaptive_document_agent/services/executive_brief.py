@@ -292,7 +292,7 @@ def brief_items(result: PipelineResult):
         text = restore_percentage_symbols(contextual.text, [q.text for q in contextual.evidence],
                                           source_percentages=_quoted_table_percentages(item, result))
         items.append(BriefItem(item.label, text, sorted({q.page for q in contextual.evidence}),
-                               table=item.comparison_table))
+                               table=item.comparison_table, conditions=contextual.conditions))
     return items
 
 

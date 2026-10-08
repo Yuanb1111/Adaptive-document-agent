@@ -41,6 +41,7 @@ _SENTENCE_BREAK = re.compile(r'(?<=[.!?])\s+(?=[A-Z])')
 class ContextualBriefCopy:
     text: str
     evidence: list[BriefQuote]
+    conditions: str = ''
 
 
 def _normalized(text: str) -> str:
@@ -238,7 +239,32 @@ def preserve_brief_context(item: ExecutiveBriefItem, pages: dict[int, str]) -> C
     """
     text = item.text if item.comparison_table else _complete_scenarios(item.text, item.evidence)
     text, additions = _restore_cadence(text, item.evidence, pages)
-    return ContextualBriefCopy(text, [*item.evidence, *additions])
+    evidence = [*item.evidence, *additions]
+    conditions = ''
+    if item.comparison_table:
+        # A model-selected comparison can quote each scenario while missing the
+        # immediately preceding shared assumption. Restore only a literal
+        # conditional clause directly adjoining the first cited scenario.
+        starts = []
+        for quote in item.evidence:
+            if not (_CONDITION.search(quote.text) and _OUTCOME.search(quote.text)):
+                continue
+            source = ' '.join(pages.get(quote.page, '').split())
+            start = source.find(' '.join(quote.text.split()))
+            if start >= 0:
+                starts.append((quote.page, start, source))
+        if starts:
+            page, start, source = min(starts, key=lambda entry: entry[:2])
+            prefix = source[max(0, start - 1800):start].strip()
+            last = _sentences(prefix)[-1] if prefix else ''
+            match = re.search(r'\bassuming\b.+', last, re.I)
+            if match and len(match.group()) <= 700:
+                conditions = match.group().strip()
+                if _normalized(conditions) not in _normalized(text):
+                    evidence.append(BriefQuote(page=page, text=conditions))
+                else:
+                    conditions = ''
+    return ContextualBriefCopy(text, evidence, conditions)
 
 
 def adjacent_definition_excerpts(pages: dict[int, str], selected: dict[int, str]) -> dict[int, str]:

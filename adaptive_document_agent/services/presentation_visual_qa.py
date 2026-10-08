@@ -114,9 +114,19 @@ def _elements(page, slide):
     # Importers may renumber graphicFrame IDs for charts/tables. Match their
     # native, unique name and object kind; do not require importer IDs to survive.
     for e in elements:
-        if e.get("kind") in {"chart", "table"}:
+        if e.get("kind") in {"chart", "table"} or page.layout.get('schema') == 'openai.presentation.layout/v5':
             matches = [s for s in slide.shapes if s.name == e.get("name")
-                       and ((e["kind"] == "chart" and s.has_chart) or (e["kind"] == "table" and s.has_table))]
+                       and ((e["kind"] == "chart" and s.has_chart) or (e["kind"] == "table" and s.has_table)
+                            or (e['kind'] == 'shape' and s.has_text_frame))]
+            if len(matches) > 1 and page.layout.get('schema') == 'openai.presentation.layout/v5':
+                # Shared renderer names such as brief:body are deliberate.
+                # Bind imported IDs only to a unique matching native box;
+                # retain the renderer's actual bounds for subsequent checks.
+                canvas = slide.part.package.presentation_part.presentation
+                sx = page.layout['slide']['frame']['width'] / canvas.slide_width
+                sy = page.layout['slide']['frame']['height'] / canvas.slide_height
+                matches = [s for s in matches if all(abs(a-b) <= 2 for a, b in zip(
+                    e.get('bbox', []), (s.left*sx, s.top*sy, s.width*sx, s.height*sy)))]
             if len(matches) == 1:
                 e["id"] = str(matches[0].shape_id)
     # Layout exports also include placeholder prompt text and off-canvas master

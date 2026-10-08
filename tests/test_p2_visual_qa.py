@@ -259,6 +259,37 @@ def test_importer_renumbered_chart_ids_match_unique_native_names():
     assert qa.verify_presentation(deck_bytes(chart=True), renderer=Renumbering()).report.facts_preserved
 
 
+def test_v5_renderer_renumbered_text_ids_require_unique_native_names():
+    class V5Renumbering(LocalRenderStub):
+        def render(self, raw, directory):
+            pages = super().render(raw, directory)
+            for page in pages:
+                page.layout['schema'] = 'openai.presentation.layout/v5'
+                for e in page.layout['elements']:
+                    e['id'] = 'sh/imported-id'
+            return pages
+    assert qa.verify_presentation(deck_bytes(), renderer=V5Renumbering()).report.facts_preserved
+
+
+def test_v5_duplicate_names_bind_by_unique_geometry_without_hiding_bounds():
+    deck = Presentation(io.BytesIO(deck_bytes()))
+    shape = deck.slides[0].shapes[0]
+    shape.name = 'brief:body'
+    other = deck.slides[0].shapes.add_textbox(Inches(1), Inches(3), Inches(3), Inches(.4))
+    other.name, other.text = 'brief:body', 'A separately positioned finding.'
+    stream = io.BytesIO()
+    deck.save(stream)
+    class Imported(LocalRenderStub):
+        def render(self, raw, directory):
+            pages = super().render(raw, directory)
+            for page in pages:
+                page.layout['schema'] = 'openai.presentation.layout/v5'
+                for e in page.layout['elements']:
+                    e['id'] = 'sh/imported'
+            return pages
+    assert qa.verify_presentation(stream.getvalue(), renderer=Imported()).report.facts_preserved
+
+
 def test_blank_chart_region_blocks_even_with_nonblank_header():
     class BlankChart(LocalRenderStub):
         def render(self, raw, directory):

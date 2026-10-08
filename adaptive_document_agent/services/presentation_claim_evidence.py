@@ -179,6 +179,8 @@ def prepare_presentation_claims(result: PipelineResult, plan: PresentationPlan |
     plan = plan or result.presentation_plan
     if plan is None:
         return []
+    from .presentation_audit_scope import reconcile_audit_scope
+    reconcile_audit_scope(result, plan)
     from adaptive_document_agent.agent.presentation_closing_validation import withhold_cached_closing_claims
     closing_notes = withhold_cached_closing_claims(result, plan)
     from adaptive_document_agent.agent.presentation_insight_recovery import recover_insight_narrative

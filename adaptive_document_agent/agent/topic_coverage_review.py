@@ -16,9 +16,74 @@ from adaptive_document_agent.models.presentation import PresentationOmission
 from adaptive_document_agent.services.llm import LLMGateway
 from adaptive_document_agent.services.llm.exceptions import LLMResponseError, LLMTransportError
 from .prompting import load_prompt, untrusted_document_message
+from .coverage_representation import representation_links
 
 MAX_REVIEW_CHARACTERS = 120_000
 MAX_REVIEW_BATCHES = 8
+
+
+def _validate_batch(reviewed, current, requested, lookup, primary_pages, validate):
+    revised = PresentationTopicSelection(topics=reviewed.topics, omissions=reviewed.omissions)
+    validate(revised, lookup, primary_pages=primary_pages)
+    previous_ids = {sid for topic in current.topics for sid in topic.series_ids}
+    final_ids = {sid for topic in revised.topics for sid in topic.series_ids}
+    if final_ids - previous_ids - set(requested):
+        raise ValueError('Batch review selected deferred evidence without its complete context.')
+    previous = {o.id for sid in previous_ids for o in lookup[sid]}
+    selected = [o for sid in final_ids for o in lookup[sid]]
+    if not previous <= {o.id for o in selected}:
+        raise ValueError('Batch review removed accepted source evidence.')
+    local = {d.series_id: d for d in reviewed.coverage_decisions}
+    if len(local) != len(reviewed.coverage_decisions) or set(local) != set(requested):
+        raise ValueError('Coverage review must decide each requested series exactly once. Missing: '
+                         + ', '.join(sorted(set(requested) - set(local))))
+    links = {sid: representation_links(lookup[sid], selected) for sid in requested}
+    mismatches = [sid for sid, d in local.items() if not d.reason.strip()
+                  or (d.decision == 'include') != (links[sid] is not None)]
+    if mismatches:
+        raise ValueError('Coverage decision must match the evidence actually selected: ' + ', '.join(mismatches))
+    return revised, local, {sid: link for sid, link in links.items() if link is not None}
+
+
+def _review_batch(context, current, requested, lookup, primary_pages, gateway, validate, audit):
+    """One targeted semantic repair; retain all facts and every rejected attempt."""
+    from .coverage_review_context import encode
+    encoded = encode(context)
+    messages = [
+        {'role': 'system', 'content': load_prompt('presentation_topic_selection.txt') + '\n\n'
+         + load_prompt('presentation_topic_coverage_review.txt') + '\n'
+         'Retain every current selected source observation. Choose only fully evidenced series in this request. '
+         'Deferred catalog entries have no decision yet. Read point_encoding; constants apply to every point. '
+         'An include decision needs all facts actually represented, with matching values, periods, units, '
+         'definitions, categories and audit status; matching page numbers or measure names is insufficient.'},
+        untrusted_document_message(encoded),
+    ]
+    for attempt in range(2):
+        reviewed = gateway.generate_structured(messages, TopicCoverageReview,
+                                               stage='presentation', allow_repair=False)
+        entry = {'review': reviewed.model_dump(mode='json')}
+        audit.setdefault('attempts', []).append(entry)
+        audit['review'] = entry['review']
+        try:
+            revised, decisions, links = _validate_batch(reviewed, current, requested,
+                                                       lookup, primary_pages, validate)
+            audit['representation_links'] = links
+            return revised, decisions
+        except ValueError as exc:
+            entry['validation_error'] = str(exc)
+            if attempt:
+                raise
+            feedback = {'validation_error': str(exc),
+                        'rejected_topics': [t.model_dump(mode='json') for t in reviewed.topics]}
+            if len(encoded) + len(encode(feedback)) > MAX_REVIEW_CHARACTERS:
+                feedback.pop('rejected_topics')
+            if len(encoded) + len(encode(feedback)) > MAX_REVIEW_CHARACTERS:
+                raise ValueError('Repair context exceeds the bounded review budget.') from exc
+            messages = messages[:2] + [untrusted_document_message(encode(feedback)),
+                {'role': 'user', 'content': 'Repair this rejected review using the original full evidence context. '
+                 'Return the complete topics and exactly one decision for each requested series. '
+                 'If a material series is absent, select it; do not label it included without its facts. '
+                 'Explicitly explain omissions. Preserve all previously accepted observations.'}]
 
 
 class CoverageDecision(BaseModel):
@@ -120,7 +185,7 @@ def review_topic_coverage(
         final_ids = {sid for topic in revised.topics for sid in topic.series_ids}
         final_observations = {item.id for sid in final_ids for item in lookup[sid]}
         for sid, decision in decisions.items():
-            included = {item.id for item in lookup[sid]} <= final_observations
+            included = representation_links(lookup[sid], [o for selected_sid in final_ids for o in lookup[selected_sid]]) is not None
             if not decision.reason.strip() or (decision.decision == "include") != included:
                 raise ValueError("Coverage decision must match the evidence actually selected.")
         # A completeness review may regroup topics, but must not silently erase
@@ -169,7 +234,8 @@ def _review_bounded(selection, candidates, lookup, primary_pages, payload, gatew
                 break
             if len(batches) >= MAX_REVIEW_BATCHES:
                 raise ValueError('Complete coverage review exceeds the bounded batch count; no series was silently sampled.')
-            if len(encode(compact)) <= MAX_REVIEW_CHARACTERS and not batches:
+            batch_budget = int(MAX_REVIEW_CHARACTERS * .88)
+            if len(encode(compact)) <= batch_budget and not batches:
                 requested = remaining[:]
                 context = {**compact, 'current_selection': current.model_dump(mode='json'),
                            'series_requiring_coverage_decision': requested}
@@ -177,39 +243,20 @@ def _review_bounded(selection, candidates, lookup, primary_pages, payload, gatew
                 requested = []
                 for sid in remaining:
                     proposal = batch_context(compact, current, [*requested, sid])
-                    if len(encode(proposal)) > MAX_REVIEW_CHARACTERS:
+                    if len(encode(proposal)) > batch_budget:
+                        if not requested and len(encode(proposal)) <= MAX_REVIEW_CHARACTERS:
+                            requested.append(sid)  # A complete large series is never split or sampled.
                         break
                     requested.append(sid)
                 if not requested:
                     raise ValueError('One complete series and accepted context exceed the bounded review budget; no series was silently sampled.')
                 context = batch_context(compact, current, requested)
             encoded = encode(context)
-            reviewed = gateway.generate_structured([
-                {'role': 'system', 'content': load_prompt('presentation_topic_selection.txt') + '\n\n'
-                 + load_prompt('presentation_topic_coverage_review.txt') + '\n'
-                 'For a bounded batch, retain every current selected source observation. '
-                 'Choose only series with full evidence in this request; deferred catalog entries have no decision yet. '
-                 'Read point_encoding when present; factored constants apply to every ordered point.'},
-                untrusted_document_message(encoded),
-            ], TopicCoverageReview, stage='presentation', allow_repair=False)
-            batches.append({'series_ids': requested, 'context_characters': len(encoded),
-                            'review': reviewed.model_dump(mode='json')})
-            revised = PresentationTopicSelection(topics=reviewed.topics, omissions=reviewed.omissions)
-            validate(revised, lookup, primary_pages=primary_pages)
-            previous_ids = {sid for topic in current.topics for sid in topic.series_ids}
+            batch_audit = {'series_ids': requested, 'context_characters': len(encoded)}
+            batches.append(batch_audit)
+            revised, local = _review_batch(context, current, requested, lookup,
+                                           primary_pages, gateway, validate, batch_audit)
             final_ids = {sid for topic in revised.topics for sid in topic.series_ids}
-            if final_ids - previous_ids - set(requested):
-                raise ValueError('Batch review selected deferred evidence without its complete context.')
-            final_observations = {o.id for sid in final_ids for o in lookup[sid]}
-            if not represented <= final_observations:
-                raise ValueError('Batch review removed accepted source evidence.')
-            local = {d.series_id: d for d in reviewed.coverage_decisions}
-            if len(local) != len(reviewed.coverage_decisions) or set(local) != set(requested):
-                raise ValueError('Coverage review must decide each requested series exactly once.')
-            for sid, decision in local.items():
-                included = {o.id for o in lookup[sid]} <= final_observations
-                if not decision.reason.strip() or (decision.decision == 'include') != included:
-                    raise ValueError('Coverage decision must match the evidence actually selected.')
             decisions.update(local)
             # Carry model-authored reasons forward, including earlier batches.
             omitted = {o.series_id for o in revised.omissions}

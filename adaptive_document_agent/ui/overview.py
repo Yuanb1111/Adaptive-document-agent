@@ -24,6 +24,8 @@ def render(st, result: PipelineResult) -> None:
                 divider = '| ' + ' | '.join('---' for _ in item.table.headers) + ' |'
                 rows = ['| ' + ' | '.join(_literal(c) for c in row) + ' |' for row in item.table.rows]
                 st.markdown('\n'.join([header, divider, *rows]))
+            if item.conditions:
+                st.markdown(_literal(item.conditions))
             st.caption("Source pages: " + ", ".join(map(str, item.pages)))
         with st.expander("Document context and analysis coverage", expanded=False):
             _context(st, result)

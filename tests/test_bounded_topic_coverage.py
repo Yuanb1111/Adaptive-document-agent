@@ -9,6 +9,39 @@ from tests.test_topic_coverage_review import _fixture, _topic, _observation
 from adaptive_document_agent.agent.presentation_topic_selector import series_directory
 
 
+@pytest.mark.parametrize('repair_succeeds', [True, False])
+def test_bounded_semantic_repair_retains_failed_attempt_and_all_facts(repair_succeeds):
+    from adaptive_document_agent.agent.topic_coverage_review import _review_batch
+    from tests.test_topic_coverage_review import _review
+    result, lookup, annual, interim, adverse, payload = context_fixture()
+    current = PresentationTopicSelection(topics=[_topic(annual)])
+    context = batch_context(compact_context(payload), current, [interim, adverse])
+    bad = _review(annual, interim, adverse)
+    bad.topics = current.topics
+    good = _review(annual, interim, adverse)
+    class Gateway:
+        calls = []
+        def generate_structured(self, messages, model, **kwargs):
+            self.calls.append(messages)
+            return bad if len(self.calls) == 1 or not repair_succeeds else good
+    gateway, audit = Gateway(), {}
+    raw = result.model_dump()
+    if repair_succeeds:
+        revised, decisions = _review_batch(context, current, [interim, adverse], lookup,
+            set(), gateway, PresentationTopicSelector._validate, audit)
+        assert {sid for t in revised.topics for sid in t.series_ids} == {annual, interim, adverse}
+        assert set(decisions) == {interim, adverse}
+        assert set(audit['representation_links']) == {interim, adverse}
+    else:
+        with pytest.raises(ValueError, match='actually selected'):
+            _review_batch(context, current, [interim, adverse], lookup,
+                set(), gateway, PresentationTopicSelector._validate, audit)
+    assert len(gateway.calls) == len(audit['attempts']) == 2
+    assert gateway.calls[0][1] == gateway.calls[1][1]
+    assert 'validation_error' in audit['attempts'][0]
+    assert result.model_dump() == raw
+
+
 def context_fixture(extra=0):
     result, directory, lookup, annual, interim, adverse = _fixture()
     for index in range(extra):
