@@ -13,6 +13,13 @@
       </button>
     </div>
     <button type="button" class="notice-test">Send test notification</button>
-    <p class="notice-help">Keep this tab open. You can switch tabs while generation runs.</p>
+    <p class="notice-help">Notifications are silent. Keep this tab open; you can switch tabs while generation runs.</p>
   </section>
+  <aside class="notice-preview" aria-label="In-page notification" hidden>
+    <div class="notice-preview-copy" role="status" aria-live="polite">
+      <strong class="notice-preview-title"></strong>
+      <p class="notice-preview-body"></p>
+    </div>
+    <button type="button" class="notice-dismiss" aria-label="Dismiss in-page notification">×</button>
+  </aside>
 </div>

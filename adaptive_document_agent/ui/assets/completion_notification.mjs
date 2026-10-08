@@ -1,6 +1,6 @@
 // Trusted application code only. No document text, filenames or external assets.
-// Keep stored consent/deduplication, but replace any live controller with audio.
-const CONTROLLER = Symbol.for("adaptive-document-agent.completion-notice.v2");
+// Keep stored consent/deduplication, but refresh the live delivery feedback.
+const CONTROLLER = Symbol.for("adaptive-document-agent.completion-notice.v3");
 
 function controllerFor(win) {
   if (win[CONTROLLER]) return win[CONTROLLER];
@@ -16,6 +16,8 @@ function controllerFor(win) {
     latestRuns: new Map(Array.isArray(saved.latestRuns) ? saved.latestRuns : []),
     busy: false,
     message: "",
+    preview: null,
+    noticeSequence: 0,
     listeners: new Set(),
   };
   const supported = () => win.isSecureContext && typeof win.Notification === "function";
@@ -40,20 +42,44 @@ function controllerFor(win) {
   }
   function show(test = false, id = "test") {
     if (!state.enabled || permission() !== "granted") return;
+    const sequence = ++state.noticeSequence;
+    state.preview = {
+      title: test ? "Test notification" : "PowerPoint ready to download",
+      body: test ? "In-page preview. A silent system notification is also being requested."
+                 : "Export checks are complete. Return to downloads to review your presentation.",
+    };
+    if (test) state.message = "Requesting a silent system notification…";
     try {
       const notice = new win.Notification(test ? "Completion notifications enabled" : "PowerPoint ready to download", {
         body: test ? "This is a test notification." : "Export checks are complete. Return to the app to download and review your presentation.",
-        tag: `ada-presentation-${id}`,
+        // Reusing a test tag replaces the prior notice and may suppress a banner.
+        tag: test ? `ada-presentation-test-${Date.now()}-${sequence}` : `ada-presentation-${id}`,
         silent: true,
       });
-      notice.onclick = () => { win.focus(); notice.close(); };
-      notice.onerror = () => {
-        state.message = "The browser could not show a system notification. Check progress and downloads on this page.";
+      let settled = false;
+      let timer;
+      const report = message => {
+        if (sequence !== state.noticeSequence) return;
+        state.message = message;
         redraw();
       };
-      if (test) state.message = "Test message sent. Check your system notifications.";
+      notice.onclick = () => { win.focus(); notice.close(); };
+      notice.onshow = () => {
+        if (settled) return;
+        settled = true;
+        win.clearTimeout(timer);
+        if (test) report("The browser reported the notification as shown. No banner? Check Windows notification settings and Do not disturb.");
+      };
+      notice.onerror = () => {
+        settled = true;
+        win.clearTimeout(timer);
+        report("The browser could not show a system notification. The in-page notice remains available.");
+      };
+      if (test) timer = win.setTimeout(() => {
+        if (!settled) report("No display confirmation from the browser. Check Windows notification settings for your browser, notification banners and Do not disturb.");
+      }, 3500);
     } catch {
-      state.message = "System notifications are unavailable here. Check progress and downloads on this page.";
+      state.message = "System notifications are unavailable here. The in-page notice remains available.";
       redraw();
     }
   }
@@ -62,6 +88,8 @@ function controllerFor(win) {
     state.message = "";
     if (state.enabled && permission() === "granted") {
       state.enabled = false;
+      state.noticeSequence++;
+      state.preview = null;
       save(); redraw(); return;
     }
     if (!supported() || permission() === "denied") { redraw(); return; }
@@ -113,6 +141,10 @@ export default function(component) {
   const toggleText = root.querySelector(".notice-toggle-text");
   const test = root.querySelector(".notice-test");
   const status = root.querySelector(".notice-status");
+  const preview = root.querySelector(".notice-preview");
+  const previewTitle = root.querySelector(".notice-preview-title");
+  const previewBody = root.querySelector(".notice-preview-body");
+  const dismiss = root.querySelector(".notice-dismiss");
   const update = () => {
     const { state } = controller;
     const active = state.enabled && controller.permission() === "granted";
@@ -123,6 +155,9 @@ export default function(component) {
     test.disabled = !active;
     status.textContent = controller.status();
     trigger.setAttribute("aria-label", `Completion notifications: ${active ? "On" : "Off"}`);
+    preview.hidden = !state.preview;
+    previewTitle.textContent = state.preview?.title || "";
+    previewBody.textContent = state.preview?.body || "";
   };
   const close = (restoreFocus = false) => {
     panel.hidden = true;
@@ -155,10 +190,12 @@ export default function(component) {
     controller.state.message = "";
     controller.show(true); controller.redraw();
   };
+  const onDismiss = () => { controller.state.preview = null; controller.redraw(); };
   controller.state.listeners.add(update);
   enable.addEventListener("click", onToggle);
   test.addEventListener("click", onTest);
   trigger.addEventListener("click", onTrigger);
+  dismiss.addEventListener("click", onDismiss);
   document.addEventListener("pointerdown", onOutside);
   document.addEventListener("keydown", onEscape);
   window.addEventListener("resize", position);
@@ -172,6 +209,7 @@ export default function(component) {
     enable.removeEventListener("click", onToggle);
     test.removeEventListener("click", onTest);
     trigger.removeEventListener("click", onTrigger);
+    dismiss.removeEventListener("click", onDismiss);
     document.removeEventListener("pointerdown", onOutside);
     document.removeEventListener("keydown", onEscape);
     window.removeEventListener("resize", position);

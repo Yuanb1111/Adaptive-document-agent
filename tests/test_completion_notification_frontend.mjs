@@ -16,13 +16,15 @@ function root() {
   const wrapper = new Element();
   const element = new Element();
   wrapper.children.set(".completion-notice", element);
-  for (const selector of [".notice-trigger", ".notice-panel", ".notice-enable", ".notice-toggle-text", ".notice-test", ".notice-status"]) element.children.set(selector, new Element());
+  for (const selector of [".notice-trigger", ".notice-panel", ".notice-enable", ".notice-toggle-text", ".notice-test", ".notice-status", ".notice-preview", ".notice-preview-title", ".notice-preview-body", ".notice-dismiss"]) element.children.set(selector, new Element());
   element.querySelector(".notice-panel").hidden = true;
   element.style = { setProperty() {} };
   return { wrapper, element, get: selector => element.querySelector(selector) };
 }
-function browser({ saved = new Map(), permission = "default", allowed = "granted", requestThrows = false, unsupported = false } = {}) {
+function browser({ saved = new Map(), permission = "default", allowed = "granted", requestThrows = false, unsupported = false, constructorThrows = false } = {}) {
   const notices = [];
+  const timers = new Map();
+  let timerId = 0;
   let requests = 0;
   class Notification {
     static permission = permission;
@@ -32,16 +34,23 @@ function browser({ saved = new Map(), permission = "default", allowed = "granted
       this.permission = allowed;
       return Promise.resolve(allowed);
     }
-    constructor(title, options) { notices.push({ title, options }); }
+    constructor(title, options) {
+      if (constructorThrows) throw new Error("System notification unavailable");
+      notices.push({ title, options, instance: this });
+    }
     close() {}
   }
   const win = { isSecureContext: true, Notification: unsupported ? undefined : Notification,
     location: { pathname: "/" }, focus() {},
     sessionStorage: { getItem: key => saved.get(key), setItem: (key, value) => saved.set(key, value) } };
   win.addEventListener = () => {}; win.removeEventListener = () => {};
+  win.setTimeout = callback => { const id = ++timerId; timers.set(id, callback); return id; };
+  win.clearTimeout = id => timers.delete(id);
   globalThis.document = new Element();
   globalThis.window = win;
-  return { win, notices, saved, requests: () => requests };
+  return { win, notices, saved, requests: () => requests, runTimers: () => {
+    for (const [id, callback] of [...timers]) { timers.delete(id); callback(); }
+  } };
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
 const finish = (id, runId) => render({ parentElement: root().wrapper, data: { mode: "complete", event_id: id, run_id: runId } });
@@ -160,7 +169,7 @@ test("legacy sound preferences cannot create audio; test and completion messages
   assert.equal(r.get(".notice-toggle-text").textContent, "On");
   assert.equal(r.element.dataset.state, "on");
   r.get(".notice-test").fire("click");
-  assert.match(r.get(".notice-status").textContent, /Test message sent/);
+  assert.match(r.get(".notice-status").textContent, /Requesting a silent system notification/);
   finish("sound-run"); finish("sound-run");
   assert.equal(b.notices.length, 2);
   assert.ok(b.notices.every(notice => notice.options.silent === true));
@@ -193,4 +202,50 @@ test("bell opens a local panel, Escape restores focus and outside clicks close i
   cleanup();
   assert.equal(doc.events.get("keydown").size, 0);
   assert.equal(doc.events.get("pointerdown").size, 0);
+});
+
+
+test("test waits for show confirmation and repeated clicks request distinct notices", () => {
+  const b = browser({ saved: new Map([["ada:completion:v1:/", '{"enabled":true}']]), permission: "granted" });
+  const r = root();
+  render({ parentElement: r.wrapper, data: { mode: "settings" } });
+  r.get(".notice-test").fire("click");
+  assert.match(r.get(".notice-status").textContent, /Requesting/);
+  assert.equal(r.get(".notice-preview").hidden, false);
+  assert.equal(r.get(".notice-preview-title").textContent, "Test notification");
+  b.notices[0].instance.onshow();
+  assert.match(r.get(".notice-status").textContent, /browser reported/);
+  b.runTimers();
+  assert.match(r.get(".notice-status").textContent, /browser reported/);
+  r.get(".notice-test").fire("click");
+  assert.notEqual(b.notices[0].options.tag, b.notices[1].options.tag);
+  b.notices[0].instance.onerror(); // An older request cannot overwrite the new test.
+  assert.match(r.get(".notice-status").textContent, /Requesting/);
+  b.runTimers();
+  assert.match(r.get(".notice-status").textContent, /No display confirmation/);
+  b.notices[1].instance.onshow(); // Late browser confirmation remains informative.
+  assert.match(r.get(".notice-status").textContent, /browser reported/);
+  r.get(".notice-dismiss").fire("click");
+  assert.equal(r.get(".notice-preview").hidden, true);
+});
+
+test("system errors leave a visible local notice without claiming delivery", () => {
+  for (const constructorThrows of [false, true]) {
+    const b = browser({ saved: new Map([["ada:completion:v1:/", '{"enabled":true}']]), permission: "granted", constructorThrows });
+    const r = root();
+    render({ parentElement: r.wrapper, data: { mode: "settings" } });
+    r.get(".notice-test").fire("click");
+    if (!constructorThrows) b.notices[0].instance.onerror();
+    b.runTimers();
+    assert.match(r.get(".notice-status").textContent, /could not show|unavailable/);
+    assert.equal(r.get(".notice-preview").hidden, false);
+    assert.match(r.get(".notice-preview-body").textContent, /In-page preview/);
+    finish("verified-export", "attempt");
+    assert.equal(r.get(".notice-preview-title").textContent, "PowerPoint ready to download");
+    r.get(".notice-enable").fire("click");
+    b.runTimers();
+    assert.equal(r.get(".notice-preview").hidden, true);
+    finish("later-export", "attempt");
+    assert.equal(r.get(".notice-preview").hidden, true);
+  }
 });
