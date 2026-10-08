@@ -231,7 +231,9 @@ def test_three_period_kpis_fit_same_page_as_chart():
     pages = render_composed_slide(deck, plan, [result.charts[1]], result, DocumentIndex(result.observations))
     assert len(pages) == 1
     table = next(sh for sh in pages[0].shapes if sh.name == "table:a0,a1,a2")
-    assert len(table.table.rows) == 3
+    assert len(table.table.rows) == 4
+    assert [table.table.cell(0, column).text for column in range(2)] == ["Period", "Value"]
+    assert [table.table.cell(row, 0).text for row in range(1, 4)] == ["FY2022", "FY2023", "FY2024"]
     validate_composed_geometry(deck)
 
 

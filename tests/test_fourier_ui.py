@@ -56,6 +56,7 @@ def test_result_widgets_keep_downloads_evidence_and_export_gate(monkeypatch, blo
     monkeypatch.setattr(export_readiness, "check_export_readiness", lambda _: {"ready": True, "backend": "test"})
     monkeypatch.setattr(presentation_editorial, "review_presentation", lambda *args: [])
     monkeypatch.setattr(app, "_analyse_upload", lambda *args, **kwargs: result)
+    monkeypatch.setattr(app, "_analysis_scope_key", lambda *args: "widget-test-scope")
     monkeypatch.setattr(st, "file_uploader", lambda *args, **kwargs: None if kwargs.get("key") else BytesIO(b"test"))
     report = SimpleNamespace(cache_hit=False, status="passed", attempts=1, coverage=[], to_dict=lambda: {})
     from adaptive_document_agent.services.ppt_preflight import PreflightIssue
@@ -110,8 +111,8 @@ def test_result_widgets_keep_downloads_evidence_and_export_gate(monkeypatch, blo
         assert not page.exception, page.exception
         assert next(iter(page.session_state["ppt_notification_export_runs"].values()))["id"] != first_cycle
     # Selecting Sources loads only that view while keeping downloads available.
-    view_key = next(key for key in page.session_state.filtered_state if key.startswith("result_view_"))
-    page.session_state[view_key] = "Sources"
+    # Use the widget key directly; AppTest's state wrapper varies by version.
+    page.session_state["result_view_widget-test-scope"] = "Sources"
     page.run()
     assert not page.exception, page.exception
     assert any(item.value == "Original source wording." for item in page.text)
