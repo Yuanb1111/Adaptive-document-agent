@@ -719,3 +719,46 @@ metric label, and multi-chart groups split before the existing heading capacity
 rules would truncate a metric. Financial, native-preflight and rendered export
 gates remain mandatory. The presentation/output contract is v77; analysis and
 extraction cache contracts are unchanged.
+
+### Source coverage and controlled finalization (v89)
+
+The first six-file business pilot failed its scoped quality gate despite all six
+files exporting successfully. See [the anonymized baseline](docs/BUSINESS_ACCEPTANCE_BASELINE.md)
+and [the evaluation protocol](docs/EVALUATION_PROTOCOL.md). The filled source-first
+report and reviewed artifacts remain outside Git. Human editing time and broader
+source/output review have not yet been completed.
+
+Before deep extraction, the pipeline now retains original PDF outline boundaries
+(or clearly labelled page-navigation windows), selection reasons and processing
+extent. Automatic scopes receive at most one semantic scope-selection call and
+two complete supplementary source checks: six pages, 2,048 output tokens per
+call, no nested format/semantic reruns. Explicit user-confirmed scopes remain
+unchanged. Causes, risks, footnotes and conditions are part of the model's check
+question. A bounded search failure never certifies that the source did not disclose
+the requested information. The Overview view shows the ledger; JSON/PPT notes
+bind evidence and planned topics to actual renderer page scopes, separately from
+claim-by-claim display or business review.
+
+The existing extracted-series coverage review now limits each invocation to three
+model calls and 8,192 output tokens per call. Incomplete reviews retain the original
+selection and expose unchecked series. Normal bounded transport retries remain.
+Bare currency column labels inherit applicable explicit scaling, split source
+currency/scale headers override nearby narrative defaults, and explicit interim
+cash-flow typing survives financial normalization. Raw cells and page evidence
+remain unchanged. These fixes do not resolve every error found in the pilot.
+
+The result interface offers **Edit and finalize selected topics** for validated
+theme plans: content locks, ordering, and one-topic rewriting with focus/length
+instructions. Rewriting uses one bounded gateway request over existing topic
+evidence; it does not re-extract or recalculate the PDF. A proposed diff and source
+references appear before applying the draft. Facts, charts, briefing, unrelated
+topics and locked content remain stable. Full plan/claim dependency checks and
+native/rendered export checks remain mandatory; export cannot silently repair an
+approved draft. The original analysis can be restored. Plans without validated
+themes do not expose these controls. Shortening may not remove or replace displayed
+numeric assertions. Editing time still requires actual human measurement.
+
+v89 has local regression coverage; it has not rerun the cloud pilot. Those six
+files become regression samples after being used for fixes. New independent
+acceptance needs unseen files and actual human review. Source/extraction/analysis
+cache contracts advance to document-v2 / extraction-v4 / analysis-v45.

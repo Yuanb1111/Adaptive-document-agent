@@ -22,13 +22,20 @@ def cell_unit_defaults(table: ExtractedTable, row_index: int, column_label: str 
     table metadata. Never search other body rows for a cell's unit.
     """
     row_label = table.rows[row_index].cells[0] or ""
-    for label in (row_label, column_label or ""):
-        defaults = infer_unit_defaults(label)
-        if defaults.currency:
-            return CellUnitDefaults(**vars(defaults))
+    row_defaults = infer_unit_defaults(row_label)
+    column_defaults = infer_unit_defaults(column_label or '')
+    # A row-specific currency/denominator overrides table scaling. A bare
+    # currency COLUMN still belongs to the explicit table unit declaration.
+    if row_defaults.currency:
+        return CellUnitDefaults(**vars(row_defaults))
+    if column_defaults.currency and column_defaults.scale:
+        return CellUnitDefaults(**vars(column_defaults))
 
     scoped_elsewhere = False
-    for line in reversed([*table.raw_header_lines, table.unit_header or ""]):
+    lines = [*table.raw_header_lines, table.unit_header or '']
+    scale_only = next((infer_unit_defaults(line) for line in reversed(lines)
+        if re.fullmatch(r"(?i)\s*\(?\s*in\s+(?:thousands?|millions?|billions?)(?:\s*,?\s*except\s+(?:for\s+)?percentages)?\s*\)?\s*",line)),None)
+    for line in reversed(lines):
         defaults = infer_unit_defaults(line)
         if not defaults.currency:
             continue
@@ -42,10 +49,18 @@ def cell_unit_defaults(table: ExtractedTable, row_index: int, column_label: str 
                 scoped_elsewhere = True
                 continue
             return CellUnitDefaults(**vars(defaults), allow_column_defaults=False)
+        if scale_only and not defaults.scale:
+            # Both phrases are literal source header declarations. Preserve
+            # their provenance instead of inheriting a nearby narrative scale.
+            return CellUnitDefaults(unit=defaults.unit,currency=defaults.currency,
+                scale=scale_only.scale,raw_unit=defaults.raw_unit+'; '+next(line for line in reversed(lines)
+                    if infer_unit_defaults(line)==scale_only),allow_column_defaults=False)
         return CellUnitDefaults(**vars(defaults), allow_column_defaults=not scoped_elsewhere)
 
     if scoped_elsewhere:
         return CellUnitDefaults(allow_column_defaults=False)
+    if column_defaults.currency and table.default_currency not in (None,column_defaults.currency):
+        return CellUnitDefaults(**vars(column_defaults),allow_column_defaults=False)
     return CellUnitDefaults(
         unit=table.default_unit,
         currency=table.default_currency,

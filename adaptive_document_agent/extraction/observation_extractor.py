@@ -271,10 +271,10 @@ class ObservationExtractor:
             currency = local_currency or column_currency or source_units.currency
             if number.scale != 1.0:
                 scale = number.scale
-            elif row_units.currency or column_units.currency:
-                scale = row_units.scale or column_units.scale or 1.0
+            elif row_units.currency:
+                scale = row_units.scale or 1.0
             else:
-                scale = column_scale or source_units.scale or 1.0
+                scale = column_units.scale or source_units.scale or column_scale or 1.0
             value = number.value * scale if scale != 1.0 and number.scale == 1.0 else number.value
             semantic_type = "monetary_amount"
             unit_family = "currency"
@@ -354,6 +354,13 @@ class ObservationExtractor:
         is_bs = unit_family == "currency" and any(
             term in metric.casefold() for term in ("liabilit", "cash", "balance", "receiv", "payab", "inventor", "asset", "equity", "资产", "负债", "结余", "现金")
         )
+        # Explicit flow headers outrank a word such as cash or liabilities in
+        # the measure name. A six-month movement is not a June closing balance.
+        header_text=' '.join(table.raw_header_lines)
+        explicit_flow=bool(re.search(r'(?i)\b(?:months?|years?)\s+ended\b',header_text))
+        explicit_stock=bool(re.search(r'(?i)\bas\s+(?:at|of)\b',header_text))
+        if explicit_flow and not explicit_stock:
+            is_bs=False
         period_sem = classify_period(period, is_balance_sheet=is_bs)
         pres_label = sanitize_metric_label(metric)
         disp_val = ""
@@ -436,6 +443,8 @@ class ObservationExtractor:
     @staticmethod
     def _meaningful_header(value: str) -> bool:
         clean = value.strip()
+        if re.fullmatch(r"(?i)(?:RMB|CNY|USD|HKD|EUR|GBP|HK\$|US\$)(?:\s*(?:in\s*)?(?:['’]000|thousands?|millions?|billions?))?",clean):
+            return False
         if re.search(r"(?i)^%\s*(?:of\s*)?(?:rmb|usd|cny|hkd|eur|\$|£|€)\b", clean):
             return False
         # If header contains a year (e.g. 2023 Amount) or is a role keyword (Amount, %), it is not a metric

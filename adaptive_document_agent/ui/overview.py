@@ -50,6 +50,19 @@ def render(st, result: PipelineResult) -> None:
 
 
 def _context(st, result: PipelineResult) -> None:
+    coverage = result.profile.source_coverage
+    if coverage:
+        with st.expander('Source sections and bounded checks', expanded=False):
+            st.caption('Page selection records processing extent. It does not certify completeness or business accuracy.')
+            st.dataframe([dict(Section=s.title,Pages=f'{s.start_page}–{s.end_page}',
+                Status=s.processing_status,Selected=len(s.selected_pages),Evidence=len(s.observation_ids),
+                Planned_topics=', '.join(s.planned_topic_ids),Exported_topics=', '.join(s.exported_topic_ids),
+                PPT_pages=', '.join(map(str,s.exported_slide_numbers)),Reason='; '.join(s.selection_reasons) or 'Not selected; semantic exclusion reason not recorded')
+                for s in coverage.sections],use_container_width=True,hide_index=True)
+            for c in coverage.checks:
+                st.write(dict(pages=c.pages,status=c.status,question=c.reason,impact=c.decision_impact,finding=c.finding,evidence=c.evidence_quotes))
+            st.caption(f'Supplementary calls {coverage.calls_used}/{coverage.max_calls}; at most {coverage.max_supplementary_pages} pages. Full source review remains incomplete.')
+            for note in coverage.notes:st.text(note)
     left, middle, right = st.columns(3)
     left.metric("Pages", result.document.page_count)
     middle.metric("Observations", len(result.observations))

@@ -20,6 +20,8 @@ from .coverage_representation import representation_links
 
 MAX_REVIEW_CHARACTERS = 120_000
 MAX_REVIEW_BATCHES = 8
+MAX_REVIEW_CALLS = 3
+MAX_REVIEW_OUTPUT_TOKENS = 8192
 
 
 def _validate_batch(reviewed, current, requested, lookup, primary_pages, validate):
@@ -45,9 +47,10 @@ def _validate_batch(reviewed, current, requested, lookup, primary_pages, validat
     return revised, local, {sid: link for sid, link in links.items() if link is not None}
 
 
-def _review_batch(context, current, requested, lookup, primary_pages, gateway, validate, audit):
+def _review_batch(context, current, requested, lookup, primary_pages, gateway, validate, audit, budget=None):
     """One targeted semantic repair; retain all facts and every rejected attempt."""
     from .coverage_review_context import encode
+    budget = budget if budget is not None else {'calls': 0}
     encoded = encode(context)
     messages = [
         {'role': 'system', 'content': load_prompt('presentation_topic_selection.txt') + '\n\n'
@@ -59,8 +62,11 @@ def _review_batch(context, current, requested, lookup, primary_pages, gateway, v
         untrusted_document_message(encoded),
     ]
     for attempt in range(2):
+        if budget['calls'] >= MAX_REVIEW_CALLS:
+            raise ValueError('Coverage model-call budget exhausted; remaining evidence requires review.')
+        budget['calls'] += 1
         reviewed = gateway.generate_structured(messages, TopicCoverageReview,
-                                               stage='presentation', allow_repair=False)
+                                               stage='presentation', allow_repair=False,max_tokens=MAX_REVIEW_OUTPUT_TOKENS)
         entry = {'review': reviewed.model_dump(mode='json')}
         audit.setdefault('attempts', []).append(entry)
         audit['review'] = entry['review']
@@ -176,7 +182,7 @@ def review_topic_coverage(
             {"role": "system", "content": load_prompt("presentation_topic_selection.txt") + "\n\n"
              + load_prompt("presentation_topic_coverage_review.txt")},
             untrusted_document_message(encoded),
-        ], TopicCoverageReview, stage="presentation", allow_repair=False)
+        ], TopicCoverageReview, stage="presentation", allow_repair=False,max_tokens=MAX_REVIEW_OUTPUT_TOKENS)
         revised = PresentationTopicSelection(topics=reviewed.topics, omissions=reviewed.omissions)
         validate(revised, lookup, primary_pages=primary_pages)
         decisions = {item.series_id: item for item in reviewed.coverage_decisions}
@@ -220,6 +226,7 @@ def _review_bounded(selection, candidates, lookup, primary_pages, payload, gatew
     remaining = list(candidates)
     decisions = {}
     batches = []
+    budget = {'calls': 0}
     try:
         while remaining:
             represented = {o.id for topic in current.topics for sid in topic.series_ids for o in lookup[sid]}
@@ -255,7 +262,7 @@ def _review_bounded(selection, candidates, lookup, primary_pages, payload, gatew
             batch_audit = {'series_ids': requested, 'context_characters': len(encoded)}
             batches.append(batch_audit)
             revised, local = _review_batch(context, current, requested, lookup,
-                                           primary_pages, gateway, validate, batch_audit)
+                                           primary_pages, gateway, validate, batch_audit, budget)
             final_ids = {sid for topic in revised.topics for sid in topic.series_ids}
             decisions.update(local)
             # Carry model-authored reasons forward, including earlier batches.

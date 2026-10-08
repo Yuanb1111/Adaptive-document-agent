@@ -3,6 +3,7 @@
 from pydantic import BaseModel, Field
 
 from .page import DocumentPage
+from .coverage import SourceSection, SourceCoverage
 
 
 class DocumentProfile(BaseModel):
@@ -25,6 +26,7 @@ class DocumentProfile(BaseModel):
     data_quality_notes: list[str] = Field(default_factory=list)
     analysis_page_ranges: list[tuple[int, int]] = Field(default_factory=list)
     analysis_focus: str | None = None
+    source_coverage: SourceCoverage | None = None
 
 
 class AnalysisPageRange(BaseModel):
@@ -54,3 +56,4 @@ class ParsedDocument(BaseModel):
     pages: list[DocumentPage] = Field(default_factory=list)
     encrypted: bool = False
     warnings: list[str] = Field(default_factory=list)
+    outline: list[SourceSection] = Field(default_factory=list)

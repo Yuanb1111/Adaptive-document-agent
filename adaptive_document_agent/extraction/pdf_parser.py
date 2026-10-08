@@ -58,6 +58,14 @@ class PDFParser:
             if pdf.page_count == 0:
                 raise PDFValidationError("The PDF contains no pages.")
             pages = [self._parse_page(page, number) for number, page in enumerate(pdf, start=1)]
+            from adaptive_document_agent.models.coverage import SourceSection
+            entries = [entry for entry in pdf.get_toc() if 1 <= entry[2] <= len(pages)]
+            outline = []
+            for index, (level, title, start) in enumerate(entries):
+                end = next((entry[2] - 1 for entry in entries[index + 1:]
+                            if entry[0] <= level and entry[2] > start), len(pages))
+                outline.append(SourceSection(id=stable_id('section', digest, index, start),
+                    title=title, start_page=start, end_page=max(start, end), level=max(1, level)))
         finally:
             pdf.close()
 
@@ -73,6 +81,7 @@ class PDFParser:
             page_count=len(pages),
             pages=pages,
             warnings=warnings,
+            outline=outline,
         )
 
     def _parse_page(self, page: object, page_number: int) -> DocumentPage:

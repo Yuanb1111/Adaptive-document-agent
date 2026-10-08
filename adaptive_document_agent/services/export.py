@@ -101,14 +101,18 @@ def export_pptx_with_report(
     notify = progress or (lambda _: None)
     notify("Checking PowerPoint evidence")
     from adaptive_document_agent.agent.presentation_plan_recovery import PresentationPlanRecovery
-    PresentationPlanRecovery().recover_missing_plan(result)
+    from .finalization import assert_stable
+    assert_stable(result)
+    if result.finalization is None:
+        PresentationPlanRecovery().recover_missing_plan(result)
     from .source_scope_completeness import prepare_cached_source_scopes
     prepare_cached_source_scopes(result)
     from .presentation_claim_evidence import prepare_presentation_claims
     prepare_presentation_claims(result)
-    qa = run_comprehensive_qa(result, auto_repair=True)
+    qa = run_comprehensive_qa(result, auto_repair=result.finalization is None)
+    assert_stable(result)
     qa_finished = perf_counter()
-    if not force and qa.has_critical_errors:
+    if (not force or result.finalization is not None) and qa.has_critical_errors:
         reasons = "\n - ".join(e.message for e in qa.critical_errors)
         raise CriticalQAError(f"PowerPoint export blocked due to critical QA errors:\n - {reasons}", financial_report=qa)
 
@@ -135,6 +139,7 @@ def export_pptx_with_report(
                                          preflight_report=preflight_report)
         if preflight_report.errors:
             raise PreflightQAError(preflight_report)
+        assert_stable(result)
         build_finished = perf_counter()
         notify("Rendering and checking PowerPoint layout")
         verified = verify_presentation(payload, renderer=renderer, cache=visual_cache)
@@ -150,6 +155,7 @@ def export_pptx_with_report(
             "rendered_qa": round((perf_counter() - build_finished) * 1000),
             "ppt_export_total": round((perf_counter() - started) * 1000),
         }
+        assert_stable(result)
         return verified
     except Exception as exc:
         # Preserve original exception types for existing callers, while carrying

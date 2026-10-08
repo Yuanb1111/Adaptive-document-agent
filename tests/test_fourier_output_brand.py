@@ -104,8 +104,10 @@ def test_brand_export_preserves_source_evidence_and_analytical_models(branded_ou
     after = result.model_dump()
     # The existing presentation compiler fills company overview source pages.
     # Styling must leave the source, analysis and all raw evidence untouched.
-    for key in before.keys() - {"presentation_plan"}:
+    for key in before.keys() - {"presentation_plan", "presentation_export_trace"}:
         assert after[key] == before[key], key
+    assert after['presentation_export_trace']
+    assert all(item['mapping_basis'].startswith('renderer_input_scope') for item in after['presentation_export_trace'])
     assert after["presentation_plan"]["slides"] == before["presentation_plan"]["slides"]
 
 

@@ -210,6 +210,8 @@ class FinancialNormalizer:
                 "equity", "borrowing", "working capital", "net current", "资产", "负债", "资本"
             )
         )
+        if obs.period_type == 'interim_flow':
+            is_bs = False
         period_sem = classify_period(obs.period, is_balance_sheet=is_bs)
         obs.period_type = period_sem.period_type
         obs.period_basis = extract_period_basis(obs.period)

@@ -85,8 +85,11 @@ class LLMGateway:
         allow_repair: bool = True,
         request_metadata: dict[str, str | int] | None = None,
         cancelled: Event | None = None,
+        max_tokens: int | None = None,
     ) -> T:
         model_name = self.settings.model_for(stage)
+        if max_tokens is not None and (type(max_tokens) is not int or max_tokens < 1):
+            raise ValueError("max_tokens must be a positive integer")
         metadata = _request_metadata(request_metadata)
         # Capture once before hashing. SDK metadata may change while queued or
         # during an initial request; both physical calls must use this identity.
@@ -100,6 +103,7 @@ class LLMGateway:
             "schema": response_model.model_json_schema(), "messages": messages,
             "request_policy": generation_policy,
             "repair_policy": repair_policy,
+            "max_tokens": max_tokens,
             "discovery_thinking": self.settings.discovery_thinking if stage == "discovery" else None,
         }, sort_keys=True, ensure_ascii=False).encode("utf-8"))
         if self.cache and self.cache_enabled:
@@ -111,12 +115,25 @@ class LLMGateway:
             with (self._request_admission(cancelled), self.client.request_context(stage=stage),
                   self.client.operation_context(operation=response_model.__name__),
                   self.client.policy_context(stage=stage, operation=response_model.__name__, model=model_name, policy=generation_policy)):
-                value, response = self.client.generate_structured(
-                    messages,
-                    response_model,
-                    temperature=self.settings.temperature,
-                    model=model_name,
-                )
+                if max_tokens is None:
+                    value, response = self.client.generate_structured(
+                        messages, response_model, temperature=self.settings.temperature, model=model_name,
+                    )
+                else:
+                    # The stable text API supports a token cap on every adapter.
+                    # Keep admission, privacy, policy, telemetry and schema checks
+                    # here rather than adding provider-specific agent calls.
+                    schema = json.dumps(response_model.model_json_schema(), ensure_ascii=False)
+                    response = self.client.generate_text(
+                        [{"role": "system", "content": "Return only JSON matching this schema: " + schema}, *messages],
+                        temperature=self.settings.temperature, model=model_name, max_tokens=max_tokens,
+                    )
+                    if response.usage and response.usage.finish_reason == "length":
+                        raise LLMStructuredOutputError("Bounded structured response truncated", response=response)
+                    try:
+                        value = validate_structured_text(response.text, response_model)
+                    except (ValueError, TypeError) as exc:
+                        raise LLMStructuredOutputError("Bounded response failed schema validation", response=response) from exc
             self._record(response, stage=stage, operation=response_model.__name__, request_metadata=metadata)
         except LLMStructuredOutputError as exc:
             truncated = bool(exc.response.usage and exc.response.usage.finish_reason == "length")

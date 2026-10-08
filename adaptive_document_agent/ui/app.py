@@ -367,6 +367,8 @@ def run_app() -> None:
 
     from adaptive_document_agent.utils.timing import record_timing
     from . import result_explorer
+    from .finalization import render as render_finalization
+    result = render_finalization(st, result, settings, scope_key)
     with record_timing({}, "result_downloads"):
         deliverables.render(st, result, raw_pdf, progress)
     st.divider()

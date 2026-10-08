@@ -76,6 +76,8 @@ class DocumentDiscovery:
         analysis_focus: str | None = None,
         progress: Callable[[str], None] | None = None,
         routed_ranges: list[AnalysisPageRange] | None = None,
+        enable_source_checks: bool = False,
+        confirmed_scope: bool = False,
     ) -> DocumentProfile:
         notify = progress or (lambda _: None)
         # Replace on every document, including reused discovery instances.
@@ -85,11 +87,23 @@ class DocumentDiscovery:
             chunks = semantic_chunks(document.pages, target_tokens=self.target_tokens)
             profile = self._deterministic_profile(document, chunks)
             profile.analysis_focus = analysis_focus.strip() if analysis_focus and analysis_focus.strip() else None
+            from .source_coverage import section_ledger
+            profile.source_coverage = section_ledger(document, [AnalysisPageRange(title='Complete document',
+                start_page=1,end_page=document.page_count,reason='Local deterministic extraction scope')])
             return profile
         if routed_ranges is None and (document.page_count > 160 or self._estimated_chunk_count(document.pages) > 24):
             notify("Mapping the large document and selecting relevant sections")
             routed_ranges = self._route_large_document(document, analysis_focus)
         routed_ranges = routed_ranges or []
+        source_coverage = None
+        if enable_source_checks:
+            from .source_coverage import check_source_scope
+            # Explicit user-confirmed scopes are recorded without expanding them.
+            scope_ranges = routed_ranges or [AnalysisPageRange(title='Complete document',start_page=1,
+                end_page=document.page_count,reason='Complete source scope')]
+            notify('Checking unselected source sections within the supplementary budget')
+            routed_ranges, source_coverage = check_source_scope(document, scope_ranges, self.gateway,
+                analysis_focus, confirmed=confirmed_scope)
         if routed_ranges:
             # Build heavy chunk text only for deep-analysis pages. The full
             # page-preserving document remains available for background facts.
@@ -118,6 +132,7 @@ class DocumentDiscovery:
             page for page in profile.document_summary_pages if page in reviewed_pages
         })
         profile.analysis_focus = analysis_focus.strip() if analysis_focus and analysis_focus.strip() else None
+        profile.source_coverage = source_coverage
         # The model ranks/interprets; it must not erase the discovered inventory.
         for discovery in discoveries:
             for field, source in (("metrics", "metrics"), ("detected_units", "units"),

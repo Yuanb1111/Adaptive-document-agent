@@ -373,151 +373,154 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
 
     rendered_charts: list[ChartPlan] = []
     ordinal = 0
+    from .presentation_export_trace import record_section, clear_trace
+    clear_trace(result)
     for slide_plan in physical_slides[3:]:
-        if slide_plan.slide_type == "analysis":
-            horizon = [block for block in slide_plan.visual_blocks if block.role == "horizon"]
-            if horizon:
-                from .presentation_horizon import render_horizon
-                render_horizon(presentation, slide_plan, horizon[0], index, result.document)
-                ordinal += 1
-                continue
-            matrix = [block for block in slide_plan.visual_blocks if block.role == "matrix"]
-            if matrix:
-                from .presentation_matrix import render_matrix
-                from .presentation_context_notes import slide_context_notes
-                render_matrix(presentation, slide_plan, matrix[0], index,
-                              context_notes=slide_context_notes(result, slide_plan, [], index), result=result)
-                ordinal += 1
-                continue
-            waterfall = [block for block in slide_plan.visual_blocks if block.role == "waterfall"]
-            if waterfall:
-                from .presentation_waterfall import render_waterfall
-                render_waterfall(presentation, slide_plan, waterfall[0], index)
-                ordinal += 1
-                continue
-            chart_requests = _planned_chart_requests(slide_plan)
-            requested_chart_ids = [identifier for identifier, _ in chart_requests]
-            unavailable_chart_ids = set(requested_chart_ids) - chart_by_id.keys()
-            if unavailable_chart_ids:
-                raise ValueError(
-                    "The presentation plan selected charts that did not pass the evidence checks: "
-                    + ", ".join(sorted(unavailable_chart_ids))
-                )
-            charts = []
-            for identifier, chart_type in chart_requests:
-                if identifier not in chart_by_id:
+        with record_section(presentation, slide_plan, result):
+            if slide_plan.slide_type == "analysis":
+                horizon = [block for block in slide_plan.visual_blocks if block.role == "horizon"]
+                if horizon:
+                    from .presentation_horizon import render_horizon
+                    render_horizon(presentation, slide_plan, horizon[0], index, result.document)
+                    ordinal += 1
                     continue
-                chart = chart_by_id[identifier]
-                if chart_type:
-                    chart = chart.model_copy(update={"chart_type": chart_type})
-                charts.append(chart)
-            # A coherent single metric deserves a full analytical page even
-            # when the planner supplied only observation IDs and a table layout.
-            from .single_metric_analysis import single_metric_analysis
-            from .single_metric_renderer import add_single_metric_slide
-            linked = {o.id: o for o in _planned_observations(slide_plan, index)}
-            for chart in charts:
-                linked.update({oid: index.get(oid) for oid in chart.observation_ids if index.get(oid)})
-            if re.search(r"(?i)evidence.backed comparison|retained reported values|selected observations", slide_plan.message):
-                # Mechanical fallback copy carries no supported takeaway. Name
-                # the actual plotted subjects instead of an over-broad heading.
-                from .presentation_labels import qualified_metric_name
-                labels = list(dict.fromkeys(qualified_metric_name(o) for o in linked.values()))
-                evidence_title = " and ".join(labels)
-                slide_plan = slide_plan.model_copy(update={
-                    "title": evidence_title if 0 < len(evidence_title) <= 150 else "Reported measures",
-                    "message": ""})
-            single = single_metric_analysis(list(linked.values())) if len(charts) <= 1 else None
-            legacy_overview = plan.planning_origin == "legacy" and slide_plan.layout == "data_overview"
-            use_hero = not slide_plan.theme_id and (slide_plan.layout in {"auto", "single", "single_metric_hero"} or legacy_overview)
-            if single and use_hero and not any(_is_positive_topic_mismatch(o, slide_plan) for o in single.observations):
-                explicit_composition = bool(slide_plan.bullets or slide_plan.insight_ids or any(
-                    b.role in {"kpi", "table", "commentary"} or b.insight_ids for b in slide_plan.visual_blocks))
-                if explicit_composition and charts:
+                matrix = [block for block in slide_plan.visual_blocks if block.role == "matrix"]
+                if matrix:
+                    from .presentation_matrix import render_matrix
+                    from .presentation_context_notes import slide_context_notes
+                    render_matrix(presentation, slide_plan, matrix[0], index,
+                                  context_notes=slide_context_notes(result, slide_plan, [], index), result=result)
+                    ordinal += 1
+                    continue
+                waterfall = [block for block in slide_plan.visual_blocks if block.role == "waterfall"]
+                if waterfall:
+                    from .presentation_waterfall import render_waterfall
+                    render_waterfall(presentation, slide_plan, waterfall[0], index)
+                    ordinal += 1
+                    continue
+                chart_requests = _planned_chart_requests(slide_plan)
+                requested_chart_ids = [identifier for identifier, _ in chart_requests]
+                unavailable_chart_ids = set(requested_chart_ids) - chart_by_id.keys()
+                if unavailable_chart_ids:
+                    raise ValueError(
+                        "The presentation plan selected charts that did not pass the evidence checks: "
+                        + ", ".join(sorted(unavailable_chart_ids))
+                    )
+                charts = []
+                for identifier, chart_type in chart_requests:
+                    if identifier not in chart_by_id:
+                        continue
+                    chart = chart_by_id[identifier]
+                    if chart_type:
+                        chart = chart.model_copy(update={"chart_type": chart_type})
+                    charts.append(chart)
+                # A coherent single metric deserves a full analytical page even
+                # when the planner supplied only observation IDs and a table layout.
+                from .single_metric_analysis import single_metric_analysis
+                from .single_metric_renderer import add_single_metric_slide
+                linked = {o.id: o for o in _planned_observations(slide_plan, index)}
+                for chart in charts:
+                    linked.update({oid: index.get(oid) for oid in chart.observation_ids if index.get(oid)})
+                if re.search(r"(?i)evidence.backed comparison|retained reported values|selected observations", slide_plan.message):
+                    # Mechanical fallback copy carries no supported takeaway. Name
+                    # the actual plotted subjects instead of an over-broad heading.
+                    from .presentation_labels import qualified_metric_name
+                    labels = list(dict.fromkeys(qualified_metric_name(o) for o in linked.values()))
+                    evidence_title = " and ".join(labels)
+                    slide_plan = slide_plan.model_copy(update={
+                        "title": evidence_title if 0 < len(evidence_title) <= 150 else "Reported measures",
+                        "message": ""})
+                single = single_metric_analysis(list(linked.values())) if len(charts) <= 1 else None
+                legacy_overview = plan.planning_origin == "legacy" and slide_plan.layout == "data_overview"
+                use_hero = not slide_plan.theme_id and (slide_plan.layout in {"auto", "single", "single_metric_hero"} or legacy_overview)
+                if single and use_hero and not any(_is_positive_topic_mismatch(o, slide_plan) for o in single.observations):
+                    explicit_composition = bool(slide_plan.bullets or slide_plan.insight_ids or any(
+                        b.role in {"kpi", "table", "commentary"} or b.insight_ids for b in slide_plan.visual_blocks))
+                    if explicit_composition and charts:
+                        from .slide_compositor import render_composed_slide
+                        render_composed_slide(presentation, slide_plan, charts, result, index)
+                        rendered_charts.extend(charts)
+                        ordinal += 1
+                        continue
+                    hero = charts[0] if charts else ChartPlan(
+                        id=f"hero_{slide_plan.id}", title=display_metric_name(single.observations[0]),
+                        chart_type="line", question=slide_plan.message,
+                        observation_ids=[o.id for o in single.observations],
+                        source_pages=sorted({e.page for o in single.observations for e in o.evidence}),
+                    )
+                    series_ids = {item.id for item in single.observations}
+                    definitions = [definition for definition in source_ratio_definitions
+                                   if series_ids <= set(definition["observation_ids"])]
+                    from .presentation_source_context import source_table_context
+                    add_single_metric_slide(presentation, hero, single, title=slide_plan.title,
+                                            narrative=slide_plan.message,
+                                            definition=definitions[0] if len(definitions) == 1 else None,
+                                            source_context=source_table_context(single.observations, result.document)
+                                            if single.is_percentage and not definitions else "")
+                    rendered_charts.append(hero)
+                    ordinal += 1
+                    continue
+                if charts or any(b.role in {"kpi", "table"} and b.observation_ids for b in slide_plan.visual_blocks):
                     from .slide_compositor import render_composed_slide
                     render_composed_slide(presentation, slide_plan, charts, result, index)
                     rendered_charts.extend(charts)
                     ordinal += 1
                     continue
-                hero = charts[0] if charts else ChartPlan(
-                    id=f"hero_{slide_plan.id}", title=display_metric_name(single.observations[0]),
-                    chart_type="line", question=slide_plan.message,
-                    observation_ids=[o.id for o in single.observations],
-                    source_pages=sorted({e.page for o in single.observations for e in o.evidence}),
-                )
-                series_ids = {item.id for item in single.observations}
-                definitions = [definition for definition in source_ratio_definitions
-                               if series_ids <= set(definition["observation_ids"])]
-                from .presentation_source_context import source_table_context
-                add_single_metric_slide(presentation, hero, single, title=slide_plan.title,
-                                        narrative=slide_plan.message,
-                                        definition=definitions[0] if len(definitions) == 1 else None,
-                                        source_context=source_table_context(single.observations, result.document)
-                                        if single.is_percentage and not definitions else "")
-                rendered_charts.append(hero)
-                ordinal += 1
-                continue
-            if charts or any(b.role in {"kpi", "table"} and b.observation_ids for b in slide_plan.visual_blocks):
-                from .slide_compositor import render_composed_slide
-                render_composed_slide(presentation, slide_plan, charts, result, index)
-                rendered_charts.extend(charts)
-                ordinal += 1
-                continue
-            else:
-                observations = _planned_observations(slide_plan, index)
-                if not observations:
-                    insight_by_id = {item.id: item for item in result.insights}
-                    candidate_obs = []
-                    for iid in slide_plan.insight_ids:
-                        ins = insight_by_id.get(iid)
-                        if ins and ins.metric:
-                            candidate_obs.extend([o for o in index.for_metric(ins.metric) if o.value is not None])
-                    if len(candidate_obs) >= 2:
-                        observations = candidate_obs[:4]
-
-                if observations:
-                    _add_planned_data_slide(presentation, slide_plan, observations)
                 else:
-                    continue
-        elif slide_plan.slide_type == "risks":
-            _add_planned_text_slide(presentation, result, slide_plan)
-        elif slide_plan.slide_type == "data_quality":
-            from .presentation_scope import scope_items, scope_audit_notes
-            from .presentation_summary import render_complete_summary
-            limits = scope_items(result)
-            if limits:
-                render_complete_summary(presentation, "Coverage and limits", limits,
-                                        notes=scope_audit_notes(result))
-            elif len(presentation.slides):
-                presentation.slides[-1].notes_slide.notes_text_frame.text += "\n\n" + scope_audit_notes(result)
-            continue
-        elif slide_plan.slide_type == "appendix":
-            previous_slide_count = len(presentation.slides)
-            if rendered_charts or plan.themes:
-                appendix_charts = rendered_charts
-                _add_evidence_table_slides(presentation, result, appendix_charts, title="Data Index")
-            else:
-                from adaptive_document_agent.models.validation import ValidationIssue
+                    observations = _planned_observations(slide_plan, index)
+                    if not observations:
+                        insight_by_id = {item.id: item for item in result.insights}
+                        candidate_obs = []
+                        for iid in slide_plan.insight_ids:
+                            ins = insight_by_id.get(iid)
+                            if ins and ins.metric:
+                                candidate_obs.extend([o for o in index.for_metric(ins.metric) if o.value is not None])
+                        if len(candidate_obs) >= 2:
+                            observations = candidate_obs[:4]
 
-                result.validation_warnings.append(
-                    ValidationIssue(
-                        code="no_body_charts",
-                        message="No charts were rendered in presentation body; appendix limited to representative evidence sample.",
-                        severity="warning",
-                        stage="presentation_export",
+                    if observations:
+                        _add_planned_data_slide(presentation, slide_plan, observations)
+                    else:
+                        continue
+            elif slide_plan.slide_type == "risks":
+                _add_planned_text_slide(presentation, result, slide_plan)
+            elif slide_plan.slide_type == "data_quality":
+                from .presentation_scope import scope_items, scope_audit_notes
+                from .presentation_summary import render_complete_summary
+                limits = scope_items(result)
+                if limits:
+                    render_complete_summary(presentation, "Coverage and limits", limits,
+                                            notes=scope_audit_notes(result))
+                elif len(presentation.slides):
+                    presentation.slides[-1].notes_slide.notes_text_frame.text += "\n\n" + scope_audit_notes(result)
+                continue
+            elif slide_plan.slide_type == "appendix":
+                previous_slide_count = len(presentation.slides)
+                if rendered_charts or plan.themes:
+                    appendix_charts = rendered_charts
+                    _add_evidence_table_slides(presentation, result, appendix_charts, title="Data Index")
+                else:
+                    from adaptive_document_agent.models.validation import ValidationIssue
+
+                    result.validation_warnings.append(
+                        ValidationIssue(
+                            code="no_body_charts",
+                            message="No charts were rendered in presentation body; appendix limited to representative evidence sample.",
+                            severity="warning",
+                            stage="presentation_export",
+                        )
                     )
-                )
-                _add_evidence_table_slides(
-                    presentation,
-                    result,
-                    [],
-                    title="Representative retained evidence",
-                    subtitle="Representative retained evidence (no charts in body)",
-                    max_pages=1,
-                )
-            if quality_notes and len(presentation.slides) > previous_slide_count:
-                notes = presentation.slides[previous_slide_count].notes_slide.notes_text_frame
-                notes.text += "\n\nSource scope and data-quality notes:\n" + "\n".join(quality_notes)
+                    _add_evidence_table_slides(
+                        presentation,
+                        result,
+                        [],
+                        title="Representative retained evidence",
+                        subtitle="Representative retained evidence (no charts in body)",
+                        max_pages=1,
+                    )
+                if quality_notes and len(presentation.slides) > previous_slide_count:
+                    notes = presentation.slides[previous_slide_count].notes_slide.notes_text_frame
+                    notes.text += "\n\nSource scope and data-quality notes:\n" + "\n".join(quality_notes)
 
 
 def _planned_chart_requests(slide_plan: PresentationSlide) -> list[tuple[str, str | None]]:
@@ -676,8 +679,10 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
         is_company_identity_resolved,
     )
 
-    company = extract_structured_company_fields(plan.company, result)
-    plan.company = company
+    company = (plan.company if result.finalization is not None
+               else extract_structured_company_fields(plan.company, result))
+    if result.finalization is None:
+        plan.company = company
 
     has_company_identity = is_company_identity_resolved(company)
 

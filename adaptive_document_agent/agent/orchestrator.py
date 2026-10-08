@@ -95,6 +95,8 @@ class DocumentOrchestrator:
                 analysis_focus=analysis_focus,
                 progress=notify,
                 routed_ranges=scope.page_ranges if scope else None,
+                enable_source_checks=True,
+                confirmed_scope=scope is not None,
             )
 
         from .company_introduction import prepare_company_introduction
@@ -438,6 +440,8 @@ class DocumentOrchestrator:
         # In particular, a missing/valid final plan may never have awaited it.
         resources.close()
         notify("Complete")
+        from .source_coverage import link_coverage
+        link_coverage(profile.source_coverage, index.observations, presentation_plan)
         from adaptive_document_agent.utils.pipeline_version import PIPELINE_VERSION
         return PipelineResult(
             pipeline_version=PIPELINE_VERSION,
@@ -565,11 +569,11 @@ class DocumentOrchestrator:
         )
 
     def _load_document(self, raw: bytes, digest: str) -> ParsedDocument:
-        document = self.cache.get_model(f"document-v1-{digest}", ParsedDocument) if self.cache else None
+        document = self.cache.get_model(f"document-v2-{digest}", ParsedDocument) if self.cache else None
         if document is None:
             document = PDFParser().parse(raw, extract_tables=False)
             if self.cache:
-                self.cache.set_model(f"document-v1-{digest}", document)
+                self.cache.set_model(f"document-v2-{digest}", document)
         return document
 
     @staticmethod

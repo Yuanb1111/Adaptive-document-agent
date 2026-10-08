@@ -66,3 +66,5 @@ class PipelineResult(BaseModel):
     stage_details_ms: dict[str, int] = Field(default_factory=dict)
     pipeline_total_ms: int | None = None
     export_timings_ms: dict[str, int] = Field(default_factory=dict)
+    finalization: dict[str, object] | None = None
+    presentation_export_trace: list[dict[str, object]] = Field(default_factory=list)
