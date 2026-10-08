@@ -5,14 +5,12 @@ from threading import Lock
 from uuid import uuid4
 
 from adaptive_document_agent.agent.orchestrator import DocumentOrchestrator
-from adaptive_document_agent.document_model import DocumentIndex
 from adaptive_document_agent.services.llm import LLMGateway
 from adaptive_document_agent.services.llm.routing import create_llm_client
 from adaptive_document_agent.utils.hashing import sha256_bytes
 from adaptive_document_agent.utils.pipeline_version import PIPELINE_VERSION, ANALYSIS_VERSION, EXTRACTION_VERSION
 
 from . import analysis, branding, data, deliverables, overview, quality, sources, technical
-from .charts import chart_rows, render_chart
 from .deployment import cache_for_session, is_public_deployment
 from .sidebar import render_sidebar
 
@@ -367,54 +365,12 @@ def run_app() -> None:
             begin_export_run(st, scope_key)
             st.caption("Reusing the existing analysis; rebuilding PowerPoint and rerunning export checks.")
 
-    deliverables.render(st, result, raw_pdf, progress)
+    from adaptive_document_agent.utils.timing import record_timing
+    from . import result_explorer
+    with record_timing({}, "result_downloads"):
+        deliverables.render(st, result, raw_pdf, progress)
     st.divider()
     branding.section_label(st, "03", "Explore the evidence")
     st.caption("Read the findings, inspect the exact chart data, and trace each conclusion back to its source.")
-    tab_overview, tab_analysis, tab_charts, tab_data, tab_sources, tab_quality, tab_technical = st.tabs(["Overview", "Analysis", "Charts", "Extracted Data", "Sources", "Data Quality", "Technical Details"])
-    with tab_overview:
-        overview.render(st, result)
-    with tab_analysis:
-        analysis.render(st, result)
-    with tab_charts:
-        index = DocumentIndex(result.observations)
-        if not result.charts:
-            st.info("No chart met the usefulness and evidence thresholds.")
-        if result.charts:
-            st.caption(f"{len(result.charts)} validated visual(s), shown in analytical order.")
-        for chart_index, plan in enumerate(result.charts):
-            with st.expander(f"{chart_index + 1}. {plan.title}", expanded=chart_index == 0):
-                style_labels = {
-                    "line": "Line",
-                    "bar": "Vertical bar",
-                    "horizontal_bar": "Horizontal bar",
-                    "area": "Area",
-                    "pie": "Pie",
-                    "scatter": "Scatter",
-                    "table": "Data table",
-                }
-                available = plan.available_chart_types or [plan.chart_type]
-                selected_style = st.selectbox(
-                    f"Chart style — {plan.title}",
-                    available,
-                    format_func=lambda value: style_labels.get(value, value),
-                    key=f"chart_style_{plan.id}",
-                )
-                show_labels = st.toggle("Show values directly on chart", value=True, key=f"chart_labels_{plan.id}")
-                st.plotly_chart(
-                    render_chart(plan, index, chart_type=selected_style, show_data_labels=show_labels),
-                    use_container_width=True,
-                )
-                st.caption(f"Source pages: {', '.join(map(str, plan.source_pages))}")
-                with st.expander("View the exact data used in this visual"):
-                    st.dataframe(chart_rows(plan, index), use_container_width=True, hide_index=True)
-    with tab_data:
-        data.render(st, result)
-    with tab_sources:
-        sources.render(st, result)
-    with tab_quality:
-        quality.render(st, result)
-    with tab_technical:
-        if st.session_state.get("analysis_result_reused"):
-            st.caption("Reused analysis result: the ledger below records its original generation, not new model charges for this view.")
-        technical.render(st, result)
+    result_explorer.render(st, result, scope_key)
+    _LOGGER.info("Result interface ready: charts=%d observations=%d", len(result.charts), len(result.observations))

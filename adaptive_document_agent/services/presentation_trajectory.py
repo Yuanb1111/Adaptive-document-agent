@@ -85,7 +85,7 @@ def supported_subtitle(slide, charts, index):
     message = slide.message.strip()
     if not message or not charts:
         return message
-    question = message.endswith('?')
+    question = '?' in message and bool(re.match(r"(?i)^(?:how|what|which|did|does|has|have)\b", message))
     claims = f'{slide.title} {message}'
     if not question and (not _DIRECTION.search(claims) or _REVERSAL.search(claims)):
         return message
@@ -97,7 +97,7 @@ def supported_subtitle(slide, charts, index):
         if len(ordered) < 2 or (not question and not _has_turn(ordered)):
             continue
         fact = _brief_fact_for_chart(chart, index)
-        if fact is None or len(fact[0]) > 155:
+        if fact is None or len(fact[0]) > (260 if question else 155):
             continue
         metric = ordered[0].metric_original.casefold()
         metric_tokens = set(re.findall(r"[A-Za-z]+", metric)) - _STOP
@@ -108,4 +108,7 @@ def supported_subtitle(slide, charts, index):
         candidates.append((score, fact[0]))
     if not candidates:
         return message
-    return max(candidates, key=lambda candidate: candidate[0])[1]
+    answer = max(candidates, key=lambda candidate: candidate[0])[1]
+    # A source definition after the question must remain visible too.
+    suffix = message.split('?', 1)[1].strip() if question else ''
+    return ' '.join(part for part in (answer, suffix) if part)

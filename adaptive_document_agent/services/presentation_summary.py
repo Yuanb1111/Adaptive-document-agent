@@ -120,9 +120,6 @@ def render_complete_summary(presentation: Any, title: str, items: list[BriefItem
         if single_column and 3 <= len(remaining) <= 4:
             for size in (BODY_PT, 15, 14):
                 candidates = [(_rows(remaining, width, 1, body_pt=size, compact=True), 0)]
-                candidates.extend((_rows(remaining, width, 2, body_pt=size, compact=True,
-                                         column_fraction=fraction), abs(fraction - .5))
-                                  for fraction in (.4, .45, .5, .55, .6))
                 fitting = [(candidate, balance) for candidate, balance in candidates
                            if _height(candidate, compact=True) <= capacity]
                 if fitting:

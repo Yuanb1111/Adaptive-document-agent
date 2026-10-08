@@ -64,7 +64,7 @@ class UI:
 
 def test_downloads_render_before_long_result_tabs():
     source = inspect.getsource(app.run_app)
-    assert source.index("deliverables.render") < source.index("st.tabs")
+    assert source.index("deliverables.render") < source.index("result_explorer.render")
     assert "Exports & Deliverables" not in source
 
 

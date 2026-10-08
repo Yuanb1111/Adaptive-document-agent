@@ -3,6 +3,7 @@
 import copy
 
 from adaptive_document_agent.services.appendix_source_deduplication import deduplicate_period_entries
+from adaptive_document_agent.services.appendix_source_deduplication import deduplicate_complete_entries
 
 
 def _themes():
@@ -43,3 +44,30 @@ def test_conflicting_numeric_or_raw_values_or_units_remain_separate():
         else:
             second["values"].pop("FY2022")
         assert len(deduplicate_period_entries(themes, ("FY2022", "FY2023"))["Capacity"]) == 2
+
+
+def test_partial_exact_source_merges_into_complete_row_with_all_provenance():
+    themes = _themes()
+    before = copy.deepcopy(themes)
+    output = deduplicate_complete_entries(themes)["Capacity"]
+    assert len(output) == 1
+    row = next(iter(output.values()))
+    assert row["values"] == {"FY2022": 35, "FY2023": 45, "6M2024": 40}
+    assert row["pages"] == {10, 20}
+    assert set(row["records"]) == {"record-10", "record-20"}
+    assert themes == before
+
+
+def test_partial_conflicting_or_differently_scoped_source_stays_separate():
+    for change in ("value", "raw", "unit", "scope"):
+        themes = _themes()
+        second = list(themes["Capacity"].values())[1]
+        if change == "value":
+            second["values"]["FY2023"] = 46
+        elif change == "raw":
+            second["raw_signatures"]["FY2023"] = {("45.0%", "%")}
+        elif change == "unit":
+            second["unit"] = "days"
+        else:
+            second["label"] = "Utilisation: different population"
+        assert len(deduplicate_complete_entries(themes)["Capacity"]) == 2

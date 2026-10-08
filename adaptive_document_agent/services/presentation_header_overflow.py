@@ -23,8 +23,9 @@ def visual_header(plan: PresentationSlide) -> VisualHeader:
     title = plan.title
     overflow_title = ""
     if len(_lines(title, 8.91, 32)) > 3:
-        title = (plan.section_title if plan.section_title
-                 and len(_lines(plan.section_title, 8.91, 32)) <= 2 else "Analysis")
+        from .presentation_labels import compact_section_heading
+        section = compact_section_heading(plan.section_title)
+        title = section if section and len(_lines(section, 8.91, 32)) <= 2 else "Reported measures"
         overflow_title = plan.title
     subtitle, overflow = _split_header_subtitle(plan.message)
     return VisualHeader(title, subtitle, "\n\n".join(

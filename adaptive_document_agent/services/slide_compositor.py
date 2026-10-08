@@ -13,7 +13,7 @@ from adaptive_document_agent.document_model import display_metric_name
 from adaptive_document_agent.models import ChartPlan, PipelineResult, PresentationSlide
 
 from .presentation_style import CHART_TITLE_PT, DARK, FONT, FOOTNOTE_PT, GUTTER, MUTED, PURPLE
-from .presentation_labels import qualify_heading, readable_chart_heading
+from .presentation_labels import qualified_metric_name, qualify_heading, readable_chart_heading
 
 COMMENTARY_PT = 16
 COMMENTARY_LINE_PT = 20
@@ -296,7 +296,7 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
     from .presentation_conventions import signed_expense_note, signed_expense_display
     convention = signed_expense_note(support + [index.get(oid) for oid in chart_obs if index.get(oid)])
     from .presentation_trajectory import scoped_direction_title, supported_subtitle
-    display_message = (slide_plan.message if support else supported_subtitle(slide_plan, charts, index))
+    display_message = supported_subtitle(slide_plan, charts, index)
     scoped_title = scoped_direction_title(slide_plan.title, charts, index)
     from .composition_data import uses_composition_data
     from .presentation_labels import composition_heading, composition_message
@@ -315,14 +315,15 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
         # A selected topic can itself be a full sentence. When neither authored
         # heading fits, use a neutral role label and keep the complete claim
         # visibly below it; never truncate an analytical statement to fit.
-        heading = (slide_plan.section_title if slide_plan.section_title
-                   and len(_lines(slide_plan.section_title, 8.91, 32)) <= 2 else "Analysis")
+        from .presentation_labels import compact_section_heading
+        section = compact_section_heading(slide_plan.section_title)
+        heading = section if section and len(_lines(section, 8.91, 32)) <= 2 else "Reported measures"
         if len(charts) == 1 and uses_composition_data(charts[0]):
             heading = composition_heading(heading, charts[0], values, totals)
         if slide_plan.title.endswith(" (continued)"):
             heading += " (continued)"
         subtitle = "\n".join(part for part in (
-            scoped_title,
+            display_message if "?" in scoped_title and display_message else scoped_title,
             convention) if part)
     convention_h = 0.0
     if len(_lines(subtitle, 8.91, 18)) > 3 and convention:
@@ -444,23 +445,25 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
                         seen_values.add(key)
                         displayed.append(o)
             items = displayed
-        if not table and len(items) > capacity and len(evidence_groups(items)) == 1:
-            name = display_metric_name(items[0])
+        compact_rows = ((not table and len(items) > capacity)
+                        or (table and not horizontal and len(items) > 1))
+        if compact_rows and len(evidence_groups(items)) == 1:
+            name = qualified_metric_name(items[0])
             title_h = len(_lines(name, rect.w, 14)) * .24 + .12
-            rows = []
+            rows = [("Period", "Value", .4)]
             for o in items:
                 semantic = classify_metric(name, unit=o.unit, raw_unit=o.raw_unit, value=o.value)
                 value = format_metric_display_value(o.raw_value, o.value, semantic, raw_unit=_display_source_unit(o), currency=o.currency, compact=True)
                 value = signed_expense_display(o, value)
                 period = format_observation_period(o)
-                height = max(.38, max(len(_lines(period, rect.w * .34 - .15, 14)), len(_lines(value, rect.w * .66 - .15, 14))) * .24 + .12)
+                height = max(.38, max(len(_lines(period, rect.w * .50 - .15, 14)), len(_lines(value, rect.w * .50 - .15, 14))) * .24 + .12)
                 rows.append((period, value, height))
             if title_h + sum(row[2] for row in rows) <= rect.h:
                 _put_text(owner, name, Rect(rect.x, rect.y, rect.w, title_h), size=14, bold=True)
                 shape = owner.shapes.add_table(len(rows), 2, Inches(rect.x), Inches(rect.y + title_h), Inches(rect.w), Inches(sum(row[2] for row in rows)))
                 shape.name = "table:" + ",".join(o.id for o in items)
-                shape.table.columns[0].width = Inches(rect.w * .34)
-                shape.table.columns[1].width = Inches(rect.w * .66)
+                shape.table.columns[0].width = Inches(rect.w * .50)
+                shape.table.columns[1].width = Inches(rect.w * .50)
                 for i, (period, value, height) in enumerate(rows):
                     shape.table.rows[i].height = Inches(height)
                     for j, content in enumerate((period, value)):
@@ -480,7 +483,7 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
                     and len(period_sets[0]) <= 6):
                 cells = [["Metric", *period_sets[0]]]
                 for group in groups:
-                    name = display_metric_name(group[0])
+                    name = qualified_metric_name(group[0])
                     values = []
                     for o in group:
                         semantic = classify_metric(name, unit=o.unit, raw_unit=o.raw_unit, value=o.value)
@@ -507,7 +510,7 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
             # rather than losing intermediate changes or creating a near-empty continuation.
             if (horizontal and 1 < len(items) <= 6 and len(evidence_groups(items)) == 1
                     and all(format_observation_period(o) for o in items)):
-                name = display_metric_name(items[0])
+                name = qualified_metric_name(items[0])
                 name = re.sub(r"(?i)^Adjusted for Adjusted\b", "Adjusted", name)
                 cells = [["Metric", *[format_observation_period(o) for o in items]], [name]]
                 for o in items:
@@ -532,7 +535,7 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
                     return []
             rows, heights, shown = [], [0.4], []
             for o in items:
-                name = display_metric_name(o)
+                name = qualified_metric_name(o)
                 semantic = classify_metric(name, unit=o.unit, raw_unit=o.raw_unit, value=o.value)
                 display = format_metric_display_value(o.raw_value, o.value, semantic, raw_unit=_display_source_unit(o), currency=o.currency, compact=True)
                 display = signed_expense_display(o, display)
@@ -576,7 +579,7 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
             w = (rect.w - GUTTER * (len(shown) - 1)) / len(shown) if horizontal else rect.w
             x = rect.x + i * (w + GUTTER) if horizontal else rect.x
             y = rect.y if horizontal else rect.y + i * 0.98
-            name = display_metric_name(o)
+            name = qualified_metric_name(o)
             semantic = classify_metric(name, unit=o.unit, raw_unit=o.raw_unit, value=o.value)
             value = format_metric_display_value(o.raw_value, o.value, semantic, raw_unit=_display_source_unit(o), currency=o.currency, compact=True)
             value = signed_expense_display(o, value)

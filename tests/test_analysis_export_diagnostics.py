@@ -30,12 +30,14 @@ class DownloadUI:
     def __init__(self):
         self.session_state = {}
         self.downloads = {}
+        self.download_options = {}
 
     def columns(self, count, **kwargs):
         return [nullcontext() for _ in range(count if isinstance(count, int) else len(count))]
 
     def download_button(self, label, data, filename, *args, **kwargs):
         self.downloads[filename] = data
+        self.download_options[filename] = kwargs
 
     def container(self, **kwargs):
         return nullcontext()
@@ -93,6 +95,7 @@ def test_downloaded_analysis_contains_the_same_current_failure_as_qa_report(monk
     assert result.model_dump() == before
     progress.fail.assert_called_once_with("PowerPoint export blocked")
     progress.finish.assert_not_called()
+    assert all(options.get("on_click") == "ignore" for options in ui.download_options.values())
 
 
 def test_successful_retry_does_not_export_previous_failure_or_modify_analysis_state(monkeypatch):
@@ -105,6 +108,10 @@ def test_successful_retry_does_not_export_previous_failure_or_modify_analysis_st
     monkeypatch.setattr("adaptive_document_agent.services.presentation_editorial.review_presentation", lambda *args: [])
     monkeypatch.setattr(deliverables, "export_pptx_with_report", Mock(side_effect=[error, verified]))
     monkeypatch.setattr(completion_notification, "notify_export_ready", Mock())
+    def finish_after_downloads():
+        assert {"analysis_presentation.pptx", "analysis_report.md", "extracted_observations.csv",
+                "analysis_data.json"} <= ui.downloads.keys()
+    progress.finish.side_effect = finish_after_downloads
     deliverables.render(ui, result, b"source PDF", progress)
     assert json.loads(ui.downloads["analysis_data.json"])["pptx_export_diagnostics"]["is_export_blocked"]
     ui.downloads.clear()
@@ -118,6 +125,7 @@ def test_successful_retry_does_not_export_previous_failure_or_modify_analysis_st
     assert exported["export_timings_ms"] == verified.timings_ms
     assert not hasattr(result, "pptx_export_diagnostics")
     progress.finish.assert_called_once()
+    assert all(options.get("on_click") == "ignore" for options in ui.download_options.values())
 
 
 def test_generic_exception_diagnostics_keep_existing_redaction(monkeypatch):

@@ -386,7 +386,7 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
                 from .presentation_matrix import render_matrix
                 from .presentation_context_notes import slide_context_notes
                 render_matrix(presentation, slide_plan, matrix[0], index,
-                              context_notes=slide_context_notes(result, slide_plan, [], index))
+                              context_notes=slide_context_notes(result, slide_plan, [], index), result=result)
                 ordinal += 1
                 continue
             waterfall = [block for block in slide_plan.visual_blocks if block.role == "waterfall"]
@@ -1661,7 +1661,6 @@ def _add_native_chart(
     metric_name = plan.title or (values[0].metric_original if values else "")
     is_bs = any(term in metric_name.casefold() for term in ("liabilit", "cash", "balance", "receiv", "payab", "inventor"))
     has_negative = False
-    all_negative = False
     has_positive = False
     scaled_vals: list[float] = []
 
@@ -1694,14 +1693,18 @@ def _add_native_chart(
     else:
         rows = _series_rows(plan, values, is_balance_sheet=is_bs)
         has_negative = any(row[2] is not None and row[2] < 0 for row in rows)
-        all_negative = bool(rows) and all(row[2] is not None and row[2] < 0 for row in rows)
         has_positive = any(row[2] is not None and row[2] > 0 for row in rows)
         numeric_vals = [row[2] for row in rows if row[2] is not None]
         scaled_vals = [v / scale for v in numeric_vals] if numeric_vals else []
         categories = list(dict.fromkeys(row[0] for row in rows))
         series_names = list(dict.fromkeys(row[1] for row in rows))
         data = CategoryChartData()
-        data.categories = _chart_category_labels(categories, bounds[2])
+        from .presentation_axes import explicit_date_categories
+        date_categories = (explicit_date_categories(values, categories)
+                           if plan.chart_type in {"line", "area"} else None)
+        data.categories = date_categories or _chart_category_labels(categories, bounds[2])
+        if date_categories:
+            data.categories.number_format = "dd mmm yyyy"
         for name in series_names:
             lookup = {label: value for label, series_name, value in rows if series_name == name}
             data.add_series(name, [lookup.get(label) / scale if lookup.get(label) is not None else None for label in categories])
@@ -1840,46 +1843,15 @@ def _add_native_chart(
             # Clean institutional styling: NO BACKGROUND HORIZONTAL GRIDLINES
             chart.value_axis.has_major_gridlines = False
             chart.value_axis.has_minor_gridlines = False
-            chart.value_axis.axis_title.text_frame.paragraphs[0].text = ""
+            chart.value_axis.has_title = False
 
-            # Fix axis scaling for negative-only and mixed series so bars render visibly
-            try:
-                if scaled_vals:
-                    min_scaled = min(scaled_vals)
-                    max_scaled = max(scaled_vals)
-                    if all_negative:
-                        # Anchor the top of the chart at zero; extend bottom with 30% headroom
-                        chart.value_axis.maximum_scale = 0.0
-                        chart.value_axis.minimum_scale = min_scaled * 1.30
-                        try:
-                            chart.category_axis.crosses_at = 0.0
-                        except (AttributeError, ValueError):
-                            pass
-                        chart.category_axis.tick_label_position = XL_TICK_LABEL_POSITION.LOW
-                    elif has_negative and has_positive:
-                        # Mixed series crossing zero: extend bottom headroom by 45% so negative
-                        # data labels (e.g. -16.45) never collide with bottom x-axis category labels (e.g. FY2021)
-                        chart.value_axis.maximum_scale = max_scaled * 1.25 if max_scaled > 0 else 0.0
-                        chart.value_axis.minimum_scale = min_scaled * 1.45 if min_scaled < 0 else 0.0
-                        chart.category_axis.tick_label_position = XL_TICK_LABEL_POSITION.LOW
-                    elif chart.chart_type in {XL_CHART_TYPE.COLUMN_CLUSTERED, XL_CHART_TYPE.BAR_CLUSTERED}:
-                        # A truncated positive bar axis exaggerates small
-                        # changes; line charts may retain automatic scaling.
-                        chart.value_axis.minimum_scale = 0.0
-                        chart.value_axis.maximum_scale = max_scaled * 1.20 if max_scaled > 0 else 1.0
-                    elif min_scaled >= 0 and max_scaled > 0:
-                        # Reserve headroom for point labels; automatic maxima can
-                        # place the highest label over the chart's unit heading.
-                        chart.value_axis.maximum_scale = max_scaled + max(
-                            (max_scaled - min_scaled) * .20, max_scaled * .12)
-                    if has_negative:
-                        from .presentation_style import readable_axis_bounds
-                        low, high, step = readable_axis_bounds(chart.value_axis.minimum_scale, chart.value_axis.maximum_scale)
-                        chart.value_axis.minimum_scale = low
-                        chart.value_axis.maximum_scale = high
-                        chart.value_axis.major_unit = step
-            except (AttributeError, ValueError, TypeError, NameError):
-                pass
+            from .presentation_axes import style_value_range
+            style_value_range(chart.value_axis, scaled_vals)
+            if has_negative:
+                chart.category_axis.tick_label_position = XL_TICK_LABEL_POSITION.LOW
+        if not is_valid_scatter and date_categories:
+            from .presentation_axes import style_date_axis
+            style_date_axis(chart, date_categories, bounds[2])
     except (AttributeError, ValueError):
         pass
     return scale, scale_label
@@ -2183,6 +2155,8 @@ def _add_evidence_table_slides(
             if remaining_names.count(plain) == 1:
                 entry["label"] = plain
 
+    from .appendix_source_deduplication import deduplicate_complete_entries
+    metrics_by_theme = deduplicate_complete_entries(metrics_by_theme)
     sorted_periods = sorted(all_periods_set, key=period_sort_key)
     if not sorted_periods:
         sorted_periods = ["Reported"]
@@ -2230,8 +2204,8 @@ def _add_evidence_table_slides(
             metric_w = max(2.80, min(3.80, 11.70 - 1.10 - len(p_chunk) * 1.15))
             widths = [metric_w, 1.10] + [(11.70 - metric_w - 1.10) / len(p_chunk)] * len(p_chunk)
             def row_height(values):
-                return max(.38, max(len(wrap_copy(str(v), w - .16, 10.5))
-                                    for v, w in zip(values, widths)) * .16 + .13)
+                return max(.42, max(len(wrap_copy(str(v), w - .16, 12))
+                                    for v, w in zip(values, widths)) * .20 + .16)
             def metric_height(entry):
                 return row_height([entry["label"], entry["unit"],
                                    *[entry["periods"].get(p, "—") for p in p_chunk]])
@@ -2300,8 +2274,8 @@ def _add_evidence_table_slides(
         num_rows = len(table_rows) + 1
         num_cols = len(formatted_headers)
         short_table = num_rows <= 5
-        body_pt = 11.0 if short_table else 9.5
-        header_pt = 11.5 if short_table else 10.5
+        body_pt = 12.0
+        header_pt = 12.0
         table_shape = slide.shapes.add_table(num_rows, num_cols, Inches(0.45), Inches(table_top), Inches(11.70), Inches(table_h))
         table_shape.name = "evidence:packable"
         table = table_shape.table

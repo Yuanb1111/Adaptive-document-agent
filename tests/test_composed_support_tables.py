@@ -66,6 +66,20 @@ def test_table_layout_keeps_conflicting_period_values_visible():
     assert all(item.id in slides[0].notes_slide.notes_text_frame.text for item in [*support, conflict])
 
 
+def test_support_table_does_not_drop_the_category_from_a_parent_label():
+    result, support = _supported_result("Current liabilities")
+    for item in support:
+        item.category_dimensions = {"category": "Trade and bills payables"}
+        item.dimensions = dict(item.category_dimensions)
+    before = result.model_dump_json()
+    _, slides = _render(result)
+    labels = [cell.text.replace("\n", " ") for slide in slides for shape in slide.shapes if shape.has_table
+              for row in shape.table.rows for cell in row.cells]
+    assert any("Trade and bills payables" in label for label in labels)
+    assert not any(label == "Current liabilities" for label in labels)
+    assert result.model_dump_json() == before
+
+
 def test_table_layout_does_not_pivot_incompatible_period_bases_into_one_series():
     result, support = _supported_result("Measured participation share")
     support[-1].period = "6M2023"

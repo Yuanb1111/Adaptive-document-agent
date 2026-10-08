@@ -44,4 +44,4 @@ def render_report_downloads(st: Any, result: PipelineResult, columns: tuple[Any,
                 st.button(label, disabled=True, use_container_width=True)
                 st.warning(f"{kind} export is unavailable ({error_type}). Other downloads and PowerPoint QA are unaffected.")
             else:
-                st.download_button(label, payload, filename, mime, use_container_width=True)
+                st.download_button(label, payload, filename, mime, use_container_width=True, on_click="ignore")

@@ -38,6 +38,13 @@ def qualified_metric_name(observation: Observation) -> str:
     return qualify_heading(display_metric_name(observation), [observation])
 
 
+def compact_section_heading(title: str) -> str:
+    """Use the authored topic prefix, retaining its full scope elsewhere."""
+    if ":" in title:
+        return title.split(":", 1)[0].strip()
+    return re.sub(r"(?i)\s+across reported (?:balance sheet )?dates$", "", title).strip()
+
+
 def readable_chart_heading(title: str, *, composition: bool = False) -> str:
     """Keep chart captions tied to their measure without pipeline boilerplate."""
     from .language_qa import clean_display_copy

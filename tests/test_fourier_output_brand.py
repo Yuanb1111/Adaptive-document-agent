@@ -210,7 +210,7 @@ def test_long_selected_topic_heading_keeps_complete_claim_visible():
     snapshot = slide_plan.model_dump()
     deck = Presentation(BytesIO(build_presentation(result, BUNDLED_TEMPLATE_PATH)))
     slides = [s for s in deck.slides if s.name.startswith("composed_")]
-    assert any(shape.text == "Analysis" for s in slides for shape in s.shapes if shape.has_text_frame)
+    assert any(shape.text == "Reported measures" for s in slides for shape in s.shapes if shape.has_text_frame)
     visible = "\n".join(shape.text for s in slides for shape in s.shapes if shape.has_text_frame)
     assert claim in visible
     assert slide_plan.model_dump() == snapshot

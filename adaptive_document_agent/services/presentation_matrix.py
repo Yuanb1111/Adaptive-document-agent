@@ -95,7 +95,7 @@ def _matrix_value(item) -> str:
     return value
 
 
-def render_matrix(presentation, slide_plan, block, index, *, context_notes=()):
+def render_matrix(presentation, slide_plan, block, index, *, context_notes=(), result=None):
     """Continue complete matrix rows on readable, independently cited pages."""
     from pptx.util import Inches, Pt
     from .pptx_export import _source_footer, _text, _rgb, FOURIER_DARK, FOURIER_MUTED, FOURIER_PURPLE
@@ -137,7 +137,12 @@ def render_matrix(presentation, slide_plan, block, index, *, context_notes=()):
                    for row in rows]
     header_h = max(.48, max(len(_lines(value, cell_width - .20, 12))
                            for value, cell_width in zip(headers, widths)) * 15 / 72 + .14)
-    header = visual_header(slide_plan)
+    from .executive_brief import _selected_table_series
+    from .presentation_trajectory import supported_subtitle
+    # The same validated matrix cells can answer an otherwise unanswered question.
+    series = _selected_table_series(slide_plan, index, result) if result is not None else []
+    message = supported_subtitle(slide_plan, series, index)
+    header = visual_header(slide_plan.model_copy(update={"message": message}))
     first_slide, top = _base(presentation, header.title, header.subtitle)
     # The header may already contain a complete source definition. Avoid
     # printing the exact same sentence again in its local context band.

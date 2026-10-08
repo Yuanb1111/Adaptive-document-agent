@@ -331,7 +331,10 @@ def display_brief(result: PipelineResult):
                 retained = topics[key][1].setdefault(signature,
                     {"chart": chart, "text": fact[0], "pages": set()})
                 retained["pages"].update(fact[1])
+    from .brief_source_deduplication import deduplicate_brief_facts
+    from .presentation_labels import compact_section_heading
     for label, facts in topics.values():
+        facts = {i: fact for i, fact in enumerate(deduplicate_brief_facts(facts.values(), index))}
         if facts:
             # Rounded display copy cannot prove that source facts are equal.
             # When it masks a source difference, show exact levels for every
@@ -346,7 +349,10 @@ def display_brief(result: PipelineResult):
                         fact["text"] = exact[0]
                         fact["pages"].update(exact[1])
             pages = sorted({page for fact in facts.values() for page in fact["pages"]})
-            items.append(BriefItem(label, ' '.join(fact["text"] for fact in facts.values()), pages))
+            # One complete measure per paragraph is easier to scan than an
+            # undifferentiated inventory. The original periods remain explicit.
+            items.append(BriefItem(compact_section_heading(label),
+                                   '\n'.join(fact["text"] for fact in facts.values()), pages))
     return 'Executive Summary', items
 
 

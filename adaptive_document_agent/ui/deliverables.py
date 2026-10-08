@@ -123,6 +123,7 @@ def render(st, result: PipelineResult, raw_pdf: bytes, progress) -> None:
                     "application/vnd.openxmlformats-officedocument.presentationml.presentation",
                     type="primary",
                     use_container_width=True,
+                    on_click="ignore",
                 )
             else:
                 st.button(
@@ -131,10 +132,6 @@ def render(st, result: PipelineResult, raw_pdf: bytes, progress) -> None:
                     use_container_width=True,
                     help="Export blocked by Critical QA",
                 )
-    if pptx_bytes and qa_error is None:
-        progress.finish()
-        from .completion_notification import notify_export_ready
-        notify_export_ready(st, verified)
     qa = None
     if qa_error:
         progress.fail("PowerPoint export blocked")
@@ -153,7 +150,6 @@ def render(st, result: PipelineResult, raw_pdf: bytes, progress) -> None:
             pdf_cache=st.session_state.setdefault("pdf_export_cache", {}),
             pptx_export_diagnostics=qa,
         )
-
     if qa is not None:
         stage = qa["export_error"]["stage"]
         st.error(
@@ -168,6 +164,7 @@ def render(st, result: PipelineResult, raw_pdf: bytes, progress) -> None:
                 json.dumps(qa, indent=2),
                 "qa_report.json",
                 "application/json",
+                on_click="ignore",
             )
 
     if editorial or visual_report or preflight_report:
@@ -183,6 +180,7 @@ def render(st, result: PipelineResult, raw_pdf: bytes, progress) -> None:
                     json.dumps(preflight_report.to_dict(), indent=2),
                     "ppt_preflight_qa.json",
                     "application/json",
+                    on_click="ignore",
                 )
             if visual_report:
                 st.caption(
@@ -196,6 +194,7 @@ def render(st, result: PipelineResult, raw_pdf: bytes, progress) -> None:
                     json.dumps(visual_report.to_dict(), indent=2),
                     "ppt_visual_qa.json",
                     "application/json",
+                    on_click="ignore",
                 )
 
     if export_timings:
@@ -205,3 +204,8 @@ def render(st, result: PipelineResult, raw_pdf: bytes, progress) -> None:
                 f"build reused: {verified.build_cache_hit}; rendered QA reused: {visual_report.cache_hit}"
             )
             st.json(export_timings)
+
+    if pptx_bytes and qa_error is None:
+        progress.finish()
+        from .completion_notification import notify_export_ready
+        notify_export_ready(st, verified)

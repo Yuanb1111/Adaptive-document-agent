@@ -45,7 +45,9 @@ def _summary(case):
     assert items == before
     bodies = [s for slide in slides for s in slide.shapes if s.name == "brief:body"]
     assert "".join(s.text for s in bodies) == "".join(item.text for item in items)
-    assert {p.font.size.pt for s in bodies for p in s.text_frame.paragraphs} == ({14} if case == "compact" else {16})
+    assert {p.font.size.pt for s in bodies for p in s.text_frame.paragraphs} == {16}
+    if case == "compact":
+        assert len(slides) > 1
     if case == "continuation":
         assert len(slides) > 1
     stream = io.BytesIO()
@@ -67,7 +69,7 @@ def test_summary_serializes_exact_point_leading_for_every_text_size(case):
                 assert paragraph.line_spacing == Pt(size * LINE_HEIGHT_FACTOR)
                 assert paragraph._p.xpath("./a:pPr/a:lnSpc/a:spcPts")
                 assert not paragraph._p.xpath("./a:pPr/a:lnSpc/a:spcPct")
-    assert sizes == ({14, 18} if case == "compact" else {16, 18})
+    assert sizes == {16, 18}
 
 
 def test_old_proportional_spacing_build_cache_is_not_reused(monkeypatch):

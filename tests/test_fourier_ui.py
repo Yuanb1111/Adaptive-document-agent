@@ -81,7 +81,7 @@ def test_result_widgets_keep_downloads_evidence_and_export_gate(monkeypatch, blo
     assert [tab.label for tab in page.tabs] == ["Overview", "Analysis", "Charts", "Extracted Data", "Sources", "Data Quality", "Technical Details"]
     assert any("Summary source pages: 2, 4" in item.value for item in page.caption)
     assert any("Source pages: 4" in item.value for item in page.markdown)
-    assert any(item.value == "Original source wording." for item in page.text)
+    assert not any(item.value == "Original source wording." for item in page.text)
     downloads = [item.proto.label for item in page.get("download_button")]
     assert "Download Markdown" in downloads and "Download CSV" in downloads
     progress = "\n".join(item.value for item in page.markdown)
@@ -109,3 +109,10 @@ def test_result_widgets_keep_downloads_evidence_and_export_gate(monkeypatch, blo
         next(item for item in page.button if item.label == "Regenerate PowerPoint only").click().run()
         assert not page.exception, page.exception
         assert next(iter(page.session_state["ppt_notification_export_runs"].values()))["id"] != first_cycle
+    # Selecting Sources loads only that view while keeping downloads available.
+    view_key = next(key for key in page.session_state.filtered_state if key.startswith("result_view_"))
+    page.session_state[view_key] = "Sources"
+    page.run()
+    assert not page.exception, page.exception
+    assert any(item.value == "Original source wording." for item in page.text)
+    assert all(item.proto.ignore_rerun for item in page.get("download_button"))

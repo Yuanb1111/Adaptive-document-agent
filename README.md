@@ -253,8 +253,14 @@ If this is your first visit, use the **零基础上手手册** link below the si
 2. Optionally describe an analysis focus in plain language.
 3. Upload one PDF.
 4. Analysis and verified PowerPoint generation start automatically. Wait for the export check to finish.
-5. Review the Overview, Analysis, Charts, Extracted Data, Sources, Data Quality, and Technical Details tabs if needed.
+5. Review the Overview, Analysis, Charts, Extracted Data, Sources, Data Quality, and Technical Details views if needed. Only the selected view executes; Streamlit versions without tracked tabs use a view selector. Charts show five per page, with every chart and its source data accessible through the page selector.
 6. Download the available deliverables. To inspect or override the page ranges, enable **Review page scope before analysis (optional)** before uploading and confirm the proposed scope.
+
+Download clicks do not rerun the app. The completion indicator reaches 100% after
+the verified PowerPoint and automatic report downloads have been prepared; the
+optional PDF remains generated on request. Result-view and download preparation
+timings appear in hosted logs without document text. File transfer speed still
+depends on the hosting service and network connection.
 
 Interactive charts expose the exact retained observations used, their source pages, selectable compatible chart types, and optional direct data labels.
 
