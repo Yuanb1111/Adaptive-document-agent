@@ -107,6 +107,8 @@ export default function(component) {
     return;
   }
   root.hidden = false;
+  const trigger = root.querySelector(".notice-trigger");
+  const panel = root.querySelector(".notice-panel");
   const enable = root.querySelector(".notice-enable");
   const toggleText = root.querySelector(".notice-toggle-text");
   const test = root.querySelector(".notice-test");
@@ -120,6 +122,33 @@ export default function(component) {
     enable.disabled = state.busy || ["denied", "unsupported"].includes(controller.permission());
     test.disabled = !active;
     status.textContent = controller.status();
+    trigger.setAttribute("aria-label", `Completion notifications: ${active ? "On" : "Off"}`);
+  };
+  const close = (restoreFocus = false) => {
+    panel.hidden = true;
+    trigger.setAttribute("aria-expanded", "false");
+    if (restoreFocus) trigger.focus();
+  };
+  const onTrigger = () => {
+    panel.hidden = !panel.hidden;
+    trigger.setAttribute("aria-expanded", String(!panel.hidden));
+    if (!panel.hidden) (enable.disabled ? test.disabled ? trigger : test : enable).focus();
+  };
+  const onOutside = event => {
+    if (!event.composedPath().includes(root)) close();
+  };
+  const onEscape = event => {
+    if (event.key === "Escape" && !panel.hidden) { close(true); event.preventDefault(); }
+  };
+  // Place beside the live Streamlit toolbar, including its running indicator.
+  // Only geometry is read; native toolbar controls and document data are untouched.
+  const position = () => {
+    const controls = document.querySelectorAll('[data-testid="stToolbarActions"], [data-testid="stAppDeployButton"], [data-testid="stMainMenu"]');
+    const rects = [...controls].map(control => control.getBoundingClientRect()).filter(rect => rect.width && rect.height);
+    const left = Math.min(...rects.map(rect => rect.left));
+    if (Number.isFinite(left) && left > 48) {
+      root.style.setProperty("--notice-right", `${window.innerWidth - left + 8}px`);
+    }
   };
   const onToggle = () => { void controller.toggle(); };
   const onTest = () => {
@@ -129,10 +158,23 @@ export default function(component) {
   controller.state.listeners.add(update);
   enable.addEventListener("click", onToggle);
   test.addEventListener("click", onTest);
+  trigger.addEventListener("click", onTrigger);
+  document.addEventListener("pointerdown", onOutside);
+  document.addEventListener("keydown", onEscape);
+  window.addEventListener("resize", position);
+  const observer = typeof ResizeObserver === "function" ? new ResizeObserver(position) : null;
+  const toolbar = document.querySelector('[data-testid="stToolbarActions"]')?.parentElement;
+  if (toolbar) observer?.observe(toolbar);
+  position();
   update();
   return () => {
     controller.state.listeners.delete(update);
     enable.removeEventListener("click", onToggle);
     test.removeEventListener("click", onTest);
+    trigger.removeEventListener("click", onTrigger);
+    document.removeEventListener("pointerdown", onOutside);
+    document.removeEventListener("keydown", onEscape);
+    window.removeEventListener("resize", position);
+    observer?.disconnect();
   };
 }

@@ -70,3 +70,18 @@ def test_shared_authored_section_is_listed_once_without_losing_other_sections():
     _add_planned_contents(deck, plans)
 
     assert [shape.text for shape in _entries(deck)] == ["Operational performance", "Service risks"]
+
+
+def test_large_agenda_remains_one_page_and_every_section_is_recoverable():
+    labels = [f"Section {i}: " + ("qualified operational evidence " * 6).rstrip() for i in range(45)]
+    deck = blank_deck()
+    _add_planned_contents(deck, [PresentationSlide(id=str(i), slide_type="analysis", title=label)
+                                for i, label in enumerate(labels)])
+    assert len(deck.slides) == 1
+    entries = _entries(deck)
+    assert len(entries) == 30
+    assert "16 further sections" in entries[-1].text
+    notes = deck.slides[0].notes_slide.notes_text_frame.text
+    assert all(label in notes for label in labels)
+    assert all(shape.top.inches + shape.height.inches <= deck.slide_height.inches - 1 + .001
+               for shape in entries)

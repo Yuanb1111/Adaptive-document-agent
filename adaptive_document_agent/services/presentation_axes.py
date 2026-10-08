@@ -53,7 +53,7 @@ def style_date_axis(chart, dates, width):
             axis._element.append(element)
 
 
-def style_value_range(axis, values):
+def style_value_range(axis, values, *, height=None):
     """Use zero for one-sided data and rounded ticks for every native chart."""
     if not values:
         return
@@ -65,6 +65,15 @@ def style_value_range(axis, values):
     else:
         low, high = low * 1.45, high * 1.25
     low, high, step = readable_axis_bounds(low, high)
+    if height is not None:
+        # Chart frames include data labels and category labels. Short panels
+        # need fewer ticks, while full-height charts keep the regular scale.
+        intervals = max(2, min(5, int(max(.4, height - 1.0) / .28)))
+        from math import ceil, floor, log10
+        raw = (high - low) / intervals
+        order = 10 ** floor(log10(raw))
+        step = next(n * order for n in (1, 2, 2.5, 5, 10) if n * order >= raw)
+        low, high = floor(low / step) * step, ceil(high / step) * step
     axis.minimum_scale, axis.maximum_scale, axis.major_unit = low, high, step
     # Axis labels describe the rounded scale; point labels retain source precision.
     axis.tick_labels.number_format = "0.##;-0.##;0" if step < 1 else "#,##0;-#,##0;0"

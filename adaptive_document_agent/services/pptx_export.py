@@ -587,58 +587,28 @@ def _add_planned_contents(
 
 
 def _render_contents_entries(presentation: Any, entries: list[str], subtitle: str) -> None:
-    """Fit complete labels in measured, balanced columns before adding pages."""
-    from .text_capacity import wrap_copy
+    """Keep the agenda on one page, with complete authored labels in notes."""
+    from .presentation_contents import contents_layout
 
-    top, gap = 1.50, .10
+    top = 1.50
     capacity = presentation.slide_height.inches - 1.0 - top
-    column_width = (presentation.slide_width.inches - 1.40) / 2
-    text_width = column_width - .60
-    font_size, line_spacing = 16, 19.5
-    line_height = line_spacing / 72
-    max_lines = max(1, int((capacity - .08) / line_height))
-    rows = []
-    for number, label in enumerate(entries, start=1):
-        lines = wrap_copy(label, text_width, font_size)
-        for start in range(0, len(lines), max_lines):
-            part = lines[start:start + max_lines]
-            # Capacity wrapping retains characters; only page/column breaks
-            # split exceptionally long labels, never a character-count cap.
-            rows.append((number, "".join(part), max(.46, len(part) * line_height + .08)))
-
-    def height(items):
-        return sum(row[2] for row in items) + max(0, len(items) - 1) * gap
-
-    pages = 0
-    while rows or not pages:
-        best_count, best_cut = 0, 0
-        for count in range(1, len(rows) + 1):
-            cuts = [cut for cut in range(1, count + 1)
-                    if height(rows[:cut]) <= capacity and height(rows[cut:count]) <= capacity]
-            if not cuts:
-                break
-            best_count = count
-            best_cut = min(cuts, key=lambda cut: abs(height(rows[:cut]) - height(rows[cut:count])))
-        if rows and not best_count:
-            raise ValueError("Contents label exceeds readable page capacity.")
-        slide = _base_slide(presentation, "Contents" + (" (continued)" if pages else ""), subtitle)
-        selected, rows = rows[:best_count], rows[best_count:]
-        for column, items in enumerate((selected[:best_cut], selected[best_cut:])):
-            left = .55 + column * (column_width + .30)
-            y = top
-            for number, label, row_h in items:
-                # The agenda is a reading list. Removing card padding leaves
-                # room for more complete labels at a larger, fixed text size.
-                _text(slide, f"{number:02d}", left, y + .02, .46, row_h - .04,
-                      size=font_size, color=FOURIER_PURPLE, bold=True)
-                shape = _text(slide, label, left + .60, y + .02, text_width, row_h - .04,
-                              size=font_size, color=FOURIER_DARK)
-                for paragraph in shape.text_frame.paragraphs:
-                    paragraph.line_spacing = Pt(line_spacing)
-                    paragraph.space_before = paragraph.space_after = Pt(0)
-                shape.name = f"contents:entry:{number}"
-                y += row_h + gap
-        pages += 1
+    columns, column_width, font_size, line_spacing = contents_layout(
+        entries, presentation.slide_width.inches, capacity)
+    slide = _base_slide(presentation, "Contents", subtitle)
+    slide.notes_slide.notes_text_frame.text += "\n\nComplete agenda:\n" + "\n".join(
+        f"{number:02d}. {label}" for number, label in enumerate(entries, 1))
+    for column, items in enumerate(columns):
+        left, y = .55 + column * (column_width + .30), top
+        for number, label, row_h in items:
+            _text(slide, f"{number:02d}", left, y + .02, .46, row_h - .04,
+                  size=font_size, color=FOURIER_PURPLE, bold=True)
+            shape = _text(slide, label, left + .60, y + .02, column_width - .60, row_h - .04,
+                          size=font_size, color=FOURIER_DARK)
+            for paragraph in shape.text_frame.paragraphs:
+                paragraph.line_spacing = Pt(line_spacing)
+                paragraph.space_before = paragraph.space_after = Pt(0)
+            shape.name = f"contents:entry:{number}"
+            y += row_h + .08
 
 
 def _presentation_company_identity(result: PipelineResult) -> tuple[str, list[int]]:
@@ -1787,7 +1757,7 @@ def _add_native_chart(
             # individual columns, not the single-series headline font.
             labels.font.size = Pt(9.5 if bounds[2] < 7 else 11)
         else:
-            labels.font.size = Pt(12 if compact else 14)
+            labels.font.size = Pt(12 if compact or bounds[3] < 2.2 else 14)
         labels.font.bold = True
         # Signed dynamic format preserves minus sign and exact precision
         labels.number_format = label_fmt
@@ -1846,7 +1816,7 @@ def _add_native_chart(
             chart.value_axis.has_title = False
 
             from .presentation_axes import style_value_range
-            style_value_range(chart.value_axis, scaled_vals)
+            style_value_range(chart.value_axis, scaled_vals, height=bounds[3])
             if has_negative:
                 chart.category_axis.tick_label_position = XL_TICK_LABEL_POSITION.LOW
         if not is_valid_scatter and date_categories:

@@ -313,11 +313,16 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
     # or commentary according to available space, without rewriting its meaning.
     if len(_lines(heading, 8.91, 32)) > 2:
         # A selected topic can itself be a full sentence. When neither authored
-        # heading fits, use a neutral role label and keep the complete claim
+        # heading fits, name the plotted measures and keep the complete claim
         # visibly below it; never truncate an analytical statement to fit.
         from .presentation_labels import compact_section_heading
         section = compact_section_heading(slide_plan.section_title)
-        heading = section if section and len(_lines(section, 8.91, 32)) <= 2 else "Reported measures"
+        measures = list(dict.fromkeys(readable_chart_heading(chart.title) for chart in charts))
+        measured = " and ".join(measures)
+        if len(_lines(measured, 8.91, 32)) > 2 and measures:
+            measured = measures[0] + (" and related measures" if len(measures) > 1 else "")
+        heading = section if section and len(_lines(section, 8.91, 32)) <= 2 else (
+            measured if measured and len(_lines(measured, 8.91, 32)) <= 2 else "Reported measures")
         if len(charts) == 1 and uses_composition_data(charts[0]):
             heading = composition_heading(heading, charts[0], values, totals)
         if slide_plan.title.endswith(" (continued)"):

@@ -54,3 +54,20 @@ def test_unknown_dates_remain_categories_without_inventing_a_calendar():
     from adaptive_document_agent.services.presentation_axes import explicit_date_categories
     item = observation("a", "Reported measure", 1, "FY2024")
     assert explicit_date_categories([item], ["FY2024"]) is None
+
+
+def test_short_chart_reduces_tick_density_without_changing_values():
+    items = [observation(str(i), "Recorded balance", value, f"FY{2020+i}")
+             for i, value in enumerate((8.5, 32.37, 67.2, 78.48, 87.14))]
+    axes = []
+    for height in (1.4, 4):
+        deck = blank_deck()
+        slide = deck.slides.add_slide(deck.slide_layouts[6])
+        _add_native_chart(slide, ChartPlan(id="c", question="Reported values", chart_type="line",
+                          title="Recorded balance"), items, (.5, 1, 5, height))
+        chart = next(s.chart for s in slide.shapes if s.has_chart)
+        assert list(chart.series[0].values) == [8.5, 32.37, 67.2, 78.48, 87.14]
+        axes.append(chart.value_axis)
+    short, tall = axes
+    assert short.major_unit > tall.major_unit
+    assert (short.maximum_scale - short.minimum_scale) / short.major_unit <= 3

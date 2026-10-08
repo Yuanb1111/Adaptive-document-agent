@@ -208,6 +208,8 @@ def run_app() -> None:
 
     st.set_page_config(page_title="FOURIER | Document Intelligence", page_icon="📄", layout="wide")
     branding.apply_theme(st)
+    from .completion_notification import render_settings as render_notification_settings
+    render_notification_settings(st)
     branding.header(st)
     public_deployment = is_public_deployment()
     settings = render_sidebar(st, public_deployment=public_deployment)
@@ -231,8 +233,6 @@ def run_app() -> None:
     if not readiness["ready"]:
         st.warning("PowerPoint export is currently unavailable. Analysis and other download formats remain available.")
     cache = cache_for_session(st.session_state, public_deployment=public_deployment)
-    from .completion_notification import render_settings as render_notification_settings
-    render_notification_settings(st)
     with st.container(border=True):
         branding.section_label(st, "01", "Upload your document")
         with st.expander("Analysis options (optional)", expanded=False):

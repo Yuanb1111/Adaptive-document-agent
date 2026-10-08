@@ -6,15 +6,19 @@ class Element {
   constructor() { this.events = new Map(); this.children = new Map(); this.dataset = {}; this.attributes = new Map(); }
   setAttribute(name, value) { this.attributes.set(name, value); }
   querySelector(selector) { return this.children.get(selector); }
+  querySelectorAll() { return []; }
   addEventListener(type, fn) { if (!this.events.has(type)) this.events.set(type, new Set()); this.events.get(type).add(fn); }
   removeEventListener(type, fn) { this.events.get(type)?.delete(fn); }
-  fire(type) { for (const fn of this.events.get(type) || []) fn(); }
+  focus() { this.focused = true; }
+  fire(type, event = {}) { for (const fn of this.events.get(type) || []) fn(event); }
 }
 function root() {
   const wrapper = new Element();
   const element = new Element();
   wrapper.children.set(".completion-notice", element);
-  for (const selector of [".notice-enable", ".notice-toggle-text", ".notice-test", ".notice-status"]) element.children.set(selector, new Element());
+  for (const selector of [".notice-trigger", ".notice-panel", ".notice-enable", ".notice-toggle-text", ".notice-test", ".notice-status"]) element.children.set(selector, new Element());
+  element.querySelector(".notice-panel").hidden = true;
+  element.style = { setProperty() {} };
   return { wrapper, element, get: selector => element.querySelector(selector) };
 }
 function browser({ saved = new Map(), permission = "default", allowed = "granted", requestThrows = false, unsupported = false } = {}) {
@@ -34,6 +38,8 @@ function browser({ saved = new Map(), permission = "default", allowed = "granted
   const win = { isSecureContext: true, Notification: unsupported ? undefined : Notification,
     location: { pathname: "/" }, focus() {},
     sessionStorage: { getItem: key => saved.get(key), setItem: (key, value) => saved.set(key, value) } };
+  win.addEventListener = () => {}; win.removeEventListener = () => {};
+  globalThis.document = new Element();
   globalThis.window = win;
   return { win, notices, saved, requests: () => requests };
 }
@@ -162,4 +168,29 @@ test("legacy sound preferences cannot create audio; test and completion messages
   r.get(".notice-enable").fire("click");
   assert.equal(r.get(".notice-enable").attributes.get("aria-checked"), "false");
   assert.equal(r.get(".notice-test").disabled, true);
+});
+
+
+test("bell opens a local panel, Escape restores focus and outside clicks close it", () => {
+  const b = browser();
+  const r = root();
+  const cleanup = render({ parentElement: r.wrapper, data: { mode: "settings" } });
+  const doc = globalThis.document;
+  r.get(".notice-trigger").fire("click");
+  assert.equal(r.get(".notice-panel").hidden, false);
+  assert.equal(r.get(".notice-trigger").attributes.get("aria-expanded"), "true");
+  assert.equal(b.requests(), 0);
+  let prevented = false;
+  doc.fire("keydown", { key: "Escape", preventDefault() { prevented = true; } });
+  assert.equal(prevented, true);
+  assert.equal(r.get(".notice-panel").hidden, true);
+  assert.equal(r.get(".notice-trigger").focused, true);
+  r.get(".notice-trigger").fire("click");
+  doc.fire("pointerdown", { composedPath: () => [r.element] });
+  assert.equal(r.get(".notice-panel").hidden, false);
+  doc.fire("pointerdown", { composedPath: () => [] });
+  assert.equal(r.get(".notice-panel").hidden, true);
+  cleanup();
+  assert.equal(doc.events.get("keydown").size, 0);
+  assert.equal(doc.events.get("pointerdown").size, 0);
 });

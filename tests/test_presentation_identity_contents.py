@@ -107,7 +107,7 @@ def test_contents_keeps_complete_financial_terms_and_colon_qualifications():
     assert [item.model_dump() for item in plans] == before
 
 
-def test_contents_paginate_complete_labels_without_shrinking_or_dropping_entries():
+def test_contents_fits_one_page_at_a_readable_size_without_dropping_entries():
     labels = [f"Section {index:02d}: Comparable operational performance, customer activity and service capacity"
               for index in range(1, 19)]
     plans = [PresentationSlide(id=str(index), slide_type="analysis", title="Reported evidence",
@@ -115,21 +115,22 @@ def test_contents_paginate_complete_labels_without_shrinking_or_dropping_entries
     deck = _deck()
     _add_planned_contents(deck, plans)
     entries = _contents_entries(deck)
-    assert len(deck.slides) > 1
-    assert [shape.text for shape in entries] == labels
+    assert len(deck.slides) == 1
+    assert all(label in deck.slides[0].notes_slide.notes_text_frame.text for label in labels)
     assert [shape.name for shape in entries] == [f"contents:entry:{index}" for index in range(1, 19)]
-    assert all(shape.text_frame.paragraphs[0].font.size.pt == 16 for shape in entries)
+    assert all(shape.text_frame.paragraphs[0].font.size.pt >= 12 for shape in entries)
     assert all(shape.top.inches + shape.height.inches <= deck.slide_height.inches - 1.0 + .001
                for shape in entries)
-    assert "Contents (continued)" in _text(deck.slides[1])
+    assert "Contents (continued)" not in _text(deck.slides[0])
 
 
-def test_exceptionally_long_contents_label_continues_without_losing_characters():
+def test_exceptionally_long_contents_label_keeps_full_text_in_notes_on_one_page():
     label = "Operational context: " + "retained evidence and qualified comparisons " * 70 + "FINAL_SECTION_WORD"
     deck = _deck()
     _add_planned_contents(deck, [PresentationSlide(id="long", slide_type="analysis", title="Reported evidence",
                                                   section_title=label)])
     entries = _contents_entries(deck)
-    assert len(entries) > 1
-    assert "".join(shape.text for shape in entries) == label
+    assert len(deck.slides) == len(entries) == 1
+    assert entries[0].text.endswith("…")
+    assert label in deck.slides[0].notes_slide.notes_text_frame.text
     assert all(shape.name == "contents:entry:1" for shape in entries)
