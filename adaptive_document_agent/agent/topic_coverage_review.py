@@ -95,7 +95,7 @@ def _review_batch(context, current, requested, lookup, primary_pages, gateway, v
 class CoverageDecision(BaseModel):
     series_id: str
     decision: Literal["include", "omit"]
-    reason: str = Field(min_length=1)
+    reason: str = Field(min_length=1, max_length=400)
 
 
 class TopicCoverageReview(PresentationTopicSelection):

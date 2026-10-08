@@ -468,6 +468,9 @@ class PresentationPlanValidator:
         ``6M`` is deliberately left ambiguous and validated as a quantity;
         ``6M2025`` or ``6M period`` supplies explicit period context.
         """
+        # Half-year labels are periods too. Preserve the year for provenance;
+        # never treat the leading 1/2 in 1H2024 or H12024 as a measured value.
+        value = re.sub(r"(?i)(?<![A-Za-z0-9_.])(?:[12]H|H[12])\s*((?:19|20)\d{2})\b", r" \1", value)
         pattern = re.compile(
             r"(?i)(?<![A-Za-z0-9_.])(?:3|6|9|12)M"
             r"(?:(?P<year>\d{4})\b|(?=\s+(?:period|ended|ending)\b))"
@@ -509,6 +512,9 @@ class PresentationPlanValidator:
         currency = r"(?:US\$|HK\$|RMB|CNY|CNH|USD|HKD|SGD|GBP|EUR|JPY|AUD|CAD|CHF|[$€£¥￥])"
         amount = r"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?\s*(?:trillion|billion|million|thousand|bn|mn|[mkb])"
         value = re.sub(rf"(?i)({currency})\s*\(\s*({amount})\s*\)", r"\1 -\2", value)
+        coefficient = r"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
+        magnitude = r"(?:trillion|billion|million|thousand|bn|mn|[mkb])"
+        value = re.sub(rf"(?i)({currency})\s*\(\s*({coefficient})\s*\)\s*({magnitude})\b", r"\1 -\2 \3", value)
         value = re.sub(rf"(?i)\(\s*({amount})\s*\)\s*({currency})", r"-\1 \2", value)
         return re.sub(r"(?<![A-Za-z0-9_])([+-])\s+(?=\d)", r"\1", value)
 

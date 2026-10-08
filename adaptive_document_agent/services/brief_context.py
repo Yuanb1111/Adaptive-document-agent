@@ -112,8 +112,10 @@ def _relation_subject(text: str) -> str | None:
     return subject if subject and not re.search(r'[;:]', subject) else None
 
 
-def _complete_scenarios(text: str, evidence: list[BriefQuote]) -> str:
-    source_sentences = list(dict.fromkeys(sentence for quote in evidence for sentence in _sentences(quote.text)))
+def _complete_scenarios(text: str, evidence: list[BriefQuote], pages=None) -> str:
+    from .source_quotes import continuous_quote_texts
+    passages = continuous_quote_texts(evidence, pages) if pages is not None else [q.text for q in evidence]
+    source_sentences = list(dict.fromkeys(sentence for passage in passages for sentence in _sentences(passage)))
     shown = _sentences(text)
     for position, summary in enumerate(shown):
         # An already-literal independent sentence must not be rewritten from
@@ -237,7 +239,7 @@ def preserve_brief_context(item: ExecutiveBriefItem, pages: dict[int, str]) -> C
     source page. The authoring schema's copy budget never truncates display text;
     the existing renderer paginates this complete copy at its fixed line spacing.
     """
-    text = item.text if item.comparison_table else _complete_scenarios(item.text, item.evidence)
+    text = item.text if item.comparison_table else _complete_scenarios(item.text, item.evidence, pages)
     text, additions = _restore_cadence(text, item.evidence, pages)
     evidence = [*item.evidence, *additions]
     conditions = ''

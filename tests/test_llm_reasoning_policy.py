@@ -24,6 +24,17 @@ class Answer(BaseModel):
     value: int
 
 
+@pytest.mark.parametrize('setting,options', [('reduced', {'extra_body': {'thinking': {'type': 'disabled'}}}),
+                                            ('provider_default', {})])
+def test_bounded_coverage_output_keeps_reasoning_inside_existing_opt_out_policy(setting, options):
+    settings = LLMSettings(provider=ProviderName.DEEPSEEK, simple_task_reasoning=setting)
+    policy = request_reasoning_policy(settings, stage='presentation', operation='TopicCoverageReview',
+                                      model='deepseek-flash')
+    assert policy['options'] == options
+    assert request_reasoning_policy(settings, stage='report', operation='ExecutiveBrief',
+                                     model='deepseek-flash')['options'] == {}
+
+
 class UnsupportedParamsError(Exception):
     pass
 

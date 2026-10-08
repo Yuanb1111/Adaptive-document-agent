@@ -7,6 +7,7 @@ from adaptive_document_agent.services.brief_context import adjacent_definition_e
 from adaptive_document_agent.services.llm import LLMGateway
 from .prompting import load_prompt, untrusted_document_message
 from .brief_item_repair import generate_with_item_repair
+from .brief_source_checks import source_check_context, record_uncited_checks
 
 
 class BriefSourcePages(BaseModel):
@@ -46,6 +47,7 @@ class ExecutiveBriefWriter:
         if not pages:
             raise ValueError('No page text is available for a source-bound executive brief.')
         topic_pages = _selected_topic_pages(result, set(pages))
+        source_checks, checked_passages = source_check_context(result)
         selected = list(pages)
         if len(pages) > 10:
             # All pages retain an entry; reduce preview width rather than taking
@@ -61,6 +63,7 @@ class ExecutiveBriefWriter:
                              for i in sorted(result.insights, key=lambda i: -i.importance)[:14]],
                 'selected_analysis_topics': [{'title': title, 'pages': source_pages}
                                              for title, source_pages in topic_pages],
+                'supplementary_source_checks': source_checks,
                 'page_previews': [{'page': p, 'text': ' '.join(text.split())[:width]}
                                   for p, text in pages.items()],
             }
@@ -86,9 +89,17 @@ class ExecutiveBriefWriter:
                 page = next((page for page in candidates if page not in anchors), candidates[0])
                 if page not in anchors:
                     anchors.append(page)
-            selected = list(dict.fromkeys([*anchors, *selected]))[:10]
+            # Keep the two leading topic anchors required by the brief gate,
+            # then preserve the semantic selector's reading choices. Filling
+            # all ten slots with chart anchors could discard every narrative
+            # constraint or explanation that the selector had requested.
+            selected = list(dict.fromkeys([*anchors[:2], *selected, *anchors[2:]]))[:10]
         excerpts = {p: pages[p][:9000] for p in selected}
         excerpts.update(adjacent_definition_excerpts(pages, excerpts))
+        for page, passages in checked_passages.items():
+            for passage in passages:
+                if passage not in excerpts.get(page, ''):
+                    excerpts[page] = excerpts.get(page, '') + '\n[SEPARATE SOURCE PASSAGE]\n' + passage
         included_topics = [(title, [page for page in source_pages if page in excerpts])
                            for title, source_pages in topic_pages]
         included_topics = [(title, source_pages) for title, source_pages in included_topics if source_pages]
@@ -102,13 +113,16 @@ class ExecutiveBriefWriter:
                    },
                    'selected_analysis_topics': [{'title': title, 'pages': source_pages}
                                                 for title, source_pages in included_topics],
+                   'supplementary_source_checks': source_checks,
                    'source_table_guide': _table_evidence_guide(result, excerpts),
                    'source_excerpts': [{'page': p, 'text': text, 'truncated': len(pages[p]) > len(text)}
                                        for p, text in excerpts.items()]}
         messages = [{'role': 'system', 'content': load_prompt('executive_brief.txt')},
                     untrusted_document_message(json.dumps(payload, ensure_ascii=False))]
-        return generate_with_item_repair(self.gateway, messages, result=result, excerpts=excerpts,
+        brief = generate_with_item_repair(self.gateway, messages, result=result, excerpts=excerpts,
                                          topics=included_topics, source_context=payload)
+        record_uncited_checks(result, brief)
+        return brief
 
 
 def _table_evidence_guide(result: PipelineResult, excerpts: dict[int, str]) -> list[dict]:

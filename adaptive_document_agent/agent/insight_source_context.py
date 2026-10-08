@@ -76,12 +76,15 @@ elsewhere in the document. No embeddings, external lookup, or model calls occur.
     if budget < 1:
         return contexts
     pages = {page.page_number: page for page in document.pages if page.text.strip()}
+    lexical_richness = {number: min(128, len(set(re.findall(r'[a-z]{3,}|[\u3400-\u9fff]{2,}',
+                                                         page.text.casefold()))))
+                        for number, page in pages.items()}
     by_id = {item.id: item for item in observations}
     for result in results:
         terms = _terms(result, [by_id[oid] for oid in result.input_observation_ids if oid in by_id])
         anchors = {source.page for source in result.evidence}
         scores = {number: _overlap(page.text, terms) for number, page in pages.items()}
-        rank = lambda number: (-scores[number], number)
+        rank = lambda number: (-scores[number], -lexical_richness[number], number)
         direct = sorted(anchors & pages.keys(), key=rank)
         neighbors = sorted(({number + step for number in anchors for step in (-1, 1)} & pages.keys()) - anchors,
                            key=rank)
@@ -89,8 +92,12 @@ elsewhere in the document. No embeddings, external lookup, or model calls occur.
                         and number not in anchors and number not in neighbors), key=rank)
         # Reserve reading opportunities for nearby narrative and remote cross-
         # references, even when the result has many numeric source pages.
-        order = list(dict.fromkeys(direct[:2] + neighbors[:2] + other[:2] + direct[2:] + neighbors[2:]))
-        count = min(max_excerpts, len(order))
+        order = list(dict.fromkeys(direct[:1] + neighbors[:1] + other[:1] + direct[1:] + neighbors[1:] + other[1:]))
+        # Sharing a large result set across six tiny fragments can cut away
+        # the cause and its qualification. Prefer fewer readable passages,
+        # still reserving nearby narrative and remote reading opportunities.
+        readable_size = min(1200, max_excerpt_chars)
+        count = min(max_excerpts, len(order), max(1, budget // readable_size))
         if not count:
             continue
         size = min(max_excerpt_chars, max(1, budget // count))

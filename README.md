@@ -762,3 +762,42 @@ v89 has local regression coverage; it has not rerun the cloud pilot. Those six
 files become regression samples after being used for fixes. New independent
 acceptance needs unseen files and actual human review. Source/extraction/analysis
 cache contracts advance to document-v2 / extraction-v4 / analysis-v45.
+
+### Evidence-preserving briefing and coverage fixes (v90)
+
+Long literal briefing quotations are split into bounded contiguous citations
+only when the entire passage is on its stated source page. No source words,
+conditions or cases are discarded. The original response and targeted patch
+remain in the repair audit; valid findings stay locked. A malformed patch item
+can no longer erase independent verified replacements. Truncated responses,
+unknown patch keys, fabricated passages and unsupported quantities remain
+rejected. Joined citation chunks must still be contiguous in the original PDF,
+including when validating comparison cells and conditional completeness.
+
+Half-year period labels, accounting signs with an external scale label, and
+complete duplicate rows with identical column bindings retain their source
+meaning. Percentage units require a resolved source column and literal header;
+mixed-unit ambiguity remains blocked. Narrative reading uses fewer, longer
+passages within the same total budget, and chart anchors cannot displace all
+model-selected explanation/constraint pages.
+
+Supplementary source-check quotations now enter briefing selection and synthesis
+even when no numeric observation was extracted. A found check not referenced by
+a literal briefing quotation produces a specific pending-review warning and
+closing-page question, decision impact and source pages. Referencing a quote
+does not prove semantic completeness or business acceptance. Unknown/not-found
+statuses never certify source non-disclosure.
+
+Bounded topic coverage uses the documented operation-level reasoning reduction
+to leave room for structured decisions, with the existing provider-default
+opt-out and exact transport capability checks. The three-call, input and output
+limits stay in place; incomplete reviews still roll back and remain disclosed.
+Conclusion packing removes redundant spacing and fills spare room with complete
+independent bundles while keeping every table value and source reference.
+
+These changes are verified locally using synthetic regressions and stored
+outputs. They do not establish live model quality, latency, cloud renderer
+success or a passed business pilot. The presentation contract advances to v90
+and analysis cache to analysis-v46; extraction stays extraction-v4. Private
+regression inputs, rendered decks, API configuration and filled reviews stay
+outside Git. A fresh run is required to assess the new model-selected output.

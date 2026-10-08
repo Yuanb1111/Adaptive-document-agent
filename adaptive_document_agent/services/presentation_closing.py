@@ -17,6 +17,12 @@ def render_closing(presentation, result, plan):
         from .presentation_summary import render_complete_summary
         findings = [item for item in brief_items(result) if item.table is None]
         if findings:
+            from adaptive_document_agent.agent.brief_source_checks import uncited_source_checks
+            pending_checks = uncited_source_checks(result, result.executive_brief)
+            for check in pending_checks:
+                findings.append(BriefItem('Checked evidence not referenced',
+                    f"Original review question: {check['question']} Review impact: {check['decision_impact']}",
+                    check['pages']))
             from adaptive_document_agent.agent.topic_coverage_review import coverage_review_pending
             pending = coverage_review_pending(result)
             notes = json.dumps({'executive_brief': result.executive_brief.model_dump(mode='json'),
@@ -226,6 +232,10 @@ def _render_linked_bundle_pages(presentation, title, candidates, notes, *, merge
                 copy_height += .08
             copy_height += sum(len(wrap_copy(item.text, text_width - .10, 15)) * .245 + .18
                                for item in items)
+        if any(groups):
+            # The final body has no following body. The bundle's .12-inch
+            # separation already supplies its trailing whitespace.
+            copy_height -= .10
         if stacked:
             return topic_height + table_height + .14 + copy_height, topic_height, watch_only, stacked
         return (max(table_height, copy_height) if watch_only
@@ -259,6 +269,23 @@ def _render_linked_bundle_pages(presentation, title, candidates, notes, *, merge
             bundles.extend(best[-1][2])
         else:
             return None
+
+    # A short complete bundle can fit a prior page even when the immediately
+    # following bundle cannot. Use stable first-fit lookahead, preserving each
+    # finding's full evidence and copy, instead of leaving a half-empty page.
+    pending, packed = list(bundles), []
+    capacity = bottom - top
+    while pending:
+        used = 0.0
+        while pending:
+            index = next((i for i, bundle in enumerate(pending)
+                          if used + dimensions(bundle)[0] <= capacity), None)
+            if index is None:
+                break
+            bundle = pending.pop(index)
+            packed.append(bundle)
+            used += dimensions(bundle)[0] + .12
+    bundles = packed
 
     slides, shown_ids = [], set()
     y, pages, unaudited = top, set(), False

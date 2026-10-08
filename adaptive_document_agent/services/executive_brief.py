@@ -3,7 +3,7 @@ import re
 from adaptive_document_agent.models import PipelineResult
 from adaptive_document_agent.models.executive_brief import ExecutiveBrief
 from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
-from .source_quotes import normalize_quote
+from .source_quotes import normalize_quote, continuous_quote_passages
 
 
 def normalized(text: str) -> str:
@@ -39,6 +39,7 @@ _MONEY_QUANTITY = re.compile(
 
 def _quantities(text: str) -> set[tuple[str, str, str]]:
     text = PresentationPlanValidator._without_period_durations(text)
+    text = PresentationPlanValidator._canonicalize_money_signs(text)
     money_matches = list(_MONEY_QUANTITY.finditer(text))
     money_spans = [match.span() for match in money_matches]
     output = {((match['currency'] or match['currency_suffix'] or '').casefold(),
@@ -73,19 +74,20 @@ def restore_percentage_symbols(text: str, quotes: list[str], *, source_percentag
     return _QUANTITY.sub(replace, text)
 
 
-def _quoted_table_percentages(item, result):
+def _quoted_table_percentages(item, result, *, quotations=None):
     """A bare quoted cell needs a resolved, explicitly percentage source column."""
     from collections import defaultdict
     from decimal import Decimal, InvalidOperation
     pages = {p.page_number: p for p in result.document.pages}
     kinds = defaultdict(set)
     bound_cells = set()
+    quoted_passages = quotations if quotations is not None else item.evidence
     for observation in result.observations:
         if observation.value is None or observation.validation_status != 'valid' or observation.anomaly_notes:
             continue
         key = PresentationPlanValidator._normalize_number(observation.raw_value)
         for evidence in observation.evidence:
-            quotes = [q.text for q in item.evidence if q.page == evidence.page]
+            quotes = [q.text for q in quoted_passages if q.page == evidence.page]
             value_quotes = [quote for quote in quotes if key in {v for _, v, _ in _quantities(quote)}]
             if value_quotes:
                 # A same-page/same-value observation with another unit keeps
@@ -119,7 +121,7 @@ def _quoted_table_percentages(item, result):
             if (observation.id, evidence.page, evidence.table_id,
                     observation.row_id, observation.column_id) not in bound_cells:
                 continue
-            if evidence.page not in {q.page for q in item.evidence}:
+            if evidence.page not in {q.page for q in quoted_passages}:
                 continue
             page = pages.get(evidence.page)
             table = next((t for t in page.tables if t.table_id == evidence.table_id), None) if page else None
@@ -202,10 +204,12 @@ def validate_executive_brief(brief: ExecutiveBrief, result: PipelineResult, *,
     prove literal quote location and numeric support, not semantic entailment.
     """
     pages = excerpts if excerpts is not None else {p.page_number: p.text for p in result.document.pages}
+    original_pages = {p.page_number: p.text for p in result.document.pages}
     errors = []
     seen = set()
     all_numbers = set()
     for item in brief.items:
+        passages = continuous_quote_passages(item.evidence, original_pages)
         if not item.label.strip() or not item.text.strip():
             errors.append('Brief labels and text must be nonempty.')
         elif _UNIT_ONLY_LABEL.fullmatch(item.label):
@@ -221,25 +225,29 @@ def validate_executive_brief(brief: ExecutiveBrief, result: PipelineResult, *,
             # and assumptions, rather than reformulated or calculated values.
             for row in item.comparison_table.rows:
                 for cell in row:
-                    if not any(normalized(cell) in normalized(q.text) for q in item.evidence):
+                    if not any(normalized(cell) in normalized(q.text) for q in passages):
                         errors.append(f'{item.label}: comparison table cell lacks literal item-bound evidence.')
             from .brief_context import _CONDITION, _outcomes
             shown = _outcomes(brief_claim_text(item))
-            for quote in item.evidence:
-                if len(_CONDITION.findall(quote.text)) < 2:
+            for passage in passages:
+                if len(_CONDITION.findall(passage.text)) < 2:
                     continue
-                if any(not values <= shown.get(unit, set()) for unit, values in _outcomes(quote.text).items()):
+                if any(not values <= shown.get(unit, set()) for unit, values in _outcomes(passage.text).items()):
                     errors.append(f'{item.label}: comparison table omits a quoted conditional outcome or its unit.')
         allowed = set()
         quantities = set()
         for quote in item.evidence:
-            if not normalized(quote.text) or normalized(quote.text) not in normalized(pages.get(quote.page, '')):
+            if (not normalized(quote.text)
+                    or normalized(quote.text) not in normalized(pages.get(quote.page, ''))
+                    or normalized(quote.text) not in normalized(original_pages.get(quote.page, ''))):
                 errors.append(f'{item.label}: quote not found on cited page {quote.page}.')
-            allowed.update(PresentationPlanValidator._numbers(quote.text))
-            quantities.update(_quantities(quote.text))
-        source_percentages = _quoted_table_percentages(item, result)
+        for passage in passages:
+            allowed.update(PresentationPlanValidator._numbers(passage.text))
+            quantities.update(_quantities(passage.text))
+        source_percentages = _quoted_table_percentages(item, result, quotations=passages)
         from .brief_table_evidence import quoted_table_context, canonical_quantity
         table_context = quoted_table_context(item, result, excerpts=excerpts)
+        source_percentages.update(table_context.percentages)
         # Accounting parentheses in a complete source row are signs, never
         # authorization to publish a positive amount with the same digits.
         allowed.difference_update(table_context.misparsed_positive_numbers)
@@ -289,8 +297,10 @@ def brief_items(result: PipelineResult):
     items = []
     for item in brief.items:
         contextual = preserve_brief_context(item, pages)
+        from .brief_table_evidence import quoted_table_context
         text = restore_percentage_symbols(contextual.text, [q.text for q in contextual.evidence],
-                                          source_percentages=_quoted_table_percentages(item, result))
+                                          source_percentages=(_quoted_table_percentages(item, result)
+                                                              | quoted_table_context(item, result).percentages))
         items.append(BriefItem(item.label, text, sorted({q.page for q in contextual.evidence}),
                                table=item.comparison_table, conditions=contextual.conditions))
     return items

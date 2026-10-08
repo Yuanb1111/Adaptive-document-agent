@@ -15,7 +15,7 @@ from tests.test_presentation_brief import blank_deck
     ("The reported series retains each original source period and measurement context. "
      "The evidence supports this finding with its source qualifications.", 2),
     ("The selected reported series retains its complete measurement context and each original source period. "
-     "These observations support the stated finding while keeping its source qualifications visible to the reader.", 3),
+     "These observations support the stated finding while keeping its source qualifications visible to the reader.", 2),
 ])
 def test_linked_findings_pack_only_when_complete_evidence_and_copy_fit(copy, page_count):
     result, _ = _fixture((123456, 145678, 167890))

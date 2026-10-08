@@ -6,7 +6,7 @@ import re
 
 from adaptive_document_agent.extraction.numeric_parser import parse_number
 from adaptive_document_agent.extraction.normalizer import infer_unit_defaults
-from .source_quotes import normalize_quote
+from .source_quotes import normalize_quote, continuous_quote_passages
 
 _SCALES = {1: "", 1000: "thousand", 1_000_000: "million",
            1_000_000_000: "billion", 1_000_000_000_000: "trillion"}
@@ -67,6 +67,7 @@ class TableQuoteContext:
     misparsed_positive_numbers: set[str] = field(default_factory=set)
     dates: set[tuple[str, str, str]] = field(default_factory=set)
     bases: dict[tuple[str, str, str], set[str]] = field(default_factory=dict)
+    percentages: set[str] = field(default_factory=set)
 
     def numeric_claim_text(self, text):
         """Exempt complete supported dates, never authorize their digits elsewhere."""
@@ -187,7 +188,8 @@ def quoted_table_context(item, result, *, excerpts=None):
     pages = {page.page_number: page for page in result.document.pages}
     context = TableQuoteContext()
     positive_coefficients = set()
-    for quote in item.evidence:
+    non_percentage_coefficients = set()
+    for quote in continuous_quote_passages(item.evidence, {number: p.text for number, p in pages.items()}):
         page = pages.get(quote.page)
         source = excerpts.get(quote.page, "") if excerpts is not None else (page.text if page else "")
         quoted = normalize_quote(quote.text)
@@ -205,8 +207,19 @@ def quoted_table_context(item, result, *, excerpts=None):
                 plausible_tables.add(table.table_id)
                 if row.alignment_status == "resolved" and normalize_quote(" ".join(cells)) in quoted:
                     complete.append((table, row))
-        if len(plausible_tables) != 1 or not complete:
+        if not complete or plausible_tables != {table.table_id for table, _ in complete}:
             continue
+        if len(plausible_tables) > 1:
+            # A shared total can be printed in several source tables. Accept
+            # it only when the complete ordered row AND every column binding
+            # agree. A partial row or a competing unit/period remains ambiguous.
+            signatures = {repr((row.cells, table.column_types, table.column_currencies,
+                                table.column_scales, table.column_periods,
+                                table.column_audit_statuses,
+                                [_column_basis(table, col, source) for col in range(len(table.column_currencies))]))
+                          for table, row in complete}
+            if len(signatures) != 1:
+                continue
         for table, row in complete:
             context.dates.update(_header_dates(table, source))
             for column, cell in enumerate(row.cells):
@@ -214,6 +227,13 @@ def quoted_table_context(item, result, *, excerpts=None):
                 if parsed is None:
                     continue
                 coefficient = _number(parsed.value / parsed.scale)
+                if column >= len(table.column_types) or table.column_types[column] != 'percentage':
+                    non_percentage_coefficients.add(coefficient)
+                if (column < len(table.column_types) and table.column_types[column] == 'percentage'
+                        and any(value and ('%' in value or 'percent' in value.casefold())
+                                and normalize_quote(value) in normalize_quote(source)
+                                for value in [*table.headers, table.default_raw_unit, *table.raw_header_lines])):
+                    context.percentages.add(coefficient)
                 if parsed.value < 0 and parsed.unit in {None, "currency"}:
                     context.signed_numbers.add(coefficient)
                 elif parsed.unit in {None, "currency"}:
@@ -241,4 +261,5 @@ def quoted_table_context(item, result, *, excerpts=None):
                 context.bases.setdefault(quantity, set()).add(basis)
     context.quantities = {q for q, bases in context.bases.items() if len(bases) == 1}
     context.misparsed_positive_numbers.difference_update(positive_coefficients)
+    context.percentages.difference_update(non_percentage_coefficients)
     return context

@@ -6,6 +6,11 @@ without changing prompts, response validation, routing, credentials or privacy:
 - `IntroductionPages` in `presentation` and `BriefSourcePages` in `report` reduce
   reasoning when the exact configured model and transport support it
 - The single existing format-only repair attempt uses the same reduction policy
+- `TopicCoverageReview` in `presentation` uses the same opt-out reduction. Its
+  bounded output must contain explicit evidence decisions rather than spend
+  the entire token allowance on internal reasoning. Full point context,
+  source validation and the three-call budget remain required; incomplete
+  coverage remains unresolved and cannot certify business acceptance.
 - Semantic resolution, planning, insight generation, `ExecutiveBrief`,
   `IntroductionDraft`, unknown operations and plain text generation keep defaults
 - The existing `discovery_thinking` setting remains independent and unchanged
