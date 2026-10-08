@@ -619,9 +619,7 @@ class PresentationPlanRecovery:
         # selecting the most informative closing copy.
         groups = []
         seen = set(summary_copy)
-        from adaptive_document_agent.validation.claim_validator import ClaimValidator
         from adaptive_document_agent.validation.presentation_provenance import insight_inputs
-        from adaptive_document_agent.validation.scoped_narrative_values import scoped_value_errors
         from adaptive_document_agent.models import ValidationIssue
         import json
 
@@ -644,11 +642,8 @@ class PresentationPlanRecovery:
                 # or borrow another bullet's dates and values. Keep the model's
                 # original statement and rejection in the audit and raw insight.
                 records = [by_id[oid] for oid in links.get(item.id, [])]
-                candidate = PresentationSlide(id="slide_risks", slide_type="risks", title="Conclusions",
-                    bullets=[statement], observation_ids=[o.id for o in records])
-                failures = [issue.message for issue in ClaimValidator().validate_slide(candidate, records)
-                            if issue.severity == "error"]
-                failures.extend(scoped_value_errors(candidate, records, result.observations))
+                from .presentation_closing_validation import closing_claim_errors
+                failures = closing_claim_errors(statement, records, result)
                 if failures:
                     audit = json.dumps({"insight_id": item.id, "field": field,
                         "statement": statement, "errors": failures}, ensure_ascii=False, sort_keys=True)

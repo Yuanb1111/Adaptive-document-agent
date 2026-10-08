@@ -103,7 +103,21 @@ class InsightGenerator:
                                   if item.id in result.input_observation_ids))
         metric_name = "; ".join(labels) if labels else clean_metric_label(result.title)
         res_str = str(result.result) if result.result is not None else "reported levels"
-        movement = f"{metric_name} stood at {res_str}"
+        movement = f"Calculated result for {result.title}: {res_str}"
+        kind = "calculated_result"
+        # A scalar tool result does not carry its operation or output unit.
+        # It may be growth, a ratio or a statistic, never necessarily a level
+        # of the input metric. Preserve the reported inputs instead of guessing.
+        linked = [item for item in observations or []
+                  if item.id in result.input_observation_ids and item.evidence]
+        if isinstance(result.result, (int, float)) and linked:
+            parts = []
+            for item in linked[:6]:
+                context = "; ".join(value for value in (item.period, item.raw_unit) if value)
+                parts.append(f"{qualified_metric_label(item)}: {item.raw_value}"
+                             + (f" ({context})" if context else ""))
+            movement = "Selected reported values — " + "; ".join(parts)
+            kind = "reported_fact"
         if isinstance(result.result, list) and len(result.result) >= 3:
             series_rows = [row for row in result.result if isinstance(row, dict) and row.get("value") is not None]
             if len(series_rows) >= 3:
@@ -122,7 +136,7 @@ class InsightGenerator:
             id=stable_id("insight", result.task_id),
             title=metric_name if labels else result.title,
             narrative=narrative,
-            kind="calculated_result",
+            kind=kind,
             importance=min(1.0, result.confidence),
             confidence=result.confidence,
             evidence=result.evidence,

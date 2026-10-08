@@ -405,17 +405,20 @@ def test_closing_prioritizes_verified_findings_over_generic_watch_items():
 
 
 def test_calculated_conclusion_uses_sourced_result_instead_of_absence_claim() -> None:
+    from adaptive_document_agent.models import AnalysisResult
     result = _result()
+    result.analysis_results = [AnalysisResult(task_id="growth", title="Revenue growth", result=95.39256623911618,
+        input_observation_ids=[o.id for o in result.observations], evidence=result.insights[0].evidence, confidence=.9)]
     result.insights[0] = result.insights[0].model_copy(update={
         "kind": "calculated_result", "title": "Reported growth rate",
-        "narrative": "Reported growth was 12.5% from FY2022 to FY2024.",
+        "narrative": "Revenue increased 95.4% from FY2023 to FY2025.", "result_ids": ["growth"],
         "implication": "Growth improved, but no cost drivers are provided in the supplied data.",
     })
     closing = PresentationPlanRecovery._risks_slide(
         result, PresentationSlide(id="summary", slide_type="executive_summary", title="Summary"))
     assert closing is not None
     assert closing.title == "Conclusions"
-    assert closing.bullets == ["Reported growth was 12.5% from FY2022 to FY2024."]
+    assert closing.bullets == ["Revenue increased 95.4% from FY2023 to FY2025."]
 
 
 def test_topic_recovery_selects_composition_across_category_series():

@@ -179,6 +179,8 @@ def prepare_presentation_claims(result: PipelineResult, plan: PresentationPlan |
     plan = plan or result.presentation_plan
     if plan is None:
         return []
+    from adaptive_document_agent.agent.presentation_closing_validation import withhold_cached_closing_claims
+    closing_notes = withhold_cached_closing_claims(result, plan)
     from adaptive_document_agent.agent.presentation_insight_recovery import recover_insight_narrative
     recover_insight_narrative(result, plan)
     if plan.planning_origin in {"topic_compilation", "topic_recovery"}:
@@ -200,7 +202,7 @@ def prepare_presentation_claims(result: PipelineResult, plan: PresentationPlan |
     totals = source_total_denominators(result)
     from .presentation_ratio_definitions import ratio_definitions, source_defined_possessive_share
     definitions = ratio_definitions(result)
-    notes, replacements, restored_titles = list(composition_notes), {}, defaultdict(set)
+    notes, replacements, restored_titles = [*closing_notes, *composition_notes], {}, defaultdict(set)
     for slide in plan.slides:
         if slide.slide_type != "analysis":
             continue

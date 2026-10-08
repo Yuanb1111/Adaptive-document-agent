@@ -95,6 +95,30 @@ def recover_unscoped_topic_claims(plan: PresentationPlan, result: PipelineResult
         for topic_id in matched:
             affected.add(topic_id)
             errors_by_topic.setdefault(topic_id, []).append(issue.message)
+    # A separate scoped-value gate may find an endpoint attributed to a
+    # differently named source measure. Withdraw those authored takeaways in
+    # the same transaction; otherwise they prevent unrelated scope repairs.
+    from adaptive_document_agent.validation.scoped_narrative_values import scoped_value_errors
+    from adaptive_document_agent.models import PresentationSlide
+    from adaptive_document_agent.validation.narrative_plan_validator import expanded_observation_ids
+    by_id = {item.id: item for item in result.observations}
+    charts = {item.id: item for item in result.charts}
+    for slide in plan.slides:
+        if slide.slide_type == "analysis" and slide.theme_id in topics:
+            copies = [(slide.theme_id, slide.title)]
+        elif slide.id in summaries:
+            copies = [(topic.id, text) for text in slide.bullets for topic in topics.values()
+                      if text in {topic.takeaway, topic.title}]
+        else:
+            continue
+        ids = expanded_observation_ids(slide, charts)
+        records = [by_id[oid] for oid in ids if oid in by_id]
+        for topic_id, text in copies:
+            view = PresentationSlide(id=slide.id, slide_type=slide.slide_type, title=text)
+            errors = scoped_value_errors(view, records, result.observations)
+            if errors:
+                affected.add(topic_id)
+                errors_by_topic.setdefault(topic_id, []).extend(errors)
     if not affected:
         return []
     candidate = plan.model_copy(deep=True)
