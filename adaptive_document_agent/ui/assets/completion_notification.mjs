@@ -1,6 +1,6 @@
 // Trusted application code only. No document text, filenames or external assets.
 // Keep stored consent/deduplication, but refresh the live delivery feedback.
-const CONTROLLER = Symbol.for("adaptive-document-agent.completion-notice.v3");
+const CONTROLLER = Symbol.for("adaptive-document-agent.completion-notice.v4");
 
 function controllerFor(win) {
   if (win[CONTROLLER]) return win[CONTROLLER];
@@ -11,7 +11,8 @@ function controllerFor(win) {
   catch { storageAvailable = false; }
   if (!saved || typeof saved !== "object") saved = {};
   const state = {
-    enabled: saved.enabled === true,
+    // Default on when the browser has permission; preserve an explicit opt-out.
+    enabled: saved.enabled !== false,
     seen: new Set(Array.isArray(saved.seen) ? saved.seen : []),
     latestRuns: new Map(Array.isArray(saved.latestRuns) ? saved.latestRuns : []),
     busy: false,
@@ -37,6 +38,7 @@ function controllerFor(win) {
     if (state.message) return state.message;
     if (!storageAvailable) return "Browser storage is unavailable. Notifications cannot stay enabled across a refresh.";
     if (state.busy) return "Waiting for browser permission…";
+    if (state.enabled && permission() === "default") return "Completion notifications are enabled by default. Click the switch and allow browser notifications to activate them.";
     if (!state.enabled || permission() !== "granted") return "Get a message when your PowerPoint is ready to download.";
     return "You’ll get a message when your PowerPoint is ready to download.";
   }

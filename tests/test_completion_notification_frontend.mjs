@@ -55,6 +55,23 @@ function browser({ saved = new Map(), permission = "default", allowed = "granted
 const flush = () => new Promise(resolve => setImmediate(resolve));
 const finish = (id, runId) => render({ parentElement: root().wrapper, data: { mode: "complete", event_id: id, run_id: runId } });
 
+test("a permitted browser defaults on and preserves a manual opt-out after reload", () => {
+  const b = browser({ permission: "granted" });
+  const r = root();
+  render({ parentElement: r.wrapper, data: { mode: "settings" } });
+  assert.equal(r.get(".notice-enable").attributes.get("aria-checked"), "true");
+  assert.equal(b.requests(), 0);
+  finish("default-on", "run");
+  assert.equal(b.notices.length, 1);
+  r.get(".notice-enable").fire("click");
+  const reloaded = browser({ saved: b.saved, permission: "granted" });
+  const next = root();
+  render({ parentElement: next.wrapper, data: { mode: "settings" } });
+  assert.equal(next.get(".notice-enable").attributes.get("aria-checked"), "false");
+  finish("new-result", "run");
+  assert.equal(reloaded.notices.length, 0);
+});
+
 test("identical content notifies for each new attempt, once per run even after refresh", async () => {
   const b = browser();
   const r = root();
@@ -96,6 +113,7 @@ test("consent is only requested on a click, then completion is delivered once ac
   let cleanup = render({ parentElement: r.wrapper, data: { mode: "settings" } });
   assert.equal(b.requests(), 0);
   assert.equal(b.notices.length, 0);
+  assert.match(r.get(".notice-status").textContent, /enabled by default.*allow browser notifications/);
   r.get(".notice-enable").fire("click"); await flush();
   assert.equal(b.requests(), 1);
   finish("run1"); finish("run1");

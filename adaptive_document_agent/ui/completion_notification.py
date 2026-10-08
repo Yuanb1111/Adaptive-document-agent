@@ -1,4 +1,4 @@
-"""Opt-in browser notices for verified, downloadable PowerPoint exports.
+"""Browser notices enabled by default for verified PowerPoint exports.
 
 The frameless v2 component runs in the app origin. Its preferences stay in the
 browser, so changing them never interrupts a running Streamlit script.
@@ -29,7 +29,7 @@ def _component():
 
 
 def render_settings(st) -> None:
-    """Mount before upload so the user can opt into silent completion notices."""
+    """Mount before upload to show browser permission and notification settings."""
     try:
         renderer = _component()
     except ImportError:
