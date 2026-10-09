@@ -45,6 +45,8 @@ def _missing_included_facts(reviewed, lookup):
 
 
 def _validate_batch(reviewed, current, requested, lookup, primary_pages, validate):
+    from .topic_reference_binding import bind_topic_references
+    bind_topic_references(reviewed, lookup)
     revised = PresentationTopicSelection(topics=reviewed.topics, omissions=reviewed.omissions)
     validate(revised, lookup, primary_pages=primary_pages)
     previous_ids = {sid for topic in current.topics for sid in topic.series_ids}
@@ -211,6 +213,8 @@ def review_topic_coverage(
              + load_prompt("presentation_topic_coverage_review.txt")},
             untrusted_document_message(encoded),
         ], TopicCoverageReview, stage="presentation", allow_repair=False,max_tokens=MAX_REVIEW_OUTPUT_TOKENS)
+        from .topic_reference_binding import bind_topic_references
+        bind_topic_references(reviewed, lookup, result)
         revised = PresentationTopicSelection(topics=reviewed.topics, omissions=reviewed.omissions)
         validate(revised, lookup, primary_pages=primary_pages)
         decisions = {item.series_id: item for item in reviewed.coverage_decisions}

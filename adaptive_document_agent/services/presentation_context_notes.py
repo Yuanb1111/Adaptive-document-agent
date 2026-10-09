@@ -16,6 +16,9 @@ def slide_context_notes(result, slide, charts, index, *, definitions=None):
             label = qualified_metric_name(index.get(chart.observation_ids[0]))
             factor = f" × {definition['multiplier']:g}" if definition.get("multiplier") is not None else ""
             notes.append(f"{label}: {definition['numerator']} / {definition['denominator']}{factor}.")
+        from .source_row_qualifications import source_row_qualifications
+        notes.extend(note['text'] for note in source_row_qualifications(
+            [index.get(oid) for oid in chart.observation_ids if index.get(oid)], result.document))
     plan = result.presentation_plan
     if plan and slide.theme_id:
         first = next((page for page in plan.slides

@@ -92,7 +92,8 @@ def _composition_scope(chart, observations, totals):
     aliases = {}
     for original, view in zip(observations, views):
         category = {**view.dimensions, **view.category_dimensions}[dimension]
-        for label in (category, original.metric_original, display_metric_name(original), qualified_metric_name(original)):
+        for label in (category, original.metric_original, display_metric_name(original), qualified_metric_name(original),
+                      f'{display_metric_name(original)}: {category}'):
             aliases.setdefault(_composition_label_key(label), set()).add(category)
     # A shared metric such as "Responses" identifies the whole measure, not
     # one component. Only labels that identify exactly one part are mechanical.
@@ -135,7 +136,8 @@ def composition_heading(title, chart, observations, totals=()):
     inferred from surrounding table prose; the chart's own title is preferred.
     """
     heading, components, categories = _composition_scope(chart, observations, totals)
-    return heading if _composition_inventory(title, components, categories, single=True) else title
+    return heading if (_composition_inventory(title, components, categories, single=True)
+                       or title.strip().casefold() in {'reported measure', 'reported measures'}) else title
 
 
 def composition_message(message, chart, observations, totals=()):

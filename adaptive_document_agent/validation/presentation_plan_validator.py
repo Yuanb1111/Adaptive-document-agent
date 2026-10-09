@@ -472,7 +472,7 @@ class PresentationPlanValidator:
         # never treat the leading 1/2 in 1H2024 or H12024 as a measured value.
         value = re.sub(r"(?i)(?<![A-Za-z0-9_.])(?:[12]H|H[12])\s*((?:19|20)\d{2})\b", r" \1", value)
         pattern = re.compile(
-            r"(?i)(?<![A-Za-z0-9_.])(?:3|6|9|12)M"
+            r"(?i)(?<![A-Za-z0-9_.])(?:1[0-2]|[1-9])M"
             r"(?:(?P<year>\d{4})\b|(?=\s+(?:period|ended|ending)\b))"
         )
         if not pattern.search(value):

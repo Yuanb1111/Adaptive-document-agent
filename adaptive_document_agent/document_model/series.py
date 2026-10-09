@@ -395,13 +395,17 @@ def paired_observations(
     return pairs
 
 
-def period_sort_key(value: str | None) -> tuple[int, int, str]:
+def period_sort_key(value: str | None) -> tuple[int, int, int, str]:
     """Sort common period labels while keeping unfamiliar labels deterministic."""
     text = value or ""
     year_match = re.search(r"(?:19|20)\d{2}", text)
     year = int(year_match.group()) if year_match else 10**9
     basis = 0 if text.upper().startswith("FY") else 1
-    return year, basis, text.casefold()
+    from .period_semantic_validator import period_sort_key_extended, extract_period_basis
+    if extract_period_basis(text) == 'point_in_time' or re.fullmatch(r'(?:19|20)\d{2}-\d{2}-\d{2}\*?', text):
+        y, month, day, _ = period_sort_key_extended(text)
+        return y, 1, month * 100 + day, text.casefold()
+    return year, basis, 0, text.casefold()
 
 
 def _has_conflict(items: list[Observation]) -> bool:

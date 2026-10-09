@@ -9,7 +9,7 @@ from .column_roles import percentage_column
 _YEAR_OR_PERIOD_PATTERN = re.compile(
     r"\b(?:19|20)\d{2}\b"
     r"|(?:FY\s*)?(?:19|20)\d{2}"
-    r"|(?:3M|6M|9M|12M|Q[1-4]|1H|2H)\s*(?:19|20)?\d{2}"
+    r"|(?:(?:1[0-2]|[1-9])M|Q[1-4]|1H|2H)\s*(?:19|20)?\d{2}"
     r"|(?:19|20)\d{2}\s*年(?:度)?"
 )
 

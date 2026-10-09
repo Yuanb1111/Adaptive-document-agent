@@ -317,6 +317,8 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
     presentation._ada_denominators = source_total_denominators(result)
     from .presentation_display_plan import display_slides
     physical_slides = display_slides(plan, chart_by_id, index)
+    from .presentation_export_trace import record_section, clear_trace
+    clear_trace(result)
     from .presentation_value_chain import can_render_value_chain
     value_chain = can_render_value_chain(plan.company, presentation.slide_width.inches)
     slides_by_type = {slide.slide_type: slide for slide in plan.slides}
@@ -394,8 +396,6 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
 
     rendered_charts: list[ChartPlan] = []
     ordinal = 0
-    from .presentation_export_trace import record_section, clear_trace
-    clear_trace(result)
     for slide_plan in physical_slides[3:]:
         with record_section(presentation, slide_plan, result):
             if slide_plan.slide_type == "analysis":
@@ -586,7 +586,7 @@ def _add_planned_contents(
         "appendix": "Data Index",
     }
     contents_order = planned_slides
-    for item in contents_order:
+    for position, item in enumerate(contents_order):
         if item.slide_type not in defaults:
             continue
         if evidence_in_notes and item.slide_type == "appendix":
@@ -600,7 +600,9 @@ def _add_planned_contents(
         if key not in seen:
             seen.add(key)
             entries.append(label)
-        if include_value_chain and item.slide_type == 'company_overview' and 'how the business operates' not in seen:
+        if (include_value_chain and item.slide_type == 'company_overview'
+                and not any(s.slide_type == 'company_overview' for s in contents_order[position + 1:])
+                and 'how the business operates' not in seen):
             seen.add('how the business operates')
             entries.append('How the business operates')
         if include_key_figures and item.slide_type == 'executive_summary' and 'key figures' not in seen:
@@ -1246,6 +1248,11 @@ def _add_cover(
         # Put the already-resolved subject first. Keep the planner's document
         # topic as the subtitle, and its complete analytical scope in notes.
         clean_purpose, clean_title = clean_title, company_name
+    elif company_name and len(_lines(clean_title, 6.65, 36)) > 3:
+        # A company name embedded in a long document title still needs the
+        # short cover treatment. Preserve the complete planned title in notes.
+        clean_purpose = re.sub(re.escape(company_name), '', clean_title, count=1, flags=re.I).strip(' :,-')
+        clean_title = company_name
 
     import json
     note_data = {

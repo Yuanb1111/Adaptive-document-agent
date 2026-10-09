@@ -246,10 +246,21 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
         'original_title': original.get('title', 'Key takeaways'),
         'validation_errors': audit['initial_errors'],
     }
+    from .brief_native_quantities import native_quantity_options
+    repair_context['source_native_money_options'] = native_quantity_options(
+        original, invalid, result, excerpts)
     repair_messages = [
         {'role': 'system', 'content': messages[0]['content'] + '\nRepair only the requested invalid item_N '
          'fields (zero-based original positions), and title only when present in the response schema. '
          'Verified locked_items are immutable; never return them or a whole briefing. '
+         'Keep the original lead and material counterpoints in the invalid positions. '
+         'For every unsupported or rescaled monetary amount, use the exact signed coefficient, '
+         'currency and source_scale from that item\'s source_native_money_options when available. '
+         'These are source-native spellings, not rounded million/billion equivalents. '
+         'For example a quoted (59,883) in RMB thousand supports -RMB59,883 thousand, '
+         'not RMB59.9 million. You may use positive magnitude wording only with its required '
+         'exact quantity_representations annotation. Preserve unit denominators and source headers. '
+         'Do not repeat a rejected conversion or omit the finding merely because its native scale is less compact. '
          'When shortening prose, retain its valid source context and shared assumptions. '
          'Every comparison cell needs its complete source unit; quote adjacent blocks when a sentence '
          'continues across a boundary. Address each listed missing outcome and qualification, '

@@ -15,6 +15,8 @@ def retain_valid_topics(selection, lookup, primary_pages, result, gateway, valid
     accepted topic is checked independently; one failed claim cannot invalidate
     its siblings. Corrections may only use that topic's original evidence scope.
     """
+    from .topic_reference_binding import bind_topic_references
+    bind_topic_references(selection, lookup, result)
     counts = Counter(t.id for t in selection.topics)
     accepted, rejected = {}, []
 
@@ -23,6 +25,8 @@ def retain_valid_topics(selection, lookup, primary_pages, result, gateway, valid
             code="presentation_topic_validation", stage="presentation", severity="warning",
             related_ids=[topic.id], message=json.dumps({
                 "phase": phase, "error": str(error), "topic": topic.model_dump(mode="json"),
+                "source_scopes": {sid: [item.id for item in lookup.get(sid, [])]
+                                  for sid in topic.series_ids},
             }, ensure_ascii=False),
         ))
 

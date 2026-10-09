@@ -10,7 +10,7 @@ from adaptive_document_agent.utils.ids import stable_id
 from .normalizer import infer_unit_defaults
 from .column_roles import explicit_percentage
 from .borderless_layout import source_lines, column_anchors, align_sparse_values, geometric_headers, is_wrapped_label, geometric_audit_statuses
-from .period_header_geometry import geometric_periods
+from .period_header_geometry import geometric_periods, MONTH_DURATION, month_count
 
 _VALUE = re.compile(r"(?<![A-Za-z0-9])(?:\(?[+-]?(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)\)?[%％]?|[—–]|-(?!\S))")
 _YEAR = re.compile(r"\b(?:19|20)\d{2}\b")
@@ -212,13 +212,15 @@ class BorderlessTableExtractor:
             return [None] * width
         if any(not _YEAR.fullmatch(year) for year in years):
             return [year for year in years for _ in range(width // len(years))]
-        context = " ".join(lines[max(0, (year_index or 0) - 3) : (year_index or 0) + 1]).casefold()
+        context = " ".join(lines[max(0, (year_index or 0) - 4) : (year_index or 0) + 1]).casefold()
         labels = list(years)
         duplicate_at = next((index for index, year in enumerate(years) if year in years[:index]), None)
         dates = BorderlessTableExtractor._date_labels(context)
-        if duplicate_at is not None and re.search(r"year\s*ended", context) and re.search(r"(three|six|nine|twelve)\s*months?", context):
-            month_match = re.search(r"(three|six|nine|twelve)\s*months?", context)
-            month_label = {"three": "3M", "six": "6M", "nine": "9M", "twelve": "12M"}.get(month_match.group(1), "M") if month_match else "M"
+        month_match = re.search(MONTH_DURATION, context, re.I)
+        if re.search(r"as\s+(?:of|at)", context) and month_match and not re.search(r"year\s*ended", context):
+            return [None] * width  # Date superheaders need geometry, not a flow-duration guess.
+        if duplicate_at is not None and re.search(r"year\s*ended", context) and month_match:
+            month_label = f"{month_count(month_match.group(1))}M"
             labels = [f"FY{year}" if index < duplicate_at else f"{month_label}{year}" for index, year in enumerate(years)]
         elif duplicate_at is not None and re.search(r"as\s+(?:of|at)", context) and len(dates) >= 2:
             date_split = years.index(years[duplicate_at])
@@ -229,13 +231,13 @@ class BorderlessTableExtractor:
                 f"{year}-{base_date}" if index < date_split else f"{year}-{later_dates[index - date_split]}"
                 for index, year in enumerate(years)
             ]
-        elif re.search(r"year\s*ended", context) and not re.search(r"(three|six|nine|twelve)\s*months?", context):
+        elif re.search(r"year\s*ended", context) and not re.search(r"months?", context):
             labels = [f"FY{year}" for year in years]
-        elif not re.search(r"year\s*ended", context) and (month_match := re.search(r"(three|six|nine|twelve)\s*months?\s*ended", context)):
-            month_label = {"three": "3M", "six": "6M", "nine": "9M", "twelve": "12M"}[month_match.group(1)]
+        elif not re.search(r"year\s*ended", context) and month_match:
+            month_label = f"{month_count(month_match.group(1))}M"
             labels = [f"{month_label}{year}" for year in years]
         repeats = width // len(labels)
-        if duplicate_at is None and re.search(r"year\s*ended", context) and re.search(r"(three|six|nine|twelve)\s*months?", context):
+        if re.search(r"year\s*ended", context) and re.search(r"months?", context) and (duplicate_at is None or not month_match):
             return [None] * width  # Geometry, not word order, must resolve the split.
         return [label for label in labels for _ in range(repeats)]
 
@@ -410,8 +412,8 @@ class BorderlessTableExtractor:
         year = years[0]
         if re.search(r"year\s*ended", lowered):
             return f"FY{year}"
-        if month_match := re.search(r"(three|six|nine|twelve)\s*months?\s*ended", lowered):
-            label = {"three": "3M", "six": "6M", "nine": "9M", "twelve": "12M"}[month_match.group(1)]
+        if month_match := re.search(MONTH_DURATION + r"\s*ended", lowered):
+            label = f"{month_count(month_match.group(1))}M"
             return f"{label}{year}"
         if re.search(r"as\s+(?:of|at)", lowered):
             formatted = format_period_label(line, is_balance_sheet=True)
@@ -433,7 +435,7 @@ class BorderlessTableExtractor:
             lowered = candidate.casefold()
             if not candidate or len(candidate) > 100 or candidate.endswith("."):
                 continue
-            if re.search(r"year\s*ended|months?\s*ended|as\s*(?:of|at)|^ended\b|^(?:three|six|nine|twelve)\s+months?$", lowered):
+            if re.search(r"year\s*ended|months?\s*ended|as\s*(?:of|at)|^ended\b|^(?:" + MONTH_DURATION + r")$", lowered):
                 continue
             if sum(bool(re.search(r"\d", m.group())) for m in _VALUE.finditer(candidate)) >= 2:
                 continue

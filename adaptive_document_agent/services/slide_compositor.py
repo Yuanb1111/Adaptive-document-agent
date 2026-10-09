@@ -415,7 +415,8 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
         qualified = {display_metric_name(o) for o in values}
         # Retain an explicitly extracted parent even when the planned short
         # label names only the child. Do not turn grants into expense metrics.
-        if len(qualified) == 1 and not any(o.category_dimensions for o in values) and any(o.parent_section or o.dimensions.get("section") for o in values):
+        if (not uses_composition_data(chart) and len(qualified) == 1 and not any(o.category_dimensions for o in values)
+                and any(o.parent_section or o.dimensions.get("section") for o in values)):
             title = re.sub(r"(?i)^Adjusted for Adjusted\b", "Adjusted", next(iter(qualified)))
         from .composition_data import uses_composition_data
         title = readable_chart_heading(re.sub(r"(?i)\b(margin|ratio|share)\s+\1\b", r"\1", title),

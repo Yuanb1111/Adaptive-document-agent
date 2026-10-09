@@ -231,7 +231,7 @@ def ensure_company_introduction(gateway, result, plan, *, cancelled: Event | Non
          "omit a ranking if its qualifiers cannot fit rather than generalizing it. "
          "For a source-defined reference date, use its explicit calendar date when that definition "
          "is supplied and cited. If only a term such as Latest Practicable Date is available, "
-         "state that the calendar date is unspecified in the supplied excerpt; never infer it. "
+         "retain the source term without internal comments about excerpts or unavailable context; never infer its date. "
          "Page titles must be short topic labels without numeric claims. Provide the legal company name "
          "only with a literal name_quote and name_page. If insufficient, return null pages. "
          "Optionally provide value_chain as three to five ordered operating stages when the "

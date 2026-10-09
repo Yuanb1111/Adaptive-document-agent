@@ -11,6 +11,16 @@ def scope_items(result):
     if plan is None:
         return []
     retained = {theme.id for theme in plan.themes}
+    retained.update(slide.theme_id for slide in plan.slides if slide.slide_type == 'analysis' and slide.theme_id)
+    # A failed draft is not proof of absent source evidence. Use the final
+    # renderer's exact input scopes when recovery produced unthemed pages.
+    from adaptive_document_agent.agent.presentation_topic_selector import series_directory
+    from adaptive_document_agent.agent.topic_reference_binding import reference_aliases
+    from adaptive_document_agent.agent.coverage_representation import representation_links
+    lookup = None
+    rendered_ids = {oid for record in result.presentation_export_trace for oid in record.get('observation_ids', [])}
+    rendered = [item for item in result.observations if item.id in rendered_ids]
+    by_id = {item.id: item for item in result.observations}
     items, seen = [], set()
 
     def add(title, text, pages=()):
@@ -27,8 +37,29 @@ def scope_items(result):
             except (ValueError, KeyError, TypeError):
                 continue
             if draft.get("phase") == "initial" and topic.get("id") not in retained:
+                if rendered_ids:
+                    identifiers = topic.get('series_ids', [])
+                    audited = draft.get('source_scopes', {})
+                    if identifiers and all(sid in audited for sid in identifiers):
+                        scopes = [[by_id[oid] for oid in audited[sid]]
+                                  if audited[sid] and all(oid in by_id for oid in audited[sid]) else []
+                                  for sid in identifiers]
+                    else:
+                        if lookup is None:
+                            _, lookup = series_directory(result)
+                        aliases = reference_aliases(lookup)
+                        identifiers = [sid if sid in lookup else aliases.get(sid, sid) for sid in identifiers]
+                        scopes = [lookup.get(sid, []) for sid in identifiers]
+                    if scopes and all(scope and representation_links(scope, rendered) is not None for scope in scopes):
+                        continue
+                    if any(representation_links([item], rendered) is not None
+                           for scope in scopes for item in scope):
+                        add("Partially covered: " + topic.get("title", "Selected topic"),
+                            "Some source evidence is shown, but the original topic was not retained in full. "
+                            "See the analysis audit for the remaining evidence scope.")
+                        continue
                 add("Not covered: " + topic.get("title", "Selected topic"),
-                    "The available source evidence did not support a verified presentation of this topic.")
+                    "This topic was not retained as a validated finding; its source evidence and draft remain in the analysis audit.")
     for note in plan.coverage_notes:
         if not _editorial_omission(note, result) and not _contradicted_by_retained_content(note, result):
             add("Coverage boundary", note)

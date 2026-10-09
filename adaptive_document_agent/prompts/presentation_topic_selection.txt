@@ -22,6 +22,10 @@ State each selected view's scope in a useful subject label: identify the reporte
 
 Output only the requested structured schema. Do not include chart IDs or slide layouts; those come later.
 
+Copy each series ID in full, including its presentation_series_ or presentation_composition_ prefix. Do not abbreviate hashes, substitute observation IDs or invent aliases. Missing namespaces can invalidate an otherwise useful question.
+
+Read source_row_qualifications before naming a measure or describing its meaning. Preserve distinctions established by literal row footnotes, including cash versus non-cash scope, exclusions and working-capital adjustments. A qualified component must not be presented as an unqualified total. The same literal notes will accompany the chart.
+
 When selecting an exhaustive category or geographic breakdown, retain every source-declared top-level category or explicitly narrow the scope. Preserve literal exclusions and category definitions; familiar labels are not permission to assume their boundaries.
 
 A total's share of itself is a definitional 100%, rather than a changing category mix. Prefer the complete meaningful components and evidenced denominator; select the self-share only if you can explain a separate material analytical purpose. Keep important assumptions, matched-period counterpoints and adjusted-versus-reported outcomes when they change interpretation. Do not omit them merely to reduce the number of slides.

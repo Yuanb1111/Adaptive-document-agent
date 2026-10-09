@@ -47,7 +47,9 @@ def is_technical_copy(text: str) -> bool:
     return bool(re.search(
         r"\b(?:slope|intercept|start_value|end_value|turning_points?|r_squared|"
         r"residuals|debug|parser)\b|\b(?:supplied|calculated)\s+(?:\w+\s+){0,3}"
-        r"(?:calculation|result)\b|\d+\.\d{6,}|[{}]", text, re.I))
+        r"(?:calculation|result)\b|\d+\.\d{6,}|[{}]|"
+        r"\b(?:calendar date|date|context)\s+(?:is\s+)?(?:unspecified|unavailable|not available)"
+        r"\s+in\s+(?:the\s+)?(?:supplied\s+)?excerpt\b", text, re.I))
 
 
 def _copy_height(text: str, width: float, size: int) -> float:

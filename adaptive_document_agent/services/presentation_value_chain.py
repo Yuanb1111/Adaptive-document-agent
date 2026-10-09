@@ -13,6 +13,13 @@ def can_render_value_chain(company, slide_width: float) -> bool:
     right_gap = .24
     total = slide_width - 1.2
     width = (total - right_gap * (len(steps) - 1)) / len(steps)
+    from .text_capacity import wrap_copy
+    import re
+    # A broken word is not a useful two-line heading. Omit this optional page
+    # when any complete label word cannot fit at the template's heading size.
+    if any(len(wrap_copy(word, width - .18, 17)) > 1
+           for item in steps for word in re.findall(r'[A-Za-z]+', item.label)):
+        return False
     # Optional visual: retain the narrative company pages if the flow cannot
     # fit without shrinking source-backed text below a readable size.
     if any(len(_lines(item.label, width - .18, 17)) > 2

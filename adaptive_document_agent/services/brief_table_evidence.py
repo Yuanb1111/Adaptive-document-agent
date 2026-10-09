@@ -14,7 +14,7 @@ _MONTHS = "January February March April May June July August September October N
 _MONTH = "(?:" + "|".join(_MONTHS) + ")"
 _DATE = re.compile(r"\b(" + _MONTH + r")\s+(\d{1,2}),?\s+((?:19|20)\d{2})\b", re.I)
 _DATE_HEADER = re.compile(
-    r"(?:(?:as of|for the|the|year|years|months?|ended|ending|quarter|six|three|twelve|nine)\s+)*"
+    r"(?:(?:as of|for the|the|year|years|months?|ended|ending|quarter|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+)*"
     r"(" + _MONTH + r")\s+(\d{1,2})(?:,?\s+((?:19|20)\d{2}))?[,]?", re.I)
 _YEAR_HEADER = re.compile(r"(?:19|20)\d{2}(?:[\s,/–-]+(?:19|20)\d{2})*")
 _BASIS_START = re.compile(r"(?:/|\bper\s+)\s*", re.I)

@@ -41,6 +41,9 @@ def generate_summary_presentation(gateway, result, pages, response_model, *, sco
             'numeric spellings, dates, attribution and conditions; never invent missing facts, '
             'causes or recommendations. Prefer a coherent overview followed by the most useful '
             'source-specific subjects; do not repeat the later executive briefing. '
+            'Do not put internal comments about excerpts, missing retrieval context or generation '
+            'in slide copy. Retain a source-defined reference-date term when its calendar definition '
+            'is unavailable, without guessing a date. '
             'Leave legacy overview, business and value_chain empty. Supply a company name only '
             'with a literal name_quote/name_page from supplied reading facts, otherwise leave it empty.')},
             untrusted_document_message(json.dumps(payload, ensure_ascii=False))]

@@ -7,6 +7,12 @@ from .borderless_layout import SourceLine
 
 _YEAR = re.compile(r"\b(?:19|20)\d{2}\b")
 _MONTHS = {name: i for i, name in enumerate(("january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"), 1)}
+MONTH_COUNTS = {word: i for i, word in enumerate(("one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"), 1)}
+MONTH_DURATION = r"\b(" + "|".join(MONTH_COUNTS) + r"|1[0-2]|[1-9])\s*months?(?=\b|ended)"
+
+
+def month_count(token: str) -> int:
+    return int(token) if token.isdigit() else MONTH_COUNTS[token.casefold()]
 
 
 def geometric_periods(headers: list[SourceLine], year_line: SourceLine, width: int) -> list[str] | None:
@@ -31,9 +37,9 @@ def geometric_periods(headers: list[SourceLine], year_line: SourceLine, width: i
             break
         tiers.insert(0, line)
     context = " ".join(line.text for line in tiers).casefold()
-    snapshot = bool(re.search(r"\bas\s+(?:of|at)\b", context)) and not re.search(r"year\s+ended|months?\s+ended", context)
+    snapshot = bool(re.search(r"\bas\s+(?:of|at)\b", context)) and not re.search(r"year\s*ended", context)
     descriptors = []
-    duration = re.compile(r"\b(year\s+ended|(three|six|nine|twelve|3|6|9|12)\s+months?)\b", re.I)
+    duration = re.compile(r"\b(year\s*ended|" + MONTH_DURATION + r")\b", re.I)
     date = re.compile(r"\b(" + "|".join(_MONTHS) + r")\s+(\d{1,2})\b", re.I)
     for line in tiers:
         for match in (date if snapshot else duration).finditer(line.text):
@@ -58,7 +64,7 @@ def geometric_periods(headers: list[SourceLine], year_line: SourceLine, width: i
                 label = f"-{month:02d}-{day:02d}"
             else:
                 token = (match.group(2) or "").casefold()
-                label = "FY" if not token else f"{ {'three': 3, 'six': 6, 'nine': 9, 'twelve': 12}.get(token, token)}M"
+                label = "FY" if not token else f"{month_count(token)}M"
             item = ((bounds[0] + bounds[1]) / 2, label)
             if item not in descriptors:
                 descriptors.append(item)

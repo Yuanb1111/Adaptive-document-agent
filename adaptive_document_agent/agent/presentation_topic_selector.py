@@ -107,6 +107,7 @@ def series_directory(result: PipelineResult) -> tuple[list[dict[str, object]], d
             "evidence_status": "complete", "ratio_definitions": [],
             "visual_kind": chart.chart_type,
         })
+    source_pages = {page.page_number: page for page in result.document.pages}
     for item in directory:
         item.setdefault("visual_kind", "series")
         group = lookup[item["id"]]
@@ -117,6 +118,8 @@ def series_directory(result: PipelineResult) -> tuple[list[dict[str, object]], d
              o.audited_status, o.validation_status, sorted({e.page for e in o.evidence})]
             for o in group
         ]
+        from adaptive_document_agent.services.source_row_qualifications import source_row_qualifications
+        item['source_qualifications'] = source_row_qualifications(group, result.document, pages=source_pages)
     return directory, lookup
 
 
@@ -166,6 +169,10 @@ class PresentationTopicSelector:
                 {"series_id": item["id"], "definitions": item["ratio_definitions"]}
                 for item in directory if item["ratio_definitions"]
             ],
+            'source_row_qualifications': [
+                {'series_id': item['id'], 'notes': item['source_qualifications']}
+                for item in directory if item['source_qualifications']
+            ],
             "validated_insights": [
                 {"id": item.id, "title": item.title, "narrative": item.narrative,
                  "importance": item.importance,
@@ -189,6 +196,8 @@ class PresentationTopicSelector:
             PresentationTopicSelection,
             stage="presentation",
         )
+        from .topic_reference_binding import bind_topic_references
+        bind_topic_references(selection, lookup, result)
         from adaptive_document_agent.services.presentation_ratio_definitions import prepare_topic_ratio_definitions
         prepare_topic_ratio_definitions(selection, lookup, result)
         from adaptive_document_agent.validation.topic_period_consistency import reconcile_topic_periods

@@ -209,7 +209,7 @@ def is_interim_date(period: str | None) -> bool:
         return True
     if any(k in p for k in ("interim", "unaudited", "*")):
         return True
-    if re.search(r"\b[0-9]{1,2}m\b", p):
+    if re.search(r"\b[0-9]{1,2}m(?=\b|(?:19|20)\d{2})", p):
         return True
     # If it is a point-in-time date other than Dec 31
     if m := re.search(r"\b(20\d{2})[-/.](0[1-9]|1[0-2])[-/.](0[1-9]|[12]\d|3[01])\b", p):
@@ -235,10 +235,12 @@ def period_sort_key_extended(period: str | None) -> tuple[int, int, int, str]:
         day = int(m.group(3))
         return (year, month, day, p)
 
-    if m := re.search(r"(?:20)?(\d{2})", p):
+    if m := re.search(r"(?:19|20)\d{2}", p):
+        year = int(m.group())
+    elif m := re.fullmatch(r"(?i)(?:FY|[1-9]M|1[0-2]M|Q[1-4]|[12]H)\s*(\d{2})\*?", p):
         year = int(f"20{m.group(1)}")
 
-    if m := re.search(r"\b([0-9]{1,2})m\b", p.casefold()):
+    if m := re.search(r"\b([0-9]{1,2})m(?=\b|(?:19|20)\d{2})", p.casefold()):
         month = int(m.group(1))
         day = 30
         return (year, month, day, p)

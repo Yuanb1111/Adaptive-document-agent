@@ -154,8 +154,9 @@ class ObservationExtractor:
 
                 if is_deduction:
                     dimensions["row_operator"] = "subtractive"
-                if period and re.match(r"^(FY|3M|6M|9M|12M)", period):
-                    dimensions["period_basis"] = re.match(r"^(FY|3M|6M|9M|12M)", period).group(1)  # type: ignore[union-attr]
+                basis = extract_period_basis(period)
+                if re.fullmatch(r'(?:1[0-2]|[1-9])M', basis) or (period and period.startswith('FY')):
+                    dimensions["period_basis"] = basis
                 if table.context_label:
                     dimensions["table_context"] = table.context_label
 
