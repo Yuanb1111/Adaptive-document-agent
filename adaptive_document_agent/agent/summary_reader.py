@@ -18,7 +18,9 @@ from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputE
 
 class ReadFact(BaseModel):
     label: str = Field(min_length=1, max_length=60)
-    text: str = Field(min_length=1, max_length=220)
+    # Reading is evidence capture, not slide copy. Retain qualifications up to
+    # the canonical fact limit; the separate editor compacts audience wording.
+    text: str = Field(min_length=1, max_length=280)
     quote_start_line: int = Field(ge=1)
     quote_end_line: int = Field(ge=1)
 
@@ -29,7 +31,7 @@ class ReadPart(BaseModel):
     end_line: int = Field(ge=1)
     title: str = Field(min_length=1, max_length=160)
     role: Literal['content', 'layout']
-    reading_note: str = Field(min_length=1, max_length=400)
+    reading_note: str = Field(min_length=1, max_length=800)
     facts: list[ReadFact] = Field(default_factory=list, max_length=2)
 
 
@@ -68,11 +70,19 @@ _RULES = (
     'explaining its subject, significant qualifications, and what is unresolved. Do not silently discard '
     'a part merely because it is not suitable for a slide. If no safe fact can be extracted, facts may '
     'be empty, but explain the limitation in reading_note. Layout parts have no facts. '
-    'Every fact needs a concise label/text (at most 220 characters) and quote_start_line/quote_end_line '
+    'Keep reading_note under 400 characters (hard limit 800); do not repeat the source paragraph. '
+    'Every fact needs a concise label/text (target 180, hard limit 280 characters) and quote_start_line/quote_end_line '
     'for a short contiguous passage entirely within its part. Python retains the literal source quote '
     'and page from those lines, so do not repeat source text or supply source_pages in the JSON. '
     'Choose only the lines needed to substantiate the fact, between 8 and 1800 source characters. Preserve source '
     'numeric spelling, dates, currency, scale, units, ranking attribution and conditions. '
+    'For table facts, the quote must include the column/period and unit headers that establish '
+    'the meaning of the selected row values. A bare row without its headers is insufficient. '
+    'If the headers fall outside this part, adjust the partition or leave facts empty and explain '
+    'the limitation; never borrow a period or currency from elsewhere on the page. '
+    'Do not put PDF page numbers in titles or reading notes; source-page metadata is already retained. '
+    'Reading notes describe only the supplied block, not unseen continuations or other pages. '
+    'Keep literal period spelling: do not change source "six months" into an unsourced numeric "6M". '
     'Never invent evidence, missing values, periods, explanations or recommendations. Do not calculate.'
 )
 

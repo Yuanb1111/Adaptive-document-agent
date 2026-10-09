@@ -1538,6 +1538,11 @@ def _associate_clause_direction_spans(
         pattern = r"\b" + re.escape(dw.casefold()) + r"\b"
         for m in re.finditer(pattern, clause_lower):
             s, e = m.start(), m.end()
+            # "Growth rate" names a measure; it does not assert an upward
+            # movement. A separate predicate (rose/declined/etc.) still needs
+            # its own uniquely bound metric, periods and source values.
+            if dw.casefold() == 'growth' and re.match(r'\s+rates?\b', clause_lower[e:]):
+                continue
             if not any(occupied_dir[s:e]):
                 dir_spans.append((s, e, dw))
                 for i in range(s, e):

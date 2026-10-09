@@ -200,6 +200,7 @@ def test_header_percent_is_supported_without_authorizing_invented_percent():
     summary = next(s for s in plan.slides if s.slide_type == 'executive_summary')
     summary.observation_ids = [item.id]
     summary.bullets = ['Reported percentage: 46.8%']
+    summary.source_pages = sorted({e.page for e in item.evidence})
     PresentationPlanValidator().validate(plan, result)
     summary.bullets = ['Reported percentage: 99.9%']
     with pytest.raises(ValueError, match='unsupported numeric'):

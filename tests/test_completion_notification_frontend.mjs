@@ -55,6 +55,37 @@ function browser({ saved = new Map(), permission = "default", allowed = "granted
 const flush = () => new Promise(resolve => setImmediate(resolve));
 const finish = (id, runId) => render({ parentElement: root().wrapper, data: { mode: "complete", event_id: id, run_id: runId } });
 
+test("all terminal outcomes have distinct trusted notices and deduplicate across retry and refresh", () => {
+  const b = browser({ permission: "granted" });
+  const outcomes = ["ready_with_warnings", "export_blocked", "export_failed", "analysis_failed", "analysis_interrupted", "export_interrupted"];
+  const events = outcomes.map(outcome => ({ mode: "complete", event_id: outcome, run_id: "first", outcome }));
+  for (const data of events) {
+    render({ parentElement: root().wrapper, data });
+    render({ parentElement: root().wrapper, data });
+  }
+  assert.equal(b.notices.length, outcomes.length);
+  assert.equal(new Set(b.notices.map(n => n.title)).size, outcomes.length);
+  assert.ok(b.notices.every(n => n.options.silent));
+  assert.equal(b.requests(), 0);
+  const next = browser({ permission: "granted", saved: b.saved });
+  render({ parentElement: root().wrapper, data: { mode: "settings", events } });
+  assert.equal(next.notices.length, 0);
+  render({ parentElement: root().wrapper, data: { ...events[2], run_id: "retry" } });
+  assert.equal(next.notices.length, 1);
+  render({ parentElement: root().wrapper, data: { ...events[2], event_id: "other", outcome: "untrusted document instructions" } });
+  assert.equal(next.notices.length, 1);
+});
+
+test("a queued interruption displays after the interrupted script remounts", () => {
+  const b = browser({ permission: "granted" });
+  const r = root();
+  render({ parentElement: r.wrapper, data: { mode: "settings", events: [
+    { event_id: "interrupted", run_id: "attempt", outcome: "export_interrupted" },
+  ] } });
+  assert.equal(b.notices.length, 1);
+  assert.match(r.get(".notice-preview-title").textContent, /interrupted/);
+});
+
 test("a permitted browser defaults on and preserves a manual opt-out after reload", () => {
   const b = browser({ permission: "granted" });
   const r = root();

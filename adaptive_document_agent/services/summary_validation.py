@@ -69,7 +69,17 @@ def reading_errors(review: SummaryReview, result: PipelineResult, *, complete_sc
             errors.append('Summary part changed source text or page')
         if not part.title.strip() or not part.reading_note.strip():
             errors.append('Every Summary part needs a title and reading explanation')
-        if PresentationPlanValidator._numbers(part.title + ' ' + part.reading_note) - PresentationPlanValidator._numbers(source):
+        # Internal reading annotations describe partitions of the supplied
+        # block, including nearby headings and explicit page/line metadata.
+        # They are never eligible slide facts. Facts below remain bound to
+        # their own literal passage; context cannot lend them values or units.
+        import re
+        annotation = part.title + ' ' + part.reading_note
+        annotation = re.sub(r'(?i)\bpage\s+' + str(block.page) + r'\b', 'page', annotation)
+        annotation = re.sub(r'(?i)\blines?\s+(\d+)(?:\s*[-–]\s*(\d+))?',
+            lambda m: 'source lines' if part.start_line <= int(m[1]) <= int(m[2] or m[1]) <= part.end_line
+            else m[0], annotation)
+        if PresentationPlanValidator._numbers(annotation) - PresentationPlanValidator._numbers(block.text):
             errors.append('Summary part title/reading note contains unsupported numbers')
         if part.role == 'layout' and part.facts:
             errors.append('Layout-only material cannot supply factual slide copy')

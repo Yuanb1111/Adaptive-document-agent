@@ -137,6 +137,13 @@ def recover_unscoped_topic_claims(plan: PresentationPlan, result: PipelineResult
             "errors": list(dict.fromkeys(errors_by_topic[slide.theme_id])),
         }, ensure_ascii=False, sort_keys=True))
         slide.title = question
+        # These headings are also rendered by the contents, narrow-layout
+        # fallback and appendix. A withdrawn takeaway cannot survive there as
+        # an unchecked section label when the full question is too long.
+        slide.section_title = question
+        theme = next((t for t in candidate.themes if t.id == slide.theme_id), None)
+        if theme:
+            theme.title = question
     rebuild_selected_topic_summary(result, candidate)
     # A local withdrawal must not rebuild unrelated, already repaired summary
     # claims from the raw takeaways. That can revive another rejected scope
@@ -171,6 +178,7 @@ def recover_unscoped_topic_claims(plan: PresentationPlan, result: PipelineResult
     except ValueError:
         return []  # A question is not an exemption from number, source or scope checks.
     plan.slides = candidate.slides
+    plan.themes = candidate.themes
     plan.editorial_notes = list(dict.fromkeys(candidate.editorial_notes))
     plan.editorial_status = "needs_review"
     for topic_id in sorted(withheld_topic_ids(candidate)):

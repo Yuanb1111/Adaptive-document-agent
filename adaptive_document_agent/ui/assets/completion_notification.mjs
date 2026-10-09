@@ -1,6 +1,15 @@
 // Trusted application code only. No document text, filenames or external assets.
 // Keep stored consent/deduplication, but refresh the live delivery feedback.
-const CONTROLLER = Symbol.for("adaptive-document-agent.completion-notice.v4");
+const CONTROLLER = Symbol.for("adaptive-document-agent.completion-notice.v5");
+const OUTCOMES = Object.freeze({
+  ready: ["PowerPoint ready to download", "Export checks are complete. Return to the app to download and review your presentation."],
+  ready_with_warnings: ["PowerPoint ready — review needed", "A presentation is available with limitations. Review the delivery diagnostics before sharing."],
+  export_blocked: ["PowerPoint export blocked", "The presentation did not pass export checks. Return to the app for the blocker details and analysis download."],
+  export_failed: ["PowerPoint generation failed", "No verified presentation was produced. Return to the app for the error details and retry options."],
+  analysis_failed: ["Document analysis failed", "Analysis could not be completed. Return to the app for the error details and retry options."],
+  analysis_interrupted: ["Document analysis interrupted", "Analysis stopped before completion. Return to the app and retry to reuse successful cached work."],
+  export_interrupted: ["PowerPoint generation interrupted", "Generation stopped before completion. Return to the app to rebuild the presentation."],
+});
 
 function controllerFor(win) {
   if (win[CONTROLLER]) return win[CONTROLLER];
@@ -39,21 +48,23 @@ function controllerFor(win) {
     if (!storageAvailable) return "Browser storage is unavailable. Notifications cannot stay enabled across a refresh.";
     if (state.busy) return "Waiting for browser permission…";
     if (state.enabled && permission() === "default") return "Completion notifications are enabled by default. Click the switch and allow browser notifications to activate them.";
-    if (!state.enabled || permission() !== "granted") return "Get a message when your PowerPoint is ready to download.";
-    return "You’ll get a message when your PowerPoint is ready to download.";
+    if (!state.enabled || permission() !== "granted") return "Get a message when generation finishes, fails or is interrupted.";
+    return "You’ll get a message when generation finishes, fails or is interrupted.";
   }
-  function show(test = false, id = "test") {
+  function show(test = false, id = "test", outcome = "ready") {
     if (!state.enabled || permission() !== "granted") return;
+    if (!Object.hasOwn(OUTCOMES, outcome)) return;
+    const [title, body] = OUTCOMES[outcome];
     const sequence = ++state.noticeSequence;
     state.preview = {
-      title: test ? "Test notification" : "PowerPoint ready to download",
+      title: test ? "Test notification" : title,
       body: test ? "In-page preview. A silent system notification is also being requested."
-                 : "Export checks are complete. Return to downloads to review your presentation.",
+                 : body,
     };
     if (test) state.message = "Requesting a silent system notification…";
     try {
-      const notice = new win.Notification(test ? "Completion notifications enabled" : "PowerPoint ready to download", {
-        body: test ? "This is a test notification." : "Export checks are complete. Return to the app to download and review your presentation.",
+      const notice = new win.Notification(test ? "Completion notifications enabled" : title, {
+        body: test ? "This is a test notification." : body,
         // Reusing a test tag replaces the prior notice and may suppress a banner.
         tag: test ? `ada-presentation-test-${Date.now()}-${sequence}` : `ada-presentation-${id}`,
         silent: true,
@@ -108,8 +119,8 @@ function controllerFor(win) {
       state.busy = false; save(); redraw();
     }
   }
-  function complete(id, runId) {
-    if (!id) return;
+  function complete(id, runId, outcome = "ready") {
+    if (!id || !Object.hasOwn(OUTCOMES, outcome)) return;
     // A restored server session may have cached content but no attempt record.
     // Recover that content's last run locally, instead of creating a new run.
     const run = typeof runId === "string" && runId ? runId : state.latestRuns.get(id) || "cached";
@@ -119,7 +130,7 @@ function controllerFor(win) {
     // A result completed while notifications were off must not alert later.
     state.seen.add(event); save();
     if (state.enabled && permission() === "granted") state.message = "";
-    show(false, event);
+    show(false, event, outcome);
     redraw();
   }
   const controller = { state, permission, status, save, redraw, toggle, show, complete };
@@ -133,10 +144,11 @@ export default function(component) {
   const root = parentElement.querySelector(".completion-notice");
   if (data?.mode === "complete") {
     root.hidden = true;
-    controller.complete(data.event_id, data.run_id);
+    controller.complete(data.event_id, data.run_id, data.outcome);
     return;
   }
   root.hidden = false;
+  for (const event of data?.events || []) controller.complete(event.event_id, event.run_id, event.outcome);
   const trigger = root.querySelector(".notice-trigger");
   const panel = root.querySelector(".notice-panel");
   const enable = root.querySelector(".notice-enable");

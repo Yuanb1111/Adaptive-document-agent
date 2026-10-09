@@ -33,6 +33,43 @@ def test_structured_output_accepts_fenced_json_without_a_repair() -> None:
     assert len(client.calls) == 1
 
 
+@pytest.mark.parametrize('wrapper', ['{}', 'Result: {}', '```json\n{}\n```'])
+def test_invalid_outer_response_cannot_be_replaced_by_a_valid_nested_answer(wrapper):
+    from adaptive_document_agent.services.llm.structured import validate_structured_text
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError, match='value'):
+        validate_structured_text(wrapper.format('{"unexpected": {"value": 9}}'), Answer)
+
+
+def test_repairs_receive_the_outer_schema_error_instead_of_nested_missing_fields():
+    from pydantic import Field, ValidationError
+    from adaptive_document_agent.services.llm.structured import validate_structured_text
+    class Part(BaseModel):
+        text: str = Field(max_length=4)
+    class Reading(BaseModel):
+        parts: list[Part]
+    with pytest.raises(ValidationError) as caught:
+        validate_structured_text('{"parts":[{"text":"too long"}]}', Reading)
+    assert caught.value.errors()[0]['loc'] == ('parts', 0, 'text')
+    assert caught.value.errors()[0]['type'] == 'string_too_long'
+
+
+@pytest.mark.parametrize('prefix', ['', 'Here is the result: '])
+def test_malformed_outer_json_does_not_expose_an_inner_answer(prefix):
+    from adaptive_document_agent.services.llm.structured import validate_structured_text
+    with pytest.raises(ValueError):
+        validate_structured_text(prefix + '{"broken": {"value": 9}', Answer)
+
+
+def test_exact_json_takes_precedence_over_markdown_inside_source_strings():
+    import json
+    from adaptive_document_agent.services.llm.structured import validate_structured_text
+    class Quote(BaseModel):
+        text: str
+    text = 'Source contains ```json\n{"value": 999}\n``` as untrusted text.'
+    assert validate_structured_text(json.dumps({'text': text}), Quote).text == text
+
+
 def test_malformed_json_fails_after_one_repair_and_names_the_stage() -> None:
     client = MockLLMClient(["bad", "still bad"])
     gateway = LLMGateway(client, LLMSettings(provider=ProviderName.MOCK, model="mock"))

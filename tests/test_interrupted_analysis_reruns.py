@@ -125,6 +125,7 @@ def test_failure_is_saved_before_status_update_can_interrupt(flow):
     failure = app._analysis_failure(flow.st, "same-scope")
     assert "bad evidence" in failure["message"]
     assert failure["usage"] == flow.gateway.usage
+    assert flow.st.session_state['presentation_notification_outcomes'][0]['outcome'] == 'analysis_failed'
     assert flow.st.session_state["failed_llm_usage"] == flow.gateway.usage
     flow.st.status.return_value.update.side_effect = None
     assert run(flow) is None
@@ -174,7 +175,8 @@ def test_completion_identity_changes_only_for_actual_new_analysis_attempts(flow,
     from adaptive_document_agent.ui import completion_notification
 
     events = []
-    monkeypatch.setattr(completion_notification, "_component", lambda: lambda **kw: events.append(kw["data"]))
+    monkeypatch.setattr(completion_notification, "_component", lambda: lambda **kw:
+        events.append(kw["data"]) if kw["data"].get('outcome') == 'ready' else None)
     verified = SimpleNamespace(payload=b"identical-presentation", report=SimpleNamespace(status="passed"))
     assert run(flow) is flow.result
     completion_notification.notify_export_ready(flow.st, verified)

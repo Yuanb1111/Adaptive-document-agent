@@ -1760,6 +1760,7 @@ def _add_native_chart(
         chart.legend.font.color.rgb = _rgb(FOURIER_DARK)
     chart.chart_style = None
     chart.font.name = FONT
+    chart.font.size = Pt(10 if compact else 11)
     chart.font.color.rgb = _rgb(FOURIER_DARK)
     from .presentation_style import chart_color, deck_color_map
     keys = categories if plan.chart_type == "pie" else [series.name for series in chart.series]
@@ -1882,7 +1883,7 @@ def _add_native_chart(
         if not is_valid_scatter and date_categories:
             from .presentation_axes import style_date_axis, label_source_dates
             style_date_axis(chart, date_categories, bounds[2])
-            label_source_dates(chart, date_categories)
+            label_source_dates(chart, date_categories, width=bounds[2])
     except (AttributeError, ValueError):
         pass
     return scale, scale_label

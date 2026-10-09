@@ -58,7 +58,7 @@ def test_result_widgets_keep_downloads_evidence_and_export_gate(monkeypatch, blo
     monkeypatch.setattr(app, "_analyse_upload", lambda *args, **kwargs: result)
     monkeypatch.setattr(app, "_analysis_scope_key", lambda *args: "widget-test-scope")
     monkeypatch.setattr(st, "file_uploader", lambda *args, **kwargs: None if kwargs.get("key") else BytesIO(b"test"))
-    report = SimpleNamespace(cache_hit=False, status="passed", attempts=1, coverage=[], to_dict=lambda: {})
+    report = SimpleNamespace(cache_hit=False, status="passed", attempts=1, coverage=[], issues=[], to_dict=lambda: {})
     from adaptive_document_agent.services.ppt_preflight import PreflightIssue
     from adaptive_document_agent.services.presentation_preflight_report import PreflightQAError, PreflightReport
     native = PreflightReport([PreflightIssue(1, "native_finding", "Native finding detail", "error" if blocked else "warning")]) if native_findings else None
@@ -74,9 +74,13 @@ def test_result_widgets_keep_downloads_evidence_and_export_gate(monkeypatch, blo
     monkeypatch.setattr(deliverables, "export_pptx_with_report", export)
     from adaptive_document_agent.ui import completion_notification
     notifications = []
-    def notify(ui, verified):
+    failures = []
+    reviews = []
+    def notify(ui, verified, *, needs_review=False):
         notifications.append(verified.payload)
+        reviews.append(needs_review)
     monkeypatch.setattr(completion_notification, "notify_export_ready", notify)
+    monkeypatch.setattr(completion_notification, 'notify_outcome', lambda ui, outcome, **kwargs: failures.append(outcome))
     page = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "app.py"), default_timeout=30).run()
     assert not page.exception, page.exception
     assert [tab.label for tab in page.tabs] == ["Overview", "Analysis", "Charts", "Extracted Data", "Sources", "Data Quality", "Technical Details"]
@@ -91,11 +95,14 @@ def test_result_widgets_keep_downloads_evidence_and_export_gate(monkeypatch, blo
         assert any("Native preflight:" in item.value for item in page.caption)
         assert any("Native finding detail" in item.value for item in page.markdown)
     if blocked:
+        assert failures == ['export_blocked']
         assert notifications == []
         assert "Download presentation (.pptx)" not in downloads
         assert any(item.label == "Download presentation (.pptx)" and item.disabled for item in page.button)
         assert 'aria-valuenow="100"' not in progress
     else:
+        assert not failures
+        assert reviews == [native_findings]
         assert notifications == [b"verified-test-payload"]
         assert "Download presentation (.pptx)" in downloads
         assert 'aria-valuenow="100"' in progress

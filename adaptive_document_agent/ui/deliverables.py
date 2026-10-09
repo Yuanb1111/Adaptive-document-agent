@@ -59,6 +59,7 @@ def render(st, result: PipelineResult, raw_pdf: bytes, progress) -> None:
     visual_report = None
     preflight_report = None
     export_timings = None
+    outcome = 'export_blocked'
     try:
         if artwork_error:
             raise CriticalQAError(artwork_error)
@@ -87,16 +88,22 @@ def render(st, result: PipelineResult, raw_pdf: bytes, progress) -> None:
         qa_error = exc
         preflight_report = getattr(exc, "preflight_report", None)
     except ValueError as exc:
+        outcome = 'export_failed'
         preflight_report = getattr(exc, "preflight_report", None)
         qa_error = CriticalQAError(f"PowerPoint generation failed: {exc}. No verified file was produced.",
                                   financial_report=getattr(exc, "financial_report", None),
                                   preflight_report=preflight_report)
     except Exception as exc:
+        outcome = 'export_failed'
         preflight_report = getattr(exc, "preflight_report", None)
         qa_error = CriticalQAError(
             f"PowerPoint generation failed ({type(exc).__name__}). No verified file was produced.",
             financial_report=getattr(exc, "financial_report", None), preflight_report=preflight_report,
         )
+    except BaseException:
+        from .completion_notification import queue_outcome
+        queue_outcome(st, 'export_interrupted')
+        raise
 
     with st.container(border=True):
         summary_column, download_column = st.columns([1.65, 1], gap="large")
@@ -134,6 +141,8 @@ def render(st, result: PipelineResult, raw_pdf: bytes, progress) -> None:
                 )
     qa = None
     if qa_error:
+        from .completion_notification import notify_outcome
+        notify_outcome(st, outcome)
         progress.fail("PowerPoint export blocked")
         from adaptive_document_agent.services.export_diagnostics import export_diagnostics
 
@@ -208,4 +217,6 @@ def render(st, result: PipelineResult, raw_pdf: bytes, progress) -> None:
     if pptx_bytes and qa_error is None:
         progress.finish()
         from .completion_notification import notify_export_ready
-        notify_export_ready(st, verified)
+        incomplete_intro = any(w.code == 'company_introduction_unavailable' for w in result.validation_warnings)
+        qa_warnings = bool(verified.report.issues or preflight_report and preflight_report.status == 'passed_with_warnings')
+        notify_export_ready(st, verified, needs_review=bool(legacy or degraded or editorial or incomplete_intro or qa_warnings))

@@ -45,6 +45,20 @@ def _component(slide: PresentationSlide, component: str) -> str:
     return slide.bullets[0] if component == "bullets" else getattr(slide, component)
 
 
+def test_growth_rate_is_a_measure_name_without_a_directional_assertion():
+    observations = _series('Revenue', [100, 169, 270])
+    rates = _series('Revenue growth rate', [18.3, 69, 60])
+    for item in rates:
+        item.unit, item.raw_unit, item.currency = 'percent', '%', None
+        item.unit_family = 'percentage'
+    observations += rates
+    slide = _slide('How did total revenue and its growth rate evolve from FY2023 to FY2025?', observations)
+    assert not ClaimValidator().validate_slide(slide, observations)
+    slide.message = 'Revenue growth rate rose from FY2024 to FY2025.'
+    issues = ClaimValidator().validate_slide(slide, observations)
+    assert any(i.severity == 'error' for i in issues)  # 69% to 60% still contradicts rose.
+
+
 def test_independent_as_predicates_cannot_borrow_the_other_subject():
     observations = _series("ASP", [65.9, 61.4, 56.6], years=(2021, 2022, 2023))
     observations += _series("Revenue", [100, 120, 130], years=(2021, 2022, 2023))

@@ -319,6 +319,10 @@ class PresentationPlanRecovery:
         for slide in base.slides:
             if slide.slide_type == "analysis" and slide.theme_id in withheld:
                 slide.title = slide.analytical_question
+                slide.section_title = slide.analytical_question
+                theme = next((t for t in base.themes if t.id == slide.theme_id), None)
+                if theme:
+                    theme.title = slide.analytical_question
         rebuild_selected_topic_summary(result, base)
         from adaptive_document_agent.services.presentation_claim_evidence import prepare_presentation_claims
         prepare_presentation_claims(result, base)
@@ -491,6 +495,7 @@ class PresentationPlanRecovery:
             report_type="Evidence-bound document analysis",
             company=company_profile,
             slides=slides,
+            editorial_notes=getattr(summary_slide, '_summary_claim_audit', []),
         )
         if not validate:
             return recovered
@@ -542,13 +547,6 @@ class PresentationPlanRecovery:
         )
 
     def _summary_slide(self, result: PipelineResult) -> PresentationSlide:
-        from adaptive_document_agent.document_model import DocumentIndex
-        from adaptive_document_agent.services.pptx_export import _chart_findings, _usable_charts
-
-        index = DocumentIndex(result.observations)
-        usable = _usable_charts(result)
-        findings = _chart_findings(usable, index)
-
         insights = sorted(
             (
                 item
@@ -560,27 +558,35 @@ class PresentationPlanRecovery:
             key=lambda item: (item.importance, item.confidence),
             reverse=True,
         )[:5]
-        pages = sorted({source.page for item in insights for source in item.evidence})
-        if not pages and usable:
-            pages = sorted({p for c in usable[:3] for p in c.source_pages})
-
-        bullets = [
-            item.title
-            for item in insights[:4]
-            if not any(char.isdigit() for char in item.title)
-        ]
-        if not bullets and findings:
-            bullets = [
-                str(f["title"])
-                for f in findings[:4]
-                if not self._is_calc_artifact(str(f["title"]))
-                and not self._is_calc_artifact(str(f["narrative"]))
-                and not any(char.isdigit() for char in str(f["title"]))
-            ]
+        from adaptive_document_agent.validation.presentation_provenance import insight_inputs
+        from .presentation_closing_validation import closing_claim_errors
+        import json
+        links = insight_inputs(result)
+        by_id = {item.id: item for item in result.observations}
+        retained, scopes, withheld = [], [], []
+        for item in insights:
+            if any(char.isdigit() for char in item.title):
+                continue
+            ids = links.get(item.id, [])
+            errors = (closing_claim_errors(item.title, [by_id[oid] for oid in ids], result)
+                      if ids else ['Summary finding lacks explicit analysis-input provenance.'])
+            if errors:
+                audit = json.dumps({'insight_id': item.id, 'statement': item.title, 'errors': errors},
+                                   ensure_ascii=False, sort_keys=True)
+                withheld.append('[presentation_summary_claim_withheld] ' + audit)
+                continue
+            retained.append(item)
+            scopes.append(ids)
+            if len(retained) == 4:
+                break
+        bullets = [item.title for item in retained]
         if not bullets:
             bullets = ["Key retained findings selected from the source document."]
+            scopes = []
+        pages = sorted({source.page for item in retained for source in item.evidence}
+                       | {source.page for ids in scopes for oid in ids for source in by_id[oid].evidence})
 
-        return PresentationSlide(
+        summary = PresentationSlide(
             id="slide_executive_summary",
             slide_type="executive_summary",
             title="Executive Summary",
@@ -589,9 +595,13 @@ class PresentationPlanRecovery:
             slide_role="overview",
             message="Key retained findings selected from the source document.",
             bullets=bullets,
-            insight_ids=[item.id for item in insights],
+            insight_ids=[item.id for item in retained],
+            observation_ids=list(dict.fromkeys(oid for ids in scopes for oid in ids)),
+            bullet_observation_ids=scopes,
             source_pages=pages,
         )
+        object.__setattr__(summary, '_summary_claim_audit', withheld)
+        return summary
 
     @classmethod
     def _risks_slide(

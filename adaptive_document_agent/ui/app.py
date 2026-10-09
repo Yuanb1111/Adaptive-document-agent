@@ -53,6 +53,10 @@ def _analysis_failure(st, scope_key):
 
 
 def _render_analysis_failure(st, failure, progress=None):
+    from .completion_notification import notify_outcome
+    attempt = st.session_state.get('analysis_attempts', {}).get(failure['scope_key'], {})
+    notify_outcome(st, 'analysis_interrupted' if attempt.get('state') == 'interrupted'
+                   else 'analysis_failed', scope_key=failure['scope_key'])
     if progress:
         progress.fail("Analysis could not be completed")
     st.error(failure["message"])
@@ -178,6 +182,8 @@ def _analyse_upload(st, raw_pdf, *, scope_key, analysis_focus, settings, cache, 
                    "message": f"Analysis could not be completed: {exc}", "usage": usage}
         # Save the failure before UI updates, which can themselves be interrupted.
         attempt.update(state="failed", failure=failure)
+        from .completion_notification import queue_outcome
+        queue_outcome(st, 'analysis_failed', scope_key=scope_key)
         st.session_state["failed_llm_usage"] = usage
         st.session_state["analysis_failure"] = failure
         _LOGGER.info("Analysis attempt %s failed at %s", attempt["id"], attempt["stage"])

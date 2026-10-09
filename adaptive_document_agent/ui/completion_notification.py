@@ -1,4 +1,4 @@
-"""Browser notices enabled by default for verified PowerPoint exports.
+"""Browser notices for terminal analysis and PowerPoint outcomes.
 
 The frameless v2 component runs in the app origin. Its preferences stay in the
 browser, so changing them never interrupts a running Streamlit script.
@@ -9,6 +9,46 @@ from hashlib import sha256
 import json
 from pathlib import Path
 from uuid import uuid4
+
+OUTCOMES = frozenset({'ready', 'ready_with_warnings', 'export_blocked',
+                     'export_failed', 'analysis_failed', 'analysis_interrupted', 'export_interrupted'})
+
+
+def _event(st, outcome, identity, scope_key):
+    if outcome not in OUTCOMES:
+        raise ValueError('Unknown notification outcome')
+    event_id = sha256(json.dumps([outcome, identity], separators=(',', ':')).encode()).hexdigest()
+    attempt = st.session_state.get('analysis_attempts', {}).get(scope_key, {})
+    run_id = attempt.get('id')
+    export_run = st.session_state.get('ppt_notification_export_runs', {}).get(scope_key)
+    if outcome.startswith('export_') or outcome.startswith('ready'):
+        if export_run and export_run['analysis_run'] == run_id:
+            run_id = f"{run_id or 'cached'}:export:{export_run['id']}"
+    return {'mode': 'complete', 'event_id': event_id, 'run_id': run_id, 'outcome': outcome}
+
+
+def queue_outcome(st, outcome, *, scope_key=None, identity=None):
+    """Save trusted, opaque terminal state before any interruptible UI write."""
+    scope_key = scope_key or st.session_state.get('analysis_result_key')
+    event = _event(st, outcome, identity or scope_key or 'current', scope_key)
+    events = st.session_state.setdefault('presentation_notification_outcomes', [])
+    if event not in events:
+        events.append(event)
+        del events[:-20]
+    return event
+
+
+def _emit(event):
+    try:
+        _component()(data=event, key='presentation_notification_event')
+    except Exception:
+        # Notification availability must never turn a successful analysis or
+        # an already diagnosed export failure into another pipeline failure.
+        return
+
+
+def notify_outcome(st, outcome, *, scope_key=None):
+    _emit(queue_outcome(st, outcome, scope_key=scope_key))
 
 
 @lru_cache(maxsize=1)
@@ -35,7 +75,14 @@ def render_settings(st) -> None:
     except ImportError:
         st.caption("Browser notifications require Streamlit 1.53 or newer. Progress remains available on this page.")
         return
-    renderer(data={"mode": "settings"}, key="presentation_notification_settings")
+    # A stopped Streamlit script cannot mount a component. Replay its saved
+    # terminal state when the next script mounts; the browser deduplicates it.
+    for scope, attempt in st.session_state.get('analysis_attempts', {}).items():
+        if attempt.get('state') in {'failed', 'interrupted'}:
+            queue_outcome(st, 'analysis_interrupted' if attempt['state'] == 'interrupted'
+                          else 'analysis_failed', scope_key=scope)
+    renderer(data={"mode": "settings", 'events': st.session_state.get(
+        'presentation_notification_outcomes', [])}, key="presentation_notification_settings")
 
 
 def begin_export_run(st, scope_key: str) -> None:
@@ -51,7 +98,7 @@ def begin_export_run(st, scope_key: str) -> None:
     }
 
 
-def notify_export_ready(st, verified) -> None:
+def notify_export_ready(st, verified, *, needs_review=False) -> None:
     """Emit only after the download button exists and progress reaches 100%.
 
     The attempt id changes only when analysis actually starts. Browser state
@@ -63,15 +110,5 @@ def notify_export_ready(st, verified) -> None:
     keys = list(st.session_state.get("ppt_build_cache", {}))
     identity = (keys[0] if len(keys) == 1 else
                 getattr(verified.report, "output_sha256", "") or sha256(verified.payload).hexdigest())
-    event_id = sha256(json.dumps(identity, separators=(",", ":")).encode()).hexdigest()
-    scope_key = st.session_state.get("analysis_result_key")
-    attempt = st.session_state.get("analysis_attempts", {}).get(scope_key, {})
-    run_id = attempt.get("id") if attempt.get("state") == "complete" else None
-    export_run = st.session_state.get("ppt_notification_export_runs", {}).get(scope_key)
-    if export_run and export_run["analysis_run"] == run_id:
-        run_id = f"{run_id or 'cached'}:export:{export_run['id']}"
-    try:
-        renderer = _component()
-    except ImportError:
-        return
-    renderer(data={"mode": "complete", "event_id": event_id, "run_id": run_id}, key="presentation_notification_event")
+    event = queue_outcome(st, 'ready_with_warnings' if needs_review else 'ready', identity=identity)
+    _emit(event)

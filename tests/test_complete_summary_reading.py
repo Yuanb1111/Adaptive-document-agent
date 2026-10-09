@@ -225,6 +225,29 @@ def test_reader_retries_one_schema_failure_with_original_source_and_keeps_diagno
                for part in review.parts for f in part.facts)
 
 
+def test_reading_accepts_exact_page_annotations_without_lending_numbers_to_facts():
+    def edit(response, payload, messages):
+        for part in response.parts:
+            if part.role == 'layout':
+                part.title = f"Page {payload[0]['page']} source headings"
+    result = generate(distinct_source(1), SummaryClient(edit_read=edit))
+    assert result.presentation_plan.company.summary_review.status == 'complete'
+    review = result.presentation_plan.company.summary_review.model_copy(deep=True)
+    fact = next(f for part in review.parts for f in part.facts)
+    fact.text += ' It has 1 product.'
+    assert any('unsupported numeric' in error for error in reading_errors(review, result))
+
+
+def test_reading_preserves_a_qualified_fact_between_220_and_280_characters():
+    from adaptive_document_agent.agent.summary_reader import ReadFact
+    text = ('Services depend on successful customer integration and staff training; '
+            'the source describes the delivery requirements without guaranteeing adoption, '
+            'an implementation date, a financial return or continuing purchases by existing customers.')
+    assert 220 < len(text) <= 280
+    fact = ReadFact(label='Delivery conditions', text=text, quote_start_line=1, quote_end_line=4)
+    assert fact.text == text
+
+
 def test_failed_introduction_does_not_render_an_evidence_limitation_placeholder():
     from adaptive_document_agent.models import ValidationIssue
     from tests.test_presentation_brief import blank_deck

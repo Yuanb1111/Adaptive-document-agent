@@ -601,7 +601,41 @@ def test_summary_filters_slope_and_intercept_artifacts() -> None:
         assert "slope" not in bullet.casefold()
         assert "intercept" not in bullet.casefold()
         assert "turning point" not in bullet.casefold()
-    assert any("expanded significantly" in b.casefold() for b in summary.bullets)
+    # A source page alone is not an analysis-input link. Retain the raw insight
+    # and audit its omission rather than reviving unsupported audience copy.
+    assert all('expanded significantly' not in b.casefold() for b in summary.bullets)
+    assert res.insights[1].title == 'Revenue expanded significantly'
+    assert getattr(summary, '_summary_claim_audit')
+
+
+def test_fallback_summary_keeps_valid_findings_with_their_own_inputs():
+    result = _result()
+    ids = [o.id for o in result.observations]
+    result.analysis_results = [AnalysisResult(task_id='trend', title='Revenue trend', input_observation_ids=ids)]
+    result.insights[0].result_ids = ['trend']
+    plan = PresentationPlanRecovery().fallback(result)
+    summary = next(s for s in plan.slides if s.slide_type == 'executive_summary')
+    assert summary.bullets == [result.insights[0].title]
+    assert summary.bullet_observation_ids == [ids]
+    assert summary.observation_ids == ids
+    PresentationPlanValidator().validate(plan, result)
+
+
+def test_fallback_summary_withholds_ambiguous_growth_instead_of_blocking_valid_charts():
+    from adaptive_document_agent.validation.claim_validator import ClaimValidator
+    from tests.test_topic_scope_recovery_regressions import _synthetic_result
+    result = _synthetic_result('metric_alias')
+    result.presentation_topics = None
+    result.insights = [Insight(id='ambiguous', title='Loss for the year widened', narrative='Loss measures changed.',
+        kind='interpretation', evidence=result.observations[0].evidence, result_ids=['trend'])]
+    result.analysis_results = [AnalysisResult(task_id='trend', title='Loss measures',
+        input_observation_ids=[o.id for o in result.observations])]
+    plan = PresentationPlanRecovery().fallback(result)
+    summary = next(s for s in plan.slides if s.slide_type == 'executive_summary')
+    assert result.insights[0].title not in summary.bullets
+    assert any(n.startswith('[presentation_summary_claim_withheld]') for n in plan.editorial_notes)
+    assert not [i for i in ClaimValidator().validate_plan(plan, result.observations, result.charts)
+                if i.severity == 'error']
 
 
 def test_appendix_limited_to_one_page_when_no_charts_in_body() -> None:

@@ -17,7 +17,7 @@ def test_completion_uses_opaque_stable_export_identity(monkeypatch):
     notification.notify_export_ready(ui, exported(payload=b"new ZIP timestamp"))
     assert calls[0]["data"] == calls[1]["data"]
     assert len(calls[0]["data"]["event_id"]) == 64
-    assert set(calls[0]["data"]) == {"mode", "event_id", "run_id"}
+    assert set(calls[0]["data"]) == {"mode", "event_id", "run_id", "outcome"}
     ui.session_state["ppt_build_cache"] = {("version", "template", "other content"): b"ppt"}
     notification.notify_export_ready(ui, exported())
     assert calls[2]["data"] != calls[0]["data"]
@@ -91,3 +91,40 @@ def test_old_streamlit_degrades_to_on_page_progress(monkeypatch):
     notification.render_settings(ui)
     notification.notify_export_ready(ui, exported())
     assert "Progress remains available" in captions[0]
+
+
+@pytest.mark.parametrize('outcome', sorted(notification.OUTCOMES - {'ready'}))
+def test_terminal_outcomes_are_private_stable_and_distinct_from_success(monkeypatch, outcome):
+    calls = []
+    monkeypatch.setattr(notification, '_component', lambda: lambda **kw: calls.append(kw['data']))
+    ui = SimpleNamespace(session_state={'analysis_result_key': 'private document name',
+        'analysis_attempts': {'private document name': {'id': 'attempt', 'state': 'failed'}}})
+    notification.notify_outcome(ui, outcome)
+    notification.notify_outcome(ui, outcome)
+    assert calls[0] == calls[1]
+    assert calls[0]['outcome'] == outcome
+    assert 'private document' not in str(calls)
+    success = notification.queue_outcome(ui, 'ready')
+    assert success['event_id'] != calls[0]['event_id']
+
+
+def test_interruption_is_replayed_after_script_restart(monkeypatch):
+    calls = []
+    monkeypatch.setattr(notification, '_component', lambda: lambda **kw: calls.append(kw['data']))
+    ui = SimpleNamespace(session_state={'analysis_attempts': {
+        'scope': {'id': 'interrupted-attempt', 'state': 'interrupted'}}})
+    notification.render_settings(ui)
+    notification.render_settings(ui)
+    assert len(ui.session_state['presentation_notification_outcomes']) == 1
+    assert calls[0]['events'][0]['outcome'] == 'analysis_interrupted'
+    assert calls[0]['events'][0]['run_id'] == 'interrupted-attempt'
+
+
+def test_notification_component_failure_cannot_break_delivery(monkeypatch):
+    def failed(): raise RuntimeError('browser component unavailable')
+    monkeypatch.setattr(notification, '_component', failed)
+    ui = SimpleNamespace(session_state={})
+    notification.notify_export_ready(ui, exported(), needs_review=True)
+    notification.notify_outcome(ui, 'export_failed')
+    assert [e['outcome'] for e in ui.session_state['presentation_notification_outcomes']] == [
+        'ready_with_warnings', 'export_failed']

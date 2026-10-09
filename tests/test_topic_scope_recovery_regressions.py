@@ -123,6 +123,7 @@ def _assert_question_first(result: PipelineResult, plan: PresentationPlan) -> No
     assert analysis.title == topic.question
     assert analysis.message == topic.question
     assert analysis.analytical_question == topic.question
+    assert analysis.section_title == topic.question
     assert analysis.selection_reason == topic.rationale
     assert summary.bullets == [topic.question, unaffected.takeaway]
     assert _analysis(plan, "volume").title == unaffected.takeaway
@@ -133,6 +134,7 @@ def _assert_question_first(result: PipelineResult, plan: PresentationPlan) -> No
     PresentationPlanValidator().validate(plan, result)
     selected_ids = {item.id for item in result.observations if not item.id.startswith("units_")}
     theme = next(theme for theme in plan.themes if theme.id == topic.id)
+    assert theme.title == topic.question
     assert set(theme.observation_ids) == selected_ids
     assert set(analysis.chart_ids) == {chart.id for chart in result.charts if set(chart.observation_ids) <= selected_ids}
     assert set(summary.bullet_observation_ids[0]) == selected_ids

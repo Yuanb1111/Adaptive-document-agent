@@ -56,6 +56,28 @@ def test_unknown_dates_remain_categories_without_inventing_a_calendar():
     assert explicit_date_categories([item], ["FY2024"]) is None
 
 
+def test_narrow_date_chart_uses_explicit_small_numeric_point_labels_and_preserves_dates():
+    from pptx import Presentation
+    from io import BytesIO
+    dates = ['2021-12-31', '2022-12-31', '2023-12-31', '2024-06-30', '2024-10-31']
+    items = [observation(str(i), 'Cash', v, p) for i, (p, v) in enumerate(zip(dates, [149, 298, 111, 73, 81]))]
+    for item in items:
+        item.period_type, item.as_of_date = 'balance_sheet_date', item.period
+    deck = blank_deck()
+    slide = deck.slides.add_slide(deck.slide_layouts[6])
+    _add_native_chart(slide, ChartPlan(id='cash', question='Cash balances', chart_type='line', title='Cash'),
+                      items, (.5, 1, 3.6, 2.4), compact=True)
+    stream = BytesIO(); deck.save(stream)
+    chart = next(s.chart for s in Presentation(BytesIO(stream.getvalue())).slides[0].shapes if s.has_chart)
+    assert chart._chartSpace.xpath('.//c:dateAx')
+    assert len(chart._chartSpace.xpath('.//c:cat/c:numRef/c:numCache/c:pt')) == 5
+    assert list(chart.series[0].values) == [149, 298, 111, 73, 81]
+    for point in chart.series[0].points:
+        label = point.data_label.text_frame
+        assert not any(year in label.text for year in ['2021', '2022', '2023', '2024'])
+        assert all(run.font.size.pt == 9 for p in label.paragraphs for run in p.runs)
+
+
 def test_short_chart_reduces_tick_density_without_changing_values():
     items = [observation(str(i), "Recorded balance", value, f"FY{2020+i}")
              for i, value in enumerate((8.5, 32.37, 67.2, 78.48, 87.14))]
