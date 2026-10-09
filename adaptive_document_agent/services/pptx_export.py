@@ -191,6 +191,8 @@ def build_presentation(result: PipelineResult, template_path: str | Path | None 
     else:
         _build_legacy_presentation(presentation, result)
 
+    from .presentation_sparse_pages import fold_sparse_text_pages
+    fold_sparse_text_pages(presentation, result)
     _add_thank_you_slide(presentation)
 
     _number_slides(presentation)
@@ -359,7 +361,10 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
         scoped_contents.append(entry)
     _add_planned_contents(presentation, scoped_contents, include_key_figures=bool(key_figures),
                           include_value_chain=value_chain)
+    company_start = len(presentation.slides)
     _add_company_at_a_glance(presentation, result, slides_by_type["company_overview"])
+    for slide in list(presentation.slides)[company_start:]:
+        slide._ada_section_label = slides_by_type["company_overview"].section_title or 'Company Overview'
     if value_chain:
         from .presentation_value_chain import render_value_chain
         render_value_chain(presentation, plan.company)
@@ -369,7 +374,10 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
             + summary.model_dump_json(indent=2)
         )
     else:
+        summary_start = len(presentation.slides)
         _add_planned_summary(presentation, result, summary, index)
+        for slide in list(presentation.slides)[summary_start:]:
+            slide._ada_section_label = summary.section_title or 'Executive Summary'
     from .presentation_identity import presentation_quality_notes
     quality_notes = presentation_quality_notes(result)
     if quality_notes:

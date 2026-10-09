@@ -427,8 +427,7 @@ def test_chart_plus_kpis_layout_export() -> None:
     pptx_bytes = export_pptx(result)
     prs = Presentation(io.BytesIO(pptx_bytes))
 
-    # The fixed contents page is slide 2; the analysis slide is therefore index 4.
-    analysis_slide = prs.slides[4]
+    analysis_slide = next(s for s in prs.slides if any(shape.has_chart for shape in s.shapes))
     has_chart = any(s.has_chart for s in analysis_slide.shapes)
     has_kpi_card = any(s.has_text_frame and "48.5%" in s.text for s in analysis_slide.shapes)
 

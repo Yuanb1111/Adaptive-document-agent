@@ -149,11 +149,9 @@ def test_pptx_export_structure_ordering_and_gridlines() -> None:
                           if shape.placeholder_format.idx == 15)
     assert cover_subtitle.text == "Institutional Review"
     assert slide_titles[1] == "Contents"
-    assert slide_titles[2] == "Company at a Glance"
-    assert slide_titles[3] == "Executive Summary"
-    assert slide_titles[4] == "Revenue Acceleration"
+    assert slide_titles[2] == "Revenue Acceleration"
 
-    analysis_slide = deck.slides[4]
+    analysis_slide = deck.slides[2]
     charts = [s.chart for s in analysis_slide.shapes if s.has_chart]
     assert len(charts) == 1
     ch = charts[0]
@@ -318,8 +316,7 @@ def test_long_title_dynamic_layout_and_preflight() -> None:
 
     pptx_bytes = export_pptx(result)
     deck = Presentation(io.BytesIO(pptx_bytes))
-    # In exported deck: 0=Cover, 1=Contents, 2=Overview, 3=Summary, 4=Analysis
-    slide = deck.slides[4]
+    slide = next(s for s in deck.slides if any(shape.has_chart for shape in s.shapes))
 
     # Check title and subtitle placeholder spacing
     phs = {p.placeholder_format.idx: p for p in slide.placeholders}

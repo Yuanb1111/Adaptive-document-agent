@@ -180,13 +180,16 @@ def test_pptx_export_renders_validated_ai_story_plan() -> None:
         for slide in deck.slides
     ]
 
-    assert titles[:4] == [
+    assert titles[:2] == [
         "Example Automation",
         "Contents",
-        "Company at a Glance",
-        "Executive Summary",
     ]
-    assert titles[4].startswith("Revenue growth accelerated in the latest period")
+    assert titles[2].startswith("Revenue growth accelerated in the latest period")
+    assert 'Company at a Glance' not in titles
+    assert 'Executive Summary' not in titles
+    retained_notes = '\n'.join(slide.notes_slide.notes_text_frame.text for slide in deck.slides)
+    assert 'Company at a Glance' in retained_notes
+    assert 'Executive Summary' in retained_notes
     cover_subtitle = next(
         shape for shape in deck.slides[0].placeholders if shape.placeholder_format.idx == 15
     )
@@ -196,7 +199,7 @@ def test_pptx_export_renders_validated_ai_story_plan() -> None:
     assert "Revenue growth accelerated in the latest period" in all_text
     assert any(
         shape.has_text_frame and shape.text.strip().startswith("Revenue growth accelerated in the latest period")
-        for shape in deck.slides[4].shapes
+        for shape in deck.slides[2].shapes
     )
     contents_text = "\n".join(shape.text for shape in deck.slides[1].shapes if shape.has_text_frame)
     assert "Financial Performance" in contents_text
@@ -255,12 +258,11 @@ def test_pptx_contents_order_matches_generated_sections() -> None:
         for index, slide in enumerate(deck.slides)
         if any(shape.has_text_frame and shape.text.strip() == "Contents" for shape in slide.shapes)
     )
-    findings_index = next(
-        index
-        for index, slide in enumerate(deck.slides)
-        if index > contents_index
-        and any(shape.has_text_frame and shape.text.strip() == "Key findings" for shape in slide.shapes)
-    )
+    # This fixture has only one short finding, which is now folded into a
+    # substantive page rather than occupying a nearly empty summary page.
+    assert not any(shape.has_text_frame and shape.text.strip() == 'Key findings'
+                   for slide in deck.slides for shape in slide.shapes)
+    assert any('Key findings' in slide.notes_slide.notes_text_frame.text for slide in deck.slides)
     thematic_index = next(
         index
         for index, slide in enumerate(deck.slides)
@@ -268,7 +270,7 @@ def test_pptx_contents_order_matches_generated_sections() -> None:
         and any(shape.has_text_frame and shape.text.strip() == "Thematic analysis" for shape in slide.shapes)
     )
 
-    assert findings_index < thematic_index
+    assert contents_index < thematic_index
 
 
 def test_series_rows_preserve_non_axis_business_dimensions() -> None:

@@ -22,6 +22,7 @@ def record_section(presentation,slide_plan,result):
                 source_pages=sorted(pages),mapping_basis='renderer_input_scope; not claim-by-claim display proof')
             result.presentation_export_trace.append(record)
             for i in range(before,after):
+                presentation.slides[i]._ada_section_label = slide_plan.section_title or slide_plan.title
                 notes=presentation.slides[i].notes_slide.notes_text_frame
                 trace={**record,'physical_slide':i+1}
                 try:
@@ -49,3 +50,23 @@ def clear_trace(result):
         for section in result.profile.source_coverage.sections:
             section.export_mapping_status='not_recorded'
             section.exported_topic_ids=[];section.exported_slide_numbers=[]
+
+
+def rebase_trace(presentation, result, number_map):
+    """Keep durable source mappings accurate after folding physical pages."""
+    by_page = {}
+    for record in result.presentation_export_trace:
+        record['slide_numbers'] = sorted({number_map[n] for n in record['slide_numbers']})
+        for number in record['slide_numbers']:
+            by_page.setdefault(number, []).append({**record, 'physical_slide': number})
+    if result.profile.source_coverage:
+        for section in result.profile.source_coverage.sections:
+            section.exported_slide_numbers = sorted({number_map[n] for n in section.exported_slide_numbers})
+    for number, records in by_page.items():
+        notes = presentation.slides[number - 1].notes_slide.notes_text_frame
+        # Preserve the old audit record explicitly as historical. Append the
+        # current mapping after all merged notes so readers find current IDs.
+        notes.text = notes.text.replace('ADA_EXPORT_TRACE_V1', 'ADA_PRIOR_EXPORT_TRACE_V1')
+        primary = next((r for r in records if r.get('topic_id')), records[0])
+        notes.text += '\n\nADA_EXPORT_TRACE_V1\n' + json.dumps(
+            {**primary, 'co_located_scopes': records}, ensure_ascii=False)

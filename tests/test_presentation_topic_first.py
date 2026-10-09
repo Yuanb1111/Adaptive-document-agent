@@ -377,7 +377,9 @@ def test_conclusion_precedes_data_index_and_final_thank_you() -> None:
     appendix = [i for i, slide in enumerate(deck.slides) if any(shape.has_table for shape in slide.shapes)]
     assert "Conclusions and Watch Items" in texts[closing]
     assert "Watch item 1" not in texts[closing]
-    assert appendix and all(closing < i < len(texts) - 1 for i in appendix)
+    # A one-line watch item shares a substantive page, including an appendix
+    # page when the analysis page has no free margin.
+    assert appendix and all(closing <= i < len(texts) - 1 for i in appendix)
     assert "Data Index" in texts[appendix[0]]
     assert "THANK YOU" in last_text
 
