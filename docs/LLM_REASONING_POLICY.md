@@ -17,7 +17,7 @@ without changing prompts, response validation, routing, credentials or privacy:
   and layout on 2026-10-09. Complete numeric, unit, quote, source and qualification
   checks remain in place. Models, prompts and semantic selection stay unchanged.
 - Semantic resolution, candidate scoring, analytical topic selection, insight generation,
-  `IntroductionDraft`, unknown operations and plain text generation keep defaults
+  `SummaryReadBatch`, `IntroductionDraft`, unknown operations and plain text generation keep defaults
 - The existing `discovery_thinking` setting remains independent and unchanged
 
 `LLM_SIMPLE_TASK_REASONING=reduced` is the default. Set `provider_default` to opt

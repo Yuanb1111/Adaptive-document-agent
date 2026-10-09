@@ -11,12 +11,14 @@ from pydantic import BaseModel, Field
 
 from adaptive_document_agent.models import PipelineResult, PresentationPlan, ValidationIssue
 from adaptive_document_agent.models.presentation import CompanyProfile, CompanySummaryItem, CompanySummaryPage
+from adaptive_document_agent.models.summary import SummaryPageRange, SummarySlidePage, SummaryPartDecision
 from adaptive_document_agent.services.company_summary import summary_excerpts, validate_summary
 from .prompting import untrusted_document_message
 
 
 class IntroductionPages(BaseModel):
     pages: list[int] = Field(default_factory=list, max_length=8)
+    summary_ranges: list[SummaryPageRange] = Field(default_factory=list)
 
 
 class IntroductionDraft(BaseModel):
@@ -26,6 +28,8 @@ class IntroductionDraft(BaseModel):
     overview: CompanySummaryPage | None = None
     business: CompanySummaryPage | None = None
     value_chain: list[CompanySummaryItem] = Field(default_factory=list, max_length=5)
+    summary_pages: list[SummarySlidePage] = Field(default_factory=list, max_length=8)
+    summary_decisions: list[SummaryPartDecision] = Field(default_factory=list)
 
 
 _RULES = (
@@ -100,7 +104,8 @@ class PreparedCompanyIntroduction:
                     current.validation_warnings.append(issue.model_copy(deep=True))
         _check_cancelled(self._cancelled)
         errors = _introduction_errors(self._draft.company, current)
-        if not self._draft.company.summary_overview and not self._draft.company.summary_business:
+        if (not self._draft.company.summary_overview and not self._draft.company.summary_business
+                and not self._draft.company.summary_review):
             errors.append("At least one introduction page needs source evidence")
         if errors:
             raise ValueError("Prepared introduction no longer matches the source: " + "; ".join(errors))
@@ -160,12 +165,13 @@ def _introduction_errors(company: CompanyProfile, result: PipelineResult) -> lis
 
 
 def _has_valid_introduction(plan: PresentationPlan, result: PipelineResult) -> bool:
-    return bool((plan.company.summary_overview or plan.company.summary_business)
+    return bool((plan.company.summary_overview or plan.company.summary_business
+                 or (plan.company.summary_review and plan.company.summary_review.status == 'complete'))
                 and not _introduction_errors(plan.company, result))
 
 
 def ensure_company_introduction(gateway, result, plan, *, cancelled: Event | None = None) -> None:
-    """Keep valid introductions; otherwise select pages then extract two short pages.
+    """Read complete Summary scope, then let the model compose introductory pages.
 
     Both calls use the configured gateway and presentation-stage privacy policy.
     No provider, document type or issuer is special-cased. Failed extraction does
@@ -176,6 +182,7 @@ def ensure_company_introduction(gateway, result, plan, *, cancelled: Event | Non
         _shorten_cover(plan)
         return
     candidates = summary_excerpts(result.document, result.profile)
+    from adaptive_document_agent.services.company_summary import summary_page_numbers
     _check_cancelled(cancelled)
     selected = gateway.generate_structured([
         {"role": "system", "content": _RULES +
@@ -183,13 +190,31 @@ def ensure_company_introduction(gateway, result, plan, *, cancelled: Event | Non
          "who the subject/company is and a distinct subsection describing its actual "
          "products, services, operations or business model. Prefer introductory summary "
          "over detailed financial statements. Different documents use different headings. "
+         "Also identify ALL contiguous introductory Summary/overview section ranges in summary_ranges. "
+         "These ranges are for complete reading, not an eight-page excerpt selection. Include every "
+         "continuation page and all subsections; do not stop after products/business. PDF outline "
+         "and Summary running-header page numbers below are retrieval hints, not a document-type workflow. "
          "Return no pages if the material does not support an introduction."},
-        untrusted_document_message(json.dumps([
+        untrusted_document_message(json.dumps({'page_previews': [
             {"page": p["page"], "preview": p["text"][:1200]} for p in candidates
-        ], ensure_ascii=False)),
+        ], 'outline': [s.model_dump(mode='json') for s in result.document.outline],
+            'summary_running_header_pages': summary_page_numbers(result.document)}, ensure_ascii=False)),
     ], IntroductionPages, stage="presentation", cancelled=cancelled)
     _check_cancelled(cancelled)
     by_page = {p["page"]: p for p in candidates}
+    if not set(selected.pages) <= by_page.keys():
+        raise ValueError('No supported introductory pages were selected')
+    from adaptive_document_agent.services.summary_source import summary_scope
+    complete_pages = summary_scope(result, selected.summary_ranges)
+    if complete_pages:
+        from .summary_presentation import generate_summary_presentation
+        company = generate_summary_presentation(gateway, result, complete_pages, IntroductionDraft,
+                                               scope_ranges=selected.summary_ranges, cancelled=cancelled)
+        _check_cancelled(cancelled)
+        _apply_introduction(plan, company)
+        from adaptive_document_agent.services.presentation_identity import reconcile_presentation_identity
+        reconcile_presentation_identity(plan, result)
+        return
     if not selected.pages or not set(selected.pages) <= by_page.keys():
         raise ValueError("No supported introductory pages were selected")
     excerpts = [by_page[p] for p in dict.fromkeys(selected.pages)]
@@ -300,11 +325,12 @@ def _apply_introduction(plan: PresentationPlan, company: CompanyProfile) -> None
     plan.company = company
     if company.name:
         _shorten_cover(plan)
-        if company.summary_overview:
-            for slide in plan.slides:
-                if slide.slide_type == "company_overview":
-                    slide.title = company.summary_overview.title
-                    slide.section_title = company.summary_overview.title
+    title = (company.summary_pages[0].title if company.summary_pages else
+             company.summary_overview.title if company.summary_overview else '')
+    if title:
+        for slide in plan.slides:
+            if slide.slide_type == "company_overview":
+                slide.title = slide.section_title = title
 
 
 def _shorten_cover(plan) -> None:

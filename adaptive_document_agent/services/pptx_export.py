@@ -340,7 +340,11 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
     from .presentation_scope import scope_items
     if not scope_items(result):
         contents_slides = [s for s in contents_slides if s.slide_type != "data_quality"]
-    if plan.company.summary_overview and plan.company.summary_business:
+    if plan.company.summary_review:
+        contents_slides = [entry.model_copy(update={'section_title': page.title, 'title': page.title})
+                          for entry in contents_slides for page in
+                          (plan.company.summary_pages if entry.slide_type == 'company_overview' else [entry])]
+    elif plan.company.summary_overview and plan.company.summary_business:
         company_index = next((i for i, s in enumerate(contents_slides) if s.slide_type == "company_overview"), None)
         if company_index is not None:
             contents_slides.insert(company_index + 1, contents_slides[company_index].model_copy(update={
@@ -364,7 +368,8 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
     company_start = len(presentation.slides)
     _add_company_at_a_glance(presentation, result, slides_by_type["company_overview"])
     for slide in list(presentation.slides)[company_start:]:
-        slide._ada_section_label = slides_by_type["company_overview"].section_title or 'Company Overview'
+        slide._ada_section_label = getattr(slide, '_ada_section_label', None) or (
+            slides_by_type["company_overview"].section_title or 'Company Overview')
     if value_chain:
         from .presentation_value_chain import render_value_chain
         render_value_chain(presentation, plan.company)
@@ -644,6 +649,35 @@ def _presentation_company_identity(result: PipelineResult) -> tuple[str, list[in
 def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_plan: PresentationSlide) -> None:
     plan = result.presentation_plan
     if plan is None:  # pragma: no cover - guarded by caller
+        return
+
+    if plan.company.summary_review is not None:
+        from .company_summary import validate_summary
+        from .presentation_brief import BriefItem, render_profile
+        errors = validate_summary(plan.company, result)
+        if errors:
+            raise ValueError('Invalid complete Summary introduction: ' + '; '.join(errors))
+        if not plan.company.summary_pages and len(presentation.slides):
+            presentation.slides[-1].notes_slide.notes_text_frame.text += (
+                '\n\nComplete Summary reading and omission decisions:\n'
+                + plan.company.summary_review.model_dump_json(indent=2))
+        for index, page in enumerate(plan.company.summary_pages):
+            items = [BriefItem(item.label, item.text, item.source_pages) for item in page.items]
+            notes = page.model_dump_json(indent=2)
+            if index == 0:
+                notes += '\n\nComplete Summary reading and decisions:\n' + (
+                    plan.company.summary_review.model_dump_json(indent=2))
+            source_visual = getattr(presentation, '_ada_source_visual', None)
+            if index == 0 and source_visual:
+                from .presentation_source_visual import render_profile_with_source
+                rendered = render_profile_with_source(presentation, page.title, items, source_visual, notes=notes)
+            else:
+                rendered = render_profile(presentation, page.title, items, notes=notes)
+            if len(rendered) != 1:
+                raise ValueError('Summary page exceeds its layout budget; merge/shorten supported copy.')
+            for slide in rendered:
+                slide._ada_section_label = page.title
+        # A fully read Summary with justified omissions needs no placeholder.
         return
 
     available_summaries = [summary for summary in

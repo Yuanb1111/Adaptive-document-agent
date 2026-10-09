@@ -491,6 +491,17 @@ the deck and its contents. Their original copy and evidence references remain
 in the introduction's speaker notes and JSON. Summaries with independent
 findings, numeric copy or explicit charts/tables keep their page.
 
+The introductory Summary is now read completely within its identified scope,
+including later subsections and continuation pages. Source text is divided into
+bounded reading batches, retaining every page, source span, section note and
+quoted fact. Cloud batches may overlap while leaving capacity for the main
+analysis; local and stateful clients remain serial. The agent then merges related
+parts into substantive introductory slides and records an include/omit decision
+and reason for every read part. A part need not get its own slide. Sparse pages
+are merged or omitted rather than padded. Reading/selection audits are available
+in JSON, speaker notes and Technical Details; missing or over-budget source fails
+explicitly rather than being sampled and called complete.
+
 If a standard cover subtitle exceeds the template's readable capacity, export
 uses a fitting document-type label or "Document analysis" and retains the full
 original subtitle and purpose in speaker notes. This adds no model call and

@@ -48,8 +48,16 @@ class Gateway:
         return next(self.responses)
 
 
-def test_recovery_extracts_two_pages_independently_and_removes_heuristic_fields():
+def generic_intro_source():
+    """Legacy excerpt repair still applies to documents without Summary scope."""
     result = sample()
+    for page in result.document.pages:
+        page.text = page.text.replace('SUMMARY\n', '')
+    return result
+
+
+def test_recovery_extracts_two_pages_independently_and_removes_heuristic_fields():
+    result = generic_intro_source()
     original = result.presentation_plan.company.model_copy(deep=True)
     result.presentation_plan.company.summary_overview = None
     result.presentation_plan.company.summary_business = None
@@ -66,7 +74,7 @@ def test_recovery_extracts_two_pages_independently_and_removes_heuristic_fields(
 
 
 def test_independent_introduction_attaches_sourced_operating_flow():
-    result = sample()
+    result = generic_intro_source()
     company = result.presentation_plan.company.model_copy(deep=True)
     result.presentation_plan.company.summary_overview = None
     result.presentation_plan.company.summary_business = None
@@ -86,7 +94,7 @@ def test_independent_introduction_attaches_sourced_operating_flow():
 
 
 def test_introduction_rejects_only_invented_items_after_one_repair():
-    result = sample()
+    result = generic_intro_source()
     original = result.presentation_plan.company.model_copy(deep=True)
     original.summary_business.items[0].source_quote = "An invented product quotation"
     result.presentation_plan.company.summary_overview = None

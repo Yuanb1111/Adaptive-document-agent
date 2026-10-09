@@ -103,6 +103,17 @@ def render(st, result: PipelineResult) -> None:
                 st.caption("Important evidence considered but not promoted to a presentation topic")
                 st.json([item.model_dump(mode="json") for item in result.presentation_topics.omissions])
 
+    company = result.presentation_plan.company if result.presentation_plan else None
+    if company and company.summary_review:
+        review = company.summary_review
+        with _expander(st, 'Summary reading and slide decisions'):
+            st.caption(f'{review.status} · {len(review.source_pages)} source pages · '
+                       f'{len(review.parts)} read parts · {len(company.summary_pages)} introductory slides')
+            st.json([{'part_id': part.id, 'title': part.title, 'page': part.source_page,
+                      'reading_note': part.reading_note,
+                      'decision': next((d.model_dump(mode='json') for d in review.decisions
+                                        if d.part_id == part.id), None)} for part in review.parts])
+
     sections = (
         ("LLM cost by stage and currency (estimates, not billing)", cost_summary),
         ("Document profile", result.profile.model_dump(mode="json")),

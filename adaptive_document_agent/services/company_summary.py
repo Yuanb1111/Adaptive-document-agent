@@ -37,13 +37,15 @@ def summary_excerpts(document: ParsedDocument, profile: DocumentProfile | None =
         *CompanyProfileDiscovery.rank_profile_pages(document, profile, max_pages=10),
     ]))
     candidates = list(dict.fromkeys([
-        *summary_page_numbers(document)[:20],
+        *summary_page_numbers(document),
         *anchors,
         *(p + offset for p in anchors for offset in (-1, 1, 2)),
         *range(1, min(document.page_count, 40) + 1),
     ]))
     by_number = {p.page_number: p for p in document.pages if p.text.strip()}
-    selected = [p for p in candidates if p in by_number][:60]
+    explicit = set(summary_page_numbers(document))
+    other = [p for p in candidates if p in by_number and p not in explicit][:60]
+    selected = list(dict.fromkeys([*(p for p in candidates if p in explicit and p in by_number), *other]))
     return [{"page": p, "text": by_number[p].text[:6000],
              "text_truncated": len(by_number[p].text) > 6000,
              "retrieval_role": "candidate_only_model_must_classify"}
@@ -55,6 +57,16 @@ def validate_summary(company, result) -> list[str]:
     from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
 
     errors = []
+    if company.summary_review is not None:
+        from .summary_validation import presentation_errors
+        errors.extend(presentation_errors(company.summary_review, company.summary_pages, result))
+        if company.summary_review.status != 'complete':
+            errors.append('Introductory Summary reading/selection is incomplete')
+        if company.summary_overview or company.summary_business or company.value_chain:
+            errors.append('Complete Summary introduction cannot mix legacy introductory pages')
+        return errors
+    elif company.summary_pages:
+        errors.append('Dynamic Summary slides require their complete reading/decision audit')
     candidate_text = {p["page"]: p["text"] for p in summary_excerpts(result.document, result.profile)}
     normalize = normalize_quote
     for field in ("summary_overview", "summary_business"):

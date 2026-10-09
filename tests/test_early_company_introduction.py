@@ -22,6 +22,10 @@ from tests.test_company_summary_pages import sample
 
 def source_only(**kwargs):
     source = sample(**kwargs)
+    # This lifecycle harness exercises generic introductory excerpts; complete
+    # Summary coverage and batch reading have their own source-bound fixtures.
+    for page in source.document.pages:
+        page.text = page.text.replace('SUMMARY\n', '')
     company = source.presentation_plan.company.model_copy(deep=True)
     source.presentation_plan = None
     return source, company
@@ -164,7 +168,7 @@ def test_snapshot_is_independent_of_table_and_profile_mutations(monkeypatch):
     def generate(gateway, snapshot, draft, **kwargs):
         started.set()
         assert release.wait(3)
-        assert snapshot.document.pages[1].text == "SUMMARY\nOVERVIEW\nWe operate a business software platform."
+        assert snapshot.document.pages[1].text == "OVERVIEW\nWe operate a business software platform."
         assert snapshot.profile.document_summary_pages == []
         assert not snapshot.document.pages[1].tables
         draft.company = expected

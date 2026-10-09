@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, model_validator
 
 from .chart import ChartType
+from .summary import SummaryReview, SummarySlidePage
 
 
 PresentationSlideType = Literal[
@@ -102,6 +103,8 @@ class CompanyProfile(BaseModel):
     field_source_pages: dict[str, list[int]] = Field(default_factory=dict)
     summary_overview: CompanySummaryPage | None = None
     summary_business: CompanySummaryPage | None = None
+    summary_pages: list[SummarySlidePage] = Field(default_factory=list, max_length=8)
+    summary_review: SummaryReview | None = None
     value_chain: list[CompanySummaryItem] = Field(default_factory=list, max_length=5)
 
 

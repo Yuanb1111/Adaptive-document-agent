@@ -129,7 +129,7 @@ def validate_presentation_layout(
     unresolved_name = not is_company_identity_resolved(company)
     missing_fields = not company.industry or not company.products or not company.business_model
 
-    if long_desc or unresolved_name or missing_fields:
+    if (long_desc or unresolved_name or missing_fields) and not company.summary_review:
         if auto_repair:
             enriched = extract_structured_company_fields(company, result)
             plan.company = enriched

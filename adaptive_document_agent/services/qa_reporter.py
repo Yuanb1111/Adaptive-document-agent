@@ -339,6 +339,7 @@ def run_comprehensive_qa(result: PipelineResult, auto_repair: bool = True) -> QA
         result = result.model_copy(deep=True)
     if (auto_repair and result.presentation_plan and result.presentation_plan.company
             and not result.presentation_plan.company.summary_overview
+            and not result.presentation_plan.company.summary_review
             and not any(i.code == "company_introduction_unavailable" for i in result.validation_warnings)):
         from adaptive_document_agent.services.company_extractor import extract_structured_company_fields
         result.presentation_plan.company = extract_structured_company_fields(result.presentation_plan.company, result)
