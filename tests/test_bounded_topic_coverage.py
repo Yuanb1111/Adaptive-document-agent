@@ -202,3 +202,25 @@ def test_compaction_preserves_category_to_value_mapping_in_matrix_dimensions():
     payload['all_extracted_series'][0][payload['series_columns'].index('dimensions')] = {'reported_values': mapping}
     compact = compact_context(payload)
     assert compact['all_extracted_series'][0]['dimensions']['reported_values'] == mapping
+
+
+def test_short_input_still_batches_decisions_to_fit_bounded_output(monkeypatch):
+    from adaptive_document_agent.agent import topic_coverage_review as module
+    result, lookup, annual, interim, adverse, payload = context_fixture(extra=3)
+    selection = PresentationTopicSelection(topics=[_topic(annual)])
+    candidates = {sid for sid in lookup if sid != annual}
+    monkeypatch.setattr(module, 'MAX_REVIEW_DECISIONS', 2)
+    class Gateway:
+        def __init__(self): self.requested = []
+        def generate_structured(self, messages, response_model, **kwargs):
+            data = json.loads(messages[-1]['content'].split('\n', 1)[1].rsplit('\n', 1)[0])
+            ids = data['series_requiring_coverage_decision']
+            assert len(ids) <= 2
+            self.requested.extend(ids)
+            return TopicCoverageReview(**data['current_selection'], coverage_decisions=[
+                {'series_id': sid, 'decision': 'omit', 'reason': 'Outside this model-selected historical question.'}
+                for sid in ids])
+    gateway = Gateway()
+    review_topic_coverage(selection, result, lookup, set(), payload, gateway, PresentationTopicSelector._validate)
+    assert set(gateway.requested) == candidates and len(gateway.requested) == len(candidates)
+    assert result.validation_warnings[-1].code == 'presentation_topic_coverage_review'

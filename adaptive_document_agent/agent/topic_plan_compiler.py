@@ -7,17 +7,25 @@ from .presentation_topic_selector import PresentationTopicSelector, series_direc
 from .presentation_plan_recovery import PresentationPlanRecovery
 
 
+def reconcile_topic_source_scope(result: PipelineResult):
+    """Stabilize source-bound semantics before concurrent editorial work."""
+    _, lookup = series_directory(result)
+    from adaptive_document_agent.validation.topic_period_consistency import reconcile_topic_periods
+    reconcile_topic_periods(result, lookup)
+    from adaptive_document_agent.services.source_scope_completeness import reconcile_source_scopes
+    reconcile_source_scopes(result, lookup)
+    from adaptive_document_agent.services.presentation_audit_scope import reconcile_audit_scope
+    reconcile_audit_scope(result, PresentationPlan(title='Source scope preparation'))
+    return lookup
+
+
 def compile_topic_plan(result: PipelineResult) -> PresentationPlan:
     """Preserve semantic choices; Python only binds IDs, layout and validation.
 
     Invalid selections still fail into the existing observable recovery path.
     No model call, evidence check or review status is silently fabricated.
     """
-    _, lookup = series_directory(result)
-    from adaptive_document_agent.validation.topic_period_consistency import reconcile_topic_periods
-    reconcile_topic_periods(result, lookup)
-    from adaptive_document_agent.services.source_scope_completeness import reconcile_source_scopes
-    reconcile_source_scopes(result, lookup)
+    lookup = reconcile_topic_source_scope(result)
     scope = {page for start, end in result.profile.analysis_page_ranges for page in range(start, end + 1)}
     PresentationTopicSelector._validate(result.presentation_topics, lookup, primary_pages=scope)
     plan = PresentationPlanRecovery().from_selected_topics(result, origin="topic_compilation")

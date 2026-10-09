@@ -12,7 +12,7 @@ from pptx.util import Inches
 from adaptive_document_agent.agent.company_introduction import (
     IntroductionDraft, IntroductionPages, ensure_company_introduction, prepare_company_introduction,
 )
-from adaptive_document_agent.agent.summary_reader import ReadPart, SummaryReadBatch
+from adaptive_document_agent.agent.summary_reader import ReadFact, ReadPart, SummaryReadBatch
 from adaptive_document_agent.models import DocumentPage, DocumentProfile, ParsedDocument, PipelineResult, PresentationPlan, PresentationSlide
 from adaptive_document_agent.models.summary import SummaryFact, SummaryPageRange, SummaryPartDecision, SummarySlideItem, SummarySlidePage
 from adaptive_document_agent.services.company_summary import validate_summary
@@ -72,8 +72,8 @@ class SummaryClient(MockLLMClient):
                     if not is_fact:
                         while end < len(lines) and not lines[end][1].startswith(('Cedar provides', 'Delivery depends')):
                             end += 1
-                    facts = [SummaryFact(label='Operations' if line.startswith('Cedar') else 'Delivery',
-                        text=line.strip(), source_quote=line.strip(), source_pages=[block['page']])] if is_fact else []
+                    facts = [ReadFact(label='Operations' if line.startswith('Cedar') else 'Delivery',
+                        text=line.strip(), quote_start_line=index, quote_end_line=index)] if is_fact else []
                     parts.append(ReadPart(block_id=block['block_id'], start_line=index, end_line=lines[end-1][0],
                         title='Operations' if line.startswith('Cedar') else 'Delivery' if is_fact else 'Source headings',
                         role='content' if is_fact else 'layout', reading_note='Read the complete assigned source lines.', facts=facts))
@@ -175,8 +175,8 @@ def test_full_scope_includes_more_than_twenty_header_pages_and_long_page_tail():
 
 
 @pytest.mark.parametrize('mutation,fragment', [
-    ('drop_part', 'skip'), ('overlap', 'overlap'), ('bad_quote', 'assigned source part'),
-    ('wrong_page', 'exact source page'), ('wrong_unit', 'numeric'), ('wrong_number', 'numeric'),
+    ('drop_part', 'skip'), ('overlap', 'overlap'), ('bad_quote', 'outside its assigned part'),
+    ('reversed_span', 'outside its assigned part'), ('wrong_unit', 'numeric'), ('wrong_number', 'numeric'),
 ])
 def test_reader_rejects_gaps_overlaps_and_unbound_claims_and_retains_failed_audit(mutation, fragment):
     def edit(response, payload, messages):
@@ -186,9 +186,9 @@ def test_reader_rejects_gaps_overlaps_and_unbound_claims_and_retains_failed_audi
         elif mutation == 'overlap':
             response.parts.append(part.model_copy(deep=True))
         elif mutation == 'bad_quote':
-            part.facts[0].source_quote = 'This passage is not in the source.'
-        elif mutation == 'wrong_page':
-            part.facts[0].source_pages = [99]
+            part.facts[0].quote_end_line = 999
+        elif mutation == 'reversed_span':
+            part.facts[0].quote_start_line = part.end_line + 1
         elif mutation == 'wrong_unit':
             part.facts[0].text = 'Cedar revenue was RMB 30 million.'
         else:
@@ -202,6 +202,41 @@ def test_reader_rejects_gaps_overlaps_and_unbound_claims_and_retains_failed_audi
     assert len(audit['read_audits'][0]['attempts']) == 2
     assert any(fragment in e for a in audit['read_audits'][0]['attempts'] for e in a['errors'])
     assert 'IntroductionDraft' not in client.operations
+
+
+def test_reader_retries_one_schema_failure_with_original_source_and_keeps_diagnostics():
+    from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
+    class InvalidFirstRead(SummaryClient):
+        failed = False
+        def generate_structured(self, messages, response_model, **kwargs):
+            if response_model is SummaryReadBatch and not self.failed:
+                self.failed = True
+                response = LLMResponse(text='{"parts": [{"facts": "invalid"}]}')
+                raise LLMStructuredOutputError('schema validation failed', response=response) from ValueError('facts must be a list')
+            return super().generate_structured(messages, response_model, **kwargs)
+    result = distinct_source(1)
+    generate(result, InvalidFirstRead())
+    review = result.presentation_plan.company.summary_review
+    assert review.status == 'complete'
+    attempts = review.read_audits[0]['attempts']
+    assert len(attempts) == 2 and attempts[0]['validation_detail'] == 'facts must be a list'
+    assert 'invalid' in attempts[0]['raw_response']
+    assert all(f.source_pages == [part.source_page] and f.source_quote in part.source_text
+               for part in review.parts for f in part.facts)
+
+
+def test_failed_introduction_does_not_render_an_evidence_limitation_placeholder():
+    from adaptive_document_agent.models import ValidationIssue
+    from tests.test_presentation_brief import blank_deck
+    result = source(1)
+    result.presentation_plan = PresentationPlan(title='Findings')
+    result.validation_warnings.append(ValidationIssue(code='company_introduction_unavailable',
+        stage='presentation', severity='warning', message='Source verification failed'))
+    deck = blank_deck()
+    deck.slides.add_slide(deck.slide_layouts[0])
+    _add_company_at_a_glance(deck, result, PresentationSlide(id='intro', slide_type='company_overview', title='Overview'))
+    assert len(deck.slides) == 1
+    assert 'source verification failed' in deck.slides[0].notes_slide.notes_text_frame.text
 
 
 @pytest.mark.parametrize('mutation', ['sparse', 'missing_decision', 'false_include', 'unknown_part', 'new_quote'])

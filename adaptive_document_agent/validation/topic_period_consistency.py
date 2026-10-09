@@ -169,4 +169,8 @@ def continuation_copy(question, reason, observations):
         if item.period:
             groups[qualified_metric_name(item)].add(item.period)
     detail = '; '.join(label+': '+', '.join(sorted(periods,key=period_sort_key)) for label,periods in groups.items())
-    return 'How do the reported values compare?', 'Displayed evidence: '+detail if detail else ''
+    labels = list(groups)
+    heading = ' and '.join(labels)
+    if len(heading) > 100:
+        heading = labels[0] + (' and related measures' if len(labels) > 1 else '')
+    return heading or 'Reported measures', 'Displayed evidence: '+detail if detail else ''

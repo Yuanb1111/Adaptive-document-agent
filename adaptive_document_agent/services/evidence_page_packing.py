@@ -93,8 +93,22 @@ def _write_note(slide, name, spec, top):
     shape.top, shape.height = Inches(top), Inches(height)
 
 
-def pack_evidence_pages(presentation, slides):
-    """Combine adjacent, explicitly marked tables when their content fits.
+def _complete_pair_fits(presentation, previous, slide):
+    tables = _tables(previous) + _tables(slide)
+    if not _tables(previous) or not _tables(slide):
+        return False
+    footer = _note_spec(previous, slide, 'evidence:footer')
+    convention = _note_spec(previous, slide, 'evidence:convention')
+    footer_top = min(6.47, presentation.slide_height.inches - .60) - (footer[2] if footer else 0)
+    convention_top = footer_top - (.08 + convention[2] if convention else 0)
+    bottom = min(presentation.slide_height.inches - 1.02, convention_top - .12)
+    top = min(s.top.inches for s in _tables(previous))
+    height = sum(_compact_row_height(row, shape.table.columns) for shape in tables for row in shape.table.rows)
+    return top + height + .18 * (len(tables) - 1) <= bottom
+
+
+def pack_evidence_pages(presentation, slides, *, first_fit=False):
+    """Combine explicitly marked tables when their content fits.
 
     Each table retains its own complete headers and rows, even when periods or
     units differ. Source paragraphs and raw-record speaker notes are retained.
@@ -103,7 +117,11 @@ def pack_evidence_pages(presentation, slides):
     retained = []
     for slide in slides:
         tables = _tables(slide)
-        previous = retained[-1] if retained else None
+        previous = (next((candidate for candidate in retained
+                          if _complete_pair_fits(presentation, candidate, slide)), None)
+                    if first_fit else None)
+        if previous is None:
+            previous = retained[-1] if retained else None
         old_tables = _tables(previous) if previous is not None else []
         if not tables or not old_tables:
             retained.append(slide)

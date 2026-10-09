@@ -15,6 +15,21 @@ class CellUnitDefaults(UnitDefaults):
     allow_column_defaults: bool = True
 
 
+def standalone_unit_declaration(row) -> UnitDefaults | None:
+    """A literal unit heading scopes following rows, unlike another row's unit."""
+    if not row.cells or any((cell or '').strip() for cell in row.cells[1:]):
+        return None
+    label = (row.cells[0] or '').strip()
+    # Require the entire heading to be a unit declaration. A metric containing
+    # a currency (or a narrative sentence) must never change following rows.
+    if not re.fullmatch(r"(?i)\(?\s*(?:in\s+)?(?:(?:thousands?|millions?|billions?)\s+(?:of\s+)?)?"
+                        r"(?:RMB|CNY|USD|HKD|EUR|GBP|US\$|HK\$)"
+                        r"(?:\s*(?:in\s+)?(?:['’]000s?|thousands?|millions?|billions?))?\s*\)?", label):
+        return None
+    defaults = infer_unit_defaults(label)
+    return defaults if defaults.currency else None
+
+
 def cell_unit_defaults(table: ExtractedTable, row_index: int, column_label: str | None) -> CellUnitDefaults:
     """Prefer a row/column declaration, then an applicable source header.
 
@@ -30,6 +45,11 @@ def cell_unit_defaults(table: ExtractedTable, row_index: int, column_label: str 
         return CellUnitDefaults(**vars(row_defaults))
     if column_defaults.currency and column_defaults.scale:
         return CellUnitDefaults(**vars(column_defaults))
+
+    for previous in reversed(table.rows[:row_index]):
+        scoped = standalone_unit_declaration(previous)
+        if scoped:
+            return CellUnitDefaults(**vars(scoped), allow_column_defaults=False)
 
     scoped_elsewhere = False
     lines = [*table.raw_header_lines, table.unit_header or '']

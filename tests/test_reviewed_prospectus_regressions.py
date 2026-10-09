@@ -124,7 +124,8 @@ def test_repair_receives_native_signed_values_but_cannot_authorize_conversion():
     original['items'][0]['text']='Programme fees were USD 1.5 million.'
     excerpts={p.page_number:p.text for p in result.document.pages}
     options=native_quantity_options(original,{0:[]},result,excerpts)['item_0']
-    assert {'currency':'us$','signed_coefficient':'1475','source_scale':'thousand','literal_basis':['']} in options
+    assert {'currency':'us$','signed_coefficient':'1475','source_scale':'thousand','literal_basis':[''],
+            'amount_text':'US$ 1475 thousand'} in options
     assert not any(o['source_scale']=='million' for o in options)
     from adaptive_document_agent.services.executive_brief import validate_executive_brief
     brief.items[0].text=original['items'][0]['text']

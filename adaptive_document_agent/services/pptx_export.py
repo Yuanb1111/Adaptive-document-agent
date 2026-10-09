@@ -352,6 +352,9 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
             contents_slides.insert(company_index + 1, contents_slides[company_index].model_copy(update={
                 "section_title": plan.company.summary_business.title,
             }))
+    elif (not plan.company.summary_overview and not plan.company.summary_business
+          and any(issue.code == 'company_introduction_unavailable' for issue in result.validation_warnings)):
+        contents_slides = [s for s in contents_slides if s.slide_type != 'company_overview']
     from .presentation_labels import composition_heading
     from .composition_data import uses_composition_data
     scoped_contents = []
@@ -686,17 +689,10 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
                            (plan.company.summary_overview, plan.company.summary_business) if summary]
     if (not available_summaries
             and any(issue.code == "company_introduction_unavailable" for issue in result.validation_warnings)):
-        from .presentation_brief import BriefItem, render_profile
-        items = [BriefItem(
-            "Evidence limitation", "A source-verified company introduction could not be generated in this run.", []
-        )]
-        source_visual = getattr(presentation, "_ada_source_visual", None)
-        if source_visual:
-            from .presentation_source_visual import render_profile_with_source
-            render_profile_with_source(presentation, "Document overview", items, source_visual)
-        else:
-            render_profile(presentation, "Company introduction unavailable", items,
-                           notes="See company_introduction_unavailable in the analysis diagnostics.")
+        if len(presentation.slides):
+            presentation.slides[-1].notes_slide.notes_text_frame.text += (
+                '\n\nCompany introduction omitted: source verification failed. '
+                'See company_introduction_unavailable and company_introduction_summary_audit in analysis diagnostics.')
         return
 
     if available_summaries:
@@ -2398,7 +2394,7 @@ def _add_evidence_table_slides(
             _text(slide, convention, 0.45, max(5.90, table_shape.top.inches + table_shape.height.inches + .08), 11.70, 0.28, size=10, color=FOURIER_MUTED).name = "evidence:convention"
         _text(slide, footnote, 0.45, 6.22, 11.70, 0.25, size=9.0, color=FOURIER_MUTED).name = "evidence:footer"
     from .evidence_page_packing import pack_evidence_pages
-    pack_evidence_pages(presentation, appendix_slides)
+    pack_evidence_pages(presentation, appendix_slides, first_fit=True)
 
 
 def update_geometry(

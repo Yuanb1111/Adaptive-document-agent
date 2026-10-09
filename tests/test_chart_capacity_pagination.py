@@ -123,3 +123,29 @@ def test_unfit_single_chart_still_blocks_and_removes_partial_page():
     with pytest.raises(ValueError, match="title exceeds readable capacity"):
         render_composed_slide(deck, slide, [chart], result, DocumentIndex([item]))
     assert not len(deck.slides)
+
+
+def test_single_chart_continuation_uses_full_width_and_retains_global_copy_once():
+    from adaptive_document_agent.services.slide_compositor import _paginate_chart_slide
+    values, charts = [], []
+    for i, metric in enumerate(('Output', 'Resource use', 'Adjusted result')):
+        group = [observation(f'{i}-{year}', metric, value, f'FY{year}', unit='count')
+                 for year, value in ((2023, 10), (2024, 20))]
+        values.extend(group)
+        charts.append(ChartPlan(id=f'c-{i}', title=metric, question='How do reported measures compare?', chart_type='bar',
+                               observation_ids=[o.id for o in group], source_pages=[3]))
+    copy = 'The comparison covers three separate reported measures.'
+    plan = PresentationSlide(id='split', slide_type='analysis', title='Reported activity',
+        message=copy, bullets=['These measures retain their separate source definitions.'],
+        chart_ids=[c.id for c in charts], source_pages=[3])
+    result = result_for(values, charts, plan)
+    deck = _deck()
+    pages = _paginate_chart_slide(deck, plan, (charts[:2], charts[2:]), result, DocumentIndex(values))
+    assert len(pages) == 2
+    chart = next(s for s in pages[1].shapes if s.has_chart)
+    assert chart.width.inches > deck.slide_width.inches * .8
+    second = ' '.join(s.text for s in pages[1].shapes if s.has_text_frame)
+    assert 'Adjusted result' in second and copy not in second
+    assert 'separate source definitions' not in second
+    assert [list(s.chart.series[0].values) for p in pages for s in p.shapes if s.has_chart] == [[10, 20]] * 3
+    validate_composed_geometry(deck)

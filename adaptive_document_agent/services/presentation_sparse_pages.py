@@ -24,15 +24,18 @@ def _sparse(slide, page_height=7.5):
         return False
     # Charts, tables, source pictures, and other evidence are substantive even
     # when the accompanying prose is short. Never count them as empty space.
-    if any(s.has_chart or s.has_table or s.shape_type in (6, 13) for s in slide.shapes):
+    tables = [s for s in slide.shapes if s.has_table]
+    short_closing = (len(tables) == 1 and tables[0].name.startswith('closing:evidence:')
+                     and len(tables[0].table.rows) <= 2 and tables[0].height.inches <= 1.4)
+    if any(s.has_chart or (s.has_table and not short_closing) or s.shape_type in (6, 13) for s in slide.shapes):
         return False
-    headings = [s for s in slide.shapes if s.name == 'brief:heading' and s.text.strip()]
+    headings = [s for s in slide.shapes if s.name in {'brief:heading', 'closing:heading'} and s.text.strip()]
     body_lines = sum(len(wrap_copy(s.text, s.width.inches, 16)) for s in bodies)
     heading_lines = sum(len(wrap_copy(s.text, s.width.inches, 18)) for s in headings)
     # An independently rendered definition/caveat is additional content, not
     # whitespace. Leave such pages intact rather than dropping untracked copy.
     if any(s.has_text_frame and s.text.strip() and s.top.inches >= 1.45
-           and not s.is_placeholder and s.name not in {'brief:body', 'brief:heading', 'closing:body'}
+           and not s.is_placeholder and s.name not in {'brief:body', 'brief:heading', 'closing:body', 'closing:heading'}
            and not s.text.startswith('Source:') for s in slide.shapes):
         return False
     if getattr(slide, '_ada_review_status', False):
@@ -64,10 +67,12 @@ def fold_sparse_text_pages(presentation, result=None):
     for slide in sparse:
         title = _title(slide)
         copy = '\n'.join(s.text for s in slide.shapes if s.has_text_frame and s.text.strip()
-                         and (s.name in {'brief:heading', 'brief:body', 'closing:body'}
+                         and (s.name in {'brief:heading', 'brief:body', 'closing:body', 'closing:heading'}
                               or (s.text.startswith('Source:')
                                   and 'page references not available' not in s.text)))
         text = f'{title}: {copy}' if title else copy
+        tables = [s for s in slide.shapes if s.has_table]
+        table_height = sum(s.height.inches + .12 for s in tables)
         ordered = sorted(targets, key=lambda s: (
             _title(s).removesuffix(' (continued)') != title.removesuffix(' (continued)'),
             abs(slides.index(s) - slides.index(slide))))
@@ -80,13 +85,22 @@ def fold_sparse_text_pages(presentation, result=None):
                         and (s.has_chart or s.has_table or s.shape_type in (6, 13)
                              or (s.has_text_frame and s.text.strip()))]
             top = max((s.top.inches + s.height.inches for s in occupied), default=1.5) + .12
-            if top + height <= presentation.slide_height.inches - 1.02:
+            if top + height + table_height <= presentation.slide_height.inches - 1.02:
                 _text(candidate, text, .55, top, width, height, size=11,
                       color=FOURIER_MUTED).name = 'sparse:retained_note'
+                from .evidence_page_packing import _copy_shape
+                from pptx.util import Inches
+                for table in tables:
+                    copied = _copy_shape(candidate, table)
+                    copied.top = Inches(top + height + .12)
+                    top += table.height.inches + .12
                 target = candidate
                 break
         notes = target.notes_slide.notes_text_frame
         merged = {'text': text, 'original_notes': slide.notes_slide.notes_text_frame.text}
+        if tables:
+            merged['source_tables'] = [[[cell.text for cell in row.cells] for row in table.table.rows]
+                                      for table in tables]
         try:
             structured = json.loads(notes.text)
         except (ValueError, TypeError):
@@ -96,6 +110,8 @@ def fold_sparse_text_pages(presentation, result=None):
             notes.text = json.dumps(structured, ensure_ascii=False, indent=2)
         else:
             notes.text += '\n\nMerged short page:\n' + text + '\n' + merged['original_notes']
+            if tables:
+                notes.text += '\n\nMerged source tables:\n' + json.dumps(merged['source_tables'], ensure_ascii=False)
         destinations[slide.slide_id] = target.slide_id
         slide_id = next(sid for sid in presentation.slides._sldIdLst if sid.id == slide.slide_id)
         presentation.part.drop_rel(slide_id.rId)

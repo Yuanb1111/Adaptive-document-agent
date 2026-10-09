@@ -6,6 +6,7 @@ import re
 
 from adaptive_document_agent.extraction.numeric_parser import parse_number
 from adaptive_document_agent.extraction.normalizer import infer_unit_defaults
+from adaptive_document_agent.extraction.unit_evidence import cell_unit_defaults, standalone_unit_declaration
 from .source_quotes import normalize_quote, continuous_quote_passages
 
 _SCALES = {1: "", 1000: "thousand", 1_000_000: "million",
@@ -182,11 +183,16 @@ def _column_basis(table, column, source, locate=_located_header):
     return ""
 
 
-def _unit_supported(table, column, currency, scale, source, parsed, locate=_located_header):
+def _unit_supported(table, column, currency, scale, source, parsed, locate=_located_header, row_index=None):
     """A column annotation cannot supply a unit absent from the cited context."""
     if parsed.currency and parsed.raw_unit:
         return True  # Already matched the explicit cell declaration above.
     fields = [table.unit_header, table.default_raw_unit, *table.raw_header_lines]
+    if row_index is not None:
+        heading = next((row.cells[0] for row in reversed(table.rows[:row_index])
+                        if standalone_unit_declaration(row)), None)
+        if heading:
+            fields.append(heading)
     if column < len(table.headers):
         fields.append(table.headers[column])
     for value in fields:
@@ -243,6 +249,8 @@ def quoted_table_context(item, result, *, excerpts=None):
             if len(plausible[key]) > 1:
                 signatures = {repr((row.cells, table.column_types, table.column_currencies,
                     table.column_scales, table.column_periods, table.column_audit_statuses,
+                    [vars(cell_unit_defaults(table, next(i for i, candidate in enumerate(table.rows) if candidate is row),
+                                             header)) for header in table.headers],
                     [_column_basis(table, col, source, locate) for col in range(len(table.column_currencies))]))
                     for table, row in rows}
                 if len(signatures) != 1:
@@ -271,8 +279,13 @@ def quoted_table_context(item, result, *, excerpts=None):
                     context.misparsed_positive_numbers.add(coefficient.lstrip("-"))
                 if column >= len(table.column_types) or table.column_types[column] not in {"amount", "numeric"}:
                     continue
-                currency = table.column_currencies[column] if column < len(table.column_currencies) else None
-                scale = table.column_scales[column] if column < len(table.column_scales) else None
+                row_index = next(i for i, candidate in enumerate(table.rows) if candidate is row)
+                defaults = cell_unit_defaults(table, row_index,
+                    table.headers[column] if column < len(table.headers) else None)
+                currency = (table.column_currencies[column]
+                    if defaults.allow_column_defaults and column < len(table.column_currencies) else None) or defaults.currency
+                scale = (table.column_scales[column]
+                    if defaults.allow_column_defaults and column < len(table.column_scales) else None) or defaults.scale or 1
                 if not currency or scale not in _SCALES or parsed.unit not in {None, "currency"}:
                     continue
                 currency = canonical_quantity(currency, "", "")[0]
@@ -280,7 +293,7 @@ def quoted_table_context(item, result, *, excerpts=None):
                     continue
                 if parsed.raw_unit and parsed.scale != scale:
                     continue
-                if not _unit_supported(table, column, currency, scale, source, parsed, locate):
+                if not _unit_supported(table, column, currency, scale, source, parsed, locate, row_index):
                     continue
                 basis = _column_basis(table, column, source, locate)
                 if basis is None:

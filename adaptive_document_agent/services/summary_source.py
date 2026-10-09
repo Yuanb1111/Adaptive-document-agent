@@ -6,7 +6,7 @@ from .company_summary import summary_page_numbers
 
 MAX_SUMMARY_CHARACTERS = 300_000
 BLOCK_CHARACTERS = 6500
-BATCH_CHARACTERS = 24_000
+BATCH_CHARACTERS = 12_000
 
 
 def summary_scope(result: PipelineResult, ranges) -> list[int]:

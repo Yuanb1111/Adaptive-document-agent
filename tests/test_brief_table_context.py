@@ -29,6 +29,33 @@ def test_complete_literal_row_inherits_only_its_explicit_table_headers():
     assert not validate_executive_brief(brief, result)
 
 
+def test_unit_heading_inside_body_can_support_only_its_following_source_row():
+    result, brief = table_result()
+    table = result.document.pages[0].tables[0]
+    table.column_currencies = [None, None, None]
+    table.column_scales = [None, None, None]
+    table.raw_header_lines = ['Six months ended June 30,', '2023 2024']
+    table.rows.insert(0, TableRow(cells=['(USD in thousands)', None, None], page=1))
+    assert not validate_executive_brief(brief, result)
+    table.rows.reverse()
+    assert validate_executive_brief(brief, result)
+
+
+def test_competing_identical_rows_with_different_scoped_units_are_ambiguous():
+    result, brief = table_result()
+    table = result.document.pages[0].tables[0]
+    table.column_currencies = [None, None, None]
+    table.column_scales = [None, None, None]
+    table.raw_header_lines = ['Six months ended June 30,', '2023 2024']
+    table.rows.insert(0, TableRow(cells=['(USD in thousands)', None, None], page=1))
+    other = table.model_copy(deep=True)
+    other.table_id = 'different-currency'
+    other.rows[0].cells[0] = '(EUR in thousands)'
+    result.document.pages[0].text += '\n(EUR in thousands)'
+    result.document.pages[0].tables.append(other)
+    assert validate_executive_brief(brief, result)
+
+
 @pytest.mark.parametrize("change", ["currency", "scale", "number", "row", "page", "unresolved", "ambiguous", "date"])
 def test_table_context_cannot_authorize_unbound_or_changed_values(change):
     result, brief = table_result()

@@ -100,6 +100,20 @@ def test_wrapped_rows_keep_separate_pages_when_compaction_would_clip_text():
     assert [_cells(_tables(slide)[0]) for slide in slides] == original
 
 
+def test_first_fit_uses_earlier_space_without_splitting_or_rewriting_later_table():
+    deck = Presentation()
+    deck.slide_width, deck.slide_height = Inches(12.6), Inches(7.1)
+    slides = [_page(deck, ['FY2030'], ['First'], 3),
+              _page(deck, ['FY2031'], ['Complete row'] * 9, 7),
+              _page(deck, ['6M2032'], ['Final'], 11)]
+    original = [_cells(_tables(s)[0]) for s in slides]
+    packed = pack_evidence_pages(deck, slides, first_fit=True)
+    assert len(packed) == 2
+    assert [_cells(s) for s in _tables(packed[0])] == [original[0], original[2]]
+    assert _cells(_tables(packed[1])[0]) == original[1]
+    assert 'p. 11' in packed[0].notes_slide.notes_text_frame.text
+
+
 def test_packing_retains_conflicting_values_and_distinct_conventions():
     deck = Presentation()
     deck.slide_width, deck.slide_height = Inches(12.6), Inches(7.1)

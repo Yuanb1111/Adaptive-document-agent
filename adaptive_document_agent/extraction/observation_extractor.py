@@ -81,6 +81,11 @@ class ObservationExtractor:
             # disappear from the identity of the following source rows.
             label = self._row_label(row.cells[0], allow_generic=not numeric_columns)
             if label and not numeric_columns:
+                from .unit_evidence import standalone_unit_declaration
+                if standalone_unit_declaration(row):
+                    # This is a source unit heading, not a semantic category.
+                    current_section = None
+                    continue
                 # Operators are not semantic parent metrics. Keep their raw
                 # source row without prefixing all subsequent results with Add.
                 current_section = None if re.fullmatch(r"(?i)(?:add|less|adjustments?|加|减|调整)[:：]?", label.strip()) else label.rstrip(":")

@@ -13,6 +13,14 @@ from adaptive_document_agent.services.summary_source import reading_batches
 from adaptive_document_agent.services.summary_validation import reading_errors
 from adaptive_document_agent.utils.ids import stable_id
 from .prompting import untrusted_document_message
+from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
+
+
+class ReadFact(BaseModel):
+    label: str = Field(min_length=1, max_length=60)
+    text: str = Field(min_length=1, max_length=220)
+    quote_start_line: int = Field(ge=1)
+    quote_end_line: int = Field(ge=1)
 
 
 class ReadPart(BaseModel):
@@ -22,7 +30,7 @@ class ReadPart(BaseModel):
     title: str = Field(min_length=1, max_length=160)
     role: Literal['content', 'layout']
     reading_note: str = Field(min_length=1, max_length=400)
-    facts: list[SummaryFact] = Field(default_factory=list, max_length=3)
+    facts: list[ReadFact] = Field(default_factory=list, max_length=2)
 
 
 class SummaryReadBatch(BaseModel):
@@ -55,12 +63,15 @@ _RULES = (
     'a semantic section boundary: describe continuations under their actual topic; the later editor '
     'may merge them. Split a block when a new subsection starts. Source headings need not be familiar. '
     'Use role content for source substance, layout only for running headers/footers/blank layout. '
-    'For each content part extract up to three material source-supported facts and a concise reading_note '
+    'Group continuous lines under their actual subsection, rather than creating a part per line. '
+    'For each content part extract up to two material source-supported facts and a concise reading_note '
     'explaining its subject, significant qualifications, and what is unresolved. Do not silently discard '
     'a part merely because it is not suitable for a slide. If no safe fact can be extracted, facts may '
     'be empty, but explain the limitation in reading_note. Layout parts have no facts. '
-    'Every fact needs a concise label/text and a literal contiguous source_quote entirely within '
-    'its assigned lines, with source_pages containing exactly that source page. Preserve source '
+    'Every fact needs a concise label/text (at most 220 characters) and quote_start_line/quote_end_line '
+    'for a short contiguous passage entirely within its part. Python retains the literal source quote '
+    'and page from those lines, so do not repeat source text or supply source_pages in the JSON. '
+    'Choose only the lines needed to substantiate the fact, between 8 and 1800 source characters. Preserve source '
     'numeric spelling, dates, currency, scale, units, ranking attribution and conditions. '
     'Never invent evidence, missing values, periods, explanations or recommendations. Do not calculate.'
 )
@@ -77,8 +88,20 @@ def _read_batch(gateway, result, blocks, cancelled: Event) -> ReadOutcome:
         for attempt in range(2):
             if cancelled.is_set():
                 raise CancelledError('Summary reading cancelled')
-            response = gateway.generate_structured(messages, SummaryReadBatch, stage='presentation',
-                                                   allow_repair=False, cancelled=cancelled)
+            try:
+                response = gateway.generate_structured(messages, SummaryReadBatch, stage='presentation',
+                                                       allow_repair=False, cancelled=cancelled)
+            except LLMStructuredOutputError as exc:
+                record = {'error': str(exc), 'validation_detail': str(exc.__cause__ or exc),
+                          'raw_response': exc.response.text}
+                audit['attempts'].append(record)
+                if attempt or (exc.response.usage and exc.response.usage.finish_reason == 'length'):
+                    raise
+                messages = messages[:2] + [untrusted_document_message(json.dumps(record, ensure_ascii=False)),
+                    {'role': 'user', 'content': 'Correct only these schema failures using the original source. '
+                     'Keep every subsection and all line coverage. Use compact facts with source line spans, '
+                     'not copied paragraphs. Do not manufacture missing facts.'}]
+                continue
             record = {'response': response.model_dump(mode='json')}
             audit['attempts'].append(record)
             by_id = {b.id: b for b in blocks}
@@ -88,9 +111,22 @@ def _read_batch(gateway, result, blocks, cancelled: Event) -> ReadOutcome:
                 if block is None:
                     unknown.append('Summary reader cites an unknown source block')
                     continue
-                source = ''.join(block.text.splitlines(keepends=True)[part.start_line-1:part.end_line])
-                parts.append(SummaryPart(**part.model_dump(), id=stable_id('summary_part', block.id,
-                    part.start_line, part.end_line), source_page=block.page, source_text=source))
+                lines = block.text.splitlines(keepends=True)
+                source = ''.join(lines[part.start_line-1:part.end_line])
+                facts = []
+                for fact in part.facts:
+                    if not part.start_line <= fact.quote_start_line <= fact.quote_end_line <= part.end_line <= len(lines):
+                        unknown.append('Summary fact source span is outside its assigned part')
+                        continue
+                    try:
+                        facts.append(SummaryFact(label=fact.label, text=fact.text,
+                            source_quote=''.join(lines[fact.quote_start_line-1:fact.quote_end_line]).strip(),
+                            source_pages=[block.page]))
+                    except ValueError as exc:
+                        unknown.append('Invalid Summary fact source span: ' + str(exc))
+                parts.append(SummaryPart(**part.model_dump(exclude={'facts'}), facts=facts,
+                    id=stable_id('summary_part', block.id, part.start_line, part.end_line),
+                    source_page=block.page, source_text=source))
             probe = SummaryReview(document_id=result.document.document_id, document_sha256=result.document.sha256,
                 source_pages=sorted({b.page for b in blocks}), source_blocks=blocks, parts=parts)
             # Full-page supply is validated once by the owner, because another

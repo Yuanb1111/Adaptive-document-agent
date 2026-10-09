@@ -241,6 +241,19 @@ def test_three_verified_items_cannot_salvage_failed_topic_coverage():
     assert len(client.calls) == 2 and audited(result)['outcome'] == 'rejected'
 
 
+def test_two_verified_findings_survive_bad_patch_instead_of_a_metric_dump():
+    texts = ['Revenue was 12.', 'Costs were 8.']
+    bad = item('Debt was 99.'); bad['evidence'] = [{'page': 1, 'text': texts[0]}]
+    original = {'title': 'Findings', 'items': [*[item(text) for text in texts], bad]}
+    result = result_for([' '.join(texts)])
+    g, client = gateway([original, {'item_2': bad}])
+    brief = ExecutiveBriefWriter(g).generate(result)
+    assert [value.model_dump() for value in brief.items] == original['items'][:2]
+    assert audited(result)['outcome'] == 'salvaged'
+    assert audited(result)['discarded_indices'] == [2]
+    assert len(client.calls) == 2
+
+
 def test_transport_failure_is_audited_and_never_retried_as_content_repair():
     source = 'Revenue was 12.'
     bad = payload(source); bad['items'][0]['text'] = 'Revenue was 99.'

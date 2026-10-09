@@ -131,7 +131,7 @@ def _salvage(values: list[Any], locked: dict[int, ExecutiveBriefItem], title: An
         if not _item_errors(item, result, excerpts) and normalized(brief_claim_text(item, include_label=False)) not in seen:
             retained[index] = item
             seen.add(normalized(brief_claim_text(item, include_label=False)))
-    if not 3 <= len(retained) <= 7:
+    if not 2 <= len(retained) <= 7:
         return None, []
     # The existing salvage path permits a neutral title when the original title
     # cannot pass its source checks; every retained item stays unchanged.
@@ -257,6 +257,8 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
          'For every unsupported or rescaled monetary amount, use the exact signed coefficient, '
          'currency and source_scale from that item\'s source_native_money_options when available. '
          'These are source-native spellings, not rounded million/billion equivalents. '
+         'Copy amount_text as an exact monetary spelling when useful. Repair numeric labels too; '
+         'prefer a short topic label without a rounded amount, with exact figures in the body. '
          'For example a quoted (59,883) in RMB thousand supports -RMB59,883 thousand, '
          'not RMB59.9 million. You may use positive magnitude wording only with its required '
          'exact quantity_representations annotation. Preserve unit denominators and source headers. '

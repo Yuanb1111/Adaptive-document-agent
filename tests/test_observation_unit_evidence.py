@@ -67,6 +67,38 @@ def test_generic_nonfinancial_amount_column_does_not_invent_currency():
     assert obs.unit_family == "generic"
 
 
+def test_mid_table_source_unit_heading_scopes_only_following_rows_and_preserves_scale():
+    table = mixed_table([
+        ['Number of customers', '254', '324'],
+        ['(In millions of RMB)', None, None],
+        ['Repeat end customers revenue', '726.83', '1,792.43'],
+        ['Average revenue per repeat end customer', '4.49', '6.82'],
+    ])
+    original = table.model_dump()
+    values = ObservationExtractor()._table_observations(table)
+    assert (values[0].value, values[0].currency, values[0].unit_scale) == (254, None, 1)
+    money = values[2:]
+    assert [o.value for o in money] == [726_830_000, 1_792_430_000, 4_490_000, 6_820_000]
+    assert all(o.currency == 'CNY' and o.unit_scale == 1_000_000 for o in money)
+    assert all(o.raw_unit == 'In millions of RMB' for o in money)
+    assert all('(In millions' not in o.metric_original for o in money)
+    assert table.model_dump() == original
+    from adaptive_document_agent.services.pptx_export import _appendix_display_unit, _appendix_display_value
+    semantic = classify_metric(money[0].metric_original, value=money[0].value,
+                               raw_unit=money[0].raw_unit, unit=money[0].unit)
+    assert _appendix_display_unit(money[0], semantic) == 'RMB million'
+    assert _appendix_display_value(money[0], semantic) == '726.83'
+
+
+def test_body_metric_currency_is_not_a_scope_heading_for_later_rows():
+    table = mixed_table([
+        ['Average transaction value (USD million)', None, None],
+        ['Observed response score', '4.1', '4.5'],
+    ])
+    value = ObservationExtractor()._table_observations(table)[0]
+    assert value.currency is None and value.unit_scale == 1
+
+
 def test_financial_metric_still_supports_unknown_currency():
     obs = ObservationExtractor()._table_observations(mixed_table([["Revenue", "123", "456"]]))[0]
     assert (obs.value, obs.unit, obs.currency) == (123, "currency", None)

@@ -22,6 +22,7 @@ MAX_REVIEW_CHARACTERS = 120_000
 MAX_REVIEW_BATCHES = 8
 MAX_REVIEW_CALLS = MAX_REVIEW_BATCHES + 2
 MAX_REVIEW_OUTPUT_TOKENS = 8192
+MAX_REVIEW_DECISIONS = 32
 
 
 def _missing_included_facts(reviewed, lookup):
@@ -203,7 +204,7 @@ def review_topic_coverage(
             stage="presentation", related_ids=candidates,
             message=json.dumps({**audit, **details}, ensure_ascii=False)))
 
-    if len(encoded) > MAX_REVIEW_CHARACTERS:
+    if len(encoded) > MAX_REVIEW_CHARACTERS or len(candidates) > MAX_REVIEW_DECISIONS:
         return _review_bounded(selection, candidates, lookup, primary_pages,
                                review_payload, gateway, validate, record)
     reviewed = None
@@ -274,14 +275,14 @@ def _review_bounded(selection, candidates, lookup, primary_pages, payload, gatew
             if len(batches) >= MAX_REVIEW_BATCHES:
                 raise ValueError('Complete coverage review exceeds the bounded batch count; no series was silently sampled.')
             batch_budget = int(MAX_REVIEW_CHARACTERS * .88)
-            if len(encode(compact)) <= batch_budget and not batches:
+            if len(encode(compact)) <= batch_budget and not batches and len(remaining) <= MAX_REVIEW_DECISIONS:
                 requested = remaining[:]
                 context = {**compact, 'current_selection': current.model_dump(mode='json'),
                            'series_requiring_coverage_decision': requested}
             else:
                 # Encoding size grows monotonically with this ordered prefix.
                 # Search its boundary rather than rebuilding every prefix.
-                low, high = 0, len(remaining)
+                low, high = 0, min(len(remaining), MAX_REVIEW_DECISIONS)
                 while low < high:
                     middle = (low + high + 1) // 2
                     proposal = batch_context(compact, current, remaining[:middle])

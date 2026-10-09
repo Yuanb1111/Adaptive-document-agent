@@ -99,6 +99,17 @@ def test_explicit_partial_selection_is_not_expanded_but_exclusion_qualifier_surv
     assert 'other than Home territory' in topic.question
 
 
+def test_editorial_source_scope_is_stable_before_layout_compiles_again():
+    from adaptive_document_agent.agent.topic_plan_compiler import reconcile_topic_source_scope
+    result = source_result()
+    original = result.presentation_topics.model_dump_json()
+    reconcile_topic_source_scope(result)
+    prepared = result.presentation_topics.model_copy(deep=True)
+    assert prepared.model_dump_json() != original
+    reconcile_topic_source_scope(result)
+    assert result.presentation_topics == prepared
+
+
 def test_unrelated_numbered_prose_cannot_expand_the_selected_scope():
     result = source_result()
     result.document.pages[0].text = 'Tasks: (1) Read, (2) Write, (3) Check, (4) Publish.'

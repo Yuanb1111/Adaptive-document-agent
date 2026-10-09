@@ -28,7 +28,8 @@ def native_quantity_options(original, invalid, result, excerpts):
             quantities.update(canonical_quantity(*q) for q in _quantities(passage.text))
         options[f'item_{index}'] = [
             {'currency': c, 'signed_coefficient': v, 'source_scale': u,
-             'literal_basis': sorted(context.bases.get((c, v, u), {''}))}
+             'literal_basis': sorted(context.bases.get((c, v, u), {''})),
+             'amount_text': f'{c.upper()} {v} {u}'}
             for c, v, u in sorted(quantities) if c and u in {'thousand', 'million', 'billion', 'trillion'}
         ]
     return options

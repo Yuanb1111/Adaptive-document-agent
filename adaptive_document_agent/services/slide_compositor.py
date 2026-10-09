@@ -242,17 +242,20 @@ def _paginate_chart_slide(presentation, slide_plan: PresentationSlide,
     rendered = []
     for part, group in enumerate(groups):
         cids = {c.id for c in group}
-        blocks = [b.model_copy(update={"chart_ids": [cid for cid in b.chart_ids if cid in cids]})
+        blocks = [b.model_copy(update={"chart_ids": [cid for cid in b.chart_ids if cid in cids],
+                                      'insight_ids': [] if part else b.insight_ids})
                   for b in slide_plan.visual_blocks
                   if any(cid in cids for cid in b.chart_ids) or (not part and not b.chart_ids)]
         physical = slide_plan.model_copy(update={
             "chart_ids": [c.id for c in group], "visual_blocks": blocks,
-            "title": slide_plan.title + (" (continued)" if part else ""),
+            "title": (readable_chart_heading(group[0].title) + ' (continued)'
+                      if part and len(group) == 1 else slide_plan.title + (' (continued)' if part else '')),
+            'message': '' if part else slide_plan.message,
             "bullets": [] if part else slide_plan.bullets,
             "bullet_observation_ids": [] if part else slide_plan.bullet_observation_ids,
             "insight_ids": [] if part else slide_plan.insight_ids,
             "observation_ids": [] if part else slide_plan.observation_ids,
-            "layout": "two_up" if len(group) > 1 else "chart_plus_commentary"})
+            "layout": "two_up" if len(group) > 1 else 'single' if part else "chart_plus_commentary"})
         rendered.extend(render_composed_slide(presentation, physical, group, result, index))
     return rendered
 
@@ -320,6 +323,18 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
         display_message = composition_message(display_message, chart, values, totals)
     subtitle = "\n".join(part for part in (display_message, convention) if part)
     heading = scoped_title
+    if scoped_title in {'How do the reported values compare?', 'How do the cited measures compare?',
+                        'How do the reported values vary across the cited periods?'}:
+        measures = list(dict.fromkeys(readable_chart_heading(chart.title) for chart in charts))
+        measured = ' and '.join(measures)
+        section = slide_plan.section_title.strip()
+        neutral = bool(section and not re.search(r'\d|\?|\b(?:growth|rise|fall|rose|fell|grew|'
+            r'increased?|decreased?|declined?|higher|lower|largest|smallest|all|every|complete|entire)\b', section, re.I))
+        if neutral and len(_lines(section, 8.91, 32)) <= 2:
+            heading = section
+        elif measures:
+            heading = measured if len(_lines(measured, 8.91, 32)) <= 2 else (
+                measures[0] + (' and related measures' if len(measures) > 1 else ''))
     # A complete analytical claim may not fit the template's 32 pt title role.
     # Reuse the planner's section heading and place the claim in the subtitle
     # or commentary according to available space, without rewriting its meaning.

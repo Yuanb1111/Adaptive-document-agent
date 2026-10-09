@@ -295,6 +295,10 @@ class DocumentOrchestrator:
             seed = PipelineResult(document=document, profile=profile, observations=index.observations,
                 insights=insights, analysis_results=results, presentation_topics=topic_selection,
                 presentation_plan=PresentationPlan(title='Verified editorial context'))
+            from .topic_plan_compiler import reconcile_topic_source_scope
+            reconcile_topic_source_scope(seed)
+            topic_selection = seed.presentation_topics
+            issues.extend(issue for issue in seed.validation_warnings if issue not in issues)
             try:
                 with record_timing(details, 'brief_identity_wait'):
                     attach_introduction(seed.presentation_plan, seed)

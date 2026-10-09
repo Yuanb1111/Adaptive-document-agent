@@ -41,6 +41,25 @@ def test_short_copy_with_native_evidence_is_not_removed():
     assert len(deck.slides) == 1
 
 
+def test_single_row_closing_continuation_is_folded_with_its_table_and_source_record():
+    deck = blank_deck()
+    target = render_complete_summary(deck, 'Evidence', [BriefItem('Result', 'Reported values.', [3])])[0]
+    target.shapes.add_table(3, 2, Inches(1), Inches(2), Inches(6), Inches(1.2))
+    page = render_complete_summary(deck, 'Conclusions (continued)', [BriefItem('', 'Monitor the next balance.', [7])],
+                                   notes='Source record and qualification')[0]
+    table = page.shapes.add_table(2, 2, Inches(.55), Inches(3), Inches(6), Inches(.7))
+    table.name = 'closing:evidence:12'
+    table.table.cell(0, 0).text = 'FY2024'
+    table.table.cell(1, 0).text = 'Debt'
+    table.table.cell(1, 1).text = '87.14'
+    assert fold_sparse_text_pages(deck) == ['Conclusions (continued)']
+    assert len(deck.slides) == 1
+    assert '87.14' in target.notes_slide.notes_text_frame.text
+    assert 'Source record and qualification' in target.notes_slide.notes_text_frame.text
+    assert any(s.has_table and any(c.text == '87.14' for row in s.table.rows for c in row.cells)
+               for s in target.shapes)
+
+
 def test_short_page_keeps_complete_notes_when_no_visible_margin_fits():
     deck = blank_deck()
     page = render_complete_summary(deck, 'Evidence', [BriefItem('', 'Reported values.', [3])])[0]

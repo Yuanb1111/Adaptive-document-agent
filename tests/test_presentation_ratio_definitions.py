@@ -185,3 +185,13 @@ def test_repeated_same_marker_after_another_row_does_not_lend_definition():
     result.document.pages[0].text = result.document.pages[0].text.replace(
         "(1) The calculation", "Another ratio(1) 12%\n(1) The calculation")
     assert ratio_definitions(result) == []
+
+
+def test_context_deduplication_matches_whole_literal_formula_only():
+    from adaptive_document_agent.services.presentation_context_notes import _repeats_definition
+    definition = {'metric': 'Efficiency', 'numerator': 'completed units',
+                  'denominator': 'available units', 'multiplier': 100}
+    statement = 'Efficiency is defined as completed units divided by available units.'
+    assert _repeats_definition(statement, definition, sole_definition=True)
+    assert not _repeats_definition(statement + ' Interim periods use a different scope.', definition, sole_definition=True)
+    assert not _repeats_definition('Efficiency is defined as completed units divided by total revenue.', definition, sole_definition=True)

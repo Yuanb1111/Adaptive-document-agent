@@ -315,7 +315,7 @@ def _render_linked_bundle_pages(presentation, title, candidates, notes, *, merge
             return None
         if topic_height and not watch_only:
             _text(slide, heading, .55, y, full_width, topic_height, size=16,
-                  bold=True, color=FOURIER_PURPLE)
+                  bold=True, color=FOURIER_PURPLE).name = 'closing:heading'
         row_top = y + (0 if watch_only else topic_height)
         table_y = row_top
         for table in tables:
@@ -331,7 +331,7 @@ def _render_linked_bundle_pages(presentation, title, candidates, notes, *, merge
         copy_x, current_copy_width = (.55, full_width) if stacked else (right, copy_width)
         if watch_only:
             _text(slide, heading, right, copy_y, copy_width, topic_height,
-                  size=16, bold=True, color=FOURIER_PURPLE)
+                  size=16, bold=True, color=FOURIER_PURPLE).name = 'closing:heading'
             copy_y += topic_height
         for column, items in enumerate(groups):
             if not items:
