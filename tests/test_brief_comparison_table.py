@@ -78,3 +78,17 @@ def test_table_does_not_isolate_the_last_ordinary_finding():
     copy = '\n'.join(s.text for s in pages[0].shapes if s.has_text_frame)
     assert first.text in copy and last.text in copy
     assert any(s.has_table for s in pages[1].shapes)
+
+def test_complete_literal_duration_cell_can_restore_unit_from_explicit_header():
+    from adaptive_document_agent.services.brief_table_units import literal_table_units
+    result, brief = fixture()
+    item = brief.items[0]
+    item.comparison_table.headers[1] = 'Estimated response time (months)'
+    item.comparison_table.rows[1][1] = '60'
+    before = brief.model_dump()
+    assert not validate_executive_brief(brief, result)
+    table = literal_table_units(item, {1: result.document.pages[0].text})
+    assert table.rows[1][1] == '60 months'
+    assert brief.model_dump() == before
+    item.comparison_table.rows[1][1] = '61'
+    assert validate_executive_brief(brief, result)

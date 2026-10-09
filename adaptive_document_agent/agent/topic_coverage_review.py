@@ -20,7 +20,7 @@ from .coverage_representation import representation_links
 
 MAX_REVIEW_CHARACTERS = 120_000
 MAX_REVIEW_BATCHES = 8
-MAX_REVIEW_CALLS = 3
+MAX_REVIEW_CALLS = MAX_REVIEW_BATCHES + 2
 MAX_REVIEW_OUTPUT_TOKENS = 8192
 
 
@@ -250,16 +250,23 @@ def _review_bounded(selection, candidates, lookup, primary_pages, payload, gatew
                 context = {**compact, 'current_selection': current.model_dump(mode='json'),
                            'series_requiring_coverage_decision': requested}
             else:
-                requested = []
-                for sid in remaining:
-                    proposal = batch_context(compact, current, [*requested, sid])
-                    if len(encode(proposal)) > batch_budget:
-                        if not requested and len(encode(proposal)) <= MAX_REVIEW_CHARACTERS:
-                            requested.append(sid)  # A complete large series is never split or sampled.
-                        break
-                    requested.append(sid)
+                # Encoding size grows monotonically with this ordered prefix.
+                # Search its boundary rather than rebuilding every prefix.
+                low, high = 0, len(remaining)
+                while low < high:
+                    middle = (low + high + 1) // 2
+                    proposal = batch_context(compact, current, remaining[:middle])
+                    if len(encode(proposal)) <= batch_budget:
+                        low = middle
+                    else:
+                        high = middle - 1
+                requested = remaining[:low]
                 if not requested:
-                    raise ValueError('One complete series and accepted context exceed the bounded review budget; no series was silently sampled.')
+                    proposal = batch_context(compact, current, remaining[:1])
+                    if len(encode(proposal)) <= MAX_REVIEW_CHARACTERS:
+                        requested = remaining[:1]  # Never split or sample a complete series.
+                    else:
+                        raise ValueError('One complete series and accepted context exceed the bounded review budget; no series was silently sampled.')
                 context = batch_context(compact, current, requested)
             encoded = encode(context)
             batch_audit = {'series_ids': requested, 'context_characters': len(encoded)}

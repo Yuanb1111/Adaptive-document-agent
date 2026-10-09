@@ -55,6 +55,34 @@ def _scoring_payload(candidates: list[AnalysisCandidate], profile: DocumentProfi
     return compact if len(str(compact)) < len(str(original)) else original
 
 
+def _scoring_transport(candidates, profile):
+    """Factor exact shared fields; every ID, value and exception stays on wire."""
+    payload = _scoring_payload(candidates, profile)
+    rows = payload['candidates']
+    common = set.intersection(*(set(row) for row in rows)) if rows else set()
+    constants = {key: rows[0][key] for key in rows[0] if key in common
+                 and all(row[key] == rows[0][key] for row in rows)} if rows else {}
+    compact = {**payload, 'candidate_constants': constants,
+               'candidate_encoding': 'Every candidate inherits candidate_constants; its own fields supply all varying values.',
+               'candidates': [{key: value for key, value in row.items() if key not in constants} for row in rows]}
+    compact = compact if len(str(compact)) < len(str(payload)) else payload
+    # Hash-like IDs repeat across overlapping candidates. Intern exact IDs,
+    # never their evidence or analytical meaning, and retain ordered membership.
+    identifiers = list(dict.fromkeys(identifier for row in rows for identifier in row['observation_ids']))
+    positions = {identifier: index for index, identifier in enumerate(identifiers)}
+    referenced = {**compact, 'observation_id_catalog': identifiers,
+        'candidate_encoding': 'Merge candidate_constants (if present) into each candidate. '
+            'Resolve each ordered observation_refs index through observation_id_catalog '
+            'to restore the exact observation_ids. Other fields are literal.',
+        'candidates': [{**{key: value for key, value in row.items() if key != 'observation_ids'},
+                        'observation_refs': [positions[identifier] for identifier in original['observation_ids']]}
+                       for row, original in zip(compact['candidates'], rows)]}
+    if 'candidate_constants' in referenced:
+        referenced['candidate_constants'] = {key: value for key, value in referenced['candidate_constants'].items()
+                                             if key != 'observation_ids'}
+    return referenced if len(str(referenced)) < len(str(compact)) else compact
+
+
 def _expand_reasons(decision: SemanticCandidateDecision, catalog: dict[str, list[str]]) -> tuple[list[str], list[str]]:
     """Resolve exact prose and quarantine incomplete explanations without erasing them."""
     reasons: list[str] = []
@@ -170,8 +198,8 @@ class AnalysisValueScorer:
             [
                 {"role": "system", "content": load_prompt("analysis_planner.txt") + "\nSelect and score candidates in ONE response. Return exactly one decision per supplied candidate ID: score, rejected (true means not selected), and explicit reasons. Assess analytical usefulness, redundancy and evidence. Never add candidate IDs. "
                  "Write repeated rationale once in reason_catalog as entries with unique short id and full text; reference those IDs in each applicable decision's ordered reason_refs. Put complete candidate-specific reasons, exceptions, evidence qualifications and caveats in reasons. A decision's explanation is its referenced catalog text in order followed by its inline reasons. Use only references defined in reason_catalog. Every accepted AND rejected decision needs a complete, nonblank explanation. Do not drop candidates, evidence, qualifications or unique reasoning to compress the response. "
-                 "Input source_reason_ref resolves the candidate's original reason verbatim in source_reason_catalog; it is source data, not a scoring decision or an output rationale reference."},
-                untrusted_document_message(str(_scoring_payload(candidates, profile))),
+                 "Read candidate_encoding when present; merge candidate_constants into each candidate without discarding any field. Ordered observation_refs are indices into observation_id_catalog and restore exact observation_ids; use the original IDs when identifying evidence in explanations. Input source_reason_ref resolves the candidate's original reason verbatim in source_reason_catalog; it is source data, not a scoring decision or an output rationale reference."},
+                untrusted_document_message(str(_scoring_transport(candidates, profile))),
             ],
             SemanticCandidateScores,
             stage="planner",

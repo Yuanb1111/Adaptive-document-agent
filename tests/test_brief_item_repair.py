@@ -269,3 +269,14 @@ def test_salvage_cannot_accept_whitespace_title_from_failed_title_patch():
     assert [value.model_dump() for value in brief.items] == original['items']
     assert audited(result)['outcome'] == 'salvaged'
     assert len(client.calls) == 2
+
+def test_shortening_repair_retains_qualifying_source_context():
+    from adaptive_document_agent.agent.brief_item_repair import _retain_cited_context
+    old = {'evidence': [{'page': 1, 'text': 'The estimate is 60 months.'},
+                        {'page': 1, 'text': 'This assumes no expansion.'}]}
+    patch = {'text': 'The estimate is 60 months.', 'evidence': [old['evidence'][0]]}
+    excerpts = {1: 'The estimate is 60 months. This assumes no expansion.'}
+    assert _retain_cited_context(patch, old, excerpts)['evidence'] == old['evidence']
+    assert patch['evidence'] == [old['evidence'][0]]
+    changed = {'evidence': [{'page': 2, 'text': 'A different estimate is 44 months.'}]}
+    assert _retain_cited_context(changed, old, excerpts) == changed

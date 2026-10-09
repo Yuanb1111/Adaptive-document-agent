@@ -209,3 +209,59 @@ def test_fallback_summary_merges_physical_topic_pages_and_keeps_price_precision(
     assert len(items) == 1
     assert "Model Alpha" in items[0].text
     assert all(number in items[0].text for number in ["8,200", "8,100", "8,400"])
+
+def test_header_extraction_spacing_is_recovered_only_from_literal_source():
+    result, brief = table_result()
+    result.document.pages[0].tables[0].raw_header_lines = ['SixmonthsendedJune30,', '2023 2024', '(USDinthousands)']
+    assert not validate_executive_brief(brief, result)
+    result.document.pages[0].tables[0].raw_header_lines[-1] = '(EURinthousands)'
+    assert validate_executive_brief(brief, result)
+
+
+def test_shared_total_does_not_invalidate_an_independent_complete_row():
+    result, brief = table_result()
+    table = result.document.pages[0].tables[0]
+    table.rows.append(TableRow(cells=['Total', '1,250', '1,475'], page=1))
+    other = table.model_copy(deep=True)
+    other.table_id = 'other-table'
+    other.rows = [TableRow(cells=['Other measure', '7', '9'], page=1),
+                  TableRow(cells=['Total', '1,250', '1,475'], page=1)]
+    other.column_scales = [None, 1_000_000, 1_000_000]
+    result.document.pages[0].tables.append(other)
+    result.document.pages[0].text += '\nTotal 1,250 1,475\nOther measure 7 9'
+    brief.items[0].evidence[0].text += '\nTotal 1,250 1,475'
+    assert not validate_executive_brief(brief, result)
+    brief.items[0].evidence[0].text = 'Total 1,250 1,475'
+    assert validate_executive_brief(brief, result)
+
+
+def test_rate_keeps_denominator_before_comparison_amount():
+    result, brief = table_result()
+    table = result.document.pages[0].tables[0]
+    table.unit_header = 'USD in thousands per employee/day'
+    result.document.pages[0].text += '\n' + table.unit_header
+    brief.items[0].text = 'Programme fees rose to USD 1,475 thousand/employee/day from USD 1,250 thousand/employee/day.'
+    assert not validate_executive_brief(brief, result)
+    brief.items[0].text = brief.items[0].text.replace('/employee/day', '/employee')
+    assert validate_executive_brief(brief, result)
+
+
+def test_concatenated_header_cannot_erase_a_literal_per_unit_denominator():
+    result, brief = table_result()
+    table = result.document.pages[0].tables[0]
+    table.unit_header = table.default_raw_unit = 'USDinthousandsperemployee/day'
+    table.raw_header_lines.append(table.unit_header)
+    result.document.pages[0].text += '\nUSD in thousands per employee/day'
+    brief.items[0].text = 'Programme fees were USD 1,475 thousand.'
+    assert validate_executive_brief(brief, result)
+    brief.items[0].text = 'Programme fees were USD 1,475 thousand per employee/day.'
+    assert not validate_executive_brief(brief, result)
+
+
+def test_year_row_before_percentage_header_does_not_turn_final_year_into_percent():
+    result, brief = table_result()
+    quote = '2023 2024\n% of total\nProgramme fees . . . 1,250 1,475'
+    result.document.pages[0].text += '\n' + quote
+    brief.items[0].evidence[0].text = quote
+    brief.items[0].text = 'Programme fees were USD 1,475 thousand in 2024.'
+    assert not validate_executive_brief(brief, result)

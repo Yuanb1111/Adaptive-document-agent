@@ -123,7 +123,8 @@ def test_request_uses_compact_source_references_and_existing_untrusted_boundarie
     payload = ast.literal_eval(message.split("\n", 1)[1].rsplit("\n", 1)[0])
     assert len(payload["candidates"]) == 40
     assert len(payload["source_reason_catalog"]) == 1
-    assert all("source_reason_ref" in item for item in payload["candidates"])
+    assert all("source_reason_ref" in {**payload.get("candidate_constants", {}), **item}
+               for item in payload["candidates"])
     instruction = client.calls[0][0]["content"]
     assert "exceptions" in instruction and "caveats" in instruction and "accepted AND rejected" in instruction
 
@@ -277,7 +278,9 @@ def test_prefilter_budget_keeps_every_candidate_and_unrequested_model_decisions_
     assert unreviewed.rejected and "outside candidate review budget" in unreviewed.reasons
     assert not unreviewed.semantic_audit.decisions
     assert scores[0].semantic_audit.response_audit.unmatched_decisions[0].candidate_id == outside.id
-    assert client.calls[0][1]["content"].count("'source_reason_ref':") == 160
+    wire = ast.literal_eval(client.calls[0][1]['content'].split('\n', 1)[1].rsplit('\n', 1)[0])
+    assert len(wire['candidates']) == 160
+    assert all('source_reason_ref' in {**wire.get('candidate_constants', {}), **row} for row in wire['candidates'])
 
 
 def test_full_pipeline_json_preserves_raw_values_pages_candidates_and_both_decision_layers():
@@ -340,3 +343,44 @@ def test_empty_and_no_gateway_scoring_remain_deterministic():
     scores = AnalysisValueScorer().score(candidates, index, profile)
     assert all(item.semantic_audit is None for item in scores)
     assert all(not item.rejected for item in scores)
+
+def test_shared_candidate_fields_restore_every_original_candidate_and_exception():
+    from adaptive_document_agent.agent.value_scorer import _scoring_transport
+    candidates, _, profile, _, _ = scoring_fixture(40)
+    candidates[-1].reason += ' Unique source qualification.'
+    before = [c.model_dump(mode='json') for c in candidates]
+    wire = _scoring_transport(candidates, profile)
+    restored = []
+    for row in wire['candidates']:
+        row = {**wire.get('candidate_constants', {}), **row}
+        if 'observation_refs' in row:
+            row['observation_ids'] = [wire['observation_id_catalog'][index]
+                                      for index in row.pop('observation_refs')]
+        if 'source_reason_ref' in row:
+            row['reason'] = wire['source_reason_catalog'][row.pop('source_reason_ref')]
+        restored.append(row)
+    assert restored == before
+    assert [c.model_dump(mode='json') for c in candidates] == before
+    assert len(str(wire)) < len(str(_scoring_payload(candidates, profile)))
+
+
+def test_overlapping_evidence_membership_preserves_exact_ids_duplicates_and_order():
+    from adaptive_document_agent.agent.value_scorer import _scoring_transport
+    candidates, _, profile, _, _ = scoring_fixture(40)
+    ids = [f'observation_{index:064x}' for index in range(11)]
+    for index, candidate in enumerate(candidates):
+        candidate.observation_ids = [ids[index % 11], ids[(index + 1) % 11], ids[index % 11]]
+    before = [candidate.model_dump(mode='json') for candidate in candidates]
+    wire = _scoring_transport(candidates, profile)
+    assert wire['observation_id_catalog']
+    restored = []
+    for row in wire['candidates']:
+        value = {**wire.get('candidate_constants', {}), **row}
+        value['observation_ids'] = [wire['observation_id_catalog'][index]
+                                    for index in value.pop('observation_refs')]
+        if 'source_reason_ref' in value:
+            value['reason'] = wire['source_reason_catalog'][value.pop('source_reason_ref')]
+        restored.append(value)
+    assert restored == before
+    assert [candidate.model_dump(mode='json') for candidate in candidates] == before
+    assert len(str(wire)) < len(str(_scoring_payload(candidates, profile))) * .7

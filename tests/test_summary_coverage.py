@@ -79,6 +79,26 @@ def test_editorial_summary_balances_unequal_copy_before_creating_sparse_continua
     assert all(item.text in slides[0].notes_slide.notes_text_frame.text for item in items)
 
 
+def test_template_sized_brief_does_not_strand_one_finding_near_capacity_boundary():
+    from pptx.util import Inches
+    deck = blank_deck()
+    deck.slide_width, deck.slide_height = Inches(12.598611111), Inches(7.086805556)
+    copy = ('The source reports a measured change for the stated population and reporting period. ' * 5).strip()
+    items = [BriefItem('Measured output', copy, [i + 1]) for i in range(5)]
+    before = deepcopy(items)
+    slides = render_complete_summary(deck, 'Selected findings', items, single_column=True)
+    assert len(slides) == 2
+    assert sorted(len(_bodies([slide])) for slide in slides) == [2, 3]
+    assert [body.text for body in _bodies(slides)] == [item.text for item in items]
+    assert items == before
+    for slide in slides:
+        bodies = _bodies([slide])
+        assert all(14 <= shape.text_frame.paragraphs[0].font.size.pt <= 16 for shape in bodies)
+        assert all(shape.top.inches + shape.height.inches <= deck.slide_height.inches - 1.02 + .001
+                   for shape in bodies)
+        assert all(a.top + a.height <= b.top for a, b in zip(bodies, bodies[1:]))
+
+
 @pytest.mark.parametrize("count", [1, 3, 4, 6, 7, 9, 17])
 def test_all_selected_findings_are_displayed_in_model_order(count):
     deck = blank_deck()

@@ -42,7 +42,8 @@ def _claim_keeps_basis(tail, basis):
     suffix = remainder[len(basis):]
     # A slash, hyphen, or another denominator word is not a boundary. Unknown
     # prose boundaries fail closed rather than accepting a shortened unit.
-    return bool(not suffix or re.match(r"^[.,;:)]|^\s+(?:in|during|as\s+of|for\s+the|"
+    comparison = re.match(r"^\s+(?:from|to)\s+(?:(?:[A-Z]{3}|US\$|HK\$|[$€£¥])\s*)?[+−(\-]?\d", suffix, re.I)
+    return bool(comparison or not suffix or re.match(r"^[.,;:)]|^\s+(?:in|during|as\s+of|for\s+the|"
                                       r"compared\s+with|versus|respectively)\b", suffix, re.I))
 
 
@@ -93,11 +94,30 @@ class TableQuoteContext:
         return errors
 
 
-def _header_dates(table, source):
+def _located_header(value, source):
+    """Recover whitespace from the actual source, never missing header words.
+
+    Some PDF table extractors concatenate words inside raw_header_lines. Match
+    the same character sequence and return its real source spacing; currency,
+    scale and date parsing still use literal supplied page text.
+    """
+    needle = "".join(normalize_quote(value).split())
+    if not needle:
+        return ""
+    text = normalize_quote(source)
+    positions = [i for i, c in enumerate(text) if not c.isspace()]
+    compact = "".join(text[i] for i in positions)
+    start = compact.find(needle)
+    if start < 0:
+        return ""
+    return text[positions[start]:positions[start + len(needle) - 1] + 1]
+
+
+def _header_dates(table, source, locate=_located_header):
     month_days, years, explicit = set(), set(), set()
     for raw in table.raw_header_lines:
-        line = " ".join(raw.split())
-        if not line or normalize_quote(line) not in normalize_quote(source):
+        line = locate(raw, source)
+        if not line:
             continue
         match = _DATE_HEADER.fullmatch(line)
         if match:
@@ -121,21 +141,22 @@ def _header_dates(table, source):
     return valid
 
 
-def _column_basis(table, column, source):
+def _column_basis(table, column, source, locate=_located_header):
     from .financial_formatter import split_unit_basis
     currency = canonical_quantity(table.column_currencies[column], "", "")[0]
 
     def source_basis(value):
         if not value:
             return ""
-        unit = infer_unit_defaults(value)
+        located = locate(value, source)
+        unit = infer_unit_defaults(located or value)
         if not unit.currency or canonical_quantity(unit.currency, "", "")[0] != currency:
             return ""  # A different currency's column cannot qualify this one.
-        if not _BASIS_START.search(value):
+        if not _BASIS_START.search(located or value):
             return ""
-        if normalize_quote(value) not in normalize_quote(source):
+        if not located:
             return None
-        text = value.strip()
+        text = located.strip()
         if text.startswith("(") and text.endswith(")"):
             text = text[1:-1].strip()
         numerator, basis = split_unit_basis(text)
@@ -161,7 +182,7 @@ def _column_basis(table, column, source):
     return ""
 
 
-def _unit_supported(table, column, currency, scale, source, parsed):
+def _unit_supported(table, column, currency, scale, source, parsed, locate=_located_header):
     """A column annotation cannot supply a unit absent from the cited context."""
     if parsed.currency and parsed.raw_unit:
         return True  # Already matched the explicit cell declaration above.
@@ -169,9 +190,10 @@ def _unit_supported(table, column, currency, scale, source, parsed):
     if column < len(table.headers):
         fields.append(table.headers[column])
     for value in fields:
-        if not value or normalize_quote(value) not in normalize_quote(source):
+        located = locate(value or '', source)
+        if not located:
             continue
-        unit = infer_unit_defaults(value)
+        unit = infer_unit_defaults(located)
         if (unit.currency and canonical_quantity(unit.currency, "", "")[0] == currency
                 and (unit.scale or 1) == scale):
             return True
@@ -186,6 +208,8 @@ def quoted_table_context(item, result, *, excerpts=None):
     Unit/header context must occur in the supplied excerpt for model requests.
     """
     pages = {page.page_number: page for page in result.document.pages}
+    from functools import cache
+    locate = cache(_located_header)  # Lives only for this validation, never across documents.
     context = TableQuoteContext()
     positive_coefficients = set()
     non_percentage_coefficients = set()
@@ -195,7 +219,11 @@ def quoted_table_context(item, result, *, excerpts=None):
         quoted = normalize_quote(quote.text)
         if not page or not quoted or quoted not in normalize_quote(source):
             continue
-        plausible_tables, complete = set(), []
+        # Resolve each quoted row independently. A complete product table and
+        # a second table's shared total must not invalidate unrelated rows.
+        # Competing same-label rows still require identical complete bindings.
+        from collections import defaultdict
+        plausible, matched = defaultdict(set), defaultdict(list)
         for table in page.tables:
             for row in table.rows:
                 cells = [str(cell).strip() for cell in row.cells if cell and str(cell).strip()]
@@ -204,24 +232,24 @@ def quoted_table_context(item, result, *, excerpts=None):
                 if (not labels or not values or not all(normalize_quote(label) in quoted for label in labels)
                         or not any(normalize_quote(cell) in quoted for cell in values)):
                     continue
-                plausible_tables.add(table.table_id)
+                key = tuple(normalize_quote(label) for label in labels)
+                plausible[key].add(table.table_id)
                 if row.alignment_status == "resolved" and normalize_quote(" ".join(cells)) in quoted:
-                    complete.append((table, row))
-        if not complete or plausible_tables != {table.table_id for table, _ in complete}:
-            continue
-        if len(plausible_tables) > 1:
-            # A shared total can be printed in several source tables. Accept
-            # it only when the complete ordered row AND every column binding
-            # agree. A partial row or a competing unit/period remains ambiguous.
-            signatures = {repr((row.cells, table.column_types, table.column_currencies,
-                                table.column_scales, table.column_periods,
-                                table.column_audit_statuses,
-                                [_column_basis(table, col, source) for col in range(len(table.column_currencies))]))
-                          for table, row in complete}
-            if len(signatures) != 1:
+                    matched[key].append((table, row))
+        complete = []
+        for key, rows in matched.items():
+            if plausible[key] != {table.table_id for table, _ in rows}:
                 continue
+            if len(plausible[key]) > 1:
+                signatures = {repr((row.cells, table.column_types, table.column_currencies,
+                    table.column_scales, table.column_periods, table.column_audit_statuses,
+                    [_column_basis(table, col, source, locate) for col in range(len(table.column_currencies))]))
+                    for table, row in rows}
+                if len(signatures) != 1:
+                    continue
+            complete.extend(rows)
         for table, row in complete:
-            context.dates.update(_header_dates(table, source))
+            context.dates.update(_header_dates(table, source, locate))
             for column, cell in enumerate(row.cells):
                 parsed = parse_number(str(cell).replace("−", "-")) if cell else None
                 if parsed is None:
@@ -231,7 +259,7 @@ def quoted_table_context(item, result, *, excerpts=None):
                     non_percentage_coefficients.add(coefficient)
                 if (column < len(table.column_types) and table.column_types[column] == 'percentage'
                         and any(value and ('%' in value or 'percent' in value.casefold())
-                                and normalize_quote(value) in normalize_quote(source)
+                                and bool(locate(value, source))
                                 for value in [*table.headers, table.default_raw_unit, *table.raw_header_lines])):
                     context.percentages.add(coefficient)
                 if parsed.value < 0 and parsed.unit in {None, "currency"}:
@@ -252,9 +280,9 @@ def quoted_table_context(item, result, *, excerpts=None):
                     continue
                 if parsed.raw_unit and parsed.scale != scale:
                     continue
-                if not _unit_supported(table, column, currency, scale, source, parsed):
+                if not _unit_supported(table, column, currency, scale, source, parsed, locate):
                     continue
-                basis = _column_basis(table, column, source)
+                basis = _column_basis(table, column, source, locate)
                 if basis is None:
                     continue
                 quantity = (currency, coefficient, _SCALES[scale])

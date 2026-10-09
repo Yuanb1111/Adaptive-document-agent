@@ -42,7 +42,7 @@ def _rows(items: list[BriefItem], width: float, columns: int, *, body_pt: int = 
 
 
 def _height(rows: list[list[_Cell]], *, compact: bool = False) -> float:
-    return sum(max(cell.height for cell in row) for row in rows) + (.14 if compact else .16) * max(0, len(rows) - 1)
+    return sum(max(cell.height for cell in row) for row in rows) + (.09 if compact else .16) * max(0, len(rows) - 1)
 
 
 def _split_item(item: BriefItem, width: float, capacity: float) -> tuple[BriefItem, BriefItem]:

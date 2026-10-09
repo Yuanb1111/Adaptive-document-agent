@@ -147,6 +147,27 @@ def _salvage(values: list[Any], locked: dict[int, ExecutiveBriefItem], title: An
     return brief, [index for index in range(len(values)) if index not in retained]
 
 
+def _retain_cited_context(value, original, excerpts):
+    """A text-only repair cannot strip valid previously selected qualifiers.
+
+    Retain only when the patch cites a subset of the same literal source. A
+    correction that selects different evidence remains writable as before.
+    """
+    previous = bounded_quote_item(original, excerpts)
+    if not isinstance(value, dict) or not isinstance(previous, dict):
+        return value
+    old, new = previous.get('evidence'), value.get('evidence')
+    if not isinstance(old, list) or not isinstance(new, list) or not new or len(old) > 4:
+        return value
+    if (not all(isinstance(q, dict) and set(q) == {'page', 'text'}
+                and type(q['page']) is int and isinstance(q['text'], str)
+                and normalized(q['text'])
+                and normalized(q['text']) in normalized(excerpts.get(q['page'], '')) for q in old)
+            or not all(q in old for q in new)):
+        return value
+    return {**value, 'evidence': old}
+
+
 def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]], *,
                              result: PipelineResult, excerpts: dict[int, str],
                              topics: list[tuple[str, list[int]]], source_context: dict[str, Any],
@@ -229,6 +250,10 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
         {'role': 'system', 'content': messages[0]['content'] + '\nRepair only the requested invalid item_N '
          'fields (zero-based original positions), and title only when present in the response schema. '
          'Verified locked_items are immutable; never return them or a whole briefing. '
+         'When shortening prose, retain its valid source context and shared assumptions. '
+         'Every comparison cell needs its complete source unit; quote adjacent blocks when a sentence '
+         'continues across a boundary. Address each listed missing outcome and qualification, '
+         'including distinct buffers or limits in concise prose. '
          'When additions is available, add only missing selected-topic coverage, or return an empty list '
          'if repaired items establish coverage. Preserve relevant definitions and qualifications. '
          'Use only the supplied source excerpts, including adjacent definitions and uncovered topics. '
@@ -247,6 +272,9 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
             supplied = {key: expand_item(value, evidence_catalog) if key.startswith('item_')
                         else [expand_item(item, evidence_catalog) for item in value] if key == 'additions'
                         else value for key, value in supplied.items()}
+        audit['returned_patch'] = supplied
+        supplied = {key: _retain_cited_context(value, original['items'][int(key[5:])], excerpts)
+                    if key.startswith('item_') else value for key, value in supplied.items()}
         patch_values = patch_model.model_validate(supplied).model_dump(mode='json')
         audit['patch'] = patch_values
         for index in invalid:
@@ -284,7 +312,8 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
                               else [expand_item(item, evidence_catalog) for item in value]
                               if key == 'additions' and isinstance(value, list) else value
                               for key, value in values.items()}
-                normalized_values = {key: bounded_quote_item(value, excerpts) if key.startswith('item_')
+                normalized_values = {key: bounded_quote_item(
+                    _retain_cited_context(value, original['items'][int(key[5:])], excerpts), excerpts) if key.startswith('item_')
                                      else [bounded_quote_item(item, excerpts) for item in value]
                                      if key == 'additions' and isinstance(value, list) else value
                                      for key, value in values.items()}

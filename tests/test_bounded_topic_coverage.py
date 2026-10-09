@@ -96,7 +96,7 @@ def test_batched_review_is_complete_and_transactional(monkeypatch, fail_second):
     monkeypatch.setattr(module, 'MAX_REVIEW_CHARACTERS', limit)
     # This tests a complete multi-batch transaction independently of the
     # production request budget; the budget rollback has its own test.
-    monkeypatch.setattr(module, 'MAX_REVIEW_CALLS', len(candidates))
+    assert 3 < len(candidates) <= module.MAX_REVIEW_BATCHES < module.MAX_REVIEW_CALLS
 
     class Gateway:
         calls = []
@@ -141,6 +141,7 @@ def test_call_budget_exhaustion_rolls_back_partial_review(monkeypatch):
     compact=compact_context(payload)
     limit=max(len(encode(batch_context(compact,selection,[sid]))) for sid in candidates)+5
     monkeypatch.setattr(module,'MAX_REVIEW_CHARACTERS',limit)
+    monkeypatch.setattr(module,'MAX_REVIEW_CALLS',3)
     class Gateway:
         def __init__(self):self.calls=[]
         def generate_structured(self,messages,model,**kwargs):

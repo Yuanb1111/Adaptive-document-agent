@@ -79,16 +79,28 @@ def _quoted_table_percentages(item, result, *, quotations=None):
     from collections import defaultdict
     from decimal import Decimal, InvalidOperation
     pages = {p.page_number: p for p in result.document.pages}
+    # Request-scoped memoization: no document content survives this validation.
+    parsed = {}
+    def quantities(text):
+        text = str(text)
+        if text not in parsed:
+            parsed[text] = _quantities(text)
+        return parsed[text]
     kinds = defaultdict(set)
     bound_cells = set()
     quoted_passages = quotations if quotations is not None else item.evidence
+    quotes_by_page = defaultdict(list)
+    for quote in quoted_passages:
+        quotes_by_page[quote.page].append(quote.text)
     for observation in result.observations:
         if observation.value is None or observation.validation_status != 'valid' or observation.anomaly_notes:
             continue
         key = PresentationPlanValidator._normalize_number(observation.raw_value)
         for evidence in observation.evidence:
-            quotes = [q.text for q in quoted_passages if q.page == evidence.page]
-            value_quotes = [quote for quote in quotes if key in {v for _, v, _ in _quantities(quote)}]
+            quotes = quotes_by_page.get(evidence.page, [])
+            if not quotes:
+                continue
+            value_quotes = [quote for quote in quotes if key in {v for _, v, _ in quantities(quote)}]
             if value_quotes:
                 # A same-page/same-value observation with another unit keeps
                 # the value ambiguous even when it has no resolved table cell.
@@ -101,11 +113,11 @@ def _quoted_table_percentages(item, result, *, quotations=None):
                 continue
             labels = [evidence.row_label, observation.metric_original, observation.metric_canonical]
             labels.extend(cell for index, cell in enumerate(table.rows[row].cells)
-                          if index != col and cell and not _quantities(str(cell)))
+                          if index != col and cell and not quantities(cell))
             normalized_labels = {normalized(str(label)) for label in labels if label and len(normalized(str(label))) >= 3}
             matching_quotes = [quote for quote in value_quotes
                                if any(label in normalized(quote) for label in normalized_labels)
-                               and _quote_selects_cell(quote, key, evidence.page, table.table_id, row, col, page)]
+                               and _quote_selects_cell(quote, key, evidence.page, table.table_id, row, col, page, quantities=quantities)]
             if not matching_quotes:
                 continue
             bound_cells.add((observation.id, evidence.page, evidence.table_id, row, col))
@@ -141,13 +153,15 @@ def _quoted_table_percentages(item, result, *, quotations=None):
     return percentages
 
 
-def _quote_selects_cell(quote, key, page_number, table_id, row_id, column_id, page) -> bool:
+def _quote_selects_cell(quote, key, page_number, table_id, row_id, column_id, page, *, quantities=None) -> bool:
     """Require a quote to select one exact same-valued cell on its page."""
     from decimal import Decimal, InvalidOperation
 
+    quantities = quantities or _quantities
+
     def numbers(cell):
         values = set()
-        for _, value, _ in _quantities(str(cell)):
+        for _, value, _ in quantities(str(cell)):
             try:
                 values.add(Decimal(value))
             except InvalidOperation:
@@ -209,6 +223,9 @@ def validate_executive_brief(brief: ExecutiveBrief, result: PipelineResult, *,
     seen = set()
     all_numbers = set()
     for item in brief.items:
+        if item.comparison_table:
+            from .brief_table_units import literal_table_units
+            item = item.model_copy(update={'comparison_table': literal_table_units(item, original_pages)})
         passages = continuous_quote_passages(item.evidence, original_pages)
         if not item.label.strip() or not item.text.strip():
             errors.append('Brief labels and text must be nonempty.')
@@ -233,7 +250,10 @@ def validate_executive_brief(brief: ExecutiveBrief, result: PipelineResult, *,
                 if len(_CONDITION.findall(passage.text)) < 2:
                     continue
                 if any(not values <= shown.get(unit, set()) for unit, values in _outcomes(passage.text).items()):
-                    errors.append(f'{item.label}: comparison table omits a quoted conditional outcome or its unit.')
+                    missing = {unit: sorted(values - shown.get(unit, set()))
+                                   for unit, values in _outcomes(passage.text).items()
+                                   if values - shown.get(unit, set())}
+                    errors.append(f'{item.label}: comparison table omits a quoted conditional outcome or its unit: {missing}.')
         allowed = set()
         quantities = set()
         for quote in item.evidence:
@@ -243,6 +263,11 @@ def validate_executive_brief(brief: ExecutiveBrief, result: PipelineResult, *,
                 errors.append(f'{item.label}: quote not found on cited page {quote.page}.')
         for passage in passages:
             allowed.update(PresentationPlanValidator._numbers(passage.text))
+            # A following percentage-header line must not turn the final year
+            # in an explicitly quoted year row into a percentage token.
+            for line in passage.text.splitlines():
+                if re.fullmatch(r'\s*(?:(?:19|20)\d{2}\s+)+(?:19|20)\d{2}\s*', line):
+                    allowed.update(PresentationPlanValidator._numbers(line))
             quantities.update(_quantities(passage.text))
         source_percentages = _quoted_table_percentages(item, result, quotations=passages)
         from .brief_table_evidence import quoted_table_context, canonical_quantity
@@ -303,8 +328,9 @@ def brief_items(result: PipelineResult):
                                                               | quoted_table_context(item, result).percentages))
         from .brief_money_display import readable_money
         text = readable_money(text)
+        from .brief_table_units import literal_table_units
         items.append(BriefItem(item.label, text, sorted({q.page for q in contextual.evidence}),
-                               table=item.comparison_table, conditions=contextual.conditions))
+                               table=literal_table_units(item, pages), conditions=contextual.conditions))
     return items
 
 
