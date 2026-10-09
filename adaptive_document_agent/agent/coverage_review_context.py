@@ -4,6 +4,7 @@ import json
 
 
 def encode(payload):
+    payload = deepcopy(payload)
     rows = payload.get('all_extracted_series', [])
     if payload.get('point_encoding') and rows and isinstance(rows[0], dict):
         # Columnar encoding removes repeated field names, not source content.
@@ -20,6 +21,47 @@ def encode(payload):
                    'point_encoding': ('Series rows follow series_columns. point_constants contains [field_index,value] pairs; '
                        'point_columns contains field indices into point_field_names. Every ordered point inherits '
                        'those constants and supplies its variable cells. All source points are present.')}
+    # Global catalog cells repeat across source-row period views. Dictionary
+    # columns retain every exact label/page/unit but send repeated cells once.
+    # IDs stay literal so model choices need no alias resolution.
+    catalog = payload.get('complete_series_catalog', [])
+    dictionaries = {}
+    for index, field in enumerate(payload.get('catalog_columns', [])
+                                  if not payload.get('catalog_value_dictionaries') else []):
+        if field == 'id' or not catalog:
+            continue
+        values, positions, cells = [], {}, []
+        for row in catalog:
+            key = json.dumps(row[index], ensure_ascii=False, separators=(',', ':'))
+            if key not in positions:
+                positions[key] = len(values)
+                values.append(row[index])
+            cells.append(positions[key])
+        original_size = sum(len(json.dumps(row[index], ensure_ascii=False)) for row in catalog)
+        compact_size = len(json.dumps(values, ensure_ascii=False)) + len(json.dumps(cells)) + len(field) + 80
+        if compact_size < original_size:
+            dictionaries[field] = values
+            for row, cell in zip(catalog, cells):
+                row[index] = cell
+    if dictionaries:
+        payload['catalog_value_dictionaries'] = dictionaries
+        payload['catalog_encoding'] = ('Rows follow catalog_columns. A column named in catalog_value_dictionaries '
+            'contains zero-based indices into that column dictionary. Other cells are literal. All catalog entries remain.')
+    views = payload.get('same_source_row_period_views', [])
+    entry_columns = ['series_id', 'periods', 'internally_comparable_periods']
+    if views and all(isinstance(view, dict) and set(view) == {'same_source_row', 'scope_note'}
+                     and isinstance(view['scope_note'], str)
+                     and all(isinstance(entry, dict) and set(entry) == set(entry_columns)
+                             for entry in view['same_source_row']) for view in views):
+        notes = list(dict.fromkeys(view['scope_note'] for view in views))
+        payload['period_view_scope_notes'] = notes
+        payload['period_view_entry_columns'] = entry_columns
+        payload['same_source_row_period_views'] = [[notes.index(view['scope_note']),
+            [[entry.get(key) for key in payload['period_view_entry_columns']] for entry in view['same_source_row']]]
+            for view in views]
+        payload['period_view_encoding'] = ('Each view is [scope_note_index, same_source_row_entries]. '
+            'Scope index refers to period_view_scope_notes; entry cells follow period_view_entry_columns. '
+            'Separate views are not automatically comparable; every source period remains present.')
     return json.dumps(payload, ensure_ascii=False, separators=(',', ':'))
 
 

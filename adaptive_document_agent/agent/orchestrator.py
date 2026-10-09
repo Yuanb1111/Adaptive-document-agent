@@ -287,6 +287,23 @@ class DocumentOrchestrator:
                 )
                 notify(f"Diagnostics: 0 charts retained. {len(index.metrics())} metrics found; {len(failure_reasons)} candidate series failed chartability.")
 
+        prepared_brief = None
+        if (self.gateway and self.gateway.discovery_workers > 1 and attach_introduction is not None
+                and topic_selection and topic_selection.topics):
+            from adaptive_document_agent.models import PresentationPlan
+            from .prepared_executive_brief import prepare_executive_brief
+            seed = PipelineResult(document=document, profile=profile, observations=index.observations,
+                insights=insights, analysis_results=results, presentation_topics=topic_selection,
+                presentation_plan=PresentationPlan(title='Verified editorial context'))
+            try:
+                with record_timing(details, 'brief_identity_wait'):
+                    attach_introduction(seed.presentation_plan, seed)
+            except (LLMResponseError, ValueError):
+                # The ordinary introduction attachment below retains its error
+                # and audit. An unavailable identity must not block source copy.
+                seed.presentation_plan = None
+            prepared_brief = resources.enter_context(prepare_executive_brief(self.gateway, seed, timings=details))
+
         presentation_plan = None
         if self.gateway:
             notify("Planning presentation narrative")
@@ -423,7 +440,8 @@ class DocumentOrchestrator:
                     observations=index.observations, insights=insights, analysis_results=results,
                     presentation_plan=presentation_plan, presentation_topics=topic_selection)
                 try:
-                    executive_brief = ExecutiveBriefWriter(self.gateway).generate(snapshot)
+                    executive_brief = (prepared_brief.result(snapshot) if prepared_brief is not None
+                                       else ExecutiveBriefWriter(self.gateway).generate(snapshot))
                 except (LLMResponseError, ValueError) as exc:
                     issues.append(ValidationIssue(code="executive_brief_unavailable", stage="report",
                         severity="warning", message="The final briefing could not be source-checked: " + str(exc)[:500]))

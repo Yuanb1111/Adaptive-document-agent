@@ -1,6 +1,6 @@
 # Operation-level reasoning policy
 
-The gateway distinguishes bounded retrieval/format operations from synthesis,
+The gateway distinguishes bounded retrieval/format and editorial operations from analysis,
 without changing prompts, response validation, routing, credentials or privacy:
 
 - `IntroductionPages` in `presentation` and `BriefSourcePages` in `report` reduce
@@ -9,14 +9,19 @@ without changing prompts, response validation, routing, credentials or privacy:
 - `TopicCoverageReview` in `presentation` uses the same opt-out reduction. Its
   bounded output must contain explicit evidence decisions rather than spend
   the entire token allowance on internal reasoning. Full point context,
-  source validation and the three-call budget remain required; incomplete
+  source validation and the eight-batch plus two-repair call budget remain required; incomplete
   coverage remains unresolved and cannot certify business acceptance.
-- Semantic resolution, planning, insight generation, `ExecutiveBrief`,
+- `ExecutiveBriefPatch` uses the same reduction for its single targeted repair.
+- `ExecutiveBrief` and `ReportPlan` in `report`, and `VisualSelection` in
+  `presentation`, use reduced reasoning after the user chose lighter writing
+  and layout on 2026-10-09. Complete numeric, unit, quote, source and qualification
+  checks remain in place. Models, prompts and semantic selection stay unchanged.
+- Semantic resolution, candidate scoring, analytical topic selection, insight generation,
   `IntroductionDraft`, unknown operations and plain text generation keep defaults
 - The existing `discovery_thinking` setting remains independent and unchanged
 
 `LLM_SIMPLE_TASK_REASONING=reduced` is the default. Set `provider_default` to opt
-out for selectors and repairs. A separate operation context preserves compatibility
+out for selectors, repairs and editorial operations. A separate operation context preserves compatibility
 with custom clients that implement only `request_context(stage=...)`; ContextVars
 restore the original policy after errors, nested requests and concurrent requests.
 

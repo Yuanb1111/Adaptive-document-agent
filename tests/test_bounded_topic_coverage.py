@@ -39,7 +39,45 @@ def test_bounded_semantic_repair_retains_failed_attempt_and_all_facts(repair_suc
     assert len(gateway.calls) == len(audit['attempts']) == 2
     assert gateway.calls[0][1] == gateway.calls[1][1]
     assert 'validation_error' in audit['attempts'][0]
+    feedback = json.loads(gateway.calls[1][2]['content'].split('\n', 1)[1].rsplit('\n', 1)[0])
+    missing = feedback['included_but_unrepresented_facts']
+    assert set(missing) == {interim, adverse}
+    assert [fact['raw_value'] for fact in missing[interim]] == [o.raw_value for o in lookup[interim]]
     assert result.model_dump() == raw
+
+
+def test_dictionary_and_period_views_roundtrip_without_touching_source_text():
+    result, lookup, annual, interim, adverse, payload = context_fixture(extra=20)
+    from adaptive_document_agent.agent.topic_coverage_review import source_period_views
+    payload['same_source_row_period_views'] = source_period_views(lookup)
+    compact = compact_context(payload)
+    current = PresentationTopicSelection(topics=[_topic(annual)])
+    context = batch_context(compact, current, [interim, adverse])
+    original = json.loads(json.dumps(context))
+    encoded = json.loads(encode(context))
+    assert context == original
+    assert encoded['current_selection'] == current.model_dump(mode='json')
+    catalog = encoded['complete_series_catalog']
+    for row in catalog:
+        for i, field in enumerate(encoded['catalog_columns']):
+            if field in encoded.get('catalog_value_dictionaries', {}):
+                row[i] = encoded['catalog_value_dictionaries'][field][row[i]]
+    assert catalog == context['complete_series_catalog']
+    restored = [{'scope_note': encoded['period_view_scope_notes'][note],
+                 'same_source_row': [dict(zip(encoded['period_view_entry_columns'], row)) for row in rows]}
+                for note, rows in encoded['same_source_row_period_views']]
+    assert restored == context['same_source_row_period_views']
+    fresh = json.loads(encode(context))
+    assert json.loads(encode(fresh)) == fresh
+
+
+def test_future_period_view_fields_remain_literal():
+    view = {'scope_note': 'Keep different source durations separate.',
+            'same_source_row': [{'series_id': 'source', 'periods': ['FY2023'],
+                                 'internally_comparable_periods': False, 'new_source_qualification': 'Unaudited'}]}
+    encoded = json.loads(encode({'same_source_row_period_views': [view]}))
+    assert encoded['same_source_row_period_views'] == [view]
+    assert 'period_view_encoding' not in encoded
 
 
 def context_fixture(extra=0):

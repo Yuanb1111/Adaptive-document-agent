@@ -12,13 +12,17 @@ from .config import LLMSettings, ProviderName
 from .costs import direct_deepseek
 from .credentials import DEFAULT_ENDPOINTS, provider_endpoint
 
-REASONING_POLICY_VERSION = "operation-reasoning-v3"
+REASONING_POLICY_VERSION = "operation-reasoning-v4"
 # Documented model IDs, independent of pricing data. New aliases/models do not
 # inherit transport capabilities by prefix. See docs/LLM_REASONING_POLICY.md.
 _DEEPSEEK_THINKING_MODELS = frozenset({"deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro"})
 _SIMPLE_OPERATIONS = frozenset({("presentation", "IntroductionPages"), ("report", "BriefSourcePages"),
                               ("presentation", "TopicCoverageReview"),
-                              ("report", "ExecutiveBriefPatch")})
+                              ("report", "ExecutiveBriefPatch"),
+                              # Editorial operations consume already validated analysis.
+                              # Preserve deep reasoning in scoring, insights and topic selection.
+                              ("report", "ExecutiveBrief"), ("report", "ReportPlan"),
+                              ("presentation", "VisualSelection")})
 
 
 def reasoning_parameters(options: dict[str, Any]) -> dict[str, Any]:

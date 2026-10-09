@@ -171,14 +171,14 @@ def _retain_cited_context(value, original, excerpts):
 def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]], *,
                              result: PipelineResult, excerpts: dict[int, str],
                              topics: list[tuple[str, list[int]]], source_context: dict[str, Any],
-                             evidence_catalog: dict | None = None) -> ExecutiveBrief:
+                             evidence_catalog: dict | None = None, cancelled=None) -> ExecutiveBrief:
     """Generate once, then permit only one targeted, strictly typed patch call."""
     audit: dict[str, Any] = {'original': None, 'original_response': None, 'locked_indices': [],
                              'initial_errors': {}, 'patch': None, 'patch_response': None,
                              'repair_errors': [], 'discarded_indices': []}
     try:
         brief = gateway.generate_structured(messages, ReferencedBrief if evidence_catalog is not None else ExecutiveBrief,
-                                            stage='report', allow_repair=False)
+                                            stage='report', allow_repair=False, cancelled=cancelled)
         original = brief.model_dump(mode='json')
     except LLMStructuredOutputError as exc:
         audit['original_response'] = exc.response.text
@@ -265,7 +265,7 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
     title = original.get('title', 'Key takeaways')
     try:
         patch = gateway.generate_structured(repair_messages, wire_patch_model, stage='report',
-                                            allow_repair=False, max_tokens=12000)
+                                            allow_repair=False, max_tokens=12000, cancelled=cancelled)
         # Revalidate even custom gateways; unknown keys cannot acquire an edit route.
         supplied = patch.model_dump()
         if evidence_catalog is not None:

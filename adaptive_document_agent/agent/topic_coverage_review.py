@@ -24,6 +24,26 @@ MAX_REVIEW_CALLS = MAX_REVIEW_BATCHES + 2
 MAX_REVIEW_OUTPUT_TOKENS = 8192
 
 
+def _missing_included_facts(reviewed, lookup):
+    """Explain the exact failed bindings; do not infer semantic equivalence."""
+    selected = [o for topic in reviewed.topics for sid in topic.series_ids for o in lookup.get(sid, [])]
+    missing = {}
+    fields = ('id', 'metric_original', 'period', 'period_basis', 'period_start', 'period_end',
+              'as_of_date', 'raw_value', 'value', 'unit', 'raw_unit', 'unit_scale', 'currency',
+              'entity', 'audited_status', 'ifrs_status', 'fact_type', 'dimensions', 'category_dimensions')
+    for decision in reviewed.coverage_decisions:
+        if decision.decision != 'include':
+            continue
+        facts = [{**{key: getattr(o, key) for key in fields},
+                  'source_pages': sorted({e.page for e in o.evidence}),
+                  'source_row_labels': sorted({e.row_label for e in o.evidence if e.row_label})}
+                 for o in lookup.get(decision.series_id, [])
+                 if representation_links([o], selected) is None]
+        if facts:
+            missing[decision.series_id] = facts
+    return missing
+
+
 def _validate_batch(reviewed, current, requested, lookup, primary_pages, validate):
     revised = PresentationTopicSelection(topics=reviewed.topics, omissions=reviewed.omissions)
     validate(revised, lookup, primary_pages=primary_pages)
@@ -60,6 +80,7 @@ def _review_batch(context, current, requested, lookup, primary_pages, gateway, v
          + load_prompt('presentation_topic_coverage_review.txt') + '\n'
          'Retain every current selected source observation. Choose only fully evidenced series in this request. '
          'Deferred catalog entries have no decision yet. Read point_encoding; constants apply to every point. '
+         'Read catalog_encoding and period_view_encoding when present; dictionary cells are exact source metadata. '
          'An include decision needs all facts actually represented, with matching values, periods, units, '
          'definitions, categories and audit status; matching page numbers or measure names is insufficient.'},
         untrusted_document_message(encoded),
@@ -83,6 +104,7 @@ def _review_batch(context, current, requested, lookup, primary_pages, gateway, v
             if attempt:
                 raise
             feedback = {'validation_error': str(exc),
+                        'included_but_unrepresented_facts': _missing_included_facts(reviewed, lookup),
                         'rejected_topics': [t.model_dump(mode='json') for t in reviewed.topics]}
             if len(encoded) + len(encode(feedback)) > MAX_REVIEW_CHARACTERS:
                 feedback.pop('rejected_topics')
@@ -92,6 +114,9 @@ def _review_batch(context, current, requested, lookup, primary_pages, gateway, v
                 {'role': 'user', 'content': 'Repair this rejected review using the original full evidence context. '
                  'Return the complete topics and exactly one decision for each requested series. '
                  'If a material series is absent, select it; do not label it included without its facts. '
+                 'Read included_but_unrepresented_facts: these exact raw values, periods, units and '
+                 'source rows are absent from your selected evidence. Similar measure names and '
+                 'a single matching period do not cover different rows or other periods. '
                  'Explicitly explain omissions. Preserve all previously accepted observations.'}]
 
 

@@ -34,11 +34,34 @@ def test_bounded_coverage_output_keeps_reasoning_inside_existing_opt_out_policy(
     assert request_reasoning_policy(settings, stage='report', operation='ExecutiveBriefPatch',
                                     model='deepseek-flash')['options'] == options
     assert request_reasoning_policy(settings, stage='report', operation='ExecutiveBrief',
-                                     model='deepseek-flash')['options'] == {}
+                                     model='deepseek-flash')['options'] == options
 
 
 class UnsupportedParamsError(Exception):
     pass
+
+
+@pytest.mark.parametrize('setting', ['reduced', 'provider_default'])
+@pytest.mark.parametrize('stage,operation,response', [
+    ('report', 'ExecutiveBrief', {'title': 'Findings', 'items': [{'label': 'Activity', 'text': 'Source activity.',
+        'evidence': [{'page': 1, 'text': 'Source activity.'}]}]}),
+    ('report', 'ReportPlan', {'title': 'Report', 'sections': []}),
+    ('presentation', 'VisualSelection', {'suggestions': []}),
+])
+def test_editorial_operations_use_actual_schema_route_and_audit(monkeypatch, setting, stage, operation, response):
+    from adaptive_document_agent.agent.brief_evidence_blocks import ReferencedBrief
+    from adaptive_document_agent.agent.presentation_visual_enrichment import VisualSelection
+    from adaptive_document_agent.models import ReportPlan
+    schema = {'ExecutiveBrief': ReferencedBrief, 'ReportPlan': ReportPlan, 'VisualSelection': VisualSelection}[operation]
+    settings = LLMSettings(simple_task_reasoning=setting, stage_models={stage: 'deepseek-flash'})
+    client = LiteLLMProvider(settings)
+    complete = Mock(return_value=raw_response(json.dumps(response)))
+    monkeypatch.setattr(client, '_completion', complete)
+    gateway = LLMGateway(client, settings)
+    gateway.generate_structured([], schema, stage=stage, allow_repair=False)
+    assert ('extra_body' in complete.call_args.kwargs) == (setting == 'reduced')
+    assert gateway.usage[0]['reasoning_policy']['operation'] == operation
+    assert gateway.usage[0]['reasoning_policy']['intent'] == ('reduce' if setting == 'reduced' else 'preserve')
 
 
 def raw_response(text='{"pages":[1,3]}'):
@@ -81,7 +104,9 @@ def test_verified_direct_deepseek_selectors_disable_thinking(monkeypatch, model,
 
 @pytest.mark.parametrize("stage,operation", [
     ("semantic", "SemanticMappings"), ("planner", "AnalysisPlan"), ("insight", "InsightBatch"),
-    ("report", "ExecutiveBrief"), ("presentation", "IntroductionDraft"),
+    ("planner", "SemanticCandidateScores"), ("semantic", "SemanticResolution"), ("insight", "InsightList"),
+    ("presentation", "PresentationTopicSelection"), ("presentation", "IntroductionDraft"),
+    ("presentation", "ExecutiveBrief"), ("insight", "ReportPlan"), ("report", "VisualSelection"),
     ("presentation", "PresentationPlan"), ("report", "text"),
     ("presentation", "UnknownPages"), ("planner", "IntroductionPages"),
 ])
