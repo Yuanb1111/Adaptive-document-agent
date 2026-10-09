@@ -74,6 +74,34 @@ def _split_item(item: BriefItem, width: float, capacity: float) -> tuple[BriefIt
             BriefItem(item.title, item.text[boundary:], item.pages, item.short_title))
 
 
+def _balanced_single_column(items, width, capacity):
+    """Choose one readable size and balanced complete-item pages for the section."""
+    from functools import lru_cache
+
+    candidates = []
+    for size in dict.fromkeys((BODY_PT, 15, 14)):
+        @lru_cache(None)
+        def partition(start):
+            if start == len(items):
+                return (0, 0.0, ())
+            options = []
+            for end in range(start + 1, len(items) + 1):
+                height = _height(_rows(items[start:end], width, 1, body_pt=size, compact=True), compact=True)
+                if height > capacity:
+                    break
+                tail = partition(end)
+                if tail is not None:
+                    options.append((tail[0] + 1, tail[1] + height ** 2, (end - start, *tail[2])))
+            return min(options) if options else None
+        choice = partition(0)
+        if choice:
+            candidates.append((choice[0], -size, choice[1], choice[2]))
+    if not candidates:
+        return None
+    _, size, _, counts = min(candidates)
+    return -size, list(counts)
+
+
 def render_complete_summary(presentation: Any, title: str, items: list[BriefItem], *,
                             notes: str = "", single_column: bool = False) -> list[Any]:
     """Keep every selected finding visible at the template's readable text sizes.
@@ -107,6 +135,7 @@ def render_complete_summary(presentation: Any, title: str, items: list[BriefItem
     full_notes = "\n\n".join(value for value in (notes, full_copy) if value)
     slides = []
     width = presentation.slide_width.inches - 1.3
+    balanced = None
     while remaining or not slides:
         slide, top = _base(presentation, title + (" (continued)" if slides else ""), "")
         bottom = presentation.slide_height.inches - 1.02
@@ -117,15 +146,13 @@ def render_complete_summary(presentation: Any, title: str, items: list[BriefItem
         # Balance complete findings before adding a sparse continuation. Search
         # readable sizes from largest to smallest and use one shared column
         # split across rows; never shorten evidence or its qualifications.
-        if single_column and 3 <= len(remaining) <= 4:
-            for size in (BODY_PT, 15, 14):
-                candidates = [(_rows(remaining, width, 1, body_pt=size, compact=True), 0)]
-                fitting = [(candidate, balance) for candidate, balance in candidates
-                           if _height(candidate, compact=True) <= capacity]
-                if fitting:
-                    rows = min(fitting, key=lambda pair: (_height(pair[0], compact=True), pair[1]))[0]
-                    selected_count, body_pt = len(remaining), size
-                    break
+        if single_column:
+            if balanced is None:
+                balanced = _balanced_single_column(remaining, width, capacity)
+            if balanced and balanced[1]:
+                body_pt, counts = balanced
+                selected_count = counts.pop(0)
+                rows = _rows(remaining[:selected_count], width, 1, body_pt=body_pt, compact=True)
         # Bound the geometric search, not the content: remaining findings always
         # continue on another page. Eight short findings can use four paired rows.
         if not rows:

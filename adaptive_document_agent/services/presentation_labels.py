@@ -38,6 +38,30 @@ def qualified_metric_name(observation: Observation) -> str:
     return qualify_heading(display_metric_name(observation), [observation])
 
 
+def source_share_heading(title, observations, denominators):
+    """Expand 'Total' only from an explicit caption of the very same table."""
+    from .presentation_share_claims import reported_denominator
+
+    scopes = {denominators.get(item.effective_table_id, '') for item in observations}
+    if (not observations or len(scopes) != 1 or not next(iter(scopes))
+            or any(reported_denominator(item) != 'total' for item in observations)):
+        return title
+    denominator = next(iter(scopes))
+    return re.sub(r'(?i)(%\s*of\s*|share of\s*)total\b',
+                  lambda m: m[1] + denominator, title)
+
+
+def source_fact_caption(text, observations, denominators):
+    """Scope only an exact leading metric label, never unrelated prose claims."""
+    labels = {readable_chart_heading(qualified_metric_name(item)) for item in observations}
+    if len(labels) != 1:
+        return text
+    label = next(iter(labels))
+    if not text.startswith(label + ':'):
+        return text
+    return source_share_heading(label, observations, denominators) + text[len(label):]
+
+
 def compact_section_heading(title: str) -> str:
     """Use the authored topic prefix, retaining its full scope elsewhere."""
     if ":" in title:

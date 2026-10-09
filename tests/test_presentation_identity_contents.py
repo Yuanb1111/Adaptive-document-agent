@@ -46,7 +46,7 @@ def test_cover_displays_resolved_company_and_retains_document_scope(name, topic)
     deck = _deck()
     _add_cover(deck, result, title=title, purpose="Review the reported operations and their limitations.")
     visible = _text(deck.slides[0])
-    assert name in visible and topic in visible
+    assert name in ' '.join(visible.split()) and topic in visible
     notes = json.loads(deck.slides[0].notes_slide.notes_text_frame.text)
     assert notes["planned_title"] == title
     assert notes["company_identity"] == {"name": name, "source_pages": [1]}
@@ -58,7 +58,7 @@ def test_cover_does_not_repeat_company_already_in_planned_title():
     name = result.presentation_plan.company.name
     deck = _deck()
     _add_cover(deck, result, title=name + " Review", purpose="Document analysis")
-    assert _text(deck.slides[0]).count(name) == 1
+    assert ' '.join(_text(deck.slides[0]).split()).count(name) == 1
 
 
 def test_unresolved_identity_is_not_promoted_to_cover_or_summary():

@@ -142,7 +142,7 @@ def _ranking_peers(shares, eligible, text):
     return [item for group in groups for item in group]
 
 
-def _narrow(slide, replacements):
+def _narrow(slide, replacements, selected=()):
     old = slide.title
     old_message = slide.message
     title = slide.section_title.strip()
@@ -154,7 +154,16 @@ def _narrow(slide, replacements):
                 and re.search(r"[A-Za-z]{3,}", re.sub(
                     r"(?i)\b(?:FY|[1369]M|[12]H|Q[1-4])?\s*(?:19|20)\d{2}\b", "", part))]
         title = " and ".join(safe) if safe else ""
+    if not title and selected:
+        from .presentation_labels import qualified_metric_name
+        labels = list(dict.fromkeys(qualified_metric_name(item) for item in selected))
+        title = " and ".join(labels)
+        if len(title) > 130:
+            title = labels[0] + (" and related measures" if len(labels) > 1 else "")
     slide.title = title or "Reported measures"
+    if slide.section_title:
+        replacements[slide.section_title] = slide.title
+    slide.section_title = slide.title
     if _RANK.search(slide.message) or _SHARE.search(slide.message):
         # Keep independent qualifications even when the comparative sentence
         # has to go. Raw semantic decisions remain in presentation_topics.
@@ -250,7 +259,7 @@ def prepare_presentation_claims(result: PipelineResult, plan: PresentationPlan |
             ranked = _reported_shares(displayed or selected, eligible, claim_text, ranking=True)
             unsupported = unsupported or not ranked
         if unsupported:
-            _narrow(slide, replacements)
+            _narrow(slide, replacements, displayed or selected)
             notes.append(f"Slide {slide.id}: narrowed comparative wording without compatible reported shares")
             continue
         shares = list({item.id: item for item in shares}.values())
@@ -258,11 +267,11 @@ def prepare_presentation_claims(result: PipelineResult, plan: PresentationPlan |
         if ranking:
             peers = _ranking_peers(ranked, eligible, text)
             if not peers:
-                _narrow(slide, replacements)
+                _narrow(slide, replacements, displayed or selected)
                 notes.append(f"Slide {slide.id}: narrowed ranking without a complete, consistent category comparison")
                 continue
             if len(set(slide.observation_ids) | {item.id for item in peers}) > 40:
-                _narrow(slide, replacements)
+                _narrow(slide, replacements, displayed or selected)
                 notes.append(f"Slide {slide.id}: narrowed ranking whose complete evidence exceeds page capacity")
                 continue
             added = list({item.id: item for item in [*shares, *peers]}.values())
@@ -271,7 +280,7 @@ def prepare_presentation_claims(result: PipelineResult, plan: PresentationPlan |
             already_bound = next((cid for cid in slide.chart_ids if peer_ids <= set(charts[cid].observation_ids)), None)
             replaced = next((cid for cid in slide.chart_ids if set(charts[cid].observation_ids) <= share_ids), None)
             if replaced is None and already_bound is None:
-                _narrow(slide, replacements)
+                _narrow(slide, replacements, displayed or selected)
                 notes.append(f"Slide {slide.id}: narrowed ranking without space for its full comparison")
                 continue
             chart_id = already_bound or stable_id("claim_comparison", *(item.id for item in peers))
@@ -293,7 +302,7 @@ def prepare_presentation_claims(result: PipelineResult, plan: PresentationPlan |
         if missing:
             if (len(slide.visual_blocks) >= 4 or len(missing) > 12
                     or len(set(slide.observation_ids) | {item.id for item in shares}) > 40):
-                _narrow(slide, replacements)
+                _narrow(slide, replacements, displayed or selected)
                 notes.append(f"Slide {slide.id}: narrowed share wording without room for its evidence")
                 continue
             slide.visual_blocks.insert(0, PresentationVisualBlock(role="table", observation_ids=missing))
@@ -313,6 +322,10 @@ def prepare_presentation_claims(result: PipelineResult, plan: PresentationPlan |
     replacements.update({old: next(iter(titles)) for old, titles in restored_titles.items() if len(titles) == 1})
     for slide in plan.slides:
         slide.bullets = [replacements.get(text, text) for text in slide.bullets]
+        if slide.section_title:
+            slide.section_title = replacements.get(slide.section_title, slide.section_title)
+    for theme in plan.themes:
+        theme.title = replacements.get(theme.title, theme.title)
     from .presentation_summary_claims import prepare_summary_claims
     notes.extend(prepare_summary_claims(plan, eligible, by_id, charts, totals, definitions))
     plan.editorial_notes = list(dict.fromkeys([*plan.editorial_notes, *notes]))

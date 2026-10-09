@@ -29,8 +29,11 @@ def _validate_batch(reviewed, current, requested, lookup, primary_pages, validat
     validate(revised, lookup, primary_pages=primary_pages)
     previous_ids = {sid for topic in current.topics for sid in topic.series_ids}
     final_ids = {sid for topic in revised.topics for sid in topic.series_ids}
-    if final_ids - previous_ids - set(requested):
-        raise ValueError('Batch review selected deferred evidence without its complete context.')
+    deferred = final_ids - previous_ids - set(requested)
+    if deferred:
+        raise ValueError('Batch review selected deferred evidence without its complete context: '
+                         + ', '.join(sorted(deferred)) + '. Use only selectable_series_ids; '
+                         'these deferred series require a later batch, not an include decision here.')
     previous = {o.id for sid in previous_ids for o in lookup[sid]}
     selected = [o for sid in final_ids for o in lookup[sid]]
     if not previous <= {o.id for o in selected}:

@@ -38,3 +38,29 @@ def wrap_copy(text: str, width: float, size: float) -> list[str]:
                 used += advance
         lines.append(current + paragraph[len(body):])
     return lines or [""]
+
+
+def balance_title(text: str, width: float, size: float) -> str:
+    """Reflow a stranded final word without dropping or shortening any words."""
+    lines = wrap_copy(text, width, size)
+    if len(lines) < 2 or '\n' in text:
+        return text
+    words = text.split()
+    from functools import lru_cache
+
+    @lru_cache(None)
+    def fit(start, count):
+        if not count:
+            return (0.0, ()) if start == len(words) else None
+        choices = []
+        for end in range(start + 1, len(words) + 1):
+            line = ' '.join(words[start:end])
+            if len(wrap_copy(line, width, size)) > 1:
+                break
+            tail = fit(end, count - 1)
+            if tail:
+                used = sum(_glyph_width(c, size) for c in line)
+                choices.append((tail[0] + ((width - .05) * 72 - used) ** 2, (line, *tail[1])))
+        return min(choices) if choices else None
+    balanced = fit(0, len(lines))
+    return '\n'.join(balanced[1]) if balanced else text

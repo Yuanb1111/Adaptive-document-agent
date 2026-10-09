@@ -28,5 +28,10 @@ def slide_context_notes(result, slide, charts, index, *, definitions=None):
                 if caveat == "Displayed composition covers the validated selected-category matrix for its cited periods.":
                     continue
                 if caveat.strip():
-                    notes.append(caveat.strip())
+                    import re
+                    if re.fullmatch(r'Interim results are unaudited and separate from annual periods\.?', caveat.strip(), re.I):
+                        notes.append('Interim and annual periods are shown separately. '
+                                     'Unaudited markers apply only to the identified source columns.')
+                    else:
+                        notes.append(caveat.strip())
     return list(dict.fromkeys(notes))

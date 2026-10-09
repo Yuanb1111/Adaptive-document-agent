@@ -41,12 +41,17 @@ def test_measured_chart_capacity_continues_all_panels_and_exact_table(themed, me
         charts.append(ChartPlan(id=f"chart-{number}", title=metric + " — Reported Values",
                                 question="How do the reported values compare?",
                                 chart_type="line", observation_ids=[o.id for o in series], source_pages=[3]))
+    # A support table needs a distinct fact; a complete repetition of plotted
+    # points is now omitted. Keep testing capacity with nonredundant evidence.
+    extra = observation('additional-period', metrics[0], 108, 'FY2024', unit='currency')
+    extra.validation_status = 'valid'
+    obs.append(extra)
     slide = PresentationSlide(id="capacity", slide_type="analysis", layout="three_up",
         title="Reported operating performance from FY2021 to FY2023 with annual expenditure alongside its reported ratio to annual total operating expenditure.",
         section_title="Annual operating activity with rising expenditure and lower intensity",
         message="How did activity and annual expenditure compare across FY2021-FY2023?",
         theme_id="activity" if themed else "", chart_ids=[c.id for c in charts], source_pages=[3],
-        visual_blocks=[PresentationVisualBlock(role="table", observation_ids=charts[0].observation_ids)])
+        visual_blocks=[PresentationVisualBlock(role="table", observation_ids=[*charts[0].observation_ids, extra.id])])
     result = result_for(obs, charts, slide)
     index = DocumentIndex(obs)
     snapshot = result.model_dump()

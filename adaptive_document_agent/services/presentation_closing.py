@@ -8,33 +8,37 @@ import json
 from .presentation_brief import BriefItem, _item_height, _split_profile_item, render_profile
 
 
+def editorial_closing_items(result):
+    """Only unresolved checks add information after the validated summary."""
+    from adaptive_document_agent.agent.brief_source_checks import uncited_source_checks
+    from adaptive_document_agent.agent.topic_coverage_review import coverage_review_pending
+
+    items = [BriefItem('Checked evidence not referenced',
+        f"Original review question: {check['question']} Review impact: {check['decision_impact']}",
+        check['pages']) for check in uncited_source_checks(result, result.executive_brief)]
+    if coverage_review_pending(result):
+        items.append(BriefItem('Coverage review incomplete',
+            'Material omissions may remain; complete review before final use.', []))
+    return items
+
+
 def render_closing(presentation, result, plan):
-    # The final source-validated briefing supersedes earlier insight drafts.
-    # Reuse its model-authored findings so a stale watch question cannot
-    # contradict the summary. Comparisons already have dedicated body pages.
+    # The final briefing already appears in the summary. Preserve the prior
+    # plan in notes without repeating its findings or reviving stale claims.
     if result.executive_brief is not None:
-        from .executive_brief import brief_items
+        from .executive_brief import validate_executive_brief
+        errors = validate_executive_brief(result.executive_brief, result)
+        if errors:
+            raise ValueError('Invalid executive brief: ' + '; '.join(errors))
         from .presentation_summary import render_complete_summary
-        findings = [item for item in brief_items(result) if item.table is None]
+        findings = editorial_closing_items(result)
+        notes = json.dumps({'executive_brief': result.executive_brief.model_dump(mode='json'),
+                            'superseded_closing_plan': plan.model_dump(mode='json')}, ensure_ascii=False)
         if findings:
-            from adaptive_document_agent.agent.brief_source_checks import uncited_source_checks
-            pending_checks = uncited_source_checks(result, result.executive_brief)
-            for check in pending_checks:
-                findings.append(BriefItem('Checked evidence not referenced',
-                    f"Original review question: {check['question']} Review impact: {check['decision_impact']}",
-                    check['pages']))
-            from adaptive_document_agent.agent.topic_coverage_review import coverage_review_pending
-            pending = coverage_review_pending(result)
-            notes = json.dumps({'executive_brief': result.executive_brief.model_dump(mode='json'),
-                                'superseded_closing_plan': plan.model_dump(mode='json'),
-                                'coverage_review_pending': pending}, ensure_ascii=False)
-            slides = render_complete_summary(presentation, 'Conclusions', findings, notes=notes)
-            if pending:
-                from .pptx_export import _text, FOURIER_MUTED
-                _text(slides[0], 'Coverage review incomplete. Material omissions may remain; complete review before final use.',
-                      .65, 1.05, presentation.slide_width.inches - 1.3, .32,
-                      size=12, color=FOURIER_MUTED).name = 'brief:coverage_status'
-            return slides
+            return render_complete_summary(presentation, 'Review status', findings, notes=notes)
+        if len(presentation.slides):
+            presentation.slides[-1].notes_slide.notes_text_frame.text += '\n\n' + notes
+        return []
     from .pptx_export import (
         _sanitize_investor_narrative, _source_footer, _text,
         FOURIER_DARK, FOURIER_MUTED, FOURIER_PURPLE,

@@ -64,18 +64,21 @@ def test_comparison_restores_adjacent_shared_assumption_without_definition_leak(
     assert r.model_dump() == raw
 
 
-def test_closing_uses_current_validated_summary_instead_of_stale_question():
+def test_closing_preserves_current_summary_once_and_keeps_stale_question_in_notes():
     source = 'Reported loss widened while adjusted loss narrowed in the matched period.'
     r = result_for([source])
     r.executive_brief = ExecutiveBrief.model_validate(payload(source, label='Loss comparison'))
     plan = PresentationSlide(id='closing', slide_type='risks', title='Closing',
         bullets=['Check whether adjusted loss follows reported loss.'], source_pages=[1])
     raw = r.model_dump(), plan.model_dump()
-    slides = render_closing(deck(), r, plan)
+    presentation = deck()
+    slides = render_complete_summary(presentation, 'Summary', brief_items(r))
+    assert render_closing(presentation, r, plan) == []
     visible = '\n'.join(s.text for p in slides for s in p.shapes if s.has_text_frame)
-    assert source in visible
+    assert visible.count(source) == 1
     assert plan.bullets[0] not in visible
     assert 'Source' in visible
+    assert plan.bullets[0] in slides[-1].notes_slide.notes_text_frame.text
     assert (r.model_dump(), plan.model_dump()) == raw
 
 

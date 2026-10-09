@@ -7,9 +7,9 @@ import re
 from adaptive_document_agent.document_model import period_sort_key
 
 
-_DIRECTION = re.compile(r"\b(?:increase|increased|rise|rose|grow|grew|growth|"
-                        r"decrease|decreased|fall|fell|decline|declined|"
-                        r"widen|widened|contract|contracted)\b", re.I)
+_DIRECTION = re.compile(r"\b(?:increas\w*|ris\w*|rose|grow\w*|grew|"
+                        r"decreas\w*|fall\w*|fell|declin\w*|"
+                        r"widen\w*|contract\w*|narrow\w*|lower|higher)\b", re.I)
 _REVERSAL = re.compile(r"\b(?:peak|trough|rebound|recover|fluctuat|revers|"
                        r"then|before|partially)\w*\b", re.I)
 _RATIO = re.compile(r"\b(?:ratio|share|percent|percentage|intensity|"
@@ -73,7 +73,7 @@ def scoped_direction_title(title, charts, index):
     return f"{title} ({first}–{last})"
 
 
-def supported_subtitle(slide, charts, index):
+def supported_subtitle(slide, charts, index, *, denominators=None):
     """Answer a planned question or qualify an overbroad directional claim.
 
     The model has already chosen the subject and charts. This layer uses their
@@ -97,7 +97,7 @@ def supported_subtitle(slide, charts, index):
         if len(ordered) < 2 or (not question and not _has_turn(ordered)):
             continue
         fact = _brief_fact_for_chart(chart, index)
-        if fact is None or len(fact[0]) > (260 if question else 155):
+        if fact is None or len(fact[0]) > 300:
             continue
         metric = ordered[0].metric_original.casefold()
         metric_tokens = set(re.findall(r"[A-Za-z]+", metric)) - _STOP
@@ -105,7 +105,11 @@ def supported_subtitle(slide, charts, index):
         if question and _RATIO.search(claims) and (
                 _RATIO.search(metric) or ordered[0].unit in {'percent', '%'}):
             score += 3
-        candidates.append((score, fact[0]))
+        from .presentation_labels import qualified_metric_name, source_share_heading
+        label = qualified_metric_name(ordered[0])
+        scoped = source_share_heading(label, ordered, denominators or {})
+        caption = scoped + fact[0][len(label):] if fact[0].startswith(label + ':') else fact[0]
+        candidates.append((score, caption))
     if not candidates:
         return message
     answer = max(candidates, key=lambda candidate: candidate[0])[1]

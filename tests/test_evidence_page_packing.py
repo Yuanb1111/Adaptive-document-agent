@@ -65,6 +65,30 @@ def test_three_sparse_tables_fit_without_joining_annual_and_interim_headers():
                for table in tables for row in table.table.rows for cell in row.cells)
 
 
+def test_fitting_prefix_moves_without_dropping_remaining_table_or_sources():
+    from copy import deepcopy
+    deck = Presentation()
+    deck.slide_width, deck.slide_height = Inches(12.6), Inches(7.1)
+    first = _page(deck, ['FY2030'], ['First measure'] * 4, 3)
+    second = _page(deck, ['FY2031'], ['Second measure'], 7)
+    third = _page(deck, ['FY2032'], ['Third measure'] * 6, 11)
+    # Put the latter two complete tables on one page; only its prefix fits
+    # after the first table. Keep exact source records on both output pages.
+    second.shapes._spTree.insert_element_before(deepcopy(_tables(third)[0]._element), 'p:extLst')
+    _tables(second)[-1].top = Inches(3.0)
+    originals = [_cells(t) for s in (first, second) for t in _tables(s)]
+    footer = next(s for s in first.shapes if s.name == 'evidence:footer')
+    footer.text = 'Source: Document disclosures (p. 3) | * Unaudited'
+    footer = next(s for s in second.shapes if s.name == 'evidence:footer')
+    footer.text = 'Source: Document disclosures (p. 7, 11) | * Unaudited'
+    packed = pack_evidence_pages(deck, [first, second])
+    assert len(packed) == 2
+    assert [len(_tables(s)) for s in packed] == [2, 1]
+    assert [_cells(t) for s in packed for t in _tables(s)] == originals
+    text = next(s.text for s in packed[0].shapes if s.name == 'evidence:footer')
+    assert text == 'Source: Document disclosures (p. 3, 7, 11) | * Unaudited'
+
+
 def test_wrapped_rows_keep_separate_pages_when_compaction_would_clip_text():
     deck = Presentation()
     deck.slide_width, deck.slide_height = Inches(12.6), Inches(7.1)

@@ -80,6 +80,7 @@ def batch_context(compact, selection, ids):
     result['ratio_definitions'] = [row for row in compact.get('ratio_definitions', []) if row['series_id'] in visible]
     result['current_selection'] = selection.model_dump(mode='json')
     result['series_requiring_coverage_decision'] = ids
+    result['selectable_series_ids'] = sorted(visible)
     result['batch_scope'] = ('Only current selected series and this batch have full evidence. '
         'Other catalog entries are deferred to separate review batches. Retain current selected evidence; '
         'do not select, exclude or infer values for deferred series. Every batch is reviewed before committing changes.')

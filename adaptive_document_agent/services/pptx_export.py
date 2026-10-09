@@ -311,6 +311,8 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
     from .presentation_ratio_definitions import ratio_definitions
     source_ratio_definitions = ratio_definitions(result)
     presentation._ada_ratio_definitions = source_ratio_definitions
+    from .presentation_share_claims import source_total_denominators
+    presentation._ada_denominators = source_total_denominators(result)
     from .presentation_display_plan import display_slides
     physical_slides = display_slides(plan, chart_by_id, index)
     from .presentation_value_chain import can_render_value_chain
@@ -327,6 +329,12 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
     _add_cover(presentation, result, title=cover.title, purpose=cover.message)
     contents_slides = [slide for slide in plan.slides
                        if not (omit_summary and slide.slide_type == "executive_summary")]
+    if result.executive_brief is not None:
+        from .presentation_closing import editorial_closing_items
+        has_review_status = bool(editorial_closing_items(result))
+        contents_slides = [s.model_copy(update={'section_title': 'Review status', 'title': 'Review status'})
+                          if s.slide_type == 'risks' else s for s in contents_slides
+                          if s.slide_type != 'risks' or has_review_status]
     from .presentation_scope import scope_items
     if not scope_items(result):
         contents_slides = [s for s in contents_slides if s.slide_type != "data_quality"]
@@ -1213,6 +1221,8 @@ def _add_cover(
 
     # Retain the template's 36 pt cover title; reflow instead of shrinking it.
     title_font_size = 36
+    from .text_capacity import balance_title
+    clean_title = balance_title(clean_title, 6.65, title_font_size)
     title_h = max(.85, len(_lines(clean_title, 6.65, title_font_size)) * title_font_size / 72 * 1.22 + .15)
     if title_h > 3.1:
         raise ValueError("Cover title exceeds readable capacity; shorten the presentation title.")
@@ -1825,8 +1835,9 @@ def _add_native_chart(
             if has_negative:
                 chart.category_axis.tick_label_position = XL_TICK_LABEL_POSITION.LOW
         if not is_valid_scatter and date_categories:
-            from .presentation_axes import style_date_axis
+            from .presentation_axes import style_date_axis, label_source_dates
             style_date_axis(chart, date_categories, bounds[2])
+            label_source_dates(chart, date_categories)
     except (AttributeError, ValueError):
         pass
     return scale, scale_label
@@ -2033,6 +2044,9 @@ def _add_evidence_table_slides(
     for item in observations:
         name_contexts.setdefault(display_metric_name(item), set()).add(source_context_key(item))
     all_periods_set: set[str] = set()
+    from .presentation_share_claims import source_total_denominators
+    from .presentation_labels import source_share_heading
+    denominators = source_total_denominators(result)
     thematic_labels = {}
     if result.presentation_plan and result.presentation_plan.themes:
         from adaptive_document_agent.validation.narrative_plan_validator import expanded_observation_ids
@@ -2049,6 +2063,7 @@ def _add_evidence_table_slides(
             unit=item.unit,
         )
         metric_name = clean_display_copy(sanitize_metric_label(semantic.clean_name))
+        metric_name = source_share_heading(metric_name, [item], denominators)
         categories = item.category_dimensions or {
             k: v for k, v in item.dimensions.items()
             if k not in {"table_context", "section", "period_basis", "column_role", "reporting_basis", "basis", "restatement", "restated", "ifrs_status"}
@@ -3141,7 +3156,7 @@ def _appendix_display_value(item: Observation, semantic: Any) -> str:
         # 0.0659 and 0.0566 million both look like 0.06). Keep enough
         # significant digits for the displayed trend without changing units.
         return f"{value_in_millions:,.3g}"
-    return _format_scaled(value_in_millions, 1.0)
+    return f"{value_in_millions:,.2f}".rstrip('0').rstrip('.')
 
 
 def _cell_style(cell: Any, *, fill: str, color: str, bold: bool, size: float) -> None:

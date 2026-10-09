@@ -35,7 +35,7 @@ def test_long_purpose_uses_complete_context_label_and_preserves_full_qualifiers(
     assert subtitle.text_frame.paragraphs[0].font.size.pt == 26
     assert subtitle.top.inches + subtitle.height.inches <= 6.15
     heading = next(p for p in slide.placeholders if p.placeholder_format.idx == 16)
-    assert heading.text == title
+    assert ' '.join(heading.text.split()) == title
     assert heading.text_frame.paragraphs[0].font.size.pt == 36
     notes = json.loads(slide.notes_slide.notes_text_frame.text)
     assert notes["document_purpose"] == PURPOSE

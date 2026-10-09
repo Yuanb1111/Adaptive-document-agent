@@ -170,7 +170,7 @@ def test_fallback_preserves_long_copy_and_does_not_advertise_unplotted_series():
     text = "\n".join(s.text for slide in deck.slides for s in slide.shapes if s.has_text_frame)
     assert any("COMPLETE_END_MARKER" in slide.notes_slide.notes_text_frame.text for slide in deck.slides)
     assert sum(s.text == "Operations overview" for slide in deck.slides for s in slide.shapes if s.has_text_frame) == 1
-    assert result.report_plan.title in text
+    assert result.report_plan.title in ' '.join(text.split())
     assert "Cost of sales and Revenue" not in text
     assert text.index("Key findings", text.index("Contents") + len("Contents")) < text.index("Analysis at a glance")
     assert sum(s.has_chart for slide in deck.slides for s in slide.shapes) == 1

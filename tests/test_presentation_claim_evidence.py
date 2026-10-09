@@ -77,7 +77,8 @@ def test_narrowed_comparison_does_not_leave_a_period_only_title():
     slide.section_title = "Enterprise became the largest category, FY2022–FY2023"
     before = [o.model_dump() for o in result.observations]
     prepare_presentation_claims(result)
-    assert slide.title == "Reported measures"
+    assert slide.title == "Enterprise: % of Total"
+    assert slide.section_title == slide.title
     assert [o.model_dump() for o in result.observations] == before
 
 

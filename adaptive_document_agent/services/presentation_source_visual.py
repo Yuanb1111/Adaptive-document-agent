@@ -135,8 +135,10 @@ def render_profile_with_source(presentation, title, items, visual: SourceVisual,
         available = bottom - copy_bottom - .18
         if available >= 1.45:
             picture = _picture(first, visual.payload,
-                               Rect(.65, copy_bottom + .18, width - 1.3, available))
+                               Rect(.65, copy_bottom + .18, width - 1.3, available - .24))
             picture.name = f'source_document_image:p{visual.page}'
+            _text(first, f'Source image: document p. {visual.page}', .65, bottom - .20,
+                  width - 1.3, .20, size=9, color=MUTED).name = 'profile:image_source'
             cited_pages = sorted({visual.page} | {p for item in items for p in item.pages})
             for shape in first.shapes:
                 if shape.has_text_frame and shape.text.startswith('Source: Document disclosures'):
@@ -165,8 +167,12 @@ def render_profile_with_source(presentation, title, items, visual: SourceVisual,
                 paragraph.line_spacing = Pt(20)
         image_rect = Rect(.65 + layout.text_width + .40, top,
                           layout.image_width, bottom - top)
-    picture = _picture(slide, visual.payload, image_rect)
+    picture = _picture(slide, visual.payload,
+                       Rect(image_rect.x, image_rect.y, image_rect.w, image_rect.h - .24))
     picture.name = f"source_document_image:p{visual.page}"
+    _text(slide, f'Source image: document p. {visual.page}', image_rect.x,
+          image_rect.y + image_rect.h - .20, image_rect.w, .20,
+          size=9, color=MUTED).name = 'profile:image_source'
     shown_items = retained if fits else []
     pages = sorted({visual.page} | {p for item in shown_items for p in item.pages})
     _text(slide, _source_footer(pages), .55, height - .82, width - 1.1, .20,

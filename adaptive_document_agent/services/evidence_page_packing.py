@@ -1,6 +1,7 @@
 """Pack evidence tables without joining their periods, values or provenance."""
 
 from copy import deepcopy
+import re
 
 from pptx.util import Inches
 
@@ -19,6 +20,19 @@ def _note_spec(previous, slide, name):
         return None
     texts = list(dict.fromkeys(paragraph.text for shape in shapes
                               for paragraph in shape.text_frame.paragraphs if paragraph.text))
+    if name == 'evidence:footer':
+        from .pptx_export import _source_footer
+        pattern = r'^Source: Document disclosures \(p\. ([\d, -]+)\)(.*)$'
+        matches = [re.fullmatch(pattern, text) for text in texts]
+        if matches and all(matches):
+            pages = set()
+            tails = []
+            for match in matches:
+                for span in match[1].split(','):
+                    bounds = [int(part) for part in span.strip().split('-')]
+                    pages.update(range(bounds[0], bounds[-1] + 1))
+                tails.extend(part.strip() for part in match[2].split('|') if part.strip())
+            texts = [_source_footer(sorted(pages)) + ''.join(' | ' + tail for tail in dict.fromkeys(tails))]
     template = shapes[0]
     size = template.text_frame.paragraphs[0].font.size
     size = size.pt if size is not None else 9.0
@@ -100,8 +114,7 @@ def pack_evidence_pages(presentation, slides):
         note_bottom = min(6.47, presentation.slide_height.inches - .60)
         footer_top = note_bottom - (footer[2] if footer else 0)
         convention_top = footer_top - (.08 + convention[2] if convention else 0)
-        bottom = min(5.65, presentation.slide_height.inches - 1.35,
-                     convention_top - .12)
+        bottom = min(presentation.slide_height.inches - 1.02, convention_top - .12)
         top = min(shape.top.inches for shape in old_tables)
         gap = .18
         heights = [[row.height.inches for row in shape.table.rows] for shape in combined]
@@ -111,9 +124,22 @@ def pack_evidence_pages(presentation, slides):
                         for row in shape.table.rows] for shape in combined]
             needed = sum(sum(rows) for rows in heights) + gap * (len(combined) - 1)
         if top + needed > bottom:
-            retained.append(slide)
-            continue
-        moved_tables = old_tables + [_copy_shape(previous, shape) for shape in tables]
+            # A source page may contain several independent complete tables.
+            # Move the largest fitting prefix instead of leaving a sparse page
+            # just because the whole next page cannot fit. Never split a table.
+            for count in range(len(tables) - 1, 0, -1):
+                proposed = old_tables + tables[:count]
+                measured = [[_compact_row_height(row, shape.table.columns)
+                             for row in shape.table.rows] for shape in proposed]
+                if top + sum(map(sum, measured)) + gap * (len(proposed) - 1) <= bottom:
+                    combined, heights = proposed, measured
+                    break
+            else:
+                retained.append(slide)
+                continue
+        moved_count = len(combined) - len(old_tables)
+        moved = tables[:moved_count]
+        moved_tables = old_tables + [_copy_shape(previous, shape) for shape in moved]
         for shape, rows in zip(moved_tables, heights):
             shape.name = f"evidence:packable:{shape.shape_id}"
             shape.top = Inches(top)
@@ -123,6 +149,15 @@ def pack_evidence_pages(presentation, slides):
         _write_note(previous, "evidence:footer", footer, footer_top)
         _write_note(previous, "evidence:convention", convention, convention_top)
         previous.notes_slide.notes_text_frame.text += "\n\n" + slide.notes_slide.notes_text_frame.text
+        if moved_count < len(tables):
+            new_top = min(shape.top.inches for shape in tables)
+            for shape in moved:
+                shape._element.getparent().remove(shape._element)
+            for shape in tables[moved_count:]:
+                shape.top = Inches(new_top)
+                new_top += shape.height.inches + gap
+            retained.append(slide)
+            continue
         for slide_id in list(presentation.slides._sldIdLst):
             if presentation.part.related_slide(slide_id.rId) is slide:
                 presentation.part.drop_rel(slide_id.rId)

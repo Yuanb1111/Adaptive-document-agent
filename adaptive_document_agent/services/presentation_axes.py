@@ -53,6 +53,26 @@ def style_date_axis(chart, dates, width):
             axis._element.append(element)
 
 
+def label_source_dates(chart, dates):
+    """Display exact point dates as well as the continuous calendar axis."""
+    from pptx.util import Pt
+    from pptx.enum.chart import XL_DATA_LABEL_POSITION
+
+    if len(chart.series) != 1 or len(dates) > 6:
+        return
+    series = chart.series[0]
+    for i, (point, day, value) in enumerate(zip(series.points, dates, series.values)):
+        label = point.data_label
+        label.position = XL_DATA_LABEL_POSITION.ABOVE if i % 2 == 0 else XL_DATA_LABEL_POSITION.BELOW
+        # The plotted values are already scaled; labels use that same unit.
+        amount = f'{value:,.2f}'.rstrip('0').rstrip('.')
+        # A single paragraph is interoperable with renderers that ignore extra
+        # paragraphs or breaks in native chart labels. Alternate above/below.
+        label.text_frame.text = f'{day:%d %b %Y}: {amount}'
+        for paragraph in label.text_frame.paragraphs:
+            paragraph.font.size = Pt(9)
+
+
 def style_value_range(axis, values, *, height=None):
     """Use zero for one-sided data and rounded ticks for every native chart."""
     if not values:

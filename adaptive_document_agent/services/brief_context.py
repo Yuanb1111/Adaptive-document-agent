@@ -30,7 +30,7 @@ _POSTFIX_RATE = re.compile(
 _DENOMINATOR_CADENCE = {'hour': 'hourly', 'day': 'daily', 'week': 'weekly',
                       'month': 'monthly', 'quarter': 'quarterly', 'year': 'yearly'}
 _OUTCOME = re.compile(
-    r'(?<![\w.])(?P<number>\d+(?:\.\d+)?)\s*'
+    r'(?<![\w.])(?P<number>\d+(?:\.\d+)?)\s*(?:[-–‑]\s*)?'
     r'(?P<unit>seconds?|minutes?|hours?|days?|weeks?|months?|years?|%|percent\b|times?\b|x\b)', re.I)
 _CONDITION = re.compile(r'\b(?:if|with|without|assuming|scenario)\b', re.I)
 _SENTENCE_BREAK = re.compile(r'(?<=[.!?])\s+(?=[A-Z])')
@@ -57,6 +57,17 @@ def _sentences(text: str) -> list[str]:
 def _outcomes(text: str) -> dict[str, set[str]]:
     values: dict[str, set[str]] = {}
     for match in _OUTCOME.finditer(text):
+        # A dated reporting window is context, not a conditional outcome.
+        # Keep genuine durations (including buffers and assumed horizons); only
+        # exclude an explicit period-ending date immediately after the unit.
+        if re.match(
+            r'\s+ended\s+(?:(?:January|February|March|April|May|June|July|August|'
+            r'September|October|November|December)\s+\d{1,2},?\s+\d{4}'
+            r'|\d{4}-\d{2}-\d{2}|\d{1,2}\s+(?:January|February|March|April|May|June|'
+            r'July|August|September|October|November|December)\s+\d{4})\b',
+            text[match.end():], re.I,
+        ):
+            continue
         unit = match['unit'].casefold().rstrip('s')
         unit = '%' if unit == 'percent' else unit
         values.setdefault(unit, set()).add(str(Decimal(match['number']).normalize()))

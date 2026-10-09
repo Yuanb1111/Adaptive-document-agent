@@ -96,6 +96,10 @@ def select_key_figures(result: PipelineResult, charts: list) -> list[KeyFigure]:
             if row is not None:
                 selected_views.setdefault(row, []).append(chart)
     output, seen = [], set()
+    from dataclasses import replace
+    from .presentation_share_claims import source_total_denominators
+    from .presentation_labels import source_share_heading
+    denominators = source_total_denominators(result)
     for slide in result.presentation_plan.slides:
         if slide.slide_type != 'analysis':
             continue
@@ -115,6 +119,8 @@ def select_key_figures(result: PipelineResult, charts: list) -> list[KeyFigure]:
                 # or compare an annual value directly with an interim value.
                 figure = max([figure, *peers], key=lambda candidate: period_sort_key(
                     observations[candidate.observation_ids[-1]].period))
+            figure = replace(figure, label=source_share_heading(figure.label,
+                [observations[oid] for oid in figure.observation_ids], denominators))
             identity = figure.label.casefold(), figure.period, figure.value
             if identity in seen:
                 continue

@@ -301,6 +301,8 @@ def brief_items(result: PipelineResult):
         text = restore_percentage_symbols(contextual.text, [q.text for q in contextual.evidence],
                                           source_percentages=(_quoted_table_percentages(item, result)
                                                               | quoted_table_context(item, result).percentages))
+        from .brief_money_display import readable_money
+        text = readable_money(text)
         items.append(BriefItem(item.label, text, sorted({q.page for q in contextual.evidence}),
                                table=item.comparison_table, conditions=contextual.conditions))
     return items
@@ -452,8 +454,7 @@ def _brief_fact_for_chart(chart, index, *, exact=False):
         turning = [i for i in range(1, len(values)-1)
                    if (values[i]-values[i-1]) * (values[i+1]-values[i]) < 0]
         if turning:
-            pivot = max(turning, key=lambda i: abs(values[i] - (
-                values[0] + (values[-1]-values[0])*i/(len(values)-1))))
+            pivot = turning[-1]
             points.insert(1, ordered[pivot])
 
     def value(item):

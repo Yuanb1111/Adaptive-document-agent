@@ -283,6 +283,10 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
     support = [index.get(oid) for oid in support_ids if index.get(oid)]
     if any(o.value is None or not o.evidence or o.validation_status not in {"valid", "partially_valid"} for o in support):
         raise ValueError("Supporting KPI/table evidence is incomplete or invalid.")
+    # A complete repeated table adds no evidence to a labelled native chart.
+    # Keep partially overlapping tables intact and retain all IDs in notes.
+    if support and set(support_ids) <= chart_obs and slide_plan.layout != 'kpi_band':
+        support = []
     insight_ids = list(dict.fromkeys(slide_plan.insight_ids + [iid for b in slide_plan.visual_blocks for iid in b.insight_ids]))
     insight_map = {i.id: i for i in result.insights}
     visible_insights = [iid for b in slide_plan.visual_blocks if b.role == "commentary" for iid in b.insight_ids]
@@ -296,7 +300,15 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
     from .presentation_conventions import signed_expense_note, signed_expense_display
     convention = signed_expense_note(support + [index.get(oid) for oid in chart_obs if index.get(oid)])
     from .presentation_trajectory import scoped_direction_title, supported_subtitle
-    display_message = supported_subtitle(slide_plan, charts, index)
+    from .presentation_share_claims import source_total_denominators
+    denominators = getattr(presentation, '_ada_denominators', None)
+    if denominators is None:
+        denominators = source_total_denominators(result)
+    display_message = supported_subtitle(slide_plan, charts, index, denominators=denominators)
+    from .presentation_labels import source_fact_caption
+    for chart in charts:
+        display_message = source_fact_caption(display_message,
+            [index.get(oid) for oid in chart.observation_ids if index.get(oid)], denominators)
     scoped_title = scoped_direction_title(slide_plan.title, charts, index)
     from .composition_data import uses_composition_data
     from .presentation_labels import composition_heading, composition_message
@@ -328,7 +340,8 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
         if slide_plan.title.endswith(" (continued)"):
             heading += " (continued)"
         subtitle = "\n".join(part for part in (
-            display_message if "?" in scoped_title and display_message else scoped_title,
+            display_message if display_message and ("?" in scoped_title or (
+                display_message != slide_plan.message.strip() and '?' not in slide_plan.message)) else scoped_title,
             convention) if part)
     convention_h = 0.0
     if len(_lines(subtitle, 8.91, 18)) > 3 and convention:
@@ -391,6 +404,8 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
             heading = composition_heading(heading, chart, values, totals)
         heading = readable_chart_heading(qualify_heading(heading, values),
                                          composition=uses_composition_data(chart))
+        from .presentation_labels import source_share_heading
+        heading = source_share_heading(heading, values, denominators)
         heading = re.sub(r"(?i)^Adjusted for Adjusted\b", "Adjusted", heading)
         headings.append(re.sub(r"(?i)\b(margin|ratio|share)\s+\1\b", r"\1", heading))
     shared_heading_h = max([.28] + [len(_lines(t, r.w, CHART_TITLE_PT)) * CHART_TITLE_PT / 72 * 1.22
@@ -405,6 +420,7 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
         from .composition_data import uses_composition_data
         title = readable_chart_heading(re.sub(r"(?i)\b(margin|ratio|share)\s+\1\b", r"\1", title),
                                        composition=uses_composition_data(chart))
+        title = source_share_heading(title, values, denominators)
         title_lines = _lines(title, rect.w, CHART_TITLE_PT)
         if len(title_lines) > 3:
             raise _ChartCapacityError(f"Chart title exceeds readable capacity: {chart.id}")
