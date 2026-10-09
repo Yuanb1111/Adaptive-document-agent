@@ -227,7 +227,7 @@ def test_zero_crossing_bar_headroom_and_tick_labels() -> None:
     pptx_bytes = export_pptx(result)
     prs = Presentation(io.BytesIO(pptx_bytes))
 
-    analysis_slide = prs.slides[4]
+    analysis_slide = next(slide for slide in prs.slides if any(s.has_chart for s in slide.shapes))
     native_chart = next(s.chart for s in analysis_slide.shapes if s.has_chart)
 
     # 1. Category axis tick label position must be LOW to pin year labels to the bottom

@@ -1,6 +1,7 @@
 """Fold very short text pages into existing pages without manufacturing copy."""
 
 from .text_capacity import wrap_copy
+import json
 
 
 def _bodies(slide):
@@ -79,8 +80,17 @@ def fold_sparse_text_pages(presentation, result=None):
                       color=FOURIER_MUTED).name = 'sparse:retained_note'
                 target = candidate
                 break
-        target.notes_slide.notes_text_frame.text += (
-            '\n\nMerged short page:\n' + text + '\n' + slide.notes_slide.notes_text_frame.text)
+        notes = target.notes_slide.notes_text_frame
+        merged = {'text': text, 'original_notes': slide.notes_slide.notes_text_frame.text}
+        try:
+            structured = json.loads(notes.text)
+        except (ValueError, TypeError):
+            structured = None
+        if isinstance(structured, dict):
+            structured.setdefault('merged_short_pages', []).append(merged)
+            notes.text = json.dumps(structured, ensure_ascii=False, indent=2)
+        else:
+            notes.text += '\n\nMerged short page:\n' + text + '\n' + merged['original_notes']
         destinations[slide.slide_id] = target.slide_id
         slide_id = next(sid for sid in presentation.slides._sldIdLst if sid.id == slide.slide_id)
         presentation.part.drop_rel(slide_id.rId)

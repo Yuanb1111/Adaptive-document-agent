@@ -66,7 +66,18 @@ def rebase_trace(presentation, result, number_map):
         notes = presentation.slides[number - 1].notes_slide.notes_text_frame
         # Preserve the old audit record explicitly as historical. Append the
         # current mapping after all merged notes so readers find current IDs.
-        notes.text = notes.text.replace('ADA_EXPORT_TRACE_V1', 'ADA_PRIOR_EXPORT_TRACE_V1')
         primary = next((r for r in records if r.get('topic_id')), records[0])
-        notes.text += '\n\nADA_EXPORT_TRACE_V1\n' + json.dumps(
-            {**primary, 'co_located_scopes': records}, ensure_ascii=False)
+        current = {**primary, 'co_located_scopes': records}
+        try:
+            structured = json.loads(notes.text)
+        except (ValueError, TypeError):
+            structured = None
+        if isinstance(structured, dict):
+            previous = structured.pop('ADA_EXPORT_TRACE_V1', None)
+            if previous is not None:
+                structured.setdefault('ADA_PRIOR_EXPORT_TRACES_V1', []).append(previous)
+            structured['ADA_EXPORT_TRACE_V1'] = current
+            notes.text = json.dumps(structured, ensure_ascii=False, indent=2)
+        else:
+            notes.text = notes.text.replace('ADA_EXPORT_TRACE_V1', 'ADA_PRIOR_EXPORT_TRACE_V1')
+            notes.text += '\n\nADA_EXPORT_TRACE_V1\n' + json.dumps(current, ensure_ascii=False)

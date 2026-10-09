@@ -17,3 +17,8 @@ cache version changes; extraction and analysis results can be reused.
 
 The analysis67 review export has 17 pages rather than 18. Its one-line review
 status now appears below an existing Data Index table instead of on its own page.
+
+The v93 follow-up preserves JSON speaker-note dictionaries when merging short
+pages and rebasing export traces. Original evidence fields remain unchanged,
+merged pages have their own structured field, and prior trace numbers are kept
+separately from the current mapping. Plain-text notes retain their existing form.

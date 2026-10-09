@@ -1,5 +1,6 @@
 """Short status pages disappear without losing their warning or source record."""
 import io
+import json
 
 from pptx import Presentation
 from pptx.util import Inches
@@ -49,3 +50,28 @@ def test_short_page_keeps_complete_notes_when_no_visible_margin_fits():
     assert len(deck.slides) == 1
     assert 'The source omits the denominator.' in page.notes_slide.notes_text_frame.text
     assert 'Exact source' in page.notes_slide.notes_text_frame.text
+
+
+def test_merge_and_rebase_preserve_structured_notes_after_save():
+    from types import SimpleNamespace
+    deck = blank_deck()
+    render_complete_summary(deck, 'Limit', [BriefItem('', 'The denominator is unspecified.', [7])],
+                            notes='Exact source record')
+    page = render_complete_summary(deck, 'Evidence', [BriefItem('', 'Reported values.', [3])])[0]
+    page.shapes.add_table(2, 2, Inches(1), Inches(3), Inches(6), Inches(1))
+    record = dict(topic_id='operations', slide_numbers=[2], observation_ids=['source-1'])
+    page.notes_slide.notes_text_frame.text = json.dumps({
+        'observations': [{'id': 'source-1', 'raw_value': '12.30'}],
+        'ADA_EXPORT_TRACE_V1': {**record, 'physical_slide': 2}})
+    result = SimpleNamespace(presentation_export_trace=[record],
+                             profile=SimpleNamespace(source_coverage=None))
+    assert fold_sparse_text_pages(deck, result) == ['Limit']
+    stream = io.BytesIO()
+    deck.save(stream)
+    restored = Presentation(io.BytesIO(stream.getvalue()))
+    notes = json.loads(restored.slides[0].notes_slide.notes_text_frame.text)
+    assert notes['observations'] == [{'id': 'source-1', 'raw_value': '12.30'}]
+    assert 'Exact source record' in notes['merged_short_pages'][0]['original_notes']
+    assert notes['ADA_EXPORT_TRACE_V1']['physical_slide'] == 1
+    assert notes['ADA_EXPORT_TRACE_V1']['slide_numbers'] == [1]
+    assert notes['ADA_PRIOR_EXPORT_TRACES_V1'][0]['physical_slide'] == 2
