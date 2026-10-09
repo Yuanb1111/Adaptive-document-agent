@@ -115,19 +115,16 @@ def render_complete_summary(presentation: Any, title: str, items: list[BriefItem
 
     if any(item.table for item in items):
         from .brief_comparison_rendering import render_comparison
-        slides, pending = [], []
+        # Comparison details use their own layout. Pack all ordinary findings
+        # together first so a table cannot strand the final finding on a page.
+        # Each complete comparison retains its narrative, conditions and cells.
+        authored = '\n\nOriginal finding order:\n' + '\n'.join(item.title for item in items)
+        plain = [item for item in items if not item.table]
+        slides = render_complete_summary(presentation, title, plain, notes=notes + authored,
+                                         single_column=single_column) if plain else []
         for item in items:
-            if not item.table:
-                pending.append(item)
-                continue
-            if pending:
-                slides.extend(render_complete_summary(presentation, title, pending, notes=notes,
-                                                      single_column=single_column))
-                pending = []
-            slides.extend(render_comparison(presentation, title, item, notes=notes))
-        if pending:
-            slides.extend(render_complete_summary(presentation, title, pending, notes=notes,
-                                                  single_column=single_column))
+            if item.table:
+                slides.extend(render_comparison(presentation, title, item, notes=notes + authored))
         return slides
 
     remaining = [item for item in items if item.title.strip() or item.text.strip()]

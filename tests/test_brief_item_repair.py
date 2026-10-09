@@ -138,7 +138,8 @@ def test_patch_preserves_every_supplied_excerpt_including_correct_page_and_adjac
     corrected['evidence'].append({'page': 1, 'text': definition})
     g, client = gateway([{'pages': [2]}, bad, {'item_0': corrected}])
     brief = ExecutiveBriefWriter(g).generate(result)
-    original_request, repair_request = client.calls[1][1]['content'], client.calls[2][1]['content']
+    original_request, repair_request = [next(m['content'] for m in call if m['role'] == 'user')
+                                        for call in client.calls[1:3]]
     assert definition in original_request and definition in repair_request
     assert late in original_request and late in repair_request  # Past the old 4,000-char retry cut.
     assert not validate_executive_brief(brief, result)
@@ -160,7 +161,8 @@ def test_missing_topic_additions_keep_locks_and_uncovered_source_anchors():
     assert brief.items[0].model_dump() == original['items'][0]
     assert set(schemas[1][0]['properties']) == {'additions'}
     assert schemas[1][0]['properties']['additions']['maxItems'] == 6
-    assert all(text in client.calls[1][1]['content'] for text in texts)
+    repair_request = next(m['content'] for m in client.calls[1] if m['role'] == 'user')
+    assert all(text in repair_request for text in texts)
 
 
 def test_seven_locked_items_missing_topic_coverage_fail_without_replacing_one():

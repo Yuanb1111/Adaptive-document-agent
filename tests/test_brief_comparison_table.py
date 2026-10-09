@@ -65,3 +65,16 @@ def test_literal_accounting_cells_keep_signs_without_magnitude_annotations():
     assert not validate_executive_brief(brief, result)
     item.comparison_table.rows[0][1] = '100'
     assert validate_executive_brief(brief, result)
+
+def test_table_does_not_isolate_the_last_ordinary_finding():
+    from adaptive_document_agent.services.presentation_brief import BriefItem
+    from tests.test_presentation_brief import blank_deck
+    table = BriefComparisonTable(headers=['Case', 'Estimate'], rows=[['Base case', '44 months']])
+    first = BriefItem('First finding', 'Complete source-supported finding and qualification. ' * 3, [1])
+    last = BriefItem('Last finding', 'Final source-supported finding and qualification. ' * 3, [3])
+    pages = render_complete_summary(blank_deck(), 'Summary', [first,
+        BriefItem('Scenario', 'Conditional estimate.', [2], table=table), last], single_column=True)
+    assert len(pages) == 2
+    copy = '\n'.join(s.text for s in pages[0].shapes if s.has_text_frame)
+    assert first.text in copy and last.text in copy
+    assert any(s.has_table for s in pages[1].shapes)

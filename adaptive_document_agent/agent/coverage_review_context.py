@@ -48,8 +48,8 @@ def compact_context(payload):
         # These values are exact duplicates of the ordered point view.
         for key in ('first_reported_value', 'last_reported_value', 'observation_count', 'periods'):
             entry.pop(key, None)
-        dimensions = entry.get('dimensions', {})
-        dimensions.pop('reported_values', None)
+        # Matrix reported_values also binds each point to its category.
+        # Keep that mapping: the point columns alone do not contain labels.
         entry['point_constants'] = constants
         entry['point_columns'] = varying
         entry['reported_points'] = [[fact[key] for key in varying] for fact in facts]

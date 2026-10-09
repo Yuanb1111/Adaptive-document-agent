@@ -177,9 +177,12 @@ class PresentationTopicSelector:
         }
         from .topic_coverage_review import source_period_views, review_topic_coverage
         payload["same_source_row_period_views"] = source_period_views(lookup)
+        from .coverage_review_context import compact_context, encode
+        # Reuse the complete-point encoding already used by coverage review.
+        # No series or interior point is sampled away to shorten this request.
         messages = [
             {"role": "system", "content": load_prompt("presentation_topic_selection.txt")},
-            untrusted_document_message(json.dumps(payload, ensure_ascii=False, separators=(",", ":"))),
+            untrusted_document_message(encode(compact_context(payload))),
         ]
         selection = self.gateway.generate_structured(
             messages,

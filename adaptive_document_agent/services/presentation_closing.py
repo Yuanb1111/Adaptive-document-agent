@@ -35,7 +35,10 @@ def render_closing(presentation, result, plan):
         notes = json.dumps({'executive_brief': result.executive_brief.model_dump(mode='json'),
                             'superseded_closing_plan': plan.model_dump(mode='json')}, ensure_ascii=False)
         if findings:
-            return render_complete_summary(presentation, 'Review status', findings, notes=notes)
+            slides = render_complete_summary(presentation, 'Review status', findings, notes=notes)
+            for slide in slides:
+                slide._ada_review_status = True
+            return slides
         if len(presentation.slides):
             presentation.slides[-1].notes_slide.notes_text_frame.text += '\n\n' + notes
         return []

@@ -155,3 +155,11 @@ def test_call_budget_exhaustion_rolls_back_partial_review(monkeypatch):
     assert warning.code=='presentation_topic_coverage_unresolved'
     assert 'budget exhausted' in warning.message
     assert json.loads(warning.message)['unreviewed_series_ids']
+
+def test_compaction_preserves_category_to_value_mapping_in_matrix_dimensions():
+    _, _, _, _, _, payload = context_fixture()
+    mapping = [{'metric': 'Category A', 'period': 'FY2023', 'raw_value': '60'},
+               {'metric': 'Category B', 'period': 'FY2023', 'raw_value': '40'}]
+    payload['all_extracted_series'][0][payload['series_columns'].index('dimensions')] = {'reported_values': mapping}
+    compact = compact_context(payload)
+    assert compact['all_extracted_series'][0]['dimensions']['reported_values'] == mapping

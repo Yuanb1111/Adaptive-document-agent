@@ -18,7 +18,7 @@ def _title(slide):
     return ''
 
 
-def _sparse(slide):
+def _sparse(slide, page_height=7.5):
     bodies = _bodies(slide)
     if not bodies:
         return False
@@ -35,7 +35,12 @@ def _sparse(slide):
            and not s.is_placeholder and s.name not in {'brief:body', 'brief:heading', 'closing:body'}
            and not s.text.startswith('Source:') for s in slide.shapes):
         return False
-    return body_lines <= 2 and body_lines + heading_lines <= 4
+    if getattr(slide, '_ada_review_status', False):
+        return True
+    content_height = sum(s.height.inches for s in [*bodies, *headings])
+    available = max(.1, page_height - 2.5)
+    return (body_lines <= 2 and body_lines + heading_lines <= 4
+            or len(bodies) == 1 and content_height / available < .35)
 
 
 def fold_sparse_text_pages(presentation, result=None):
@@ -50,7 +55,7 @@ def fold_sparse_text_pages(presentation, result=None):
     slides = list(presentation.slides)
     original_ids = [s.slide_id for s in slides]
     destinations = {identifier: identifier for identifier in original_ids}
-    sparse = [s for s in slides if _sparse(s)]
+    sparse = [s for s in slides if _sparse(s, presentation.slide_height.inches)]
     targets = [s for s in slides if s not in sparse and (
         _bodies(s) or any(shape.has_chart or shape.has_table for shape in s.shapes))]
     if not targets:

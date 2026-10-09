@@ -75,3 +75,14 @@ def test_merge_and_rebase_preserve_structured_notes_after_save():
     assert notes['ADA_EXPORT_TRACE_V1']['physical_slide'] == 1
     assert notes['ADA_EXPORT_TRACE_V1']['slide_numbers'] == [1]
     assert notes['ADA_PRIOR_EXPORT_TRACES_V1'][0]['physical_slide'] == 2
+
+def test_review_status_is_folded_even_when_its_diagnostics_wrap_to_many_lines():
+    deck = blank_deck()
+    target = render_complete_summary(deck, 'Evidence', [BriefItem('Result', 'Reported values.', [3])])[0]
+    target.shapes.add_table(2, 2, Inches(1), Inches(3), Inches(6), Inches(1))
+    warning = 'Complete source coverage still needs review. ' * 12
+    status = render_complete_summary(deck, 'Review status', [BriefItem('Coverage review incomplete', warning, [9])])[0]
+    status._ada_review_status = True
+    assert fold_sparse_text_pages(deck) == ['Review status']
+    assert warning in target.notes_slide.notes_text_frame.text
+    assert len(deck.slides) == 1

@@ -21,6 +21,8 @@ def test_money_display_is_exact_idempotent_and_preserves_rates():
     shown = readable_money(text)
     assert shown == 'Revenue RMB 286.749 million; loss USD -103.281 million; ASP RMB 47.1 thousand/unit.'
     assert readable_money(shown) == shown
+    assert readable_money('RMB(59,883) thousand') == 'RMB (59.883) million'
+    assert readable_money('RMB(59,883) thousand/unit') == 'RMB(59,883) thousand/unit'
     assert readable_money('USD +12,300 thousand') == 'USD +12.3 million'
     assert readable_money('USD 12,300 thousand per employee') == 'USD 12,300 thousand per employee'
 

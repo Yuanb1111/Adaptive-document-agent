@@ -17,6 +17,8 @@ from adaptive_document_agent.services.llm.exceptions import (
 from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
 from .prompting import untrusted_document_message
 from .brief_quote_bounds import bounded_quote_item
+from .brief_evidence_blocks import (ReferencedBrief, ReferencedBriefItem, expand_brief,
+                                    expand_item)
 
 BriefTitle = Annotated[str, *ExecutiveBrief.model_fields['title'].metadata]
 
@@ -147,13 +149,15 @@ def _salvage(values: list[Any], locked: dict[int, ExecutiveBriefItem], title: An
 
 def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]], *,
                              result: PipelineResult, excerpts: dict[int, str],
-                             topics: list[tuple[str, list[int]]], source_context: dict[str, Any]) -> ExecutiveBrief:
+                             topics: list[tuple[str, list[int]]], source_context: dict[str, Any],
+                             evidence_catalog: dict | None = None) -> ExecutiveBrief:
     """Generate once, then permit only one targeted, strictly typed patch call."""
     audit: dict[str, Any] = {'original': None, 'original_response': None, 'locked_indices': [],
                              'initial_errors': {}, 'patch': None, 'patch_response': None,
                              'repair_errors': [], 'discarded_indices': []}
     try:
-        brief = gateway.generate_structured(messages, ExecutiveBrief, stage='report', allow_repair=False)
+        brief = gateway.generate_structured(messages, ReferencedBrief if evidence_catalog is not None else ExecutiveBrief,
+                                            stage='report', allow_repair=False)
         original = brief.model_dump(mode='json')
     except LLMStructuredOutputError as exc:
         audit['original_response'] = exc.response.text
@@ -170,6 +174,9 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
         audit['initial_errors']['response'] = [str(exc)]
         _audit(result, audit, 'rejected')
         raise
+    if evidence_catalog is not None:
+        audit['reference_response'] = original
+        original = expand_brief(original, evidence_catalog)
     audit['original'] = original
     if not original['items'] or len(original['items']) > 7:
         audit['repair_errors'] = ['Original item count is outside the supported 1–7 range.']
@@ -201,6 +208,14 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
         _audit(result, audit, 'rejected')
         raise ValueError('Executive brief failed evidence checks: ' + '; '.join(audit['repair_errors']))
     patch_model = create_model('ExecutiveBriefPatch', __config__=ConfigDict(extra='forbid'), **fields)
+    wire_fields = dict(fields)
+    if evidence_catalog is not None:
+        for key in fields:
+            if key.startswith('item_'):
+                wire_fields[key] = (ReferencedBriefItem, ...)
+            elif key == 'additions':
+                wire_fields[key] = (list[ReferencedBriefItem], Field(min_length=0, max_length=capacity))
+    wire_patch_model = create_model('ExecutiveBriefPatch', __config__=ConfigDict(extra='forbid'), **wire_fields)
     repair_context = {
         **source_context,
         'invalid_items': {f'item_{index}': original['items'][index] for index in invalid},
@@ -224,9 +239,15 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
               for index, value in enumerate(original['items'])]
     title = original.get('title', 'Key takeaways')
     try:
-        patch = gateway.generate_structured(repair_messages, patch_model, stage='report', allow_repair=False)
+        patch = gateway.generate_structured(repair_messages, wire_patch_model, stage='report',
+                                            allow_repair=False, max_tokens=12000)
         # Revalidate even custom gateways; unknown keys cannot acquire an edit route.
-        patch_values = patch_model.model_validate(patch.model_dump()).model_dump(mode='json')
+        supplied = patch.model_dump()
+        if evidence_catalog is not None:
+            supplied = {key: expand_item(value, evidence_catalog) if key.startswith('item_')
+                        else [expand_item(item, evidence_catalog) for item in value] if key == 'additions'
+                        else value for key, value in supplied.items()}
+        patch_values = patch_model.model_validate(supplied).model_dump(mode='json')
         audit['patch'] = patch_values
         for index in invalid:
             merged[index] = patch_values[f'item_{index}']
@@ -258,6 +279,11 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
                 values = json.loads(exc.response.text, object_pairs_hook=_unique_patch_pairs)
                 if not isinstance(values, dict) or set(values) != set(fields):
                     raise ValueError('Patch keys differ from the requested schema.')
+                if evidence_catalog is not None:
+                    values = {key: expand_item(value, evidence_catalog) if key.startswith('item_')
+                              else [expand_item(item, evidence_catalog) for item in value]
+                              if key == 'additions' and isinstance(value, list) else value
+                              for key, value in values.items()}
                 normalized_values = {key: bounded_quote_item(value, excerpts) if key.startswith('item_')
                                      else [bounded_quote_item(item, excerpts) for item in value]
                                      if key == 'additions' and isinstance(value, list) else value
