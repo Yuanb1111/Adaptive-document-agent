@@ -243,10 +243,11 @@ def run_app() -> None:
         branding.section_label(st, "01", "Upload your document")
         with st.expander("Analysis options (optional)", expanded=False):
             analysis_focus = st.text_area(
-                "Analysis focus (optional)",
-                placeholder="e.g. Compare performance and highlight disclosed risks.",
+                "Analysis and PPT requirements (optional)",
+                placeholder="e.g. Focus on profitability, explain the business in detail, and append every table from a named chapter.",
                 height=88,
-                help="Leave blank for automatic discovery. Changing the focus or model after upload starts a new analysis.",
+                max_chars=6000,
+                help="Specify analysis priorities, content detail, narrative language, a slide limit, or a chapter whose tables belong in Data Index. The result shows interpreted requirements and completion checks. Original source-table cells, names, units and periods remain literal. Changing requirements or model after upload starts a new analysis.",
             )
             review_scope = st.toggle(
                 "Review page scope before analysis (optional)", value=False,

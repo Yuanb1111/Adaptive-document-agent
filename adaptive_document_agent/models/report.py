@@ -12,6 +12,7 @@ from .executive_brief import ExecutiveBrief
 from .observation import Observation
 from .presentation import PresentationPlan, PresentationTopicSelection
 from .validation import ValidationIssue
+from .customization import RequirementCheck
 
 
 class Insight(BaseModel):
@@ -68,3 +69,4 @@ class PipelineResult(BaseModel):
     export_timings_ms: dict[str, int] = Field(default_factory=dict)
     finalization: dict[str, object] | None = None
     presentation_export_trace: list[dict[str, object]] = Field(default_factory=list)
+    customization_report: list[RequirementCheck] = Field(default_factory=list)

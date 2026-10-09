@@ -194,11 +194,13 @@ class AnalysisValueScorer:
     def _semantic_scores(self, candidates: list[AnalysisCandidate], profile: DocumentProfile) -> SemanticCandidateScores | None:
         if not self.gateway or not candidates:
             return None
+        from .report_requirements import instruction_messages
         response = self.gateway.generate_structured(
             [
                 {"role": "system", "content": load_prompt("analysis_planner.txt") + "\nSelect and score candidates in ONE response. Return exactly one decision per supplied candidate ID: score, rejected (true means not selected), and explicit reasons. Assess analytical usefulness, redundancy and evidence. Never add candidate IDs. "
                  "Write repeated rationale once in reason_catalog as entries with unique short id and full text; reference those IDs in each applicable decision's ordered reason_refs. Put complete candidate-specific reasons, exceptions, evidence qualifications and caveats in reasons. A decision's explanation is its referenced catalog text in order followed by its inline reasons. Use only references defined in reason_catalog. Every accepted AND rejected decision needs a complete, nonblank explanation. Do not drop candidates, evidence, qualifications or unique reasoning to compress the response. "
                  "Read candidate_encoding when present; merge candidate_constants into each candidate without discarding any field. Ordered observation_refs are indices into observation_id_catalog and restore exact observation_ids; use the original IDs when identifying evidence in explanations. Input source_reason_ref resolves the candidate's original reason verbatim in source_reason_catalog; it is source data, not a scoring decision or an output rationale reference."},
+                *instruction_messages(profile, purpose='analysis prioritization'),
                 untrusted_document_message(str(_scoring_transport(candidates, profile))),
             ],
             SemanticCandidateScores,

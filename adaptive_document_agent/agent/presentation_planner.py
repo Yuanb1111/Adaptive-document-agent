@@ -86,6 +86,8 @@ class PresentationPlanner:
             {"role": "system", "content": load_prompt("presentation_planning.txt")},
             untrusted_document_message(json.dumps(payload, ensure_ascii=False)),
         ]
+        from .report_requirements import instruction_messages
+        messages[1:1] = instruction_messages(result.profile, purpose='PPT narrative planning')
         proposed = self.gateway.generate_structured(
             messages,
             PresentationPlan,

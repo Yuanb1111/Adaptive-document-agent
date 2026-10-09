@@ -14,9 +14,11 @@ class DynamicReportPlanner:
 
     def plan(self, profile: DocumentProfile, insights: list[Insight]) -> ReportPlan:
         if self.gateway and insights:
+            from .report_requirements import instruction_messages
             proposed = self.gateway.generate_structured(
                 [
                     {"role": "system", "content": load_prompt("report_planning.txt")},
+                    *instruction_messages(profile, purpose='report outline'),
                     untrusted_document_message(str({"profile": profile.model_dump(mode="json"), "insights": [item.model_dump(mode="json", exclude={"evidence"}) for item in insights]})),
                 ],
                 ReportPlan,

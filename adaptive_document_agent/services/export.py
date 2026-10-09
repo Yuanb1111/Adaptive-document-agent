@@ -143,6 +143,8 @@ def export_pptx_with_report(
         build_finished = perf_counter()
         notify("Rendering and checking PowerPoint layout")
         verified = verify_presentation(payload, renderer=renderer, cache=visual_cache)
+        from .customization_checks import mark_customization_export_verified
+        mark_customization_export_verified(result, verified.payload)
         if build_cache is not None:
             build_cache.clear()
             # QA/build may have repaired the plan in-place. Key the final state.
@@ -169,7 +171,7 @@ def _build_cache_key(result: PipelineResult, template_digest: str, artwork: byte
                      source_pdf: bytes | None = None) -> tuple[str, str, str]:
     # Bump the version when generation rules change. All facts, source evidence,
     # narrative, charts, warnings and plan fields participate in invalidation.
-    content = result.model_dump_json(exclude={"llm_usage", "timings_ms", "stage_details_ms", "pipeline_total_ms", "export_timings_ms"}).encode()
+    content = result.model_dump_json(exclude={"llm_usage", "timings_ms", "stage_details_ms", "pipeline_total_ms", "export_timings_ms", "customization_report"}).encode()
     from adaptive_document_agent.utils.pipeline_version import PIPELINE_VERSION
     image_digest = hashlib.sha256(source_pdf).digest() if source_pdf is not None else b""
     return (f"ppt-build-v13:{PIPELINE_VERSION}", template_digest,

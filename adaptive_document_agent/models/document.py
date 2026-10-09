@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 
 from .page import DocumentPage
 from .coverage import SourceSection, SourceCoverage
+from .customization import ReportRequirements
 
 
 class DocumentProfile(BaseModel):
@@ -26,6 +27,7 @@ class DocumentProfile(BaseModel):
     data_quality_notes: list[str] = Field(default_factory=list)
     analysis_page_ranges: list[tuple[int, int]] = Field(default_factory=list)
     analysis_focus: str | None = None
+    report_requirements: ReportRequirements | None = None
     source_coverage: SourceCoverage | None = None
 
 

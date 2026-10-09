@@ -191,6 +191,8 @@ class PresentationTopicSelector:
             {"role": "system", "content": load_prompt("presentation_topic_selection.txt")},
             untrusted_document_message(encode(compact_context(payload))),
         ]
+        from .report_requirements import instruction_messages
+        messages[1:1] = instruction_messages(result.profile, purpose='topic selection and narrative detail')
         selection = self.gateway.generate_structured(
             messages,
             PresentationTopicSelection,

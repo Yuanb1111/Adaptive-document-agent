@@ -100,6 +100,17 @@ class DocumentOrchestrator:
             )
 
         from .company_introduction import prepare_company_introduction
+        from .report_requirements import interpret_requirements, appendix_pages
+        if analysis_focus and analysis_focus.strip():
+            notify('Interpreting analysis and presentation requirements')
+            with record_timing(timings, 'report_requirements'):
+                profile.report_requirements = interpret_requirements(self.gateway, document, analysis_focus)
+                if not profile.report_requirements.interpretation_error:
+                    profile.analysis_focus = '; '.join(r.request_quote for r in profile.report_requirements.items
+                        if r.resolution == 'resolved' and r.kind in {'analysis_focus', 'content_detail'}) or None
+                    analysis_focus = profile.analysis_focus
+                for requirement in profile.report_requirements.items:
+                    notify('Report requirement: ' + requirement.description)
         attach_introduction = None
         if self.gateway and self.gateway.discovery_workers > 1:
             # Discovery is the earliest stable source/profile boundary. Copy it
@@ -115,7 +126,9 @@ class DocumentOrchestrator:
                 if profile.analysis_page_ranges
                 else None
             )
-            scope = sha256_bytes(str(profile.analysis_page_ranges or "all").encode("utf-8"))[:16]
+            if page_numbers is not None:
+                page_numbers |= appendix_pages(profile.report_requirements)
+            scope = sha256_bytes(str(sorted(page_numbers) if page_numbers is not None else 'all').encode('utf-8'))[:16]
             from adaptive_document_agent.utils.pipeline_version import EXTRACTION_VERSION
             cached_tables = self.cache.get_model(f"tables-{EXTRACTION_VERSION}-{digest}-{scope}", ParsedDocument) if self.cache else None
             if cached_tables is not None:
@@ -124,6 +137,9 @@ class DocumentOrchestrator:
                 tables_by_page = TableExtractor().extract(raw, page_numbers=page_numbers)
                 for page in document.pages:
                     page.tables = tables_by_page.get(page.page_number, [])
+                    page.raw_tables = [t.model_copy(deep=True) for t in page.tables]
+                    if page_numbers is None or page.page_number in page_numbers:
+                        page.table_extraction_status = ('processed' if page.page_number in tables_by_page else 'failed')
                 self._reconstruct_tables(document)
                 if self.cache:
                     self.cache.set_model(f"tables-{EXTRACTION_VERSION}-{digest}-{scope}", document)
@@ -465,7 +481,7 @@ class DocumentOrchestrator:
         from .source_coverage import link_coverage
         link_coverage(profile.source_coverage, index.observations, presentation_plan)
         from adaptive_document_agent.utils.pipeline_version import PIPELINE_VERSION
-        return PipelineResult(
+        final_result = PipelineResult(
             pipeline_version=PIPELINE_VERSION,
             executive_brief=executive_brief,
             document=document,
@@ -487,6 +503,18 @@ class DocumentOrchestrator:
             stage_details_ms=details,
             pipeline_total_ms=int((perf_counter() - pipeline_started) * 1000),
         )
+        if profile.report_requirements:
+            from .requirements_review import review_content_requirements
+            from .report_localization import prepare_report_language
+            from adaptive_document_agent.services.customization_checks import check_requirements
+            notify('Checking requested report customizations')
+            with record_timing(timings, 'customization_review'):
+                review_content_requirements(self.gateway, final_result)
+                prepare_report_language(self.gateway, final_result)
+                check_requirements(final_result)
+            final_result.llm_usage = list(self.gateway.usage) if self.gateway else []
+            final_result.pipeline_total_ms = int((perf_counter() - pipeline_started) * 1000)
+        return final_result
 
     @staticmethod
     def _validate_analysis(

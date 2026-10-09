@@ -47,6 +47,10 @@ def generate_summary_presentation(gateway, result, pages, response_model, *, sco
             'Leave legacy overview, business and value_chain empty. Supply a company name only '
             'with a literal name_quote/name_page from supplied reading facts, otherwise leave it empty.')},
             untrusted_document_message(json.dumps(payload, ensure_ascii=False))]
+        from .report_requirements import instruction_messages
+        messages[1:1] = instruction_messages(result.profile, purpose='introductory content selection and detail')
+        # Repair retains every original instruction and the source payload.
+        initial_messages = list(messages)
         for attempt in range(2):
             if cancelled is not None and cancelled.is_set():
                 raise CancelledError('Summary presentation cancelled')
@@ -79,7 +83,7 @@ def generate_summary_presentation(gateway, result, pages, response_model, *, sco
                 return company
             if attempt:
                 raise ValueError('Summary presentation failed validation: ' + '; '.join(errors))
-            messages = messages[:2] + [untrusted_document_message(json.dumps(record, ensure_ascii=False)),
+            messages = initial_messages + [untrusted_document_message(json.dumps(record, ensure_ascii=False)),
                 {'role': 'user', 'content': 'Correct only these failed bindings/density/coverage checks '
                  'from the original reading. Return complete pages and every include/omit decision. '
                  'Do not invent evidence or add filler to meet the page density requirement.'}]

@@ -13,7 +13,15 @@ def digest(value):
 
 
 def fact_hash(result):
-    return digest(result.model_dump(mode='json',include={'document','observations','analysis_results','insights','charts','executive_brief'}))
+    facts = result.model_dump(mode='json',include={'document','observations','analysis_results','insights','charts','executive_brief'})
+    # Saved pre-customization drafts did not have physical-fragment fields.
+    # Omit only unknown defaults; real archives/statuses participate in locking.
+    for page in facts['document']['pages']:
+        if not page['raw_tables']:
+            page.pop('raw_tables')
+        if page['table_extraction_status'] == 'not_attempted':
+            page.pop('table_extraction_status')
+    return digest(facts)
 
 
 def theme_hash(result,identifier):
@@ -31,6 +39,8 @@ def begin(result):
     if draft.finalization is None:
         draft.finalization=dict(version='finalization-v1',source_facts_sha256=fact_hash(draft),
             original_plan_sha256=digest(draft.presentation_plan.model_dump(mode='json')),locked_hashes={},revisions=[])
+        draft.finalization['requirements_sha256'] = digest(draft.profile.report_requirements.model_dump(mode='json')
+                                                         if draft.profile.report_requirements else None)
         draft.finalization['approved_plan_sha256']=digest(draft.presentation_plan.model_dump(mode='json'))
     assert_stable(draft)
     return draft
@@ -41,6 +51,9 @@ def assert_stable(result):
     if state is None:return
     if state['source_facts_sha256']!=fact_hash(result):
         raise ValueError('Finalization changed the source facts, calculations, insights, charts or briefing.')
+    requirements = result.profile.report_requirements
+    if state.get('requirements_sha256', digest(None)) != digest(requirements.model_dump(mode='json') if requirements else None):
+        raise ValueError('Report requirements or localized copy changed outside an approved finalization.')
     for identifier,expected in state.get('locked_hashes',{}).items():
         if expected!=theme_hash(result,identifier):raise ValueError('Locked theme changed: '+identifier)
     if state.get('approved_plan_sha256')!=digest(result.presentation_plan.model_dump(mode='json')):

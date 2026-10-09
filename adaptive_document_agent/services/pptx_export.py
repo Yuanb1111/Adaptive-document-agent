@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from contextlib import nullcontext
 import io
 import os
 from pathlib import Path
@@ -193,9 +194,13 @@ def build_presentation(result: PipelineResult, template_path: str | Path | None 
 
     from .presentation_sparse_pages import fold_sparse_text_pages
     fold_sparse_text_pages(presentation, result)
+    from .requested_tables import render_requested_tables, verify_requested_tables
+    render_requested_tables(presentation, result)
     _add_thank_you_slide(presentation)
 
     _number_slides(presentation)
+    from .report_language import apply_report_language
+    apply_report_language(presentation, result)
 
     # Pre-export preflight check and sanitization
     preflight = PresentationPreflight(presentation)
@@ -206,6 +211,7 @@ def build_presentation(result: PipelineResult, template_path: str | Path | None 
     # erroneous value/unit is now evidence-backed. Never rerun to erase errors.
     if report.errors:
         raise PreflightQAError(report)
+    verify_requested_tables(presentation, result)
     from .slide_compositor import validate_composed_geometry
     validate_composed_geometry(presentation)
     from .presentation_brand_qa import validate_generated_brand
@@ -371,7 +377,9 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
     _add_planned_contents(presentation, scoped_contents, include_key_figures=bool(key_figures),
                           include_value_chain=value_chain)
     company_start = len(presentation.slides)
-    _add_company_at_a_glance(presentation, result, slides_by_type["company_overview"])
+    with (record_section(presentation, slides_by_type['company_overview'], result)
+          if result.profile.report_requirements else nullcontext()):
+        _add_company_at_a_glance(presentation, result, slides_by_type["company_overview"])
     for slide in list(presentation.slides)[company_start:]:
         slide._ada_section_label = getattr(slide, '_ada_section_label', None) or (
             slides_by_type["company_overview"].section_title or 'Company Overview')
@@ -385,7 +393,9 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
         )
     else:
         summary_start = len(presentation.slides)
-        _add_planned_summary(presentation, result, summary, index)
+        with (record_section(presentation, summary, result)
+              if result.profile.report_requirements else nullcontext()):
+            _add_planned_summary(presentation, result, summary, index)
         for slide in list(presentation.slides)[summary_start:]:
             slide._ada_section_label = summary.section_title or 'Executive Summary'
     from .presentation_identity import presentation_quality_notes

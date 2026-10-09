@@ -66,6 +66,8 @@ result = analyse_pdf(pdf_bytes, gateway=gateway)
 
 The Streamlit UI starts analysis automatically after upload. It uses document discovery to select evidence-bearing page ranges, then prepares and verifies the PowerPoint export. Users who need to override the automatic scope can enable the optional review mode, call `DocumentOrchestrator.preview_scope(...)`, and confirm the proposed ranges before rerunning deep analysis.
 
+The optional **Analysis and PPT requirements** field supports analysis emphasis, content detail, chapter-wide source-table appendices, narrative language and a requested slide limit. Requirements are interpreted before generation and their completion is reported after verified export. Source-table fidelity is checked cell by cell; detected-table counts do not certify that extraction found every table in the PDF. See [executable report requirements](docs/REPORT_CUSTOMIZATION.md) for examples, execution boundaries and limitations.
+
 ## Repository Layout
 
 ```text

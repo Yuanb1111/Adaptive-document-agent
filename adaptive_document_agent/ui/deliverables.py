@@ -219,4 +219,7 @@ def render(st, result: PipelineResult, raw_pdf: bytes, progress) -> None:
         from .completion_notification import notify_export_ready
         incomplete_intro = any(w.code == 'company_introduction_unavailable' for w in result.validation_warnings)
         qa_warnings = bool(verified.report.issues or preflight_report and preflight_report.status == 'passed_with_warnings')
-        notify_export_ready(st, verified, needs_review=bool(legacy or degraded or editorial or incomplete_intro or qa_warnings))
+        custom_review = any(c.status != 'satisfied' for c in result.customization_report)
+        notify_export_ready(st, verified, needs_review=bool(legacy or degraded or editorial or incomplete_intro or qa_warnings or custom_review))
+    from .customization import render as render_customization
+    render_customization(st, result)
