@@ -28,7 +28,7 @@ class IntroductionDraft(BaseModel):
     overview: CompanySummaryPage | None = None
     business: CompanySummaryPage | None = None
     value_chain: list[CompanySummaryItem] = Field(default_factory=list, max_length=5)
-    summary_pages: list[SummarySlidePage] = Field(default_factory=list, max_length=8)
+    summary_pages: list[SummarySlidePage] = Field(default_factory=list)
     summary_decisions: list[SummaryPartDecision] = Field(default_factory=list)
 
 

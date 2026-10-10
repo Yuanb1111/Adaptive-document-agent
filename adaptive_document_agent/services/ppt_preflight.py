@@ -77,6 +77,12 @@ class PresentationPreflight:
         return sorted((shape for shape in self._shapes(slide) if shape.is_placeholder),
                       key=lambda shape: shape.placeholder_format.idx)
 
+    @staticmethod
+    def _immutable_copy(shape):
+        properties = shape.element.xpath('.//p:cNvPr')
+        return (shape.name.startswith('customization:') or any(
+            p.get('descr','').startswith('ADA_SUMMARY_ITEM_V2:') for p in properties))
+
     def _check_geometry_invariants(self, idx: int, slide: Any) -> None:
         from pptx.util import Inches
         for shape in self._shapes(slide):
@@ -163,7 +169,7 @@ class PresentationPreflight:
     def _check_raw_unit_tokens(self, idx: int, slide: Any) -> None:
         raw_token_pattern = re.compile(r"(?i)\b(rmb|cny|hkd|usd)(?:in)?(thousands?|millions?|billions?|'000)\b")
         for shape in self._shapes(slide):
-            if shape.name.startswith('customization:'):
+            if self._immutable_copy(shape):
                 continue  # Literal appendix cells, units and header context are immutable evidence.
             if shape.has_text_frame:
                 for p in shape.text_frame.paragraphs:
@@ -197,7 +203,7 @@ class PresentationPreflight:
 
     def _check_banned_phrases(self, idx: int, slide: Any) -> None:
         for shape in self._shapes(slide):
-            if shape.name.startswith('customization:'):
+            if self._immutable_copy(shape):
                 continue
             if shape.has_text_frame:
                 text = shape.text
@@ -429,7 +435,7 @@ class PresentationPreflight:
         dangling_pattern = re.compile(r"(?i)\b(?:to|of|and|with|from|in|for|by|as|at|or|including|such\s+as)\s*$")
         broken_prefix_pattern = re.compile(r"^(?:[a-z]|ing|ed|tion|ment|ly|al|ic)\s+[a-z]{3,}")
         for shape in self._shapes(slide):
-            if shape.name.startswith('customization:'):
+            if self._immutable_copy(shape):
                 continue
             if shape.has_text_frame:
                 for p in shape.text_frame.paragraphs:
@@ -622,7 +628,7 @@ class PresentationPreflight:
 
     def _check_template_completeness(self, idx: int, slide: Any) -> None:
         for shape in self._shapes(slide):
-            if shape.name.startswith('customization:'):
+            if self._immutable_copy(shape):
                 continue
             if shape.has_text_frame:
                 for p in shape.text_frame.paragraphs:

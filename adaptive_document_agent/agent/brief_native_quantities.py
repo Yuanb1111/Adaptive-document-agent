@@ -35,4 +35,9 @@ def native_quantity_options(original, invalid, result, excerpts):
                         'source_value': v, 'representation': 'absolute_magnitude'}}} if v.startswith('-') else {})}
             for c, v, u in sorted(quantities) if c and u in {'thousand', 'million', 'billion', 'trillion'}
         ]
+        options[f'item_{index}'].extend({'currency':'','signed_coefficient':v,'source_scale':'%',
+            'literal_basis':[''],'amount_text':v+'%',
+            **({'magnitude_option':{'amount_text':v[1:]+'%', 'quantity_representation':{
+                'quantity_text':v[1:]+'%', 'source_value':v,'representation':'absolute_magnitude'}}}
+               if v.startswith('-') else {})} for v in sorted(context.percentages))
     return options

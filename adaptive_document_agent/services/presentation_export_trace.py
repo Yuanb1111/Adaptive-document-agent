@@ -17,6 +17,12 @@ def record_section(presentation,slide_plan,result):
             ids=set(slide_plan.observation_ids)|{i for b in slide_plan.visual_blocks for i in b.observation_ids}
             ids.update(i for c in result.charts if c.id in chart_ids for i in [*c.observation_ids,*c.total_observation_ids])
             pages=set(slide_plan.source_pages)|{e.page for o in result.observations if o.id in ids for e in o.evidence}
+            if slide_plan.slide_type == 'data_quality':
+                # The renderer replaces the planned quality copy with current
+                # scope items. Stale planned pages are not their source evidence.
+                from .presentation_scope import scope_items
+                ids, chart_ids = set(), set()
+                pages = {p for item in scope_items(result) for p in item.pages}
             if slide_plan.slide_type == 'company_overview' and result.presentation_plan:
                 pages.update(result.presentation_plan.company.source_pages)
             record=dict(planned_slide_id=slide_plan.id,topic_id=slide_plan.theme_id,

@@ -9,7 +9,9 @@ class EditorialItem(BaseModel):
     model_config = ConfigDict(extra='forbid')
     fact_id: str
     label: str = Field(min_length=1, max_length=60)
-    text: str = Field(min_length=1, max_length=180)
+    # Transport copy can exceed the final box limit. Pagination below retains
+    # its complete wording instead of invalidating an otherwise complete plan.
+    text: str = Field(min_length=1, max_length=6000)
 
 
 class EditorialPage(BaseModel):
@@ -50,9 +52,20 @@ def expand_editorial(draft, catalog, response_model):
             if item.fact_id not in catalog:
                 raise ValueError('Summary editorial item cites an unknown reading fact: ' + item.fact_id)
             part, fact = catalog[item.fact_id]
-            items.append(SummarySlideItem(label=item.label, text=item.text, part_ids=[part.id],
-                source_quote=fact.source_quote, source_pages=list(fact.source_pages)))
-        pages.append(SummarySlidePage(**page.model_dump(exclude={'items'}), items=items))
+            pieces = split_editorial_copy(item.text)
+            from hashlib import sha256
+            digest = sha256(item.text.encode('utf-8')).hexdigest() if len(pieces)>1 else ''
+            group = stable_id('summary_copy', page.id, item.fact_id, item.text) if len(pieces)>1 else ''
+            for index, text in enumerate(pieces):
+                items.append(SummarySlideItem(label=item.label, text=text, part_ids=[part.id],
+                    source_quote=fact.source_quote, source_pages=list(fact.source_pages),
+                    continuation_group=group, continuation_index=index,
+                    continuation_count=len(pieces), continuation_digest=digest))
+        for offset in range(0, len(items), 4):
+            values = page.model_dump(exclude={'items'})
+            if offset:
+                values['id'] = stable_id('summary_continuation', page.id, offset)
+            pages.append(SummarySlidePage(**values, items=items[offset:offset+4]))
     values = {'summary_pages': pages, 'summary_decisions': draft.summary_decisions, 'name': draft.name}
     if draft.name:
         if draft.name_fact_id not in catalog:
@@ -62,3 +75,21 @@ def expand_editorial(draft, catalog, response_model):
     elif draft.name_fact_id:
         raise ValueError('An identity fact reference requires its literal company name')
     return response_model(**values)
+
+
+def split_editorial_copy(text, limit=180):
+    """Layout-only splits; concatenation preserves every source-authored word."""
+    pieces = []
+    while len(text) > limit:
+        # Prefer a sentence or word boundary, never omit punctuation or words.
+        import re
+        # Do not split decimal punctuation or a monetary/date token. A whole
+        # long identifier may be split for layout; group validation below still
+        # verifies the original complete claim, never its disconnected digits.
+        boundaries = [m.end() for m in re.finditer(r'\s+|[。；!?]|\.(?!\d)',text[:limit])]
+        end = max((i for i in boundaries if i >= limit//2), default=limit)
+        pieces.append(text[:end])
+        text = text[end:]
+    if text:
+        pieces.append(text)
+    return pieces

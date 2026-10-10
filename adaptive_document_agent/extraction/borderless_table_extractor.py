@@ -12,7 +12,7 @@ from .column_roles import explicit_percentage
 from .borderless_layout import source_lines, column_anchors, header_supported_anchors, align_sparse_values, geometric_headers, is_wrapped_label, geometric_audit_statuses
 from .period_header_geometry import geometric_periods, MONTH_DURATION, month_count
 
-_VALUE = re.compile(r"(?<![A-Za-z0-9])(?:\(?[+-]?(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)\)?[%％]?|[—–]|-(?!\S))")
+_VALUE = re.compile(r"(?<![A-Za-z0-9])(?:\(?[+-]?(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)\)?[%％]?|N/A(?![A-Za-z])|[—–]|-(?!\S))")
 _YEAR = re.compile(r"\b(?:19|20)\d{2}\b")
 _PERIOD_TOKEN = re.compile(r"\b(?:(?:FY|CY|H[12]|[12]H|Q[1-4])\s*)?(?:19|20)\d{2}(?:\s*(?:H[12]|[12]H|Q[1-4]))?\b", re.I)
 _WORD = re.compile(r"[%A-Za-z][%A-Za-z/-]*")
@@ -72,6 +72,14 @@ class BorderlessTableExtractor:
                                     if self._period_from_line(lines[i])), None) if year_index is None else None
             header_sources = (sources[year_index+1:group[0].line_index] if year_index is not None else
                               sources[max(0, vertical_header-4):vertical_header] if vertical_header is not None else [])
+            if anchors and any(s.spans for s in header_sources):
+                # Wrapped labels live left of data columns, even when their
+                # repeated words superficially resemble a textual header.
+                data_left = anchors[1][0] - anchors[2]*.45
+                header_sources = [s for s in header_sources if s.spans and max(p[3] for p in s.spans) >= data_left]
+                if year_index is not None:
+                    header_lines = lines[:year_index+1] + [s.text for s in header_sources]
+                    headers = self._headers(header_lines, year_index, len(header_lines), maximum_values)
             headers = geometric_headers(header_sources, anchors, headers)
             audit_statuses = (geometric_audit_statuses(header_sources, sources[year_index], maximum_values)
                               if year_index is not None else ["unknown"] * maximum_values)
@@ -97,7 +105,14 @@ class BorderlessTableExtractor:
                             if cells[0] and cells[0].endswith(row.label):
                                 cells[0] = cells[0][:-len(row.label)] + literal_label
                                 break
-            body_sources = sources[group[0].line_index:group[-1].line_index+1]
+            body_end = group[-1].line_index + 1
+            if raw_rows and not raw_rows[-1][0]:
+                for index in range(body_end, min(len(sources), body_end + 2)):
+                    values = [m.group() for m in _VALUE.finditer(sources[index].text)]
+                    if values == raw_rows[-1][1:]:
+                        body_end = index + 1
+                        break
+            body_sources = sources[group[0].line_index:body_end]
             bbox = None
             if body_sources and all(s.spans and s.top is not None and s.bottom is not None for s in body_sources):
                 bbox = (min(span[2] for s in body_sources for span in s.spans),
@@ -152,7 +167,7 @@ class BorderlessTableExtractor:
                     raw_header_lines=[s.text for s in raw_header_sources],
                     unit_header=next((s.text for s in raw_header_sources if re.search(
                         r'(?i)\b(?:RMB|CNY|USD|HKD|EUR|GBP)\b.*\b(?:thousands?|millions?|billions?)\b', s.text)), None),
-                    raw_body_lines=[s.text for s in sources[group[0].line_index:group[-1].line_index+1]],
+                    raw_body_lines=[s.text for s in body_sources],
                     confidence=0.68 if years or vertical_header is not None else 0.55,
                     default_unit=unit,
                     default_raw_unit=raw_unit,
@@ -391,6 +406,8 @@ class BorderlessTableExtractor:
                 # empty label and geometry-bound cells, without inventing a
                 # metric or adding them to analytical observations.
                 for index in range(previous_index+1,row.line_index):
+                    if header_index is not None and index <= header_index:
+                        continue
                     line = sources[index]
                     matches = list(_VALUE.finditer(line.text))
                     if (len(matches)==width and not line.text[:matches[0].start()].strip()
@@ -436,6 +453,26 @@ class BorderlessTableExtractor:
             ambiguous = bool(alignments is not None and row.line_index in alignments and alignments[row.line_index] is None)
             output.append(([label, *values], row_periods, ambiguous))
             previous_index = row.line_index
+        if preserve_period_headers and sources and anchors:
+            # The final unlabelled subtotal has no following named row to
+            # trigger the between-row retention above. Require close source
+            # geometry and exact column alignment before extending the grid.
+            for index in range(previous_index+1,min(len(sources),previous_index+3)):
+                line = sources[index]
+                matches = list(_VALUE.finditer(line.text))
+                if (len(matches)!=width or line.text[:matches[0].start()].strip()
+                        or line.text[matches[-1].end():].strip()
+                        or any(line.text[a.end():b.start()].strip() for a,b in zip(matches,matches[1:]))):
+                    break
+                prior = sources[previous_index]
+                if line.top is None or prior.bottom is None or not 0 <= line.top-prior.bottom <= 20:
+                    break
+                boxes = [line.bounds(m.start(),m.end()) for m in matches]
+                cells = align_sparse_values([m[0] for m in matches],boxes,anchors,width) if all(boxes) else None
+                if cells is None:
+                    break
+                output.append((['',*cells],[None]*(width+1),False))
+                previous_index = index
         return output
 
     @staticmethod

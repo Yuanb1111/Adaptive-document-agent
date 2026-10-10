@@ -52,7 +52,7 @@ def test_intro_schema_failure_gets_one_source_bound_repair_and_keeps_diagnostic(
     assert content == {pid for page in result.presentation_plan.company.summary_pages for item in page.items for pid in item.part_ids}
 
 
-def test_repeated_intro_schema_failure_remains_incomplete_with_both_attempts():
+def test_repeated_intro_schema_failure_recovers_reading_and_keeps_both_attempts():
     class InvalidPlan(SummaryClient):
         def generate_structured(self, messages, response_model, **kwargs):
             if response_model is SummaryEditorialDraft:
@@ -60,10 +60,11 @@ def test_repeated_intro_schema_failure_remains_incomplete_with_both_attempts():
             return super().generate_structured(messages, response_model, **kwargs)
 
     result = distinct_source(1)
-    with pytest.raises(LLMStructuredOutputError):
-        generate(result, InvalidPlan())
+    generate(result, InvalidPlan())
     review = json.loads(next(w.message for w in result.validation_warnings if w.code == 'company_introduction_summary_audit'))
-    assert review['status'] == 'incomplete' and len(review['plan_audits']) == 2
+    assert review['status'] == 'complete' and len(review['plan_audits']) == 3
+    assert all('raw_response' in record for record in review['plan_audits'][:2])
+    assert review['plan_audits'][-1]['reading_layout']
 
 
 def test_combined_stock_date_headers_do_not_invent_an_annual_date_for_an_interim_year():

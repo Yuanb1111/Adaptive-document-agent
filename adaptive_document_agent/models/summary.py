@@ -40,6 +40,11 @@ class SummaryPart(BaseModel):
 class SummarySlideItem(SummaryFact):
     text: str = Field(min_length=1, max_length=180)
     part_ids: list[str] = Field(min_length=1)
+    continuation_group: str = ''
+    continuation_index: int = Field(default=0, ge=0)
+    continuation_count: int = Field(default=1, ge=1)
+    continuation_digest: str = ''
+    reading_fact_copy: bool = False
 
 
 class SummarySlidePage(BaseModel):

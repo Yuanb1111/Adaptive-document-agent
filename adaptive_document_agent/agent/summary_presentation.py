@@ -11,7 +11,7 @@ from adaptive_document_agent.services.source_quotes import normalize_quote
 from .prompting import untrusted_document_message
 from .summary_reader import read_summary
 from adaptive_document_agent.utils.ids import stable_id
-from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
+from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError, LLMResponseError
 
 
 def planning_batches(parts, *, character_budget=24000, content_budget=12):
@@ -42,8 +42,14 @@ def generate_summary_presentation(gateway, result, pages, response_model, *, sco
         for index, parts in enumerate(planning_batches(review.parts)):
             probe = review.model_copy(update={'parts': parts, 'decisions': [], 'plan_audits': []})
             try:
-                draft = _generate_summary_batch(gateway, result, pages, response_model,
-                    scope_ranges=scope_ranges, cancelled=cancelled, review_override=probe)
+                try:
+                    draft = _generate_summary_batch(gateway, result, pages, response_model,
+                        scope_ranges=scope_ranges, cancelled=cancelled, review_override=probe)
+                except (ValueError, LLMResponseError) as exc:
+                    from .summary_reading_layout import reading_presentation
+                    draft = reading_presentation(probe, result, response_model)
+                    probe.plan_audits.append({'reading_layout': True, 'editorial_error': str(exc),
+                                              'retained_part_ids': [p.id for p in parts if p.role=='content']})
             finally:
                 review.plan_audits.extend(dict(record, batch=index + 1) for record in probe.plan_audits)
             company.summary_pages.extend(p.model_copy(update={'id': stable_id('summary_page', index, p.id)})
@@ -91,7 +97,8 @@ def _generate_summary_batch(gateway, result, pages, response_model, *, scope_ran
             'for low relevance, duplication or later analytical coverage. Do not force a fixed two-page template, a '
             'document-type checklist, or one slide per part. Merge related sections and continuations. '
             'Use at most eight pages FOR THIS BATCH; the whole introduction has no eight-page quota. '
-            'Use 1-4 useful items each, each item at most 180 characters. Multiple-item pages need at least 180 '
+            'Use 1-4 useful items each. Aim for 180 characters per item; longer complete copy will be '
+            'paginated in Python without dropping words. Multiple-item pages need at least 180 '
             'Latin-equivalent display characters of substantive body text (wide CJK characters count as two); '
             'merge sparse material or use one concise item, never pad copy. '
             'Every content part must contribute a supported item; missing facts are a coverage failure, '

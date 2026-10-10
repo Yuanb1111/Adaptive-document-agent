@@ -107,7 +107,7 @@ def copy_tokens(text):
     text = re.sub(r'(?:下降|下跌|减少|降低)\s*(\d[\d,]*(?:\.\d+)?[%％])', r'-\1', text)
     text = re.sub(r'([+\-−])\s+(?=\d)', lambda m: m[1].replace('−','-'), text)
     text = text.replace('％','%').replace('−','-')
-    number = r'(?<![\d.])(?:\([-+]?\d[\d,]*(?:\.\d+)?%?\)|[-+]?\d[\d,]*(?:\.\d+)?%?)'
+    number = r'(?<![\d.])(?:\([-+]?\d+(?:,\d{3})*(?:\.\d+)?%?\)|[-+]?\d+(?:,\d{3})*(?:\.\d+)?%?)'
     numbers = Counter(n.lstrip('+') for n in re.findall(number, text))
     aliases = {'人民币':'rmb','CNY':'rmb','US$':'usd','HK$':'hkd','美元':'usd','港元':'hkd','欧元':'eur',
                '百万元':'million','百万':'million','千元':'thousand','千':'thousand',

@@ -126,6 +126,7 @@ def presentation_errors(review: SummaryReview, slide_pages, result: PipelineResu
     errors = reading_errors(review, result) if validate_reading else []
     parts = {p.id: p for p in review.parts}
     used, copy_seen, page_ids = set(), set(), set()
+    continuations = {}
     for page in slide_pages:
         if page.id in page_ids:
             errors.append('Summary slide IDs repeat')
@@ -157,15 +158,44 @@ def presentation_errors(review: SummaryReview, slide_pages, result: PipelineResu
                 if not any(f.source_quote == item.source_quote for f in part.facts):
                     errors.append('Summary slide item claims a part without its evidence')
             used.update(item.part_ids)
-            key = normalize_quote(item.text)
-            if key in copy_seen:
+            key = normalize_quote(item.text) if not item.continuation_group else (item.continuation_group,item.continuation_index)
+            if key in copy_seen and not item.reading_fact_copy:
                 errors.append('Summary presentation repeats a finding')
             copy_seen.add(key)
-            if known:
-                errors.extend(fact_errors(item, result, known[0].source_text, known[0].source_page))
+            if known and item.continuation_group:
+                continuations.setdefault(item.continuation_group,[]).append(item)
+            elif known:
+                if item.reading_fact_copy and not any(f.text==item.text and f.source_quote==item.source_quote
+                        for f in known[0].facts):
+                    errors.append('Reading layout changed a model-authored fact')
+                errors.extend(fact_errors(item, result, known[0].source_text, known[0].source_page,
+                                         literal_reading=item.reading_fact_copy and item.text==item.source_quote))
         supporting = ' '.join(item.source_quote for item in page.items)
         if PresentationPlanValidator._numbers(page.title) - PresentationPlanValidator._numbers(supporting):
             errors.append('Summary slide title contains unsupported numbers')
+    for group, items in continuations.items():
+        ordered = sorted(items,key=lambda item:item.continuation_index)
+        first = ordered[0]
+        from hashlib import sha256
+        if ([item.continuation_index for item in ordered] != list(range(first.continuation_count))
+                or sha256(''.join(item.text for item in ordered).encode('utf-8')).hexdigest() != first.continuation_digest
+                or any((item.continuation_count,item.continuation_digest) !=
+                       (first.continuation_count,first.continuation_digest) for item in ordered)
+                or any((item.part_ids,item.label,item.source_quote,item.source_pages) !=
+                       (first.part_ids,first.label,first.source_quote,first.source_pages) for item in ordered)):
+            errors.append('Invalid Summary continuation provenance')
+            continue
+        from adaptive_document_agent.models.summary import SummaryFact
+        fact = SummaryFact(label=first.label,text=''.join(item.text for item in ordered),
+                           source_quote=first.source_quote,source_pages=first.source_pages)
+        part = parts[first.part_ids[0]]
+        if first.reading_fact_copy and not any(f.text==fact.text and f.source_quote==fact.source_quote
+                                                for f in part.facts):
+            errors.append('Reading layout changed a model-authored fact')
+        if fact.text == fact.source_quote:
+            errors.extend(fact_errors(fact,result,part.source_text,part.source_page,literal_reading=True))
+        else:
+            errors.extend(fact_errors(fact,result,part.source_text,part.source_page))
     decisions = {d.part_id: d for d in review.decisions}
     if len(decisions) != len(review.decisions) or set(decisions) != set(parts):
         errors.append('Decide every read Summary part exactly once')

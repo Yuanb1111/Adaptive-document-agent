@@ -174,6 +174,8 @@ def render_requested_tables(presentation, result):
                 slide.notes_slide.notes_text_frame.text = json.dumps({'CUSTOM_SOURCE_TABLES_V1': [{
                     **provenance, 'source_table': table.model_dump(mode='json'), 'source_page_text': page.text}]},
                     ensure_ascii=False, indent=2)
+        from .requested_table_notes import render_table_notes
+        render_table_notes(presentation, record)
     pack_requested_tables(presentation)
     verify_requested_tables(presentation, result)
 
@@ -232,6 +234,8 @@ def pack_requested_tables(presentation):
 def verify_requested_tables(presentation, result):
     """Compare actual editable cells to every original coordinate, including duplicates."""
     records = requested_table_catalog(result)
+    from .requested_table_notes import verify_table_notes
+    verify_table_notes(presentation, records)
     expected = {record['table'].table_id: _grid(record['table']) for record in records}
     actual = defaultdict(lambda: defaultdict(dict))
     slide_numbers = defaultdict(set)

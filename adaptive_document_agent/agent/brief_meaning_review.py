@@ -44,16 +44,29 @@ _RELATION = re.compile(r'(?i)\b(?:increas\w*|decreas\w*|declin\w*|grew|grown|gro
     r'增长|下降|上升|升至|降至|增至|减至|收窄|扩大|回落|同比|环比|改善|恶化|高于|低于')
 
 
-def comparison_errors(comparison, item):
-    from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
+def comparison_errors(comparison, item, *, pages=None):
     errors = []
     if comparison.claim not in item.text:
         errors.append('Comparison does not bind an exact audience claim')
+    from adaptive_document_agent.services.source_quotes import continuous_quote_passages
+    passages = continuous_quote_passages(item.evidence, pages) if pages is not None else item.evidence
     for value, context in [(comparison.start_value, comparison.start_context),
                            (comparison.end_value, comparison.end_context)]:
-        if not any(normalize_quote(context) in normalize_quote(q.text) for q in item.evidence):
+        if not any(normalize_quote(context) in normalize_quote(q.text) for q in passages):
             errors.append('Comparison context is outside the item quotations')
-        if not PresentationPlanValidator._numbers(value) <= PresentationPlanValidator._numbers(context):
+        from adaptive_document_agent.extraction.numeric_parser import parse_number
+        from adaptive_document_agent.extraction.borderless_table_extractor import _VALUE
+        endpoint = parse_number(value)
+        literal_values = [parse_number(m.group()) for m in _VALUE.finditer(context)]
+        # Accounting parentheses are literal signed endpoints, not positive
+        # digits. This never changes source text or calculates a new coefficient.
+        evidenced = endpoint is not None and any(v is not None and
+            v.value/v.scale == endpoint.value/endpoint.scale for v in literal_values)
+        from adaptive_document_agent.services.executive_brief import _quantities
+        if endpoint is not None:
+            evidenced = evidenced or any(Decimal(coefficient)==Decimal(str(endpoint.value/endpoint.scale))
+                                        for _,coefficient,_ in _quantities(context))
+        if not evidenced:
             errors.append('Comparison endpoint is not in its literal source context')
     try:
         def parse(value):
@@ -116,8 +129,12 @@ def meaning_validator(gateway, *, cancelled=None, result=None):
              'direction, missing attribution or caveats, and annual-versus-interim flow comparisons. '
              'For EVERY asserted numeric change, provide a comparison with the exact claim substring, '
              'source numeric coefficients (no scale conversion), claimed direction and literal source '
-             'contexts containing its values AND period/unit headers. Report durations in months only '
-             'when the source defines them; use null for point-in-time stock measures. State whether '
+             'contexts containing its values and row labels; cite period/unit headers from the supplied '
+             'evidence without reconstructing them inside a context. '
+             'Each context must be an EXACT continuous substring of the supplied literal quotations, '
+             'including source row labels and headers. Do not join separated lines with invented '
+             'semicolons or reformat a table. Adjacent citation chunks may be read together. '
+             'Report durations in months only when the source defines them; use null for point-in-time stock measures. State whether '
              'the claim compares absolute magnitudes (e.g. loss narrowing). Python calculates direction. '
              'Same numbers appearing somewhere in a table do not support a claimed association. '
              'A decline from 2% to 3% is false; annual and six-month losses do not establish a trend. '
@@ -136,7 +153,8 @@ def meaning_validator(gateway, *, cancelled=None, result=None):
             if verdict.numeric_comparison and not verdict.comparisons:
                 failed.append('Every asserted numeric change needs source-bound comparison endpoints')
             for comparison in verdict.comparisons:
-                failed.extend(comparison_errors(comparison, item))
+                failed.extend(comparison_errors(comparison, item, pages=(
+                    {p.page_number:p.text for p in result.document.pages} if result is not None else None)))
             checked[item.model_dump_json()] = failed
             if failed:
                 errors[verdict.index] = failed

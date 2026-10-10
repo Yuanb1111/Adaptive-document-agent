@@ -20,10 +20,11 @@ from pptx import Presentation
 from adaptive_document_agent.utils.pipeline_version import PIPELINE_VERSION
 
 from .presentation_rendering import RenderingError, check_render_input, configured_renderer
+from .presentation_render_batches import MAX_SLIDES, render_pages
 from .qa_reporter import CriticalQAError
 from .presentation_preflight_report import PreflightReport
 
-POLICY_VERSION = "visual-qa-v2"
+POLICY_VERSION = "visual-qa-v3"
 NS = {"p": "http://schemas.openxmlformats.org/presentationml/2006/main",
       "a": "http://schemas.openxmlformats.org/drawingml/2006/main"}
 
@@ -292,15 +293,15 @@ def verify_presentation(payload: bytes, *, renderer=None, max_repairs: int = 2, 
             return hit
         original_facts = package_digest(payload, exclude_positions=True)
         report.slide_count = len(Presentation(io.BytesIO(payload)).slides)
-        if not 1 <= report.slide_count <= 150:
-            raise RenderingError("Presentation exceeds the 150-slide rendering limit.")
+        if not 1 <= report.slide_count <= MAX_SLIDES:
+            raise RenderingError(f"Presentation exceeds the {MAX_SLIDES}-slide rendering limit.")
         candidate = payload
         with tempfile.TemporaryDirectory(prefix="ada-ppt-qa-") as temporary:
             for attempt in range(max_repairs+1):
                 directory = Path(temporary) / str(attempt)
                 directory.mkdir()
                 report.attempts += 1
-                pages = renderer.render(candidate, directory)
+                pages = render_pages(renderer, candidate, directory)
                 report.issues = inspect_pages(candidate, pages)
                 report.history.append(report.issues.copy())
                 report.facts_preserved = package_digest(candidate, exclude_positions=True) == original_facts

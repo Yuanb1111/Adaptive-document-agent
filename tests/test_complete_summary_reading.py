@@ -174,14 +174,13 @@ def test_full_scope_includes_more_than_twenty_header_pages_and_long_page_tail():
     assert pages == list(range(1, 26))
     assert ''.join(b.text for b in blocks if b.page == 25) == result.document.pages[-1].text
     client = SummaryClient(omit=True)
-    with pytest.raises(ValueError, match='Every substantive Summary part'):
-        generate(result, client)
+    generate(result, client)
     from adaptive_document_agent.models.summary import SummaryReview
     review = SummaryReview.model_validate_json(next(w.message for w in result.validation_warnings
         if w.code == 'company_introduction_summary_audit'))
     assert not reading_errors(review, result)
     assert any(p.source_page == 25 and p.facts for p in review.parts)
-    assert review.status == 'incomplete'
+    assert review.status == 'complete'
 
 
 @pytest.mark.parametrize('mutation,fragment', [
@@ -303,7 +302,7 @@ def test_failed_introduction_does_not_render_an_evidence_limitation_placeholder(
 
 
 @pytest.mark.parametrize('mutation', ['sparse', 'missing_decision', 'false_include', 'unknown_part', 'new_quote'])
-def test_editor_rejects_sparse_pages_or_incomplete_decisions(mutation):
+def test_editor_rejects_bad_draft_and_recovers_complete_validated_reading(mutation):
     def edit(draft, payload, messages):
         if mutation == 'sparse':
             for item in draft.summary_pages[0].items:
@@ -318,10 +317,14 @@ def test_editor_rejects_sparse_pages_or_incomplete_decisions(mutation):
             draft.summary_pages[0].items[0].source_quote = 'An invented source quote for this item.'
     result = distinct_source(1)
     client = SummaryClient(edit_plan=edit)
-    with pytest.raises(ValueError, match='Summary presentation failed'):
-        generate(result, client)
+    generate(result, client)
     audit = json.loads(next(w.message for w in result.validation_warnings if w.code == 'company_introduction_summary_audit'))
-    assert len(audit['plan_audits']) == 2 and audit['status'] == 'incomplete'
+    assert len(audit['plan_audits']) == 3 and audit['status'] == 'complete'
+    assert audit['plan_audits'][-1]['reading_layout'] is True
+    company = result.presentation_plan.company
+    assert {p.id for p in company.summary_review.parts if p.role=='content'} == {
+        pid for page in company.summary_pages for item in page.items for pid in item.part_ids}
+    assert all(item.reading_fact_copy for page in company.summary_pages for item in page.items)
 
 
 def test_sparse_editor_repair_cannot_omit_substantive_parts():
@@ -334,8 +337,10 @@ def test_sparse_editor_repair_cannot_omit_substantive_parts():
             for decision in draft.summary_decisions:
                 decision.decision = 'omit'
                 decision.reason = 'Retained source facts do not merit a separate introductory slide.'
-    with pytest.raises(ValueError, match='Every substantive Summary part'):
-        generate(distinct_source(1), SummaryClient(edit_plan=edit))
+    result = generate(distinct_source(1), SummaryClient(edit_plan=edit))
+    assert result.presentation_plan.company.summary_review.status == 'complete'
+    assert all(d.decision=='include' for d in result.presentation_plan.company.summary_review.decisions
+               if d.part_id in {p.id for p in result.presentation_plan.company.summary_review.parts if p.role=='content'})
 
 
 def test_parallel_batches_overlap_and_keep_source_order(monkeypatch):
@@ -469,10 +474,6 @@ def complete_deck(result):
 @pytest.mark.parametrize('omit', [False, True])
 def test_full_export_agenda_matches_dynamic_introduction_and_all_omissions(omit):
     from adaptive_document_agent.services.pptx_export import build_presentation
-    if omit:
-        with pytest.raises(ValueError, match='Every substantive Summary part'):
-            generate(client=SummaryClient(omit=True))
-        return
     result = complete_deck(generate(client=SummaryClient(omit=omit)))
     payload = build_presentation(result)
     deck = Presentation(BytesIO(payload))
@@ -483,7 +484,8 @@ def test_full_export_agenda_matches_dynamic_introduction_and_all_omissions(omit)
         assert any(page.items[0].text in ' '.join(s.text for s in slide.shapes if s.has_text_frame) for slide in deck.slides)
     assert 'Company overview' not in text
     if omit:
-        assert 'Complete Summary reading and omission decisions' in contents.notes_slide.notes_text_frame.text
+        from adaptive_document_agent.services.summary_export import verify_summary_export
+        assert verify_summary_export(deck,result)
 
 
 def test_layout_repair_does_not_replace_complete_agent_reading_with_heuristic_fields():

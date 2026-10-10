@@ -60,15 +60,15 @@ def test_single_row_closing_continuation_is_folded_with_its_table_and_source_rec
                for s in target.shapes)
 
 
-def test_short_page_keeps_complete_notes_when_no_visible_margin_fits():
+def test_short_page_stays_visible_when_no_margin_fits():
     deck = blank_deck()
     page = render_complete_summary(deck, 'Evidence', [BriefItem('', 'Reported values.', [3])])[0]
     page.shapes.add_table(8, 2, Inches(1), Inches(2), Inches(6), Inches(4.6))
     render_complete_summary(deck, 'Limit', [BriefItem('', 'The source omits the denominator.', [7])], notes='Exact source')
-    assert fold_sparse_text_pages(deck) == ['Limit']
-    assert len(deck.slides) == 1
-    assert 'The source omits the denominator.' in page.notes_slide.notes_text_frame.text
-    assert 'Exact source' in page.notes_slide.notes_text_frame.text
+    assert fold_sparse_text_pages(deck) == []
+    assert len(deck.slides) == 2
+    assert 'The source omits the denominator.' in ' '.join(s.text for s in deck.slides[1].shapes if s.has_text_frame)
+    assert 'Exact source' in deck.slides[1].notes_slide.notes_text_frame.text
 
 
 def test_merge_and_rebase_preserve_structured_notes_after_save():

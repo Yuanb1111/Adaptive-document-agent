@@ -74,6 +74,8 @@ class TableExtractor:
                     source_tables.extend(recover_source_grids(page, page_number, source_tables,
                                                              words=words if found_tables else None))
                     self.raw_tables_by_page[page_number] = retain_source_tables(source_tables)
+                    from .table_footnotes import retain_table_footnotes
+                    retain_table_footnotes(page, self.raw_tables_by_page[page_number])
                     if borderless_tables:
                         from .table_candidate_selector import TableCandidateSelector
                         page_tables = TableCandidateSelector.merge_or_replace_tables(page_tables, borderless_tables)

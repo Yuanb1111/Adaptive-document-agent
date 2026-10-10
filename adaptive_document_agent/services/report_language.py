@@ -15,7 +15,8 @@ def text_frames(presentation):
         for shape in slide.shapes:
             if shape.has_text_frame:
                 if (shape.name in {'customization:table_label', 'customization:source_section', 'customization:source_footer'}
-                        or shape.text.lstrip().lower().startswith('source:')):
+                        or shape.name.startswith('customization:source_footnote:')
+                        or shape.text.lstrip().lower().startswith(('source:','来源：'))):
                     continue
                 yield shape.text_frame, shape.width.inches, shape.height.inches
             elif shape.has_table and not shape.name.startswith('customization:source_table:'):
@@ -27,10 +28,9 @@ def text_frames(presentation):
 def translatable(text):
     # Periods, source values and identifiers remain literal. A reader-facing
     # sentence with numbers remains eligible, with exact numeric validation.
-    from .executive_brief import _UNIT_ONLY_LABEL
     if re.fullmatch(r'(?i)[+\-]?\s*(?:RMB|USD|HKD|EUR|GBP|CNY|US\$|HK\$)\s*[-+()\d.,]+\s*(?:[mkb]|bn|mn|thousand|million|billion)',text):
         return False
-    if (_UNIT_ONLY_LABEL.fullmatch(text) or re.fullmatch(
+    if (re.fullmatch(
             r'\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4}\*?', text, re.I)):
         return False
     return bool(re.search(r'[A-Za-z\u3400-\u9fff]', text) and not re.fullmatch(
@@ -99,6 +99,10 @@ def translation_errors(source, translated):
         return ['Localized copy changed a number, period or sign']
     if original[3] != target[3] or original[5] != target[5]:
         return ['Localized copy changed or invented a literal currency or scale']
+    if (re.search(r'(?i)\b(?:indebtedness|total\s+debt)\b',source)
+            and not re.search(r'(?i)\bliabilit(?:y|ies)\b',source)
+            and '总负债' in translated):
+        return ['Localized copy conflates debt/indebtedness with total liabilities']
     return []
 
 
@@ -152,3 +156,27 @@ def apply_report_language(presentation, result):
             if translation_errors(source, translated):
                 raise ValueError('Localized chart label changed source numbers or units')
             element.text = translated
+    localize_source_wrappers(presentation, result)
+
+
+def localize_source_wrappers(presentation, result):
+    """Translate standard UI provenance labels; literal source annotations stay intact."""
+    requirements = result.profile.report_requirements
+    if not requirements or not any(r.kind=='output_language' and r.resolution=='resolved'
+        and r.language_scope in {'body','all'} and re.search(r'(?i)中文|chinese|^zh(?:-|$)',r.language)
+        for r in requirements.items):
+        return
+    for slide in presentation.slides:
+        for shape in slide.shapes:
+            if not shape.has_text_frame or shape.name.startswith('customization:source_footnote:'):
+                continue
+            for paragraph in shape.text_frame.paragraphs:
+                for run in paragraph.runs:
+                    run.text = re.sub(r'Source: Document disclosures \(p\. ([\d, -]+)\)',
+                        lambda m:'来源：文件披露（PDF 第 '+m[1]+' 页）',run.text)
+                    run.text = run.text.replace('Source: Document disclosures (page references not available)',
+                                               '来源：文件披露（无可用页码）')
+                    if shape.name in {'customization:table_label','customization:source_footer'}:
+                        run.text = re.sub(r'Source table (\d+) \(PDF page (\d+)\)',
+                            lambda m:'原始表格 '+m[1]+'（PDF 第 '+m[2]+' 页）',run.text)
+                        run.text = run.text.replace('Original header text and context in notes.', '原始表头与上下文见备注。')

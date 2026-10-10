@@ -83,6 +83,7 @@ def fold_sparse_text_pages(presentation, result=None):
         target = ordered[0]
         width = presentation.slide_width.inches - 1.1
         height = len(wrap_copy(text, width - .1, 11)) * 14 / 72 + .12
+        placed = False
         for candidate in ordered:
             occupied = [s for s in candidate.shapes if s.top.inches >= 1
                         and s.top.inches < presentation.slide_height.inches - 1.02
@@ -99,7 +100,12 @@ def fold_sparse_text_pages(presentation, result=None):
                     copied.top = Inches(top + height + .12)
                     top += table.height.inches + .12
                 target = candidate
+                placed = True
                 break
+        if not placed:
+            # Notes do not replace audience-visible content. Preserve the
+            # original page if its complete copy cannot fit in a target margin.
+            continue
         notes = target.notes_slide.notes_text_frame
         merged = {'text': text, 'original_notes': slide.notes_slide.notes_text_frame.text}
         if tables:
@@ -126,7 +132,8 @@ def fold_sparse_text_pages(presentation, result=None):
     # or gaps in their numbering. Other authored section labels stay unchanged.
     labels = lambda s: {_title(s), getattr(s, '_ada_section_label', '')}
     remaining_titles = {label.casefold() for s in presentation.slides for label in labels(s)}
-    removed_titles = {label.casefold() for s in sparse for label in labels(s)} - remaining_titles
+    retained_parts = {s.part for s in presentation.slides}
+    removed_titles = {label.casefold() for s in sparse if s.part not in retained_parts for label in labels(s)} - remaining_titles
     presentation.part.rename_slide_parts([sid.rId for sid in presentation.slides._sldIdLst])
     for slide in list(presentation.slides):
         entries = [s.text for s in slide.shapes if s.name.startswith('contents:entry:')]

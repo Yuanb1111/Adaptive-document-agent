@@ -151,6 +151,7 @@ def build_presentation(result: PipelineResult, template_path: str | Path | None 
     report.completed = True
     if report.errors:
         raise PreflightQAError(report)
+    verify_summary_export(presentation, result)
     verify_requested_tables(presentation, result)
     from .slide_compositor import validate_composed_geometry
     validate_composed_geometry(presentation)
@@ -174,6 +175,8 @@ def presentation_for_copy(result: PipelineResult):
     from .requested_tables import requested_table_catalog
     if requested_table_catalog(draft):
         _base_slide(presentation, 'Data Index: Source tables', '')
+        if any(record['table'].raw_footnotes for record in requested_table_catalog(draft)):
+            _base_slide(presentation, 'Data Index: Source table notes', '')
     return presentation
 
 

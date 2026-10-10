@@ -32,13 +32,13 @@ def citation_errors(presentation, result):
     required = {n for record in result.presentation_export_trace if record.get('source_pages')
                 for n in record.get('slide_numbers',[])}
     required.update(n for n,s in enumerate(presentation.slides,1)
-                    if any(sh.name.startswith('customization:source_table:') for sh in s.shapes))
+                    if any(sh.name.startswith(('customization:source_table:','customization:source_footnote:')) for sh in s.shapes))
     for n in sorted(required):
         if not 1 <= n <= len(presentation.slides):
             errors.append(f'Source mapping refers to absent slide {n}')
             continue
         footers = [sh.text for sh in presentation.slides[n-1].shapes if sh.has_text_frame
-                   and sh.text.strip().startswith('Source: Document disclosures (p. ')]
+                   and sh.text.strip().startswith(('Source: Document disclosures (p. ', '来源：文件披露（PDF 第 '))]
         if not footers:
             errors.append(f'Slide {n}: source page footer missing')
         else:

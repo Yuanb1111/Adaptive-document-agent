@@ -539,6 +539,15 @@ restores rows mistaken for header context. Oversized briefings use bounded model
 selection before normal claim validation. See [v107 regression and acceptance
 notes](docs/COMPLETE_SUMMARY_SOURCE_GRIDS_V107.md).
 
+The v108 follow-up preserves every validated introductory reading fact when
+editorial rewriting fails, paginates complete claims without losing words, and
+checks their bindings again after export cleanup. Localization includes units
+and coverage-limit copy and distinguishes debt from total liabilities. Source
+appendices recover aligned N/A rows and final subtotals, exclude wrapped row
+labels from data headers, and display verified literal footnotes. Long decks
+use bounded local rendering batches. See [v108 regression scope and remaining
+live acceptance](docs/INTRODUCTION_TABLE_NOTES_REGRESSION_V108.md).
+
 If a standard cover subtitle exceeds the template's readable capacity, export
 uses a fitting document-type label or "Document analysis" and retains the full
 original subtitle and purpose in speaker notes. This adds no model call and

@@ -82,6 +82,12 @@ class TableQuoteContext:
                         else m[0], text)
         text = _CHINESE_DATE.sub(lambda m: " " if 1 <= int(m[2]) <= 12 and (
             _MONTHS[int(m[2]) - 1].casefold(), str(int(m[3])), m[1]) in self.dates else m[0], text)
+        # Narrative quotes may bind a shared month/day followed by several
+        # years (June 30, 2023 and 2024). Only their evidenced pair is exempt.
+        text = re.sub(r'(?<![\d年])(\d{1,2})月\s*(\d{1,2})日',
+            lambda m: ' ' if 1 <= int(m[1]) <= 12 and any(
+                month == _MONTHS[int(m[1])-1].casefold() and day == str(int(m[2]))
+                for month,day,_ in self.dates) else m[0], text)
         # Only an exact, cited negative table cell authorizes accounting signs.
         # Parenthesized footnote indexes and positive cells retain their meaning.
         return re.sub(r'\(\s*(\d[\d,]*(?:\.\d+)?)\s*\)',
@@ -101,8 +107,10 @@ class TableQuoteContext:
                 relevant = [bases for (c, v, u), bases in self.bases.items()
                             if value == v and (not currency or c == currency) and (not unit or u == unit)]
                 supported = set().union(*relevant) if relevant else set()
-                if relevant and (len(supported) != 1 or not _claim_keeps_basis(
-                        text[match.end():], next(iter(supported)))):
+                prefix_unit = (supported <= {'unit','units'} and
+                               re.search(r'每(?:台|单位)\s*$',text[max(0,match.start()-6):match.start()]))
+                if relevant and (len(supported) != 1 or not (prefix_unit or _claim_keeps_basis(
+                        text[match.end():], next(iter(supported))))):
                     errors.append("amount changes or omits its source unit denominator")
         return errors
 
@@ -265,6 +273,11 @@ def quoted_table_context(item, result, *, excerpts=None):
         quoted = normalize_quote(quote.text)
         if not page or not quoted or quoted not in normalize_quote(source):
             continue
+        # Literal narrative dates do not require a parsed table. Preserve
+        # exact shared-date/year bindings; never borrow dates from the page.
+        context.dates.update((m[1].casefold(),str(int(m[2])),m[3]) for m in _DATE.finditer(quote.text))
+        for m in re.finditer(r'\b(' + _MONTH + r')\s+(\d{1,2}),?\s+((?:19|20)\d{2}(?:\s*(?:,|and|&)\s*(?:19|20)\d{2})*)',quote.text,re.I):
+            context.dates.update((m[1].casefold(),str(int(m[2])),year) for year in re.findall(r'(?:19|20)\d{2}',m[3]))
         # Resolve each quoted row independently. A complete product table and
         # a second table's shared total must not invalidate unrelated rows.
         # Competing same-label rows still require identical complete bindings.
@@ -292,6 +305,20 @@ def quoted_table_context(item, result, *, excerpts=None):
                 if row.alignment_status == "resolved" and normalize_quote(" ".join(cells)) in quoted:
                     matched[key].append((table, row))
         complete = []
+        # An exact distinctive unit declaration inside the quotation scopes its
+        # grid, even if another grid elsewhere repeats the same row label.
+        # Row-only quotes and competing identical headers remain ambiguous.
+        declarations = {t.table_id: {normalize_quote(locate(raw, source)) for raw in t.raw_header_lines
+            if raw.strip().startswith('(') and raw.strip().endswith(')')
+            and infer_unit_defaults(locate(raw, source)).currency} for t in tables}
+        explicitly_quoted = {identifier for identifier, values in declarations.items()
+                             if any(value in quoted for value in values)}
+        if explicitly_quoted:
+            excluded = {identifier for identifier, values in declarations.items()
+                        if values and identifier not in explicitly_quoted}
+            for key in plausible:
+                plausible[key].difference_update(excluded)
+                matched[key] = [(table,row) for table,row in matched[key] if table.table_id not in excluded]
         for key, rows in matched.items():
             if plausible[key] != {table.table_id for table, _ in rows}:
                 continue

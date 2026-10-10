@@ -33,6 +33,7 @@ class ExtractedTable(BaseModel):
     raw_header_cells: list[list[str | None]] = Field(default_factory=list)
     raw_header_lines: list[str] = Field(default_factory=list)
     raw_body_lines: list[str] = Field(default_factory=list)
+    raw_footnotes: list[str] = Field(default_factory=list)
     bbox: tuple[float, float, float, float] | None = None
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     default_unit: str | None = None
