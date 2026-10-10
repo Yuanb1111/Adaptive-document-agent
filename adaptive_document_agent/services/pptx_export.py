@@ -3263,6 +3263,8 @@ def _add_thank_you_slide(presentation: Any) -> None:
 
     slide = presentation.slides.add_slide(thank_you_layout)
     tb = slide.shapes.add_textbox(Inches(0.87), Inches(2.70), Inches(6.0), Inches(1.0))
+    from .presentation_roles import CLOSING_TITLE
+    tb.name = CLOSING_TITLE
     p = tb.text_frame.paragraphs[0]
     p.text = "THANK YOU"
     p.font.name = "Arial"
@@ -3277,9 +3279,8 @@ def _number_slides(presentation: Any) -> None:
         if index == 1:
             continue
         if index == total_count:
-            last_text = " ".join(s.text for s in slide.shapes if s.has_text_frame).casefold()
-            last_layout = slide.slide_layout.name if hasattr(slide, "slide_layout") else ""
-            if "thank you" in last_text or "thank" in last_layout.casefold():
+            from .presentation_roles import is_closing_slide
+            if is_closing_slide(slide):
                 continue
         _text(slide, str(index), 11.60, 6.53, 0.60, 0.23, size=9, color=FOURIER_MUTED, align="right")
 

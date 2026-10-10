@@ -58,6 +58,21 @@ def check_requirements(result, presentation=None, *, export_verified=False):
                 message=f'Requested maximum {req.max_slides} slides. ' +
                 ('Actual physical slide count is not yet available.' if count is None else f'Actual count: {count}. '
                  'Required evidence was retained rather than removed to conceal a budget conflict.')))
+        elif req.kind in {'table_presentation','source_citations'}:
+            errors, numbers = [], []
+            if presentation is not None:
+                from .customization_presentation_checks import table_presentation_errors, citation_errors
+                errors, numbers = (table_presentation_errors(presentation) if req.kind=='table_presentation'
+                                   else citation_errors(presentation,result))
+            verified = presentation is not None and export_verified
+            checks.append(RequirementCheck(requirement_id=req.id,
+                status='planned' if not verified else 'not_met' if errors else 'satisfied',
+                message=('Native editable purple/white source tables, readable pagination and repeated source headers.'
+                         if req.kind=='table_presentation' else 'Page-level source footers on source-bound slides.')
+                        + (' Export verification pending.' if not verified else ' Verified in exported PPT.' if not errors
+                           else ' '+ '; '.join(errors[:8])),
+                slide_numbers=numbers,verification='native_table_style_and_cells' if req.kind=='table_presentation'
+                else 'native_source_page_footers'))
         else:
             check = prior.get(req.id, RequirementCheck(requirement_id=req.id, status='planned',
                                                       message='Requirement supplied to report generation; fulfillment not verified.'))

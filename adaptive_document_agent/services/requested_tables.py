@@ -157,6 +157,12 @@ def render_requested_tables(presentation, result):
                         _cell_style(cell, fill=FOURIER_PURPLE if r < header_count else FOURIER_BG_CARD,
                                     color=WHITE if r < header_count else FOURIER_DARK,
                                     bold=r < header_count, size=11)
+                        from pptx.oxml.xmlchemy import OxmlElement
+                        properties = cell._tc.get_or_add_tcPr()
+                        for edge in ('lnL','lnR','lnT','lnB'):
+                            line = OxmlElement('a:'+edge);line.set('w','6350')
+                            fill = OxmlElement('a:solidFill');color = OxmlElement('a:srgbClr');color.set('val','000000')
+                            fill.append(color);line.append(fill);properties.append(line)
                         coordinates.append([r, c, source_row, columns[c], segment])
                 _text(slide, _source_footer([page.page_number]) + ' | Original header text and context in notes.',
                       .45, footer_top, 10.8, footer_height, size=9, color=FOURIER_MUTED).name = 'customization:source_footer'

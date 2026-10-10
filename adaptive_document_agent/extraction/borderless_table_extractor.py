@@ -9,7 +9,7 @@ from adaptive_document_agent.utils.ids import stable_id
 
 from .normalizer import infer_unit_defaults
 from .column_roles import explicit_percentage
-from .borderless_layout import source_lines, column_anchors, align_sparse_values, geometric_headers, is_wrapped_label, geometric_audit_statuses
+from .borderless_layout import source_lines, column_anchors, header_supported_anchors, align_sparse_values, geometric_headers, is_wrapped_label, geometric_audit_statuses
 from .period_header_geometry import geometric_periods, MONTH_DURATION, month_count
 
 _VALUE = re.compile(r"(?<![A-Za-z0-9])(?:\(?[+-]?(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)\)?[%％]?|[—–]|-(?!\S))")
@@ -66,6 +66,8 @@ class BorderlessTableExtractor:
                     periods = resolved
             headers = self._headers(lines, year_index, group[0].line_index, maximum_values)
             anchors = column_anchors([list(r.boxes) for r in group if len(r.values) == maximum_values], maximum_values)
+            if anchors is None and year_index is not None:
+                anchors = header_supported_anchors([list(r.boxes) for r in group], sources[year_index], maximum_values)
             vertical_header = next((i for i in range(group[0].line_index-1, max(-1, group[0].line_index-8), -1)
                                     if self._period_from_line(lines[i])), None) if year_index is None else None
             header_sources = (sources[year_index+1:group[0].line_index] if year_index is not None else
@@ -77,7 +79,7 @@ class BorderlessTableExtractor:
                           for r in group if len(r.values) < maximum_values}
             row_specs = self._rows_with_sections(group, lines, maximum_values, alignments=alignments, header_index=year_index, sources=sources)
             raw_specs = self._rows_with_sections(group, lines, maximum_values, alignments=alignments,
-                header_index=year_index, sources=sources, preserve_period_headers=True)
+                header_index=year_index, sources=sources, preserve_period_headers=True, anchors=anchors)
             raw_rows = [list(cells) for cells, _, _ in raw_specs]
             if vertical_header is not None:
                 raw_rows.insert(0, [sources[vertical_header].text, *([None] * maximum_values)])
@@ -226,7 +228,8 @@ class BorderlessTableExtractor:
             gap = row.line_index - prior.line_index
             intervening = lines[prior.line_index + 1 : row.line_index]
             new_year_header = any(len(_YEAR.findall(line)) >= 2 for line in intervening)
-            narrative_break = any(len(line) > 115 or line.endswith(".") for line in intervening)
+            narrative_break = any(len(line) > 115 or line.endswith('.') and not re.search(r'(?:\.\s*){2,}$',line)
+                                  for line in intervening)
             if gap > 4 or new_year_header or narrative_break:
                 groups.append([row])
             else:
@@ -359,7 +362,7 @@ class BorderlessTableExtractor:
         return " ".join(chunks[0])
 
     @staticmethod
-    def _rows_with_sections(group: list[_CandidateRow], lines: list[str], width: int, *, alignments=None, header_index=None, sources=None, preserve_period_headers=False) -> list[tuple[list[str | None], list[str | None], bool]]:
+    def _rows_with_sections(group: list[_CandidateRow], lines: list[str], width: int, *, alignments=None, header_index=None, sources=None, preserve_period_headers=False, anchors=None) -> list[tuple[list[str | None], list[str | None], bool]]:
         output: list[tuple[list[str | None], list[str | None], bool]] = []
         initial_context = lines[max(0, group[0].line_index - 5) : group[0].line_index]
         active_period = next((period for line in reversed(initial_context) if (period := BorderlessTableExtractor._period_from_line(line))), None)
@@ -383,6 +386,19 @@ class BorderlessTableExtractor:
             if parent_lines:
                 output.append(([" ".join(parent_lines).rstrip(":"), *([None] * width)], [None] * (width + 1), False))
         for row in group:
+            if preserve_period_headers and sources and anchors:
+                # Unlabelled subtotal rows are real source content. Keep their
+                # empty label and geometry-bound cells, without inventing a
+                # metric or adding them to analytical observations.
+                for index in range(previous_index+1,row.line_index):
+                    line = sources[index]
+                    matches = list(_VALUE.finditer(line.text))
+                    if (len(matches)==width and not line.text[:matches[0].start()].strip()
+                            and not line.text[matches[-1].end():].strip()
+                            and all(not line.text[a.end():b.start()].strip() for a,b in zip(matches,matches[1:]))):
+                        boxes = [line.bounds(m.start(),m.end()) for m in matches]
+                        if all(boxes) and (cells := align_sparse_values([m[0] for m in matches],boxes,anchors,width)) is not None:
+                            output.append((['',*cells],[None]*(width+1),False))
             between = [line.strip(" .:") for line in lines[previous_index + 1 : row.line_index] if line.strip(" .:")]
             period_updates = [period for line in between if (period := BorderlessTableExtractor._period_from_line(line))]
             if period_updates:
@@ -408,9 +424,10 @@ class BorderlessTableExtractor:
                         output.append(([section, *([None] * width)], [None] * (width + 1), False))
             elif between and label[:1].islower():
                 label = " ".join([*between, label])
-            elif between and previous_index >= group[0].line_index:
+            elif between and (previous_index >= group[0].line_index or preserve_period_headers and row is group[0]):
                 for section in between:
-                    if len(section) <= 80 and len(re.findall(r"[A-Za-z]", section)) >= 2:
+                    if (len(section) <= 80 and len(re.findall(r"[A-Za-z]", section)) >= 2
+                            and not re.search(r'(?i)\d|RMB|USD|HKD|CNY|thousands?|millions?|audited|^\(',section)):
                         output.append(([section, *([None] * width)], [None] * (width + 1), False))
             values: list[str | None] = [*row.values[:width], *([None] * max(0, width - len(row.values)))]
             if alignments and alignments.get(row.line_index) is not None:

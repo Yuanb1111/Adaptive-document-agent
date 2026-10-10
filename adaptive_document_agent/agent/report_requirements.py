@@ -102,7 +102,7 @@ def instruction_messages(profile, *, purpose='report'):
     if not requirements:
         return []
     items = [r.model_dump(mode='json') for r in requirements.items
-             if r.resolution == 'resolved' and r.kind not in {'unsupported', 'section_tables', 'output_language'}]
+             if r.resolution == 'resolved' and r.kind in {'analysis_focus', 'content_detail', 'slide_limit'}]
     return [{'role': 'user', 'content': 'Execute these interpreted user report requirements for '
              + purpose + '. Never invent evidence, weaken source validation or suppress caveats. '
              'Whole-section table requests are handled independently by the appendix exporter.\n'

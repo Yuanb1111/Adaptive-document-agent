@@ -21,7 +21,7 @@ class ReportRequirement(BaseModel):
     request_quote: str = Field(min_length=1, max_length=2000)
     description: str = Field(min_length=1, max_length=500)
     kind: Literal['analysis_focus', 'section_tables', 'content_detail', 'output_language',
-                  'slide_limit', 'unsupported']
+                  'slide_limit', 'table_presentation', 'source_citations', 'unsupported']
     resolution: Literal['resolved', 'ambiguous', 'unsupported'] = 'resolved'
     reason: str = ''
     sections: list[RequestedSection] = Field(default_factory=list)

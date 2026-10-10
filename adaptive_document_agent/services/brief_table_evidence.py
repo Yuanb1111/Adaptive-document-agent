@@ -128,6 +128,7 @@ def _located_header(value, source):
 
 def _header_dates(table, source, locate=_located_header):
     month_days, years, explicit = set(), set(), set()
+    duration_dates = {}
     for raw in table.raw_header_lines:
         line = locate(raw, source)
         if not line:
@@ -139,7 +140,14 @@ def _header_dates(table, source, locate=_located_header):
         remainder = _DATE_HEADER.sub('', line).strip(' ,')
         if matches and not remainder:
             for match in matches:
-                month_days.add((match[1].casefold(), str(int(match[2]))))
+                pair = (match[1].casefold(), str(int(match[2])))
+                month_days.add(pair)
+                from adaptive_document_agent.extraction.period_header_geometry import MONTH_DURATION, month_count
+                duration = re.search(MONTH_DURATION,match[0],re.I)
+                if duration:
+                    duration_dates.setdefault(str(month_count(duration[1]))+'M',set()).add(pair)
+                elif re.search(r'\byears?\b',match[0],re.I):
+                    duration_dates.setdefault('FY',set()).add(pair)
                 if match[3]:
                     explicit.add((match[1].casefold(), str(int(match[2])), match[3]))
         elif _YEAR_HEADER.fullmatch(line):
@@ -149,6 +157,10 @@ def _header_dates(table, source, locate=_located_header):
     # fabricate the Cartesian product of unrelated interim/year-end dates.
     bound = set()
     for period in table.column_periods:
+        if period and (flow := re.fullmatch(r'(FY|(?:1[0-2]|[1-9])M)((?:19|20)\d{2})',period,re.I)):
+            for pair in duration_dates.get(flow[1].upper(),set()):
+                if flow[2] in years:
+                    bound.add((*pair,flow[2]))
         if period and re.fullmatch(r'(?:19|20)\d{2}-\d{2}-\d{2}', period):
             try:
                 actual = date.fromisoformat(period)

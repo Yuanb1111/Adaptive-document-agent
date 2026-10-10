@@ -63,6 +63,20 @@ def column_anchors(full_rows: list[list[tuple[float, float]]], width: int):
     return edges, centers, gap
 
 
+def header_supported_anchors(full_rows, year_line, width):
+    """One complete row needs independent matching year-column geometry."""
+    rows = [r for r in full_rows if len(r) == width]
+    years = list(re.finditer(r'\b(?:19|20)\d{2}\b', year_line.text))
+    boxes = [year_line.bounds(m.start(), m.end()) for m in years]
+    if len(rows) != 1 or len(boxes) != width or not all(boxes) or not year_line.spans:
+        return None
+    centers = [(b[0]+b[1])/2 for b in boxes]
+    gap = min((b-a for a,b in zip(centers,centers[1:])), default=0)
+    if gap <= 0 or any(abs((b[0]+b[1])/2-c) > gap*.25 for b,c in zip(rows[0],centers)):
+        return None
+    return [b[1] for b in rows[0]], centers, gap
+
+
 def is_wrapped_label(prefix: SourceLine, row: SourceLine, value_boxes) -> bool:
     """Use a close hanging indent in the label column, never metric keywords.
 

@@ -468,7 +468,8 @@ class PresentationPreflight:
                 text_content.append(shape.text.strip())
         joined = " ".join(text_content).strip()
         is_cover = idx == 0
-        is_closing = "thank you" in joined.casefold()
+        from .presentation_roles import is_closing_slide
+        is_closing = is_closing_slide(slide)
         if not is_cover and not is_closing and not has_visual and len(joined) < 20:
             self.issues.append(
                 PreflightIssue(
@@ -705,10 +706,8 @@ class PresentationPreflight:
     def _check_thank_you_slide(self) -> None:
         if not self.presentation.slides:
             return
-        last_slide = self.presentation.slides[-1]
-        text = " ".join(s.text for s in self._shapes(last_slide) if s.has_text_frame).casefold()
-        layout_name = last_slide.slide_layout.name if hasattr(last_slide, "slide_layout") else ""
-        if not ("thank you" in text or "thank" in layout_name.casefold()):
+        from .presentation_roles import is_closing_slide
+        if not is_closing_slide(self.presentation.slides[-1]):
             self.issues.append(
                 PreflightIssue(
                     len(self.presentation.slides) - 1,

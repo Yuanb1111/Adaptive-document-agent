@@ -5,6 +5,12 @@ from adaptive_document_agent.models.summary import SummaryReview
 from adaptive_document_agent.services.executive_brief import validate_executive_brief
 from adaptive_document_agent.services.source_quotes import normalize_quote
 from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
+from pydantic import Field
+
+
+class SummaryEvidenceItem(ExecutiveBriefItem):
+    """Reading facts keep their own limit; brief display limits do not apply."""
+    text: str = Field(min_length=1, max_length=600)
 
 
 def fact_errors(fact, result: PipelineResult, source_text: str, page: int) -> list[str]:
@@ -18,7 +24,7 @@ def fact_errors(fact, result: PipelineResult, source_text: str, page: int) -> li
         chunks = split_literal_quote(fact.source_quote)
     except ValueError as exc:
         return errors + [str(exc)]
-    brief = ExecutiveBrief(title='Summary', items=[ExecutiveBriefItem(label=fact.label, text=fact.text,
+    brief = ExecutiveBrief(title='Summary', items=[SummaryEvidenceItem(label=fact.label, text=fact.text,
         evidence=[BriefQuote(page=page, text=chunk) for chunk in chunks])])
     errors.extend(validate_executive_brief(brief, result, excerpts={page: source_text}))
     return errors

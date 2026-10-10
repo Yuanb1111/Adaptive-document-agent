@@ -520,6 +520,16 @@ footers. Source tables and their original units/qualifications are excluded from
 prose sanitizers; extraction ambiguity remains visible rather than being called
 complete. See [v105 validation notes](docs/SOURCE_BOUND_CUSTOMIZATION_V105.md).
 
+The v106 follow-up corrects the reading-fact/display-length mismatch that
+prevented a complete Summary from reaching the introduction. Faithful Chinese
+date and currency/unit wording is checked by equivalent tokens, retaining every
+coefficient, sign, period and quantity binding. Localized closing slides keep a
+durable native role, and multiline copy uses real paragraphs. Source appendices
+retain geometry-supported subtotal rows and sparse cells, with visible grid
+borders, purple headers and verified source footers. Translation audits retain
+the original copy binding. See [v106 validation notes](docs/COMPLETE_READING_LOCALIZED_EXPORT_V106.md)
+for offline verification and the remaining online acceptance boundary.
+
 If a standard cover subtitle exceeds the template's readable capacity, export
 uses a fitting document-type label or "Document analysis" and retains the full
 original subtitle and purpose in speaker notes. This adds no model call and

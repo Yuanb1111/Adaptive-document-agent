@@ -1,9 +1,9 @@
 """Exact audience-copy localization; analytical values and source grids stay intact."""
 
 import re
-from collections import Counter
 
 from .text_capacity import wrap_copy
+from .display_copy_tokens import display_text, copy_tokens
 
 
 def original_language(language):
@@ -28,6 +28,8 @@ def translatable(text):
     # Periods, source values and identifiers remain literal. A reader-facing
     # sentence with numbers remains eligible, with exact numeric validation.
     from .executive_brief import _UNIT_ONLY_LABEL
+    if re.fullmatch(r'(?i)[+\-]?\s*(?:RMB|USD|HKD|EUR|GBP|CNY|US\$|HK\$)\s*[-+()\d.,]+\s*(?:[mkb]|bn|mn|thousand|million|billion)',text):
+        return False
     if (_UNIT_ONLY_LABEL.fullmatch(text) or re.fullmatch(
             r'\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4}\*?', text, re.I)):
         return False
@@ -39,7 +41,7 @@ def translatable(text):
 def audience_copy(presentation):
     values = [frame.text for frame, _, _ in text_frames(presentation)]
     values.extend(element.text or '' for element in chart_display_strings(presentation))
-    return list(dict.fromkeys(value for value in values if value.strip() and translatable(value)))
+    return list(dict.fromkeys(display_text(value) for value in values if value.strip() and translatable(value)))
 
 
 def copy_limits(presentation):
@@ -49,15 +51,30 @@ def copy_limits(presentation):
         size = max((r.font.size.pt for p in frame.paragraphs for r in p.runs if r.font.size), default=
                    max((p.font.size.pt for p in frame.paragraphs if p.font.size), default=14))
         capacity = max(1, int(max(.1, width - .17) * 72 / size) * int((height + .06) * 72 / (size * 1.25)))
-        limits[frame.text] = min(limits.get(frame.text, capacity), capacity)
+        text = display_text(frame.text)
+        limits[text] = min(limits.get(text, capacity), capacity)
     return limits
 
 
 def copy_fit_errors(presentation, source, translated):
     for frame, width, height in text_frames(presentation):
-        if frame.text == source and not _fits(frame, width, height, translated):
+        if display_text(frame.text) == source and not _fits(frame, width, height, display_text(translated)):
             return ['Localized copy exceeds its readable native text box; compact prose without omitting facts']
     return []
+
+
+def fit_translation(presentation, source, translated):
+    from .display_copy_tokens import compact_display_periods, compact_display_units
+    text = display_text(translated)
+    if translation_errors(source,text):
+        return text
+    for compact in (compact_display_periods,compact_display_units):
+        if not copy_fit_errors(presentation,source,text):
+            break
+        candidate = compact(text)
+        if not translation_errors(source,candidate):
+            text = candidate
+    return text
 
 
 def _fits(frame, width, height, text):
@@ -77,16 +94,10 @@ def chart_display_strings(presentation):
 def translation_errors(source, translated):
     if not translated.strip():
         return ['Empty localized copy']
-    from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
-    # Sets alone allow deletion of a repeated amount. Count every literal token.
-    number = r'(?<![\d.])(?:\([-+]?\d[\d,]*(?:\.\d+)?%?\)|[-+]?\d[\d,]*(?:\.\d+)?%?)'
-    if (Counter(re.findall(number, source)) != Counter(re.findall(number, translated))
-            or PresentationPlanValidator._numbers(source) != PresentationPlanValidator._numbers(translated)):
+    original, target = copy_tokens(source), copy_tokens(translated)
+    if original[:3] != target[:3] or original[4] != target[4]:
         return ['Localized copy changed a number, period or sign']
-    if source.count('%') != translated.count('%'):
-        return ['Localized copy changed a percentage unit']
-    unit = r'(?<![A-Za-z])(?:RMB|USD|HKD|CNY|EUR|GBP|millions?|billions?|thousands?|bps|pp)(?![A-Za-z])'
-    if Counter(re.findall(unit, source, re.IGNORECASE)) != Counter(re.findall(unit, translated, re.IGNORECASE)):
+    if original[3] != target[3] or original[5] != target[5]:
         return ['Localized copy changed or invented a literal currency or scale']
     return []
 
@@ -95,9 +106,9 @@ def apply_report_language(presentation, result):
     requirements = result.profile.report_requirements
     if not requirements or not requirements.copy_translations:
         return
-    mapping = requirements.copy_translations
+    mapping = {display_text(k): display_text(v) for k,v in requirements.copy_translations.items()}
     for frame, width, height in text_frames(presentation):
-        source = frame.text
+        source = display_text(frame.text)
         if source not in mapping:
             continue
         translated = mapping[source]
@@ -109,17 +120,22 @@ def apply_report_language(presentation, result):
             # Preserve the whole source copy; a failed language requirement is
             # visible in its own report, never hidden by truncation/shrinkage.
             continue
+        from copy import deepcopy
         first = paragraphs[0]
-        if first.runs:
-            first.runs[0].text = translated
-            for run in first.runs[1:]:
-                run.text = ''
-        else:
-            first.text = translated
-        for paragraph in paragraphs[1:]:
-            paragraph.text = ''
+        properties = deepcopy(first._p.pPr) if first._p.pPr is not None else None
+        run_properties = deepcopy(first.runs[0]._r.rPr) if first.runs and first.runs[0]._r.rPr is not None else None
+        frame.clear()
+        for i, line in enumerate(translated.split('\n')):
+            paragraph = frame.paragraphs[0] if i == 0 else frame.add_paragraph()
+            if properties is not None:
+                if paragraph._p.pPr is not None:
+                    paragraph._p.remove(paragraph._p.pPr)
+                paragraph._p.insert(0, deepcopy(properties))
+            run = paragraph.add_run(); run.text = line
+            if run_properties is not None:
+                run._r.insert(0, deepcopy(run_properties))
     for element in chart_display_strings(presentation):
-        source = element.text or ''
+        source = display_text(element.text or '')
         if source in mapping:
             if translation_errors(source, mapping[source]):
                 raise ValueError('Localized chart label changed source numbers or units')
