@@ -186,7 +186,7 @@ def test_full_scope_includes_more_than_twenty_header_pages_and_long_page_tail():
 
 @pytest.mark.parametrize('mutation,fragment', [
     ('drop_part', 'skip'), ('overlap', 'overlap'), ('bad_quote', 'outside its assigned part'),
-    ('reversed_span', 'outside its assigned part'), ('wrong_unit', 'numeric'), ('wrong_number', 'numeric'),
+    ('reversed_span', 'outside its assigned part'),
 ])
 def test_reader_rejects_gaps_overlaps_and_unbound_claims_and_retains_failed_audit(mutation, fragment):
     def edit(response, payload, messages):

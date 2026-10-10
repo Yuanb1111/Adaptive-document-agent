@@ -30,6 +30,7 @@ class ExtractedTable(BaseModel):
     section_path: list[str] = Field(default_factory=list)
     rows: list[TableRow] = Field(default_factory=list)
     raw_cells: list[list[str | None]] = Field(default_factory=list)
+    raw_header_cells: list[list[str | None]] = Field(default_factory=list)
     raw_header_lines: list[str] = Field(default_factory=list)
     raw_body_lines: list[str] = Field(default_factory=list)
     bbox: tuple[float, float, float, float] | None = None

@@ -69,7 +69,11 @@ class TableExtractor:
                         )
                     borderless_tables = BorderlessTableExtractor().extract(page, page_number)
                     from .raw_table_inventory import retain_source_tables
-                    self.raw_tables_by_page[page_number] = retain_source_tables([*page_tables, *borderless_tables])
+                    from .source_grid_recovery import recover_source_grids
+                    source_tables = [*page_tables, *borderless_tables]
+                    source_tables.extend(recover_source_grids(page, page_number, source_tables,
+                                                             words=words if found_tables else None))
+                    self.raw_tables_by_page[page_number] = retain_source_tables(source_tables)
                     if borderless_tables:
                         from .table_candidate_selector import TableCandidateSelector
                         page_tables = TableCandidateSelector.merge_or_replace_tables(page_tables, borderless_tables)

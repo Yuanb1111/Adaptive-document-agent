@@ -141,6 +141,7 @@ class ExecutiveBriefWriter:
                    'user_focus': result.profile.analysis_focus,
                    'analysis_scope': result.profile.analysis_page_ranges,
                    'output_limits': {
+                       'maximum_findings': 7,
                        'label_characters': ExecutiveBriefItem.model_json_schema()['properties']['label']['maxLength'],
                        'text_characters': ExecutiveBriefItem.model_json_schema()['properties']['text']['maxLength'],
                        'quote_characters': BriefQuote.model_json_schema()['properties']['text']['maxLength'],
@@ -160,6 +161,8 @@ class ExecutiveBriefWriter:
         payload['evidence_blocks'] = blocks
         messages = [{'role': 'system', 'content': load_prompt('executive_brief.txt') +
                      '\nPrefer evidence entries {"ref":"block_id"} from evidence_blocks. '
+                     'Return at most seven material findings. Detailed introduction coverage '
+                     'and source-table appendices belong to separate sections, not this briefing. '
                      'The application fills their exact page and original text. Cite the blocks '
                      'containing the source row AND its year/period headers, currency, scale, '
                      'unit denominators and relevant conditions. Do not omit per-unit denominators '

@@ -34,6 +34,8 @@ def requested_table_catalog(result):
 def _grid(table):
     if table.raw_cells:
         raw = [[cell or '' for cell in row] for row in table.raw_cells]
+        if table.raw_header_cells:
+            return [[cell or '' for cell in row] for row in table.raw_header_cells] + raw
         if table.raw_header_lines:
             # Aligned-text extraction retains header text separately from its
             # raw body grid. Repeat resolved source column context, never style
@@ -82,7 +84,7 @@ def render_requested_tables(presentation, result):
             raise ValueError('Requested source table has no retained cells: ' + table.table_id)
         width = max(len(row) for row in raw)
         raw = [row + [''] * (width - len(row)) for row in raw]
-        header_count = (1 if table.raw_header_lines else
+        header_count = (len(table.raw_header_cells) if table.raw_header_cells else 1 if table.raw_header_lines else
                         min(max(1, TableReconstructor.detect_header_row_count(raw)), max(1, len(raw) - 1)))
         groups = ([list(range(width))] if width <= 8 else
                   [[0, *range(start, min(start + 7, width))] for start in range(1, width, 7)])

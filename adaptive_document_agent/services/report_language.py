@@ -107,11 +107,22 @@ def apply_report_language(presentation, result):
     if not requirements or not requirements.copy_translations:
         return
     mapping = {display_text(k): display_text(v) for k,v in requirements.copy_translations.items()}
+    # Native chart wrapping may happen after inventory capture. Rebind only
+    # whitespace-equivalent, unambiguous strings; never use fuzzy matching.
+    wrapped = {}
+    for key, value in mapping.items():
+        compact = ' '.join(key.split())
+        wrapped.setdefault(compact, set()).add(value)
+    def translation(source):
+        if source in mapping:
+            return mapping[source]
+        values = wrapped.get(' '.join(source.split()), set())
+        return next(iter(values)) if len(values) == 1 else None
     for frame, width, height in text_frames(presentation):
         source = display_text(frame.text)
-        if source not in mapping:
+        translated = translation(source)
+        if translated is None:
             continue
-        translated = mapping[source]
         errors = translation_errors(source, translated)
         if errors:
             raise ValueError('; '.join(errors))
@@ -136,7 +147,8 @@ def apply_report_language(presentation, result):
                 run._r.insert(0, deepcopy(run_properties))
     for element in chart_display_strings(presentation):
         source = display_text(element.text or '')
-        if source in mapping:
-            if translation_errors(source, mapping[source]):
+        translated = translation(source)
+        if translated is not None:
+            if translation_errors(source, translated):
                 raise ValueError('Localized chart label changed source numbers or units')
-            element.text = mapping[source]
+            element.text = translated

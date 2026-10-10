@@ -59,6 +59,15 @@ def _dates(text):
                   lambda m: replace(m[3], _MONTH[m[2].casefold()], m[1], m[0]), text, flags=re.I)
     text = re.sub(r'\b(' + _MONTH_PATTERN + r')\s+(\d{1,2}),?\s+((?:19|20)\d{2})\b',
                   lambda m: replace(m[3], _MONTH[m[1].casefold()], m[2], m[0]), text, flags=re.I)
+    def month(year, value):
+        if not 1 <= int(value) <= 12:
+            return None
+        tokens.append(f'{int(year):04d}-{int(value):02d}')
+        return ' '
+    text = re.sub(r'((?:19|20)\d{2})年\s*(\d{1,2})月',
+                  lambda m: month(m[1],m[2]) or m[0], text)
+    text = re.sub(r'\b(' + _MONTH_PATTERN + r')\s+((?:19|20)\d{2})\b',
+                  lambda m: month(m[2],_MONTH[m[1].casefold()]) or m[0], text, flags=re.I)
     return text, Counter(tokens)
 
 
@@ -80,10 +89,26 @@ def copy_tokens(text):
         periods.append(m[0].upper().replace(' ', ''))
         return ' '
     text = re.sub(r'(?i)(?<![A-Za-z0-9_.])(?:FY|CY|H[12]|Q[1-4]|(?:1[0-2]|[1-9])M)\s*(?:19|20)\d{2}(?!\d)', period, text)
+    # Bare duration labels ("FY and 6M") are not million quantities.
+    # Currency-qualified "RMB 6M" retains its monetary meaning.
+    def duration(m):
+        before = text[max(0, m.start()-16):m.start()]
+        currency = r'(?:RMB|USD|HKD|EUR|GBP|CNY|CNH|SGD|JPY|AUD|CAD|CHF|US\$|HK\$|人民币|美元|港元|欧元|[$€£¥￥])'
+        if (re.search(r'(?i)' + currency + r'\s*[+\-−]?\s*$', before)
+                or re.match(r'(?i)\s*' + currency, text[m.end():])):
+            return m[0]
+        periods.append(m[0].upper())
+        return ' '
+    text = re.sub(r'(?i)(?<![A-Za-z0-9_.])(?:1[0-2]|[1-9])M(?![A-Za-z0-9])', duration, text)
+    from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
+    text = PresentationPlanValidator._canonicalize_money_signs(text)
+    text = re.sub(r'([+\-−])\s*(RMB|CNY|USD|HKD|EUR|GBP|US\$|HK\$)\s*(?=\d)',
+                  r'\2 \1', text, flags=re.I)
+    text = re.sub(r'(?:下降|下跌|减少|降低)\s*(\d[\d,]*(?:\.\d+)?[%％])', r'-\1', text)
     text = re.sub(r'([+\-−])\s+(?=\d)', lambda m: m[1].replace('−','-'), text)
     text = text.replace('％','%').replace('−','-')
     number = r'(?<![\d.])(?:\([-+]?\d[\d,]*(?:\.\d+)?%?\)|[-+]?\d[\d,]*(?:\.\d+)?%?)'
-    numbers = Counter(re.findall(number, text))
+    numbers = Counter(n.lstrip('+') for n in re.findall(number, text))
     aliases = {'人民币':'rmb','CNY':'rmb','US$':'usd','HK$':'hkd','美元':'usd','港元':'hkd','欧元':'eur',
                '百万元':'million','百万':'million','千元':'thousand','千':'thousand',
                '十亿元':'billion','十亿':'billion','万亿元':'trillion','万亿':'trillion',

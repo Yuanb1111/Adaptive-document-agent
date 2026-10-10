@@ -110,6 +110,7 @@ def _translate_batch(gateway, batch, language, presentation, *, failures=None):
          'Keep fiscal/half-year labels (FY2023, 6M2024) verbatim to avoid length and scope changes. '
          'Dates may use equivalent Chinese order; units/currencies may use faithful Chinese names '
          '(RMB million = 百万元人民币, pp = 个百分点); never rescale or round a coefficient. '
+         'Preserve date precision: a month and year never permits inventing a day. '
          'Keep names and brands verbatim. Translate prose only, no calculations or new conclusions. '
          'Aim within target_characters for the same readable slide box; compact wording, never '
          'omit facts or qualifications. Already-correct target-language prose may remain unchanged. '

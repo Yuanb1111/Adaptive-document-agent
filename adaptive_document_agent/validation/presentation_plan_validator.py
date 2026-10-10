@@ -517,6 +517,7 @@ class PresentationPlanValidator:
         currency = r"(?:US\$|HK\$|RMB|CNY|CNH|USD|HKD|SGD|GBP|EUR|JPY|AUD|CAD|CHF|人民币|美元|港元|欧元|[$€£¥￥])"
         magnitude = r"(?:trillion\b|billion\b|million\b|thousand\b|bn\b|mn\b|[mkb]\b|万亿|十亿|百万|亿|万|千)(?:元)?"
         amount = r"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?\s*" + magnitude
+        value = re.sub(rf"(?i)(?<![A-Za-z0-9_])([+-])\s*({currency})\s*(?=\d)", r"\2 \1", value)
         value = re.sub(rf"(?i)({currency})\s*\(\s*({amount})\s*\)", r"\1 -\2", value)
         coefficient = r"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
         value = re.sub(rf"(?i)({currency})\s*\(\s*({coefficient})\s*\)\s*({magnitude})", r"\1 -\2 \3", value)

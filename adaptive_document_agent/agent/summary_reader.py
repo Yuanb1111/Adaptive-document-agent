@@ -10,7 +10,8 @@ from pydantic import BaseModel, Field
 
 from adaptive_document_agent.models.summary import SummaryFact, SummaryPart, SummaryReview
 from adaptive_document_agent.services.summary_source import reading_batches
-from adaptive_document_agent.services.summary_validation import reading_errors
+from adaptive_document_agent.services.summary_validation import reading_errors, fact_errors
+from adaptive_document_agent.services.llm.exceptions import PrivacyViolationError
 from adaptive_document_agent.utils.ids import stable_id
 from .prompting import untrusted_document_message
 from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
@@ -20,7 +21,7 @@ class ReadFact(BaseModel):
     label: str = Field(min_length=1, max_length=60)
     # Reading is evidence capture, not slide copy. Retain qualifications up to
     # the canonical fact limit; the separate editor compacts audience wording.
-    text: str = Field(min_length=1, max_length=600)
+    text: str = Field(min_length=1, max_length=6000)
     quote_start_line: int = Field(ge=1)
     quote_end_line: int = Field(ge=1)
 
@@ -75,7 +76,7 @@ _RULES = (
     'Keep reading_note under 400 characters (hard limit 800); do not repeat the source paragraph. '
     'Every fact label is a SHORT topic name, target 30 and hard limit 60 characters. '
     'Put the substantive claim and qualifications in text, never in the label. '
-    'Every fact needs concise text (target 180, hard limit 600 characters for necessary qualifications) and quote_start_line/quote_end_line '
+    'Every fact needs concise text (target 180; up to 6000 characters for internal evidence capture) and quote_start_line/quote_end_line '
     'for a short contiguous passage entirely within its part. Python retains the literal source quote '
     'and page from those lines, so do not repeat source text or supply source_pages in the JSON. '
     'Choose only the lines needed to substantiate the fact, target under 1800 source characters; '
@@ -136,9 +137,20 @@ def _read_batch(gateway, result, blocks, cancelled: Event) -> ReadOutcome:
                         unknown.append('Summary fact source span is outside its assigned part')
                         continue
                     try:
-                        facts.append(SummaryFact(label=fact.label, text=fact.text,
+                        bound = SummaryFact(label=fact.label, text=fact.text,
                             source_quote=''.join(lines[fact.quote_start_line-1:fact.quote_end_line]).strip(),
-                            source_pages=[block.page]))
+                            source_pages=[block.page])
+                        failures = fact_errors(bound, result, source, block.page, literal_reading=True)
+                        if failures and attempt:
+                            # Keep the model's selected material passage, not an
+                            # unsupported paraphrase. No extract is published as
+                            # a summary: the separate editor must summarize it.
+                            record.setdefault('literal_extracts', []).append({
+                                'block_id': block.id, 'start_line': fact.quote_start_line,
+                                'end_line': fact.quote_end_line, 'rejected_paraphrase': fact.text,
+                                'errors': failures})
+                            bound = bound.model_copy(update={'text': bound.source_quote})
+                        facts.append(bound)
                     except ValueError as exc:
                         unknown.append('Invalid Summary fact source span: ' + str(exc))
                 parts.append(SummaryPart(**part.model_dump(exclude={'facts'}), facts=facts,
@@ -185,7 +197,7 @@ def read_summary(gateway, result, review: SummaryReview, *, cancelled: Event | N
             for future in as_completed(futures):
                 outcome = future.result()
                 outcomes[futures[future]] = outcome
-                if outcome.error:
+                if isinstance(outcome.error, (PrivacyViolationError, CancelledError)):
                     signal.set()
                     for pending in futures:
                         pending.cancel()
@@ -203,7 +215,7 @@ def read_summary(gateway, result, review: SummaryReview, *, cancelled: Event | N
     else:
         for i, blocks in enumerate(batches):
             outcomes[i] = _read_batch(gateway, result, blocks, signal)
-            if outcomes[i].error:
+            if isinstance(outcomes[i].error, (PrivacyViolationError, CancelledError)):
                 break
     for i in sorted(outcomes):
         review.read_audits.append(outcomes[i].audit)

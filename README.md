@@ -530,6 +530,15 @@ borders, purple headers and verified source footers. Translation audits retain
 the original copy binding. See [v106 validation notes](docs/COMPLETE_READING_LOCALIZED_EXPORT_V106.md)
 for offline verification and the remaining online acceptance boundary.
 
+The v107 follow-up retains literal model-selected reading extracts when an
+internal paraphrase still fails source checks, while preserving strict published
+copy validation and complete introductory coverage in default and custom runs.
+Chinese month/sign/period spellings and later chart wrapping preserve exact copy
+bindings. Source-only geometry recovery adds qualitative/scenario tables and
+restores rows mistaken for header context. Oversized briefings use bounded model
+selection before normal claim validation. See [v107 regression and acceptance
+notes](docs/COMPLETE_SUMMARY_SOURCE_GRIDS_V107.md).
+
 If a standard cover subtitle exceeds the template's readable capacity, export
 uses a fitting document-type label or "Document analysis" and retains the full
 original subtitle and purpose in speaker notes. This adds no model call and

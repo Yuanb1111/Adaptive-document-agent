@@ -23,12 +23,13 @@ class SourceLine:
         return None
 
 
-def source_lines(page: object, text: str, clean) -> list[SourceLine]:
-    if hasattr(page, "extract_words"):
-        try:
-            words = page.extract_words(x_tolerance=2, y_tolerance=3)
-        except (AttributeError, TypeError, ValueError):
-            words = []
+def source_lines(page: object, text: str, clean, *, words=None) -> list[SourceLine]:
+    if words is not None or hasattr(page, "extract_words"):
+        if words is None:
+            try:
+                words = page.extract_words(x_tolerance=2, y_tolerance=3)
+            except (AttributeError, TypeError, ValueError):
+                words = []
         if words:
             groups: list[list[dict]] = []
             for word in sorted(words, key=lambda w: (w["top"], w["x0"])):
@@ -146,7 +147,7 @@ def geometric_headers(lines: list[SourceLine], anchors, fallback: list[str]) -> 
                 units[index] = "amount"
             elif plain in {"%", "％"}:
                 units[index] = "percentage"
-            elif re.fullmatch(r"[%A-Za-z][%A-Za-z/ -]*", word):
+            elif re.fullmatch(r"[()%A-Za-z][()%A-Za-z/ -]*", word):
                 columns[index].append(word)
     output = []
     for i, words in enumerate(columns):

@@ -19,7 +19,7 @@ class SummarySourceBlock(BaseModel):
 
 class SummaryFact(BaseModel):
     label: str = Field(min_length=1, max_length=60)
-    text: str = Field(min_length=1, max_length=600)
+    text: str = Field(min_length=1, max_length=6000)
     source_quote: str = Field(min_length=8, max_length=6000)
     source_pages: list[int] = Field(min_length=1)
 

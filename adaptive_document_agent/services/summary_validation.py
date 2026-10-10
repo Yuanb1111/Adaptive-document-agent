@@ -10,15 +10,21 @@ from pydantic import Field
 
 class SummaryEvidenceItem(ExecutiveBriefItem):
     """Reading facts keep their own limit; brief display limits do not apply."""
-    text: str = Field(min_length=1, max_length=600)
+    text: str = Field(min_length=1, max_length=6000)
 
 
-def fact_errors(fact, result: PipelineResult, source_text: str, page: int) -> list[str]:
+def fact_errors(fact, result: PipelineResult, source_text: str, page: int, *, literal_reading=False) -> list[str]:
     errors = []
     if fact.source_pages != [page]:
         errors.append('Each reading fact needs its exact source page')
     if normalize_quote(fact.source_quote) not in normalize_quote(source_text):
         errors.append('Quote is absent from the assigned source part')
+    # A literal internal reading extract makes no new numerical assertion.
+    # The editorial stage still validates its independently authored slide copy.
+    if literal_reading and fact.text == fact.source_quote:
+        if PresentationPlanValidator._numbers(fact.label) - PresentationPlanValidator._numbers(source_text):
+            errors.append('Extract label contains unsupported numbers')
+        return errors
     from .source_quotes import split_literal_quote
     try:
         chunks = split_literal_quote(fact.source_quote)
@@ -98,8 +104,12 @@ def reading_errors(review: SummaryReview, result: PipelineResult, *, complete_sc
             errors.append('Every substantive Summary part needs a supported fact for complete coverage')
         if part.role == 'heading' and (len(source.strip()) > 180 or len([line for line in source.splitlines() if line.strip()]) > 2):
             errors.append('Heading-only classification cannot hide a substantive source passage')
+        # A compact multi-tier header can have several nonempty lines.
+        # Reject long body text, not a legitimate year/unit/header group.
+        if part.role == 'layout' and len(source.strip()) > 180:
+            errors.append('Layout-only classification cannot hide a substantive source passage')
         for fact in part.facts:
-            errors.extend(fact_errors(fact, result, source, block.page))
+            errors.extend(fact_errors(fact, result, source, block.page, literal_reading=True))
     for block in review.source_blocks:
         spans = sorted((p for p in review.parts if p.block_id == block.id), key=lambda p: p.start_line)
         end = 0
