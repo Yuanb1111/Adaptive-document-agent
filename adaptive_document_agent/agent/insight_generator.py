@@ -1,14 +1,13 @@
 """Evidence-grounded insight generation after validation."""
 
-import json
-
 from pydantic import BaseModel, Field
 
 from adaptive_document_agent.models import AnalysisResult, Insight, Observation, ParsedDocument, ValidationIssue
 from adaptive_document_agent.services.llm import LLMGateway
 from adaptive_document_agent.utils.ids import stable_id
 
-from .prompting import load_prompt, untrusted_document_message
+from .prompting import load_prompt
+from .insight_batches import generate_batches
 from .insight_source_context import build_source_contexts, matched_driver_evidence
 
 
@@ -32,7 +31,7 @@ class InsightGenerator:
             return [self._deterministic(result, observations) for result in valid]
         contexts = build_source_contexts(valid, observations or [], document)
         by_id = {o.id: o for o in observations or []}
-        payload = json.dumps([{**r.model_dump(mode="json", exclude={"evidence"}),
+        records = [{**r.model_dump(mode="json", exclude={"evidence"}),
             # Explicit units and periods prevent prose from describing unlabelled
             # tool dictionaries or mixing base currency with source thousands.
             "input_observations": [{**by_id[oid].model_dump(mode="json", include={
@@ -48,16 +47,21 @@ class InsightGenerator:
                 "driver_citation_source": "excerpts" if document is not None else "evidence",
                 "excerpts": [excerpt.payload() for excerpt in contexts[r.task_id]],
             }}
-            for r in valid], ensure_ascii=False)
-        generated = self.gateway.generate_structured(
-            [
-                {"role": "system", "content": load_prompt("insight_generation.txt")},
-                untrusted_document_message(payload),
-            ],
-            InsightList,
-            stage="insight",
-        ).insights
-        generated, self.validation_issues = validate_insight_contexts(generated, valid, observations or [])
+            for r in valid]
+        generated = []
+        for batch_ids, insights in generate_batches(
+                self.gateway, records, InsightList, load_prompt("insight_generation.txt")):
+            for insight in insights:
+                if not insight.result_ids or not set(insight.result_ids).issubset(batch_ids):
+                    self.validation_issues.append(ValidationIssue(
+                        code="insight_result_scope", stage="insight", severity="warning",
+                        message="A draft cited a result outside its supplied batch and was withheld.",
+                        related_ids=[insight.id, *insight.result_ids],
+                    ))
+                    continue
+                generated.append(insight)
+        generated, context_issues = validate_insight_contexts(generated, valid, observations or [])
+        self.validation_issues.extend(context_issues)
         evidence_by_task = {result.task_id: result.evidence for result in valid}
         accepted = []
         by_task = {r.task_id: r for r in valid}
