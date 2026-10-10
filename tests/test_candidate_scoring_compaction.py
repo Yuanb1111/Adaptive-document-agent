@@ -270,7 +270,7 @@ def test_prefilter_budget_keeps_every_candidate_and_unrequested_model_decisions_
         {"candidate_id": bounded[0].id, "score": .9, "reasons": ["Reviewed supplied candidate."]},
         {"candidate_id": outside.id, "score": 1.0, "reasons": ["This candidate was not supplied for review."]},
     ]}
-    client = MockLLMClient([response])
+    client = MockLLMClient([response, {'scores':[]}, {'scores':[]}, {'scores':[]}])
     scores = AnalysisValueScorer(LLMGateway(client, LLMSettings(provider=ProviderName.MOCK))).score(candidates, index, profile)
     assert len(scores) == 164
     assert sum(not item.rejected for item in scores) == 1
@@ -280,6 +280,7 @@ def test_prefilter_budget_keeps_every_candidate_and_unrequested_model_decisions_
     assert scores[0].semantic_audit.response_audit.unmatched_decisions[0].candidate_id == outside.id
     wire = ast.literal_eval(client.calls[0][1]['content'].split('\n', 1)[1].rsplit('\n', 1)[0])
     assert len(wire['candidates']) == 160
+    assert len(client.calls)==4
     assert all('source_reason_ref' in {**wire.get('candidate_constants', {}), **row} for row in wire['candidates'])
 
 

@@ -11,8 +11,10 @@ from adaptive_document_agent.models.analysis import (
     SemanticCandidateDecision,
     SemanticRationale,
     SemanticScoringResponseAudit,
+    SemanticScoringBatchAudit,
 )
 from adaptive_document_agent.services.llm import LLMGateway
+from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
 
 from .prompting import load_prompt, untrusted_document_message
 from .candidate_generator import AnalysisCandidateGenerator
@@ -21,6 +23,8 @@ from .candidate_generator import AnalysisCandidateGenerator
 # Use the same type on the wire and in saved audit records so cache/export
 # round trips retain model identity as well as all original values.
 SemanticCandidateScore = SemanticCandidateDecision
+SCORING_BATCH_SIZE = 40
+MAX_SPLIT_DEPTH = 3
 
 
 class SemanticCandidateScores(BaseModel):
@@ -133,16 +137,25 @@ class AnalysisValueScorer:
 
     def score(self, candidates: list[AnalysisCandidate], index: DocumentIndex, profile: DocumentProfile, *, maximum: int = 20) -> list[CandidateScore]:
         bounded = AnalysisCandidateGenerator._prefilter(candidates, index, profile) if self.gateway else candidates
-        response = self._semantic_scores(bounded, profile)
+        batches, attempts = self._semantic_batches(bounded, profile)
         bounded_ids = {item.id for item in bounded}
         decisions: dict[str, list[SemanticCandidateDecision]] = defaultdict(list)
-        catalog: dict[str, list[str]] = defaultdict(list)
-        if response is not None:
+        catalogs: dict[int, dict[str, list[str]]] = {}
+        response_audit = SemanticScoringResponseAudit()
+        for identifiers, response in batches:
+            catalog: dict[str, list[str]] = defaultdict(list)
             for entry in response.reason_catalog:
                 catalog[entry.id].append(entry.text)
             for decision in response.scores:
-                if decision.candidate_id in bounded_ids:
+                if decision.candidate_id in identifiers:
                     decisions[decision.candidate_id].append(decision)
+                    catalogs[id(decision)] = catalog
+            audit = _response_audit(response, set(identifiers))
+            response_audit.reason_catalog.extend(audit.reason_catalog)
+            response_audit.unmatched_decisions.extend(audit.unmatched_decisions)
+            response_audit.validation_errors.extend(audit.validation_errors)
+        if len(attempts) > 1:
+            response_audit.batches = attempts
         input_id_counts = Counter(item.id for item in candidates)
         scored: list[CandidateScore] = []
         purpose_terms = (profile.document_purpose + " " + " ".join(profile.metrics)).casefold()
@@ -154,11 +167,11 @@ class AnalysisValueScorer:
             completeness = min(1.0, support / max(self._minimum(candidate.analysis_type), 1))
             relevance = 1.0 if candidate.metric and any(term in purpose_terms for term in candidate.metric.casefold().split("|")) else 0.5
             evidence_score = 0.5 * confidence + 0.3 * completeness + 0.2 * relevance
-            audit = CandidateScoreAudit(decisions=decisions[candidate.id]) if response is not None else None
+            audit = CandidateScoreAudit(decisions=decisions[candidate.id]) if batches else None
             semantic_reasons: list[str] = []
             if audit is not None:
                 for decision in audit.decisions:
-                    expanded, errors = _expand_reasons(decision, catalog)
+                    expanded, errors = _expand_reasons(decision, catalogs.get(id(decision), {}))
                     semantic_reasons.extend(expanded)
                     audit.validation_errors.extend(errors)
                 if len(audit.decisions) > 1:
@@ -185,23 +198,59 @@ class AnalysisValueScorer:
                 item.rejected = True
                 item.reasons.append("below bounded top-candidate cutoff")
         ranked = sorted(scored, key=lambda item: item.score, reverse=True)
-        if ranked and response is not None:
+        if ranked and batches:
             # Keep the complete response-level audit once, even if all candidates
             # were rejected. Each candidate separately retains every raw decision.
-            ranked[0].semantic_audit.response_audit = _response_audit(response, bounded_ids)
+            ranked[0].semantic_audit.response_audit = response_audit
         return ranked
 
-    def _semantic_scores(self, candidates: list[AnalysisCandidate], profile: DocumentProfile) -> SemanticCandidateScores | None:
+    def _semantic_batches(
+        self, candidates: list[AnalysisCandidate], profile: DocumentProfile,
+    ) -> tuple[list[tuple[list[str], SemanticCandidateScores]], list[SemanticScoringBatchAudit]]:
+        """Keep global comparison context; retry only an explicitly truncated batch."""
+        if not self.gateway or not candidates:
+            return [], []
+        completed: list[tuple[list[str], SemanticCandidateScores]] = []
+        attempts: list[SemanticScoringBatchAudit] = []
+
+        def review(focus: list[AnalysisCandidate], depth: int = 0) -> None:
+            identifiers = [item.id for item in focus]
+            try:
+                response = self._semantic_scores(candidates, profile, focus=identifiers)
+            except LLMStructuredOutputError as exc:
+                usage = exc.response.usage
+                if not usage or usage.finish_reason != 'length':
+                    raise
+                attempts.append(SemanticScoringBatchAudit(candidate_ids=identifiers, error=str(exc),
+                    output_tokens=usage.output_tokens))
+                if len(focus) <= 1 or depth >= MAX_SPLIT_DEPTH:
+                    raise
+                middle = len(focus)//2
+                review(focus[:middle], depth+1)
+                review(focus[middle:], depth+1)
+                return
+            audit = _response_audit(response, set(identifiers))
+            attempts.append(SemanticScoringBatchAudit(candidate_ids=identifiers,
+                reason_catalog=response.reason_catalog, scores=response.scores,
+                validation_errors=audit.validation_errors))
+            completed.append((identifiers, response))
+
+        for start in range(0, len(candidates), SCORING_BATCH_SIZE):
+            review(candidates[start:start+SCORING_BATCH_SIZE])
+        return completed, attempts
+
+    def _semantic_scores(self, candidates: list[AnalysisCandidate], profile: DocumentProfile, *, focus=None) -> SemanticCandidateScores | None:
         if not self.gateway or not candidates:
             return None
         from .report_requirements import instruction_messages
         response = self.gateway.generate_structured(
             [
-                {"role": "system", "content": load_prompt("analysis_planner.txt") + "\nSelect and score candidates in ONE response. Return exactly one decision per supplied candidate ID: score, rejected (true means not selected), and explicit reasons. Assess analytical usefulness, redundancy and evidence. Never add candidate IDs. "
+                {"role": "system", "content": load_prompt("analysis_planner.txt") + "\nScore only the current batch. Return exactly one decision per requested candidate ID: score, rejected (true means not selected), and explicit reasons. All candidates remain supplied as global comparison context: assess usefulness and redundancy against that complete context, using the same score criteria in every batch. Do not score context-only candidates or choose a separate top-N per batch. Never add candidate IDs. Do not execute calculations or draft the report; provide specific, concise scoring explanations with all relevant qualifications. "
                  "Write repeated rationale once in reason_catalog as entries with unique short id and full text; reference those IDs in each applicable decision's ordered reason_refs. Put complete candidate-specific reasons, exceptions, evidence qualifications and caveats in reasons. A decision's explanation is its referenced catalog text in order followed by its inline reasons. Use only references defined in reason_catalog. Every accepted AND rejected decision needs a complete, nonblank explanation. Do not drop candidates, evidence, qualifications or unique reasoning to compress the response. "
                  "Read candidate_encoding when present; merge candidate_constants into each candidate without discarding any field. Ordered observation_refs are indices into observation_id_catalog and restore exact observation_ids; use the original IDs when identifying evidence in explanations. Input source_reason_ref resolves the candidate's original reason verbatim in source_reason_catalog; it is source data, not a scoring decision or an output rationale reference."},
                 *instruction_messages(profile, purpose='analysis prioritization'),
                 untrusted_document_message(str(_scoring_transport(candidates, profile))),
+                {'role': 'user', 'content': 'Current batch candidate IDs to score: ' + str(focus if focus is not None else [c.id for c in candidates])},
             ],
             SemanticCandidateScores,
             stage="planner",

@@ -548,6 +548,13 @@ labels from data headers, and display verified literal footnotes. Long decks
 use bounded local rendering batches. See [v108 regression scope and remaining
 live acceptance](docs/INTRODUCTION_TABLE_NOTES_REGRESSION_V108.md).
 
+The v109 follow-up scores candidates in batches of at most 40 while retaining
+all reviewed candidates as global comparison context. An explicitly truncated
+batch is split with a bounded recovery depth; completed requests remain cached.
+Original batch decisions and rationale scopes stay auditable, and selection is
+ranked once across the complete reviewed set. See [candidate scoring recovery
+and validation](docs/CANDIDATE_SCORING_RECOVERY_V109.md).
+
 If a standard cover subtitle exceeds the template's readable capacity, export
 uses a fitting document-type label or "Document analysis" and retains the full
 original subtitle and purpose in speaker notes. This adds no model call and

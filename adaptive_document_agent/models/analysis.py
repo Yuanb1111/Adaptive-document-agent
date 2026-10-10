@@ -34,12 +34,24 @@ class SemanticRationale(BaseModel):
     text: str
 
 
+class SemanticScoringBatchAudit(BaseModel):
+    """Original batch response or an explicitly failed truncation attempt."""
+
+    candidate_ids: list[str] = Field(default_factory=list)
+    reason_catalog: list[SemanticRationale] = Field(default_factory=list)
+    scores: list[SemanticCandidateDecision] = Field(default_factory=list)
+    validation_errors: list[str] = Field(default_factory=list)
+    error: str = ''
+    output_tokens: int | None = None
+
+
 class SemanticScoringResponseAudit(BaseModel):
     """Response-wide data stored once, on the first returned candidate score."""
 
     reason_catalog: list[SemanticRationale] = Field(default_factory=list)
     unmatched_decisions: list[SemanticCandidateDecision] = Field(default_factory=list)
     validation_errors: list[str] = Field(default_factory=list)
+    batches: list[SemanticScoringBatchAudit] = Field(default_factory=list)
 
 
 class CandidateScoreAudit(BaseModel):
