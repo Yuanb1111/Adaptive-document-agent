@@ -68,7 +68,7 @@ def _item_errors(item: ExecutiveBriefItem, result: PipelineResult, excerpts: dic
         ExecutiveBrief(title='Executive Summary', items=[item]), result, excerpts=excerpts)
 
 
-def _classify(original: dict[str, Any], result: PipelineResult, excerpts: dict[int, str]):
+def _classify(original: dict[str, Any], result: PipelineResult, excerpts: dict[int, str], semantic_validator=None):
     locked: dict[int, ExecutiveBriefItem] = {}
     invalid: dict[int, list[str]] = {}
     seen = set()
@@ -93,6 +93,13 @@ def _classify(original: dict[str, Any], result: PipelineResult, excerpts: dict[i
         else:
             locked[index] = item
             seen.add(key)
+    if semantic_validator and locked:
+        positions = list(locked)
+        meaning_errors = semantic_validator(ExecutiveBrief(title='Executive Summary', items=list(locked.values())))
+        for position, errors in meaning_errors.items():
+            index = positions[position]
+            invalid[index] = ['Meaning review: ' + error for error in errors]
+            del locked[index]
     title_errors = []
     title = original.get('title', 'Key takeaways')
     try:
@@ -171,7 +178,8 @@ def _retain_cited_context(value, original, excerpts):
 def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]], *,
                              result: PipelineResult, excerpts: dict[int, str],
                              topics: list[tuple[str, list[int]]], source_context: dict[str, Any],
-                             evidence_catalog: dict | None = None, cancelled=None) -> ExecutiveBrief:
+                             evidence_catalog: dict | None = None, cancelled=None,
+                             semantic_validator=None) -> ExecutiveBrief:
     """Generate once, then permit only one targeted, strictly typed patch call."""
     audit: dict[str, Any] = {'original': None, 'original_response': None, 'locked_indices': [],
                              'initial_errors': {}, 'patch': None, 'patch_response': None,
@@ -203,7 +211,14 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
         audit['repair_errors'] = ['Original item count is outside the supported 1–7 range.']
         _audit(result, audit, 'rejected')
         raise ValueError(audit['repair_errors'][0])
-    locked, invalid, title_errors = _classify(original, result, excerpts)
+    try:
+        locked, invalid, title_errors = _classify(original, result, excerpts, semantic_validator)
+    except (ValueError, RuntimeError) as exc:
+        audit['initial_errors']['meaning_review'] = [str(exc)]
+        if isinstance(exc, LLMStructuredOutputError):
+            audit['meaning_review_response'] = exc.response.text
+        _audit(result, audit, 'rejected')
+        raise
     audit['locked_indices'] = list(locked)
     audit['initial_errors'].update({f'item_{index}': errors for index, errors in invalid.items()})
     if title_errors:
@@ -297,6 +312,8 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
         brief = ExecutiveBrief(title=title, items=merged)
         errors = [*validate_executive_brief(brief, result, excerpts=excerpts),
                   *topic_coverage_errors(brief, topics)]
+        if not errors and semantic_validator:
+            errors.extend(error for reasons in semantic_validator(brief).values() for error in reasons)
         if not brief.title.strip():
             errors.append('Brief title must be nonempty.')
         audit['repair_errors'] = errors
@@ -357,6 +374,8 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
                 brief = ExecutiveBrief(title=title, items=merged)
                 errors = [*validate_executive_brief(brief, result, excerpts=excerpts),
                           *topic_coverage_errors(brief, topics)]
+                if not errors and semantic_validator:
+                    errors.extend(error for reasons in semantic_validator(brief).values() for error in reasons)
                 if not brief.title.strip():
                     errors.append('Brief title must be nonempty.')
                 audit['repair_errors'] = errors
@@ -366,6 +385,8 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
             except (ValueError, TypeError, ValidationError):
                 pass
     salvaged, discarded = _salvage(merged, locked, title, result, excerpts, topics)
+    if salvaged is not None and semantic_validator and semantic_validator(salvaged):
+        salvaged = None
     if salvaged is not None:
         audit['discarded_indices'] = discarded
         _audit(result, audit, 'salvaged')

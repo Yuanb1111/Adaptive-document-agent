@@ -158,6 +158,13 @@ def test_complete_pipeline_with_mock_llm_controls_semantic_selection(monkeypatch
         {"title": "Key takeaways", "items": [{"label": "Revenue",
             "text": "Revenue was 150 in 2025, compared with 100 in 2023.",
             "evidence": [{"page": 1, "text": baseline.document.pages[0].text}]}]},
+        {"items": [{"index": 0, "accepted": True, "numeric_comparison": True,
+            "reason": "Revenue compares the same annual metric and units.",
+            "comparisons": [{"claim": "Revenue was 150 in 2025, compared with 100 in 2023.",
+                "start_value": "100", "end_value": "150", "direction": "increase",
+                "start_context": baseline.document.pages[0].text,
+                "end_context": baseline.document.pages[0].text,
+                "start_duration_months": 12, "end_duration_months": 12}]}]},
     ]
     client = MockLLMClient(responses)
     settings = LLMSettings(provider=ProviderName.MOCK, model="mock")
@@ -169,7 +176,7 @@ def test_complete_pipeline_with_mock_llm_controls_semantic_selection(monkeypatch
     assert result.presentation_plan is not None
     assert result.presentation_plan.slides[1].title == "Document at a Glance"
     assert "## Revenue overview" in result.report_markdown
-    assert len(client.calls) == 9  # Topics compile locally; final brief uses one source-bound call.
+    assert len(client.calls) == 10  # Source-bound brief generation and independent comparison review.
     if brief_outcome == 'audit_failure':
         assert result.executive_brief is None
         assert any(issue.code == 'executive_brief_unavailable' for issue in result.validation_warnings)

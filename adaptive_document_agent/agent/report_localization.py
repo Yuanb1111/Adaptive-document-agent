@@ -31,10 +31,13 @@ class TranslationReview(BaseModel):
 
 def prepare_report_language(gateway, result):
     requirements = result.profile.report_requirements
-    requests = [r for r in requirements.items if r.kind == 'output_language' and r.resolution == 'resolved']
+    language_requests = [r for r in requirements.items if r.kind == 'output_language' and r.resolution == 'resolved']
+    from adaptive_document_agent.services.report_language import original_language
+    requests = [r for r in language_requests if r.language_scope in {'body', 'all'}
+                and not original_language(r.language)]
     if not requests:
         return
-    if len({r.language.casefold() for r in requests}) > 1 or requirements.conflicts:
+    if len({r.language.casefold() for r in requests}) > 1:
         for r in requests:
             result.customization_report.append(RequirementCheck(requirement_id=r.id, status='ambiguous',
                 message='Resolve conflicting instructions before applying a display language.'))
@@ -74,7 +77,7 @@ def prepare_report_language(gateway, result):
                      'Native original-source table cells and editable chart workbooks stay in source language.'},
                     {'role': 'user', 'content': 'Requested audience-copy language: ' + requests[0].language},
                     untrusted_document_message(json.dumps(batch, ensure_ascii=False))],
-                    CopyTranslations, stage='presentation', allow_repair=False, max_tokens=8192)
+                    CopyTranslations, stage='presentation', allow_repair=False)
                 by_id = {item['id']: item['text'] for item in batch}
                 if len(response.items) != len(by_id) or {t.id for t in response.items} != set(by_id):
                     raise ValueError('Translation must include every exact display-copy ID')
@@ -90,7 +93,7 @@ def prepare_report_language(gateway, result):
                     {'role': 'user', 'content': 'Requested audience-copy language: ' + requests[0].language},
                     untrusted_document_message(json.dumps([{'id': item.id, 'original': by_id[item.id],
                         'translation': item.text} for item in response.items], ensure_ascii=False))],
-                    TranslationReview, stage='presentation', allow_repair=False, max_tokens=4096)
+                    TranslationReview, stage='presentation', allow_repair=False)
                 if len(review.items) != len(by_id) or {t.id for t in review.items} != set(by_id):
                     raise ValueError('Translation review did not cover every exact copy ID')
                 verdicts = {item.id: item.accepted for item in review.items}

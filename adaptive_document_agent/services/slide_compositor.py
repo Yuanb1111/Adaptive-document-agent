@@ -521,22 +521,37 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
             # Do not join unknown, conflicting or incompatible period groups.
             groups = evidence_groups(items)
             period_sets = [tuple(format_observation_period(o) for o in group) for group in groups]
+            same_periods = period_sets and all(p == period_sets[0] for p in period_sets)
+            union_dates = False
+            period_columns = period_sets[0] if period_sets else ()
+            if horizontal and len(groups) > 1 and not same_periods:
+                # Explicit resolved point dates can share a sparse grid. Empty
+                # intersections never supply a value, period or new comparison.
+                date_label = re.compile(r'^\d{1,2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4}\*?$')
+                if (all(date_label.fullmatch(p) for periods in period_sets for p in periods)
+                        and all(len(set(p)) == len(p) for p in period_sets)
+                        and len(set.intersection(*(set(p) for p in period_sets))) >= 2):
+                    from adaptive_document_agent.document_model import period_sort_key
+                    period_columns = tuple(dict.fromkeys(format_observation_period(o)
+                        for o in sorted(items, key=lambda o: period_sort_key(o.period))))
+                    union_dates = len(period_columns) <= 6
             if (horizontal and len(groups) > 1 and period_sets
-                    and all(p == period_sets[0] for p in period_sets)
+                    and (same_periods or union_dates)
                     and all(period_sets[0]) and len(set(period_sets[0])) == len(period_sets[0])
                     and len(period_sets[0]) <= 6):
-                cells = [["Metric", *period_sets[0]]]
+                cells = [["Metric", *period_columns]]
                 for group in groups:
                     name = qualified_metric_name(group[0])
-                    values = []
+                    by_period = {}
                     for o in group:
                         semantic = classify_metric(name, unit=o.unit, raw_unit=o.raw_unit, value=o.value)
                         value = format_metric_display_value(o.raw_value, o.value, semantic,
                             raw_unit=_display_source_unit(o), currency=o.currency, compact=True)
-                        values.append(signed_expense_display(o, value))
+                        by_period[format_observation_period(o)] = signed_expense_display(o, value)
+                    values = [by_period.get(p, '—') for p in period_columns]
                     cells.append([name, *values])
                 widths, wrapped, heights = _period_table_layout(cells, rect.w, .48)
-                if sum(heights) <= rect.h:
+                if sum(heights) + (.24 if union_dates else 0) <= rect.h:
                     shape = owner.shapes.add_table(len(cells), len(widths), Inches(rect.x), Inches(rect.y), Inches(rect.w), Inches(sum(heights)))
                     shape.name = "table:" + ",".join(o.id for o in items)
                     for j, w in enumerate(widths):
@@ -549,6 +564,10 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
                             cell.text_frame.word_wrap = True
                             for p in cell.text_frame.paragraphs:
                                 p.font.name, p.font.size = FONT, Pt(14)
+                    if union_dates:
+                        _put_text(owner, '— = no retained source value for this metric and date.',
+                                  Rect(rect.x, rect.y + sum(heights) + .04, rect.w, .20),
+                                  size=FOOTNOTE_PT, color=MUTED)
                     return []
             # A short single-series support band shows ALL periods horizontally,
             # rather than losing intermediate changes or creating a near-empty continuation.
@@ -595,6 +614,11 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
                 rows.append(cells)
                 heights.append(row_h)
                 shown.append(o)
+            if len(items) - len(shown) == 1 and len(shown) >= 4 and not charts:
+                # Balance a full-width exact-data split instead of leaving one
+                # row on a separate continuation. Keep all source values intact.
+                keep = (len(items) + 1) // 2
+                rows, shown, heights = rows[:keep], shown[:keep], heights[:keep + 1]
             if not shown:
                 if rect.h < 2:
                     return items

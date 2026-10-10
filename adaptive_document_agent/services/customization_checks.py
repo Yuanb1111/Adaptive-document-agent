@@ -61,7 +61,18 @@ def check_requirements(result, presentation=None, *, export_verified=False):
                                                       message='Requirement supplied to report generation; fulfillment not verified.'))
             check = check.model_copy(deep=True)
             if req.kind == 'output_language' and export_verified and presentation is not None:
-                from .report_language import audience_copy
+                from .report_language import audience_copy, original_language
+                if req.language_scope == 'source_tables':
+                    if original_language(req.language):
+                        ids = [r['table'].table_id for r in catalog]
+                        check.status = 'satisfied' if ids and all(table_pages.get(i) for i in ids) else 'not_met'
+                        check.message = 'Original source-table cells verified in exported editable tables.' if ids else 'No original source tables were exported.'
+                        check.verification = 'source_fragment_cells'
+                    else:
+                        check.status = 'unsupported'
+                        check.message = 'Source tables retain literal evidence; translated source-table cells are not supported.'
+                    checks.append(check)
+                    continue
                 mapping = requirements.copy_translations
                 text = audience_copy(presentation)
                 normalized = lambda value: ' '.join(value.split())
@@ -72,6 +83,9 @@ def check_requirements(result, presentation=None, *, export_verified=False):
                     check.message += f' {len(remaining)} display strings remain outside the checked translation.'
                 elif check.status == 'planned':
                     check.status = 'satisfied'
+                if req.language_scope == 'all' and catalog and not original_language(req.language):
+                    check.status = 'partial'
+                    check.message += ' Original evidence tables retain their literal source language.'
                 check.verification = 'rendered_display_copy; numeric_tokens_preserved'
             if req.kind in {'analysis_focus', 'content_detail'} and export_verified:
                 if check.status == 'planned' and check.verification.startswith('model_semantic_review_satisfied;'):

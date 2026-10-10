@@ -30,7 +30,7 @@ class ReadPart(BaseModel):
     start_line: int = Field(ge=1)
     end_line: int = Field(ge=1)
     title: str = Field(min_length=1, max_length=160)
-    role: Literal['content', 'layout']
+    role: Literal['content', 'heading', 'layout']
     reading_note: str = Field(min_length=1, max_length=800)
     facts: list[ReadFact] = Field(default_factory=list, max_length=2)
 
@@ -64,17 +64,20 @@ _RULES = (
     'in every supplied block exactly once, with no gaps/overlaps. A block or page boundary is not '
     'a semantic section boundary: describe continuations under their actual topic; the later editor '
     'may merge them. Split a block when a new subsection starts. Source headings need not be familiar. '
-    'Use role content for source substance, layout only for running headers/footers/blank layout. '
+    'Use role content for source substance, heading for a standalone subsection title without '
+    'body text, and layout only for running headers/footers/blank layout. '
     'Group continuous lines under their actual subsection, rather than creating a part per line. '
     'For each content part extract up to two material source-supported facts and a concise reading_note '
     'explaining its subject, significant qualifications, and what is unresolved. Do not silently discard '
     'a part merely because it is not suitable for a slide. If no safe fact can be extracted, facts may '
-    'be empty, but explain the limitation in reading_note. Layout parts have no facts. '
+    'be empty, but explain the limitation in reading_note; complete introduction coverage then fails '
+    'rather than pretending the part was summarized. Standalone headings and layout have no facts. '
     'Keep reading_note under 400 characters (hard limit 800); do not repeat the source paragraph. '
     'Every fact needs a concise label/text (target 180, hard limit 600 characters for necessary qualifications) and quote_start_line/quote_end_line '
     'for a short contiguous passage entirely within its part. Python retains the literal source quote '
     'and page from those lines, so do not repeat source text or supply source_pages in the JSON. '
-    'Choose only the lines needed to substantiate the fact, between 8 and 1800 source characters. Preserve source '
+    'Choose only the lines needed to substantiate the fact, target under 1800 source characters; '
+    'up to 6000 are allowed when the row and its headers span a long extracted table. Preserve source '
     'numeric spelling, dates, currency, scale, units, ranking attribution and conditions. '
     'For table facts, the quote must include the column/period and unit headers that establish '
     'the meaning of the selected row values. A bare row without its headers is insufficient. '

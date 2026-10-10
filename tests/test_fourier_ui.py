@@ -124,3 +124,60 @@ def test_result_widgets_keep_downloads_evidence_and_export_gate(monkeypatch, blo
     assert not page.exception, page.exception
     assert any(item.value == "Original source wording." for item in page.text)
     assert all(item.proto.ignore_rerun for item in page.get("download_button"))
+
+
+def test_result_tab_events_retain_completed_downloads_without_rerunning_shell(monkeypatch):
+    """Send the fragment-scoped widget event that a browser sends for a tab click."""
+    from dataclasses import replace
+    from streamlit.proto.WidgetStates_pb2 import WidgetStates
+    from streamlit.runtime.scriptrunner import get_script_run_ctx
+    from streamlit.runtime.scriptrunner_utils.script_requests import ScriptRequests
+    from adaptive_document_agent.ui import result_explorer
+    try:
+        from streamlit.runtime.scriptrunner_utils.script_run_context import ThreadState
+    except ImportError:
+        ThreadState = None
+
+    fragments, views = [], []
+    original_view = result_explorer._render_view
+
+    def record_view(ui, result, label, scope_key):
+        fragments.append(ThreadState.get().fragment_id if ThreadState is not None
+                         else get_script_run_ctx().current_fragment_id)
+        views.append(label)
+        original_view(ui, result, label, scope_key)
+
+    monkeypatch.setattr(result_explorer, '_render_view', record_view)
+    page = AppTest.from_string('''import streamlit as st
+from tests.test_fourier_ui import sample_result
+from adaptive_document_agent.ui import result_explorer
+if "completed_result" not in st.session_state:
+    st.session_state.completed_result = sample_result()
+st.session_state.shell_runs = st.session_state.get("shell_runs", 0) + 1
+st.download_button("Download presentation", b"completed-presentation", "analysis.pptx", on_click="ignore")
+st.download_button("Download analysis JSON", st.session_state.completed_result.model_dump_json(), "analysis.json", on_click="ignore")
+result_explorer.render(st, st.session_state.completed_result, "download-flow")
+''', default_timeout=15).run()
+    assert not page.exception, page.exception
+    assert fragments[0]
+    assert [item.proto.label for item in page.get('download_button')] == [
+        'Download presentation', 'Download analysis JSON']
+    assert all(item.proto.ignore_rerun for item in page.get('download_button'))
+    original_result = page.session_state['completed_result']
+    tab_id = page._session_state._state._key_id_mapper.get_id_from_key('result_view_download-flow')
+    original_request = ScriptRequests.request_rerun
+
+    def fragment_request(runner, data):
+        return original_request(runner, replace(data, fragment_id_queue=[fragments[0]]))
+
+    # AppTest normally sends full-app reruns; emulate the browser's fragment ID.
+    monkeypatch.setattr(ScriptRequests, 'request_rerun', fragment_request)
+    for label in ['Analysis', 'Sources', 'Analysis']:
+        states = WidgetStates()
+        states.widgets.add(id=tab_id, string_value=label)
+        page._run(states)
+        assert not page.exception, page.exception
+        assert page.session_state['shell_runs'] == 1
+        assert page.session_state['completed_result'] is original_result
+    assert views == ['Overview', 'Analysis', 'Sources', 'Analysis']
+    assert len(set(fragments)) == 1

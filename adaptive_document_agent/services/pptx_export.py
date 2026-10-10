@@ -201,6 +201,8 @@ def build_presentation(result: PipelineResult, template_path: str | Path | None 
     _number_slides(presentation)
     from .report_language import apply_report_language
     apply_report_language(presentation, result)
+    from .summary_export import verify_summary_export
+    verify_summary_export(presentation, result)
 
     # Pre-export preflight check and sanitization
     preflight = PresentationPreflight(presentation)
@@ -691,6 +693,8 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
             if len(rendered) != 1:
                 raise ValueError('Summary page exceeds its layout budget; merge/shorten supported copy.')
             for slide in rendered:
+                from .summary_export import bind_summary_items
+                bind_summary_items(slide, page)
                 slide._ada_section_label = page.title
         # A fully read Summary with justified omissions needs no placeholder.
         return

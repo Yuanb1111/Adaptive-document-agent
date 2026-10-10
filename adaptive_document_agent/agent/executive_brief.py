@@ -168,9 +168,10 @@ class ExecutiveBriefWriter:
                     untrusted_document_message(json.dumps(payload, ensure_ascii=False))]
         from .report_requirements import instruction_messages
         messages[1:1] = instruction_messages(result.profile, purpose='executive briefing')
+        from .brief_meaning_review import meaning_validator
         brief = generate_with_item_repair(self.gateway, messages, result=result, excerpts=excerpts,
                                          topics=included_topics, source_context=payload, evidence_catalog=blocks,
-                                         cancelled=cancelled)
+                                         cancelled=cancelled, semantic_validator=meaning_validator(self.gateway, cancelled=cancelled))
         record_uncited_checks(result, brief)
         return brief
 

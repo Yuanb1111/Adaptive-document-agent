@@ -106,3 +106,26 @@ def test_long_qualified_label_still_continues_when_a_readable_table_cannot_fit()
     assert all(value in cells for value in ["68.8%", "41.9%", "34.7%"])
     assert any("".join(cell.split()) == "".join(label.split()) for cell in cells)
     assert all(item.id in slides[0].notes_slide.notes_text_frame.text for item in support)
+
+
+def test_different_retained_point_date_spans_fit_one_grid_without_inventing_cells():
+    from adaptive_document_agent.models import PresentationSlide, PresentationVisualBlock
+    from tests.test_p0_composition import result_for
+    groups = [('Loans', [2022, 2023, 2024]), ('Lease obligations', [2021, 2022, 2023, 2024]),
+              ('Net current assets', [2021, 2022, 2023, 2024])]
+    retained = [observation(f'{label}-{year}', label, year - 2000, f'As of December 31, {year}')
+                for label, years in groups for year in years]
+    plan = PresentationSlide(id='dates', slide_type='analysis', title='Disclosed obligations and assets',
+        source_pages=[3], observation_ids=[o.id for o in retained], layout='data_overview',
+        visual_blocks=[PresentationVisualBlock(role='table', observation_ids=[o.id for o in retained])])
+    result = result_for(retained, [], plan)
+    before = result.model_dump_json()
+    deck, slides = _render(result)
+    assert len(slides) == 1
+    table = next(s.table for s in slides[0].shapes if s.has_table)
+    assert len(table.rows) == 4 and len(table.columns) == 5
+    assert [table.cell(0, i).text for i in range(1, 5)] == [f'31 Dec {year}' for year in range(2021, 2025)]
+    loan_row = next(i for i in range(1, len(table.rows)) if table.cell(i, 0).text == 'Loans')
+    assert table.cell(loan_row, 1).text == '—'
+    assert any('no retained source value' in s.text for s in slides[0].shapes if s.has_text_frame)
+    assert result.model_dump_json() == before

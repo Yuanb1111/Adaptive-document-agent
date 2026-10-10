@@ -40,11 +40,11 @@ def review_content_requirements(gateway, result):
              'Do not equate a mention in a title with substantive coverage or detailed treatment. '
              'Use satisfied only for demonstrated substantive treatment; otherwise partial/not_met '
              'with a specific reason in the user instruction language. Cite exact supporting slide_ids '
-             'from slides. Introduction findings cite the company_overview slide ID. Do not invent '
+             'from slides. Introduction findings cite the exact supplied slide ID whose type is company_overview. Do not invent '
              'evidence, counts, IDs or completion. This is model semantic review, not export proof. '
              'Leave table_ids and slide_numbers empty. Use only supplied source_pages.'},
             untrusted_document_message(payload)], ContentRequirementReviews, stage='presentation',
-            allow_repair=False, max_tokens=2048)
+            allow_repair=False)
         ids = {r.id for r in requested}
         slide_ids = {s['id'] for s in slides}
         if len(response.checks) != len(ids) or {c.requirement_id for c in response.checks} != ids:

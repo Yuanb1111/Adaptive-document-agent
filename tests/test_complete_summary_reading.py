@@ -167,11 +167,14 @@ def test_full_scope_includes_more_than_twenty_header_pages_and_long_page_tail():
     assert pages == list(range(1, 26))
     assert ''.join(b.text for b in blocks if b.page == 25) == result.document.pages[-1].text
     client = SummaryClient(omit=True)
-    generated = generate(result, client)
-    review = generated.presentation_plan.company.summary_review
+    with pytest.raises(ValueError, match='Every substantive Summary part'):
+        generate(result, client)
+    from adaptive_document_agent.models.summary import SummaryReview
+    review = SummaryReview.model_validate_json(next(w.message for w in result.validation_warnings
+        if w.code == 'company_introduction_summary_audit'))
     assert not reading_errors(review, result)
     assert any(p.source_page == 25 and p.facts for p in review.parts)
-    assert not generated.presentation_plan.company.summary_pages
+    assert review.status == 'incomplete'
 
 
 @pytest.mark.parametrize('mutation,fragment', [
@@ -314,7 +317,7 @@ def test_editor_rejects_sparse_pages_or_incomplete_decisions(mutation):
     assert len(audit['plan_audits']) == 2 and audit['status'] == 'incomplete'
 
 
-def test_sparse_editor_repair_can_omit_all_pages_without_a_placeholder():
+def test_sparse_editor_repair_cannot_omit_substantive_parts():
     def edit(draft, payload, messages):
         if len(messages) == 2:
             for item in draft.summary_pages[0].items:
@@ -324,11 +327,8 @@ def test_sparse_editor_repair_can_omit_all_pages_without_a_placeholder():
             for decision in draft.summary_decisions:
                 decision.decision = 'omit'
                 decision.reason = 'Retained source facts do not merit a separate introductory slide.'
-    result = generate(distinct_source(1), SummaryClient(edit_plan=edit))
-    deck = Presentation()
-    _add_company_at_a_glance(deck, result, result.presentation_plan.slides[0])
-    assert len(deck.slides) == 0
-    assert result.presentation_plan.company.summary_review.status == 'complete'
+    with pytest.raises(ValueError, match='Every substantive Summary part'):
+        generate(distinct_source(1), SummaryClient(edit_plan=edit))
 
 
 def test_parallel_batches_overlap_and_keep_source_order(monkeypatch):
@@ -421,7 +421,7 @@ def test_physical_pages_retain_every_selected_fact_citations_and_full_decisions(
         assert slide._ada_section_label == page.title
         assert sum(len(shape.text) for shape in slide.shapes if shape.name == 'brief:body') >= 180
         assert 'Source: Document disclosures' in text
-    assert 'summary-reading-v1' in deck.slides[0].notes_slide.notes_text_frame.text
+    assert 'summary-reading-v2-complete-content' in deck.slides[0].notes_slide.notes_text_frame.text
     assert 'Reserved for later' not in ' '.join(shape.text for slide in deck.slides for shape in slide.shapes if shape.has_text_frame)
 
 
@@ -462,6 +462,10 @@ def complete_deck(result):
 @pytest.mark.parametrize('omit', [False, True])
 def test_full_export_agenda_matches_dynamic_introduction_and_all_omissions(omit):
     from adaptive_document_agent.services.pptx_export import build_presentation
+    if omit:
+        with pytest.raises(ValueError, match='Every substantive Summary part'):
+            generate(client=SummaryClient(omit=True))
+        return
     result = complete_deck(generate(client=SummaryClient(omit=omit)))
     payload = build_presentation(result)
     deck = Presentation(BytesIO(payload))

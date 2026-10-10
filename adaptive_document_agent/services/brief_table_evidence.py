@@ -33,6 +33,8 @@ def _basis_key(text):
 def _claim_keeps_basis(tail, basis):
     """Require the complete source denominator and a demonstrable boundary."""
     tail = tail.lstrip()
+    if basis in {'unit', 'units'} and re.match(r'^(?:/\s*(?:台|单位)|每(?:台|单位))(?:[，。；、\s]|$)', tail):
+        return True
     start = _BASIS_START.match(tail)
     if not basis:
         return start is None
@@ -78,8 +80,13 @@ class TableQuoteContext:
         """Exempt complete supported dates, never authorize their digits elsewhere."""
         text = _DATE.sub(lambda m: " " if (m[1].casefold(), str(int(m[2])), m[3]) in self.dates
                         else m[0], text)
-        return _CHINESE_DATE.sub(lambda m: " " if 1 <= int(m[2]) <= 12 and (
+        text = _CHINESE_DATE.sub(lambda m: " " if 1 <= int(m[2]) <= 12 and (
             _MONTHS[int(m[2]) - 1].casefold(), str(int(m[3])), m[1]) in self.dates else m[0], text)
+        # Only an exact, cited negative table cell authorizes accounting signs.
+        # Parenthesized footnote indexes and positive cells retain their meaning.
+        return re.sub(r'\(\s*(\d[\d,]*(?:\.\d+)?)\s*\)',
+            lambda m: '-' + m[1] if '-' + _number(float(m[1].replace(',', ''))) in self.signed_numbers
+            else m[0], text)
 
     def basis_errors(self, text):
         from .executive_brief import _MONEY_QUANTITY, _QUANTITY, _quantities

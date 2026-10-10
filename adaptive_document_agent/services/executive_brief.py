@@ -58,16 +58,23 @@ def _quantities(text: str) -> set[tuple[str, str, str]]:
 def restore_percentage_symbols(text: str, quotes: list[str], *, source_percentages=frozenset()) -> str:
     """Restore only an unambiguous, item-bound literal percentage unit."""
     units = {}
+    years = set()
     for quote in quotes:
+        for line in quote.splitlines():
+            if re.fullmatch(r'\s*(?:(?:19|20)\d{2}\s*)+', line):
+                years.update(re.findall(r'(?:19|20)\d{2}', line))
         for currency, value, unit in _quantities(quote):
             units.setdefault(value, set()).add((currency, unit))
 
     def replace(match):
         value = PresentationPlanValidator._normalize_number(match['value'])
         if (not match['currency'] and not match['currency_suffix'] and not match['unit']
+                and value not in years
                 and units.get(value)
                 and (units[value] <= {('', '%'), ('', 'percent')}
                      or value in source_percentages and units[value] <= {('', ''), ('', '%'), ('', 'percent')})
+                and not (re.fullmatch(r'(?:19|20)\d{2}', match['value']) and
+                         re.match(r'\s*(?:年|年度|财年|财年度|上半年|下半年|Q[1-4]|H[12])', text[match.end():], re.I))
                 and not re.match(r"\s*(?:years?\b|units?\b|times?\b|percentage\s+points?\b|pp\b)", text[match.end():], re.I)):
             return match.group(0).rstrip() + '%' + match.group(0)[len(match.group(0).rstrip()):]
         return match.group(0)

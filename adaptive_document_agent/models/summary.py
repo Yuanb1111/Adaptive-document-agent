@@ -20,14 +20,14 @@ class SummarySourceBlock(BaseModel):
 class SummaryFact(BaseModel):
     label: str = Field(min_length=1, max_length=60)
     text: str = Field(min_length=1, max_length=600)
-    source_quote: str = Field(min_length=8, max_length=1800)
+    source_quote: str = Field(min_length=8, max_length=6000)
     source_pages: list[int] = Field(min_length=1)
 
 
 class SummaryPart(BaseModel):
     id: str
     title: str
-    role: Literal['content', 'layout']
+    role: Literal['content', 'heading', 'layout']
     block_id: str
     start_line: int
     end_line: int
@@ -46,7 +46,7 @@ class SummarySlidePage(BaseModel):
     id: str = Field(min_length=1, max_length=80)
     title: str = Field(min_length=1, max_length=65)
     source_section: str = Field(min_length=1, max_length=160)
-    items: list[SummarySlideItem] = Field(min_length=2, max_length=4)
+    items: list[SummarySlideItem] = Field(min_length=1, max_length=4)
 
 
 class SummaryPartDecision(BaseModel):
@@ -56,7 +56,7 @@ class SummaryPartDecision(BaseModel):
 
 
 class SummaryReview(BaseModel):
-    version: str = 'summary-reading-v1'
+    version: str = 'summary-reading-v2-complete-content'
     document_id: str
     document_sha256: str
     source_pages: list[int]

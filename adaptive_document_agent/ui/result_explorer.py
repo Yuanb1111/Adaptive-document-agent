@@ -14,6 +14,11 @@ CHARTS_PER_PAGE = 5
 
 
 def render(st, result, scope_key):
+    """Keep result interactions local so the completed page does not reset."""
+    st.fragment(_render_tabs)(st, result, scope_key)
+
+
+def _render_tabs(st, result, scope_key):
     """Use tracked tabs when supported; older Streamlit uses a view selector."""
     key = f"result_view_{scope_key}"
     if "on_change" in inspect.signature(st.tabs).parameters:

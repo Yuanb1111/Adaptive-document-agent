@@ -26,6 +26,7 @@ class ReportRequirement(BaseModel):
     reason: str = ''
     sections: list[RequestedSection] = Field(default_factory=list)
     language: str = ''
+    language_scope: Literal['body', 'source_tables', 'all'] = 'body'
     detail: Literal['concise', 'balanced', 'detailed'] = 'balanced'
     max_slides: int | None = Field(default=None, ge=1, le=500)
 

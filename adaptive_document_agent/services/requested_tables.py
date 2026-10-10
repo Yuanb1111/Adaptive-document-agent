@@ -120,6 +120,9 @@ def render_requested_tables(presentation, result):
             for batch_index, batch in enumerate(batches):
                 title = 'Data Index: Source tables'
                 slide = first_slide if batch_index == 0 else _base_slide(presentation, title, section.title)
+                for placeholder in slide.placeholders:
+                    if placeholder.placeholder_format.idx == 16:
+                        placeholder.name = 'customization:source_section'
                 label = _text(slide, table_title, .45, content_top, 11.7, label_height, size=13, color=FOURIER_PURPLE)
                 label.name = 'customization:table_label'
                 data = [*headers, *[row[2] for row in batch]]

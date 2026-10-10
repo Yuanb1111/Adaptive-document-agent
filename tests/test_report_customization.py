@@ -65,6 +65,8 @@ def test_interpreter_uses_gateway_separates_user_from_untrusted_pdf():
         if len(calls) == 1:
             req.sections = []
             req.resolution = 'ambiguous'
+        if model.__name__ == 'SectionBindings':
+            return model(bindings=[{'requirement_id': req.id, 'resolution': req.resolution, 'sections': req.sections}])
         return model(items=[req])
     parsed = interpret_requirements(SimpleNamespace(generate_structured=generate), document(), 'All Results tables')
     assert parsed.original_request == 'All Results tables'

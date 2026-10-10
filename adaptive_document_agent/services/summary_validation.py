@@ -13,8 +13,13 @@ def fact_errors(fact, result: PipelineResult, source_text: str, page: int) -> li
         errors.append('Each reading fact needs its exact source page')
     if normalize_quote(fact.source_quote) not in normalize_quote(source_text):
         errors.append('Quote is absent from the assigned source part')
+    from .source_quotes import split_literal_quote
+    try:
+        chunks = split_literal_quote(fact.source_quote)
+    except ValueError as exc:
+        return errors + [str(exc)]
     brief = ExecutiveBrief(title='Summary', items=[ExecutiveBriefItem(label=fact.label, text=fact.text,
-        evidence=[BriefQuote(page=page, text=fact.source_quote)])])
+        evidence=[BriefQuote(page=page, text=chunk) for chunk in chunks])])
     errors.extend(validate_executive_brief(brief, result, excerpts={page: source_text}))
     return errors
 
@@ -81,8 +86,12 @@ def reading_errors(review: SummaryReview, result: PipelineResult, *, complete_sc
             else m[0], annotation)
         if PresentationPlanValidator._numbers(annotation) - PresentationPlanValidator._numbers(block.text):
             errors.append('Summary part title/reading note contains unsupported numbers')
-        if part.role == 'layout' and part.facts:
+        if part.role in {'layout', 'heading'} and part.facts:
             errors.append('Layout-only material cannot supply factual slide copy')
+        if part.role == 'content' and not part.facts:
+            errors.append('Every substantive Summary part needs a supported fact for complete coverage')
+        if part.role == 'heading' and (len(source.strip()) > 180 or len([line for line in source.splitlines() if line.strip()]) > 2):
+            errors.append('Heading-only classification cannot hide a substantive source passage')
         for fact in part.facts:
             errors.extend(fact_errors(fact, result, source, block.page))
     for block in review.source_blocks:
@@ -97,8 +106,8 @@ def reading_errors(review: SummaryReview, result: PipelineResult, *, complete_sc
     return list(dict.fromkeys(errors))
 
 
-def presentation_errors(review: SummaryReview, slide_pages, result: PipelineResult) -> list[str]:
-    errors = reading_errors(review, result)
+def presentation_errors(review: SummaryReview, slide_pages, result: PipelineResult, *, validate_reading=True) -> list[str]:
+    errors = reading_errors(review, result) if validate_reading else []
     parts = {p.id: p for p in review.parts}
     used, copy_seen, page_ids = set(), set(), set()
     for page in slide_pages:
@@ -108,7 +117,7 @@ def presentation_errors(review: SummaryReview, slide_pages, result: PipelineResu
         if not page.title.strip() or not page.source_section.strip():
             errors.append('Summary slide needs a title and source section')
         # Two tiny sentences must not become a separate, nearly empty slide.
-        if sum(len(item.text.strip()) for item in page.items) < 180:
+        if len(page.items) > 1 and sum(len(item.text.strip()) for item in page.items) < 180:
             errors.append('Sparse Summary slide: merge its supported facts or omit it; never pad copy')
         for item in page.items:
             from .presentation_brief import is_technical_copy
@@ -144,4 +153,7 @@ def presentation_errors(review: SummaryReview, slide_pages, result: PipelineResu
     for pid, decision in decisions.items():
         if not decision.reason.strip() or (decision.decision == 'include') != (pid in used):
             errors.append('Summary include/omit decision does not match rendered evidence: ' + pid)
+    for part in review.parts:
+        if part.role == 'content' and part.id not in used:
+            errors.append('Every substantive Summary part must appear in the introduction: ' + part.id)
     return list(dict.fromkeys(errors))

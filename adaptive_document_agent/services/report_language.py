@@ -6,10 +6,16 @@ from collections import Counter
 from .text_capacity import wrap_copy
 
 
+def original_language(language):
+    return language.strip().casefold() in {'original', 'source', 'original language', '原文', '原始语言'}
+
+
 def text_frames(presentation):
     for slide in presentation.slides:
         for shape in slide.shapes:
             if shape.has_text_frame:
+                if shape.name in {'customization:table_label', 'customization:source_section'}:
+                    continue
                 yield shape.text_frame, shape.width.inches, shape.height.inches
             elif shape.has_table and not shape.name.startswith('customization:source_table:'):
                 for row in shape.table.rows:
@@ -26,8 +32,17 @@ def translatable(text):
 
 
 def audience_copy(presentation):
-    return list(dict.fromkeys(frame.text for frame, _, _ in text_frames(presentation)
-                              if frame.text.strip() and translatable(frame.text)))
+    values = [frame.text for frame, _, _ in text_frames(presentation)]
+    values.extend(element.text or '' for element in chart_display_strings(presentation))
+    return list(dict.fromkeys(value for value in values if value.strip() and translatable(value)))
+
+
+def chart_display_strings(presentation):
+    """Native display caches only; original embedded Excel source stays literal."""
+    for slide in presentation.slides:
+        for shape in slide.shapes:
+            if shape.has_chart:
+                yield from shape.chart._chartSpace.xpath('.//c:strCache/c:pt/c:v')
 
 
 def translation_errors(source, translated):
@@ -76,3 +91,9 @@ def apply_report_language(presentation, result):
             first.text = translated
         for paragraph in paragraphs[1:]:
             paragraph.text = ''
+    for element in chart_display_strings(presentation):
+        source = element.text or ''
+        if source in mapping:
+            if translation_errors(source, mapping[source]):
+                raise ValueError('Localized chart label changed source numbers or units')
+            element.text = mapping[source]

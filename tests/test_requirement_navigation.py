@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from adaptive_document_agent.agent.report_requirements import interpret_requirements, appendix_pages
-from adaptive_document_agent.agent.requirement_navigation import NavigationHeadings, navigation_batches
+from adaptive_document_agent.agent.requirement_navigation import NavigationHeadings, SectionBindings, navigation_batches
 from adaptive_document_agent.models.customization import ReportRequirement, ReportRequirements, RequestedSection
 from adaptive_document_agent.services.llm.exceptions import PrivacyViolationError, LLMTransportError
 from tests.test_report_customization import document, table_requirement
@@ -22,6 +22,11 @@ def intent():
 REQUEST = 'All Results tables; Chinese body'
 
 
+def bindings(requirement):
+    return SectionBindings(bindings=[{'requirement_id': requirement.id,
+        'resolution': requirement.resolution, 'reason': requirement.reason, 'sections': requirement.sections}])
+
+
 def test_long_navigation_reaches_real_interpreter_and_compact_outline_binding():
     doc = document()
     doc.pages[0].text = 'Contents ' + 'untrusted source ' * 60_000
@@ -32,9 +37,7 @@ def test_long_navigation_reaches_real_interpreter_and_compact_outline_binding():
             assert 'untrusted source' not in str(messages)
             return intent()
         assert len(str(messages)) < 60_000
-        response = intent()
-        response.items[0] = table_requirement()
-        return response
+        return bindings(table_requirement())
     result = interpret_requirements(SimpleNamespace(generate_structured=generate), doc, REQUEST)
     assert len(calls) == 2 and not result.interpretation_error
     assert appendix_pages(result) == {2, 3}
@@ -78,7 +81,7 @@ def test_complete_batched_navigation_is_supplied_before_final_binding(workers):
             response.items[0].resolution = 'resolved'
             response.items[0].sections = [RequestedSection(title='Results', start_page=2, end_page=3,
                 start_quote='Results', next_section_quote='Appendix')]
-        return response
+        return bindings(response.items[0]) if observed else response
     result = interpret_requirements(SimpleNamespace(generate_structured=generate, discovery_workers=workers), doc, REQUEST)
     assert appendix_pages(result) == {2,3}
     assert len(result.navigation_audit) > 1

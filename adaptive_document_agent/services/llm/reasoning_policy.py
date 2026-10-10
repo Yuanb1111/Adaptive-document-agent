@@ -12,7 +12,7 @@ from .config import LLMSettings, ProviderName
 from .costs import direct_deepseek
 from .credentials import DEFAULT_ENDPOINTS, provider_endpoint
 
-REASONING_POLICY_VERSION = "operation-reasoning-v5"
+REASONING_POLICY_VERSION = "operation-reasoning-v6"
 # Documented model IDs, independent of pricing data. New aliases/models do not
 # inherit transport capabilities by prefix. See docs/LLM_REASONING_POLICY.md.
 _DEEPSEEK_THINKING_MODELS = frozenset({"deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro"})
@@ -24,6 +24,7 @@ _SIMPLE_OPERATIONS = frozenset({("presentation", "IntroductionPages"), ("report"
                               ("report", "ExecutiveBrief"), ("report", "ReportPlan"),
                               ("presentation", "VisualSelection"),
                               ("presentation", "ReportRequirements"),
+                              ("presentation", "SectionBindings"),
                               ("presentation", "CopyTranslations"),
                               ("presentation", "TranslationReview")})
 

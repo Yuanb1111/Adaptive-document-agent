@@ -14,6 +14,9 @@ class TrackedUI:
         self.selected = selected
         self.session_state = {}
 
+    def fragment(self, function):
+        return function
+
     def tabs(self, labels, *, key, on_change):
         assert on_change == "rerun"
         return [Tab(label == self.selected) for label in labels]
@@ -47,7 +50,7 @@ def test_only_selected_tab_executes(monkeypatch, selected):
 
 def test_minimum_streamlit_uses_conditional_selector(monkeypatch):
     ui = SimpleNamespace(session_state={}, tabs=lambda labels: pytest.fail("Eager tabs must not run"),
-                         segmented_control=lambda *args, **kwargs: "Overview")
+                         segmented_control=lambda *args, **kwargs: "Overview", fragment=lambda function: function)
     overview, charts = Mock(), Mock(side_effect=AssertionError("Hidden charts ran"))
     monkeypatch.setattr(result_explorer.overview, "render", overview)
     monkeypatch.setattr(result_explorer, "_render_charts", charts)

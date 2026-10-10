@@ -1,17 +1,31 @@
 """Locate requested chapters after intent parsing, with complete bounded navigation."""
 
 import json
+from typing import Literal
 from concurrent.futures import ThreadPoolExecutor
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
-from adaptive_document_agent.models.customization import ReportRequirements
+from adaptive_document_agent.models.customization import RequestedSection
 from adaptive_document_agent.services.llm.exceptions import PrivacyViolationError, LLMTransportError
 from adaptive_document_agent.services.source_quotes import normalize_quote
 from .prompting import untrusted_document_message
 
 NAVIGATION_BUDGET = 60_000
 MAX_NAVIGATION_BATCHES = 32
+
+
+class SectionBinding(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    requirement_id: str
+    resolution: Literal['resolved', 'ambiguous', 'unsupported']
+    reason: str = ''
+    sections: list[RequestedSection] = Field(default_factory=list)
+
+
+class SectionBindings(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    bindings: list[SectionBinding]
 
 
 class NavigationHeading(BaseModel):
@@ -115,23 +129,28 @@ def resolve_requested_sections(gateway, requirements, document, instruction):
              'and full physical ranges when available. Otherwise use literal chapter_openings quotes '
              'as start_quote and next_section_quote on end_page+1. Never treat a contents entry or '
              'repeated running header as an opening. Preserve ambiguous/absent chapters with a specific '
-             'reason; never guess. Return the full ReportRequirements, leaving copy_translations empty.'},
+             'reason; never guess. Return only SectionBindings: one binding per requested table '
+             'requirement_id with sections, resolution (resolved/ambiguous/unsupported) and reason. '
+             'Never rewrite other requirement fields.'},
             {'role': 'user', 'content': 'Trusted user instructions:\n' + instruction + '\nInterpreted requirements:\n'
              + original.model_dump_json()},
             untrusted_document_message(json.dumps(payload, ensure_ascii=False)),
         ]
         for attempt in range(2):
             try:
-                reply = gateway.generate_structured(messages, ReportRequirements, stage='presentation',
-                    allow_repair=False, max_tokens=4096)
-                before = {r.id: r for r in original.items}
-                if len(reply.items) != len(before) or {r.id for r in reply.items} != before.keys():
-                    raise ValueError('Chapter resolution must preserve every interpreted requirement')
-                for item in reply.items:
-                    old = before[item.id]
-                    mutable = {'sections', 'resolution', 'reason'} if old in requested else set()
-                    if item.model_dump(exclude=mutable) != old.model_dump(exclude=mutable):
-                        raise ValueError('Chapter resolution changed interpreted user intent')
+                reply = gateway.generate_structured(messages, SectionBindings, stage='presentation',
+                    allow_repair=False)
+                if not isinstance(reply, SectionBindings):
+                    raise ValueError('Chapter resolution requires only SectionBindings')
+                ids = {r.id for r in requested}
+                if len(reply.bindings) != len(ids) or {b.requirement_id for b in reply.bindings} != ids:
+                    raise ValueError('Chapter resolution must bind every requested table ID exactly once')
+                candidate = original.model_copy(deep=True)
+                for binding in reply.bindings:
+                    if binding.resolution not in {'resolved', 'ambiguous', 'unsupported'}:
+                        raise ValueError('Invalid chapter resolution')
+                    item = next(r for r in candidate.items if r.id == binding.requirement_id)
+                    item.sections, item.resolution, item.reason = binding.sections, binding.resolution, binding.reason
                     if 'chapter_openings' in payload:
                         for target in item.sections:
                             if target.section_id or not any(h['page'] == target.start_page
@@ -142,10 +161,10 @@ def resolve_requested_sections(gateway, requirements, document, instruction):
                                     and normalize_quote(target.next_section_quote) in normalize_quote(h['quote'])
                                     for h in payload['chapter_openings']):
                                 raise ValueError('Chapter end was not returned by complete navigation review')
-                errors = validate_requirements(reply, document, instruction)
+                errors = validate_requirements(candidate, document, instruction)
                 if errors:
                     raise ValueError('; '.join(errors))
-                requirements.items = [next(r for r in reply.items if r.id == old.id) for old in original.items]
+                requirements.items = candidate.items
                 return
             except PrivacyViolationError:
                 raise

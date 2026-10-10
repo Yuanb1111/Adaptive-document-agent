@@ -14,6 +14,32 @@ def normalize_quote(text: str) -> str:
     return " ".join(text.casefold().split())
 
 
+def split_literal_quote(text: str, limit: int = 1800) -> list[str]:
+    """Bound citations without dropping words, signs, units or qualifications."""
+    parts, remaining = [], text
+    while len(remaining) > limit:
+        cuts = list(re.finditer(r'\s+', remaining[8:limit + 1]))
+        if not cuts:
+            raise ValueError('A literal citation cannot be split at a safe word boundary')
+        cut = 8 + cuts[-1].start()
+        parts.append(remaining[:cut])
+        remaining = remaining[cut:].lstrip()
+    if len(remaining) < 8 and parts:
+        # Keep a short final word with its preceding chunk.
+        previous = parts.pop()
+        cut = max(previous.rfind(' '), previous.rfind('\n'))
+        if cut < 8:
+            raise ValueError('A literal citation has an unbounded final fragment')
+        parts.append(previous[:cut])
+        remaining = previous[cut:].lstrip() + ' ' + remaining
+    parts.append(remaining)
+    if len(parts) > 4 or any(len(p) < 8 or len(p) > limit for p in parts):
+        raise ValueError('A literal citation exceeds the bounded evidence capacity')
+    if normalize_quote(' '.join(parts)) != normalize_quote(text):
+        raise ValueError('Splitting altered literal evidence')
+    return parts
+
+
 @dataclass(frozen=True)
 class QuotePassage:
     page: int
