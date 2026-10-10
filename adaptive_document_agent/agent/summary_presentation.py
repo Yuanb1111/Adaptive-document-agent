@@ -1,6 +1,6 @@
 """Model editorial choices over a complete, validated introductory reading."""
 import json
-from concurrent.futures import CancelledError
+from concurrent.futures import CancelledError, ThreadPoolExecutor
 
 from adaptive_document_agent.models import ValidationIssue
 from adaptive_document_agent.models.presentation import CompanyProfile
@@ -12,6 +12,7 @@ from .prompting import untrusted_document_message
 from .summary_reader import read_summary
 from adaptive_document_agent.utils.ids import stable_id
 from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError, LLMResponseError
+from adaptive_document_agent.utils.timing import record_timing
 
 
 def planning_batches(parts, *, character_budget=24000, content_budget=12):
@@ -38,10 +39,13 @@ def generate_summary_presentation(gateway, result, pages, response_model, *, sco
     company = CompanyProfile(summary_review=review)
     try:
         review.source_blocks = source_blocks(result, pages)
-        read_summary(gateway, result, review, cancelled=cancelled)
-        for index, parts in enumerate(planning_batches(review.parts)):
+        with record_timing(review.timings_ms, 'reading'):
+            read_summary(gateway, result, review, cancelled=cancelled)
+        batches = planning_batches(review.parts)
+        def edit(parts):
             probe = review.model_copy(update={'parts': parts, 'decisions': [], 'plan_audits': []})
-            try:
+            probe.timings_ms = {}
+            with record_timing(probe.timings_ms, 'batch_editorial'):
                 try:
                     draft = _generate_summary_batch(gateway, result, pages, response_model,
                         scope_ranges=scope_ranges, cancelled=cancelled, review_override=probe)
@@ -50,8 +54,19 @@ def generate_summary_presentation(gateway, result, pages, response_model, *, sco
                     draft = reading_presentation(probe, result, response_model)
                     probe.plan_audits.append({'reading_layout': True, 'editorial_error': str(exc),
                                               'retained_part_ids': [p.id for p in parts if p.role=='content']})
-            finally:
-                review.plan_audits.extend(dict(record, batch=index + 1) for record in probe.plan_audits)
+            return draft, probe
+        workers = min(getattr(gateway, 'discovery_workers', 1), len(batches))
+        with record_timing(review.timings_ms, 'editorial'):
+            if workers > 1:
+                # Each batch owns its decisions/audit. All requests still pass
+                # through the same gateway admission and privacy boundary.
+                with ThreadPoolExecutor(max_workers=workers, thread_name_prefix='summary-editorial') as pool:
+                    outcomes = list(pool.map(edit, batches))
+            else:
+                outcomes = [edit(parts) for parts in batches]
+        for index, (draft, probe) in enumerate(outcomes):
+            review.plan_audits.extend(dict(record, batch=index + 1) for record in probe.plan_audits)
+            review.timings_ms[f'editorial_batch_{index+1}'] = probe.timings_ms['batch_editorial']
             company.summary_pages.extend(p.model_copy(update={'id': stable_id('summary_page', index, p.id)})
                                          for p in draft.summary_pages)
             review.decisions.extend(probe.decisions)

@@ -202,7 +202,8 @@ class DocumentOrchestrator:
             for page in document.pages
             if not profile.analysis_page_ranges or any(start <= page.page_number <= end for start, end in profile.analysis_page_ranges)
         ]
-        candidates_images = ChartExtractor().candidates(selected_pages)
+        with record_timing(timings, 'source_chart_inventory'):
+            candidates_images = ChartExtractor().candidates(selected_pages)
         if candidates_images and self.gateway:
             vision_warning = VisionAdapter(self.gateway).unavailable_message()
             if vision_warning:
@@ -318,7 +319,7 @@ class DocumentOrchestrator:
             topic_selection = seed.presentation_topics
             issues.extend(issue for issue in seed.validation_warnings if issue not in issues)
             try:
-                with record_timing(details, 'brief_identity_wait'):
+                with record_timing(timings, 'brief_identity_wait'):
                     attach_introduction(seed.presentation_plan, seed)
             except (LLMResponseError, ValueError):
                 # The ordinary introduction attachment below retains its error
@@ -468,6 +469,7 @@ class DocumentOrchestrator:
                     issues.append(ValidationIssue(code="executive_brief_unavailable", stage="report",
                         severity="warning", message="The final briefing could not be source-checked: " + str(exc)[:500]))
                 finally:
+                    details.update(snapshot.stage_details_ms)
                     # Brief repairs keep their original/patch evidence audit on
                     # this separate snapshot, including rejected recoveries.
                     recorded_issues = {issue.model_dump_json() for issue in issues}
@@ -478,7 +480,8 @@ class DocumentOrchestrator:
 
         # Include cancellation/drain in wall time and capture all worker usage.
         # In particular, a missing/valid final plan may never have awaited it.
-        resources.close()
+        with record_timing(timings, 'background_drain'):
+            resources.close()
         notify("Complete")
         from .source_coverage import link_coverage
         link_coverage(profile.source_coverage, index.observations, presentation_plan)
@@ -511,11 +514,26 @@ class DocumentOrchestrator:
             from adaptive_document_agent.services.customization_checks import check_requirements
             notify('Checking requested report customizations')
             with record_timing(timings, 'customization_review'):
-                review_content_requirements(self.gateway, final_result)
-                prepare_report_language(self.gateway, final_result)
-                check_requirements(final_result)
+                with record_timing(final_result.stage_details_ms, 'content_requirement_review'):
+                    review_content_requirements(self.gateway, final_result)
+                with record_timing(final_result.stage_details_ms, 'report_localization'):
+                    prepare_report_language(self.gateway, final_result, progress=notify)
+                notify('Verifying requested report coverage')
+                with record_timing(final_result.stage_details_ms, 'customization_checks'):
+                    check_requirements(final_result)
             final_result.llm_usage = list(self.gateway.usage) if self.gateway else []
-            final_result.pipeline_total_ms = int((perf_counter() - pipeline_started) * 1000)
+        # Pydantic copies input dictionaries. Timings recorded after constructing
+        # the result must be explicitly synchronized, including the 90% phase.
+        final_result.timings_ms = dict(timings)
+        if presentation_plan and presentation_plan.company.summary_review:
+            final_result.stage_details_ms.update({'company_introduction_' + key: value
+                for key, value in presentation_plan.company.summary_review.timings_ms.items()})
+        final_result.pipeline_total_ms = int((perf_counter() - pipeline_started) * 1000)
+        # Stage details overlap by design. Account for the remaining foreground
+        # work without pretending every nested/background time is additive.
+        final_result.stage_details_ms['foreground_uninstrumented'] = max(0,
+            final_result.pipeline_total_ms - sum(timings.values()))
+        final_result.stage_details_ms['brief_identity_wait'] = timings.get('brief_identity_wait', 0)
         return final_result
 
     @staticmethod

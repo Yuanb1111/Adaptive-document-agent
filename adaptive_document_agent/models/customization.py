@@ -39,6 +39,9 @@ class ReportRequirements(BaseModel):
     interpretation_error: str = ''
     # Only exact source -> display wording. Never modify analytical facts.
     copy_translations: dict[str, str] = Field(default_factory=dict)
+    # Introduction claims are reviewed whole, then paginated for display.
+    # Exact page/item locators avoid collisions between repeated fragments.
+    summary_copy_translations: dict[str, str] = Field(default_factory=dict)
     navigation_audit: list[dict] = Field(default_factory=list)
 
 

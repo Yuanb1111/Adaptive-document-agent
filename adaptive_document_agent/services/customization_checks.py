@@ -94,7 +94,8 @@ def check_requirements(result, presentation=None, *, export_verified=False):
                 mapping = requirements.copy_translations
                 text = audience_copy(presentation)
                 normalized = lambda value: ' '.join(value.split())
-                translated = {normalized(value) for value in mapping.values()}
+                translated = {normalized(value) for value in [*mapping.values(),
+                    *requirements.summary_copy_translations.values()]}
                 remaining = [value for value in text if normalized(value) not in translated]
                 if not mapping or remaining or check.status == 'partial':
                     check.status = 'partial'

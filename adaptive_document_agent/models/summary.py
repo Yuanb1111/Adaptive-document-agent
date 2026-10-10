@@ -72,3 +72,4 @@ class SummaryReview(BaseModel):
     decisions: list[SummaryPartDecision] = Field(default_factory=list)
     read_audits: list[dict] = Field(default_factory=list)
     plan_audits: list[dict] = Field(default_factory=list)
+    timings_ms: dict[str, int] = Field(default_factory=dict)

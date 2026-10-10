@@ -154,7 +154,7 @@ def test_localization_repairs_only_failed_copy_and_preserves_verified_translatio
                        for m in messages if m['content'].startswith('<UNTRUSTED_DOCUMENT_CONTENT>'))
         calls.append((model.__name__, [row['id'] for row in payload]))
         if model is CopyTranslations:
-            return model(items=[{'id': row['id'], 'text': 'FY2025收入RMB 10 million' if row['id'] == 0 else
+            return model(items=[{'id': row['id'], 'text': 'FY2025收入⟦Q0⟧' if row['id'] == 0 else
                 '负债稳定' if len(calls) > 2 else '负债稳定' * 100} for row in payload])
         return model(items=[{'id': row['id'], 'accepted': True, 'reason':'Faithful target-language prose'} for row in payload])
 
@@ -163,7 +163,7 @@ def test_localization_repairs_only_failed_copy_and_preserves_verified_translatio
                      ('CopyTranslations',[1]), ('TranslationReview',[1])]
     assert result.customization_report[-1].status == 'planned'
     apply_report_language(deck, result)
-    assert [s.text for s in frames] == ['FY2025收入RMB 10 million', '负债稳定']
+    assert [s.text for s in frames] == ['FY2025收入人民币10百万元', '负债稳定']
     audit = json.loads(next(w.message for w in result.validation_warnings if w.code == 'report_localization_audit'))
     assert audit['accepted_count'] == 2 and not audit['failed_ids']
     assert 'readable native text box' in str(audit['attempts'][0]['errors'])

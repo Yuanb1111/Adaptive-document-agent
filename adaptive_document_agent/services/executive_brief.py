@@ -31,7 +31,7 @@ _MONEY_QUANTITY = re.compile(
     r"(?:(?P<prefix>US\$|HK\$|RMB|CNY|CNH|USD|HKD|SGD|GBP|EUR|JPY|AUD|CAD|CHF|人民币|美元|港元|欧元|[$€£¥￥])\s*)?"
     r"(?P<open>\()?\s*(?P<sign>[+\-\u2212])?\s*"
     r"(?P<value>(?>\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s*"
-    r"(?P<unit>trillion\b|billion\b|million\b|thousand\b|bn\b|mn\b|[mkb]\b|万亿|十亿|百万|亿|万|千)(?:元)?\s*(?(open)\))\s*"
+    r"(?P<unit>(?:trillion|billion|million|thousand|bn|mn|[mkb])(?![A-Za-z])|万亿|十亿|百万|亿|万|千)(?:元)?\s*(?(open)\))\s*"
     r"(?P<suffix>US\$|HK\$|RMB|CNY|CNH|USD|HKD|SGD|GBP|EUR|JPY|AUD|CAD|CHF|人民币|美元|港元|欧元|[$€£¥￥])?"
     r"(?![A-Za-z0-9_])"
 )

@@ -171,6 +171,7 @@ def presentation_for_copy(result: PipelineResult):
     """
     draft = result.model_copy(deep=True)
     draft.profile.report_requirements.copy_translations = {}
+    draft.profile.report_requirements.summary_copy_translations = {}
     presentation = _compose_presentation(draft, source_tables=False, validate_plan=False)
     from .requested_tables import requested_table_catalog
     if requested_table_catalog(draft):
@@ -693,6 +694,8 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
         return
 
     if plan.company.summary_review is not None:
+        from .localized_summary_copy import verify_summary_translations
+        verify_summary_translations(result)
         from .company_summary import validate_summary
         from .presentation_brief import BriefItem, render_profile
         errors = validate_summary(plan.company, result)
@@ -703,7 +706,9 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
                 '\n\nComplete Summary reading and omission decisions:\n'
                 + plan.company.summary_review.model_dump_json(indent=2))
         for index, page in enumerate(plan.company.summary_pages):
-            items = [BriefItem(item.label, item.text, item.source_pages) for item in page.items]
+            from .localized_summary_copy import summary_item_copy
+            items = [BriefItem(item.label, summary_item_copy(result, page, i), item.source_pages)
+                     for i, item in enumerate(page.items)]
             notes = page.model_dump_json(indent=2)
             if index == 0:
                 notes += '\n\nComplete Summary reading and decisions:\n' + (
@@ -715,7 +720,7 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
             else:
                 rendered = render_profile(presentation, page.title, items, notes=notes)
             from .summary_export import bind_summary_pages
-            bind_summary_pages(rendered, page)
+            bind_summary_pages(rendered, page, texts=[item.text for item in items])
             for slide in rendered:
                 slide._ada_section_label = page.title
         # A fully read Summary with justified omissions needs no placeholder.

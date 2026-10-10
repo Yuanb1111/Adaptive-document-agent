@@ -45,6 +45,20 @@ def compact_display_units(text):
 
 def _dates(text):
     tokens = []
+    # Shared month/day applies to every explicitly listed year. Expand only
+    # literal coordinates; never infer a missing day or reporting duration.
+    years = r'(?:19|20)\d{2}'
+    def english_shared(m):
+        month_name, day, listed = m.groups()
+        return ' '.join(f'{month_name} {day}, {year}' for year in re.findall(years, listed))
+    text = re.sub(r'\b(' + _MONTH_PATTERN + r')\s+(\d{1,2}),?\s+('
+                  + years + r'(?:\s*(?:,\s*(?:and\s+)?|and\s+)' + years + r')+)',
+                  english_shared, text, flags=re.I)
+    def chinese_shared(m):
+        listed, month, day = m.groups()
+        return ' '.join(f'{year}年{month}月{day}日' for year in re.findall(years, listed))
+    text = re.sub(r'(' + years + r'年?(?:\s*[、及和与,，]\s*' + years
+                  + r'年?)+)\s*(\d{1,2})月\s*(\d{1,2})日', chinese_shared, text)
     def replace(year, month, day, original):
         try:
             tokens.append(date(int(year), int(month), int(day)).isoformat())
@@ -68,6 +82,19 @@ def _dates(text):
                   lambda m: month(m[1],m[2]) or m[0], text)
     text = re.sub(r'\b(' + _MONTH_PATTERN + r')\s+((?:19|20)\d{2})\b',
                   lambda m: month(m[2],_MONTH[m[1].casefold()]) or m[0], text, flags=re.I)
+    def month_day(value, day, original):
+        try:
+            # Yearless source headers retain yearless precision, including
+            # February 29. This anchor never supplies a calendar year.
+            token = date(2000, int(value), int(day)).strftime('--%m-%d')
+        except ValueError:
+            return original
+        tokens.append(token)
+        return ' '
+    text = re.sub(r'\b(' + _MONTH_PATTERN + r')\s+(\d{1,2})(?!\d)',
+                  lambda m: month_day(_MONTH[m[1].casefold()],m[2],m[0]), text, flags=re.I)
+    text = re.sub(r'(?<!\d)(\d{1,2})月\s*(\d{1,2})日',
+                  lambda m: month_day(m[1],m[2],m[0]), text)
     return text, Counter(tokens)
 
 
@@ -78,7 +105,7 @@ def copy_tokens(text):
     No rescaling, rounding, conversion or deletion of repeated values is
     permitted. Meaning is independently model-reviewed.
     """
-    text, dates = _dates(display_text(text))
+    text, dates = _dates(display_text(text).replace('（', '(').replace('）', ')'))
     text = re.sub(r'((?:19|20)\d{2})\s*(?:财年|財年)', r' FY\1 ', text)
     text = re.sub(r'((?:19|20)\d{2})年?\s*(上半年|下半年)',
                   lambda m: ' '+('6M' if m[2] == '上半年' else 'H2') + m[1]+' ', text)

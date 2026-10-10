@@ -128,7 +128,7 @@ def _audit(result: PipelineResult, audit: dict[str, Any], outcome: str) -> None:
 
 
 def _salvage(values: list[Any], locked: dict[int, ExecutiveBriefItem], title: Any,
-             result: PipelineResult, excerpts: dict[int, str], topics):
+             result: PipelineResult, excerpts: dict[int, str], topics, semantic_validator=None):
     """Preserve every lock; a patch can never displace it through duplication."""
     retained = {}
     seen = {normalized(brief_claim_text(item, include_label=False)) for item in locked.values()}
@@ -151,6 +151,21 @@ def _salvage(values: list[Any], locked: dict[int, ExecutiveBriefItem], title: An
         brief = ExecutiveBrief(title=title, items=list(retained.values()))
     except ValidationError:
         brief = ExecutiveBrief(title='Executive Summary', items=list(retained.values()))
+    if semantic_validator:
+        failed = semantic_validator(brief)
+        positions = list(retained)
+        # The reviewer decides which candidate claims fail. A rejected patch
+        # cannot erase independent, previously verified findings. Never return
+        # an unreviewed patch or relax the final topic/source/count gates.
+        if any(type(position) is not int or not 0 <= position < len(positions) for position in failed):
+            return None, []
+        if any(positions[position] in locked for position in failed):
+            return None, []
+        for position in failed:
+            del retained[positions[position]]
+        if not 2 <= len(retained) <= 7:
+            return None, []
+        brief = brief.model_copy(update={'items': list(retained.values())})
     if not brief.title.strip() or validate_executive_brief(brief, result, excerpts=excerpts):
         brief = brief.model_copy(update={'title': 'Executive Summary'})
     if (validate_executive_brief(brief, result, excerpts=excerpts)
@@ -425,9 +440,7 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
                     return brief
             except (ValueError, TypeError, ValidationError):
                 pass
-    salvaged, discarded = _salvage(merged, locked, title, result, excerpts, topics)
-    if salvaged is not None and semantic_validator and semantic_validator(salvaged):
-        salvaged = None
+    salvaged, discarded = _salvage(merged, locked, title, result, excerpts, topics, semantic_validator)
     if salvaged is not None:
         audit['discarded_indices'] = discarded
         _audit(result, audit, 'salvaged')

@@ -35,6 +35,7 @@ class PreparedExecutiveBrief:
         try:
             brief = self._future.result()
         finally:
+            current.stage_details_ms.update(self._source.stage_details_ms)
             for issue in self._source.validation_warnings:
                 if issue not in current.validation_warnings:
                     current.validation_warnings.append(issue.model_copy(deep=True))

@@ -57,8 +57,20 @@ def copy_limits(presentation):
 
 
 def copy_fit_errors(presentation, source, translated):
-    for frame, width, height in text_frames(presentation):
-        if display_text(frame.text) == source and not _fits(frame, width, height, display_text(translated)):
+    if display_text(source) == display_text(translated):
+        return []  # Existing native copy is checked by normal export preflight.
+    # Inventory geometry once. The inventory deck is immutable during review;
+    # scanning every slide for every string made localization quadratic.
+    index = getattr(presentation, '_ada_copy_geometry', None)
+    if index is None:
+        index = {}
+        for frame, width, height in text_frames(presentation):
+            index.setdefault(display_text(frame.text), []).append((frame, width, height))
+        presentation._ada_copy_geometry = index
+    if source in getattr(presentation, '_ada_reflow_copy', set()):
+        return []  # Native introduction layout paginates the translated copy.
+    for frame, width, height in index.get(source, []):
+        if not _fits(frame, width, height, display_text(translated)):
             return ['Localized copy exceeds its readable native text box; compact prose without omitting facts']
     return []
 
@@ -106,35 +118,64 @@ def translation_errors(source, translated):
     return []
 
 
+def requested_language_errors(translated, language):
+    """Unambiguous monetary unit words are prose, not retained proper names."""
+    if not re.search(r'(?i)中文|chinese|^zh(?:-|$)', language):
+        return []
+    from .executive_brief import _MONEY_QUANTITY
+    if any((match['prefix'] or match['suffix']) and
+           match['unit'].casefold() in {'million','billion','trillion','thousand'}
+           for match in _MONEY_QUANTITY.finditer(translated)):
+        return ['Chinese display copy retains an untranslated monetary scale word']
+    return []
+
+
 def apply_report_language(presentation, result):
     requirements = result.profile.report_requirements
     if not requirements or not requirements.copy_translations:
         return
     mapping = {display_text(k): display_text(v) for k,v in requirements.copy_translations.items()}
+    chinese = any(r.kind=='output_language' and r.resolution=='resolved' and r.language_scope in {'body','all'}
+                  and re.search(r'(?i)中文|chinese|^zh(?:-|$)',r.language) for r in requirements.items)
     # Native chart wrapping may happen after inventory capture. Rebind only
     # whitespace-equivalent, unambiguous strings; never use fuzzy matching.
     wrapped = {}
     for key, value in mapping.items():
         compact = ' '.join(key.split())
         wrapped.setdefault(compact, set()).add(value)
-    def translation(source):
+    def translation(source, *, heading=False):
         if source in mapping:
             return mapping[source]
         values = wrapped.get(' '.join(source.split()), set())
-        return next(iter(values)) if len(values) == 1 else None
+        if len(values) == 1:
+            return next(iter(values))
+        if chinese and source.endswith(' (continued)'):
+            base = source.removesuffix(' (continued)')
+            if base in mapping:
+                return mapping[base] + '（续）'
+        if heading:
+            match = re.fullmatch(r'(\d{2}\s+)(.+)', source, flags=re.S)
+            if match and match[2] in mapping:
+                return match[1] + mapping[match[2]]
+        return None
     for frame, width, height in text_frames(presentation):
         source = display_text(frame.text)
-        translated = translation(source)
+        translated = translation(source, heading=getattr(frame._parent, 'name', '')=='brief:heading')
         if translated is None:
             continue
         errors = translation_errors(source, translated)
         if errors:
             raise ValueError('; '.join(errors))
         paragraphs = list(frame.paragraphs)
-        if not _fits(frame, width, height, translated):
+        if translated != source and not _fits(frame, width, height, translated):
             # Preserve the whole source copy; a failed language requirement is
             # visible in its own report, never hidden by truncation/shrinkage.
             continue
+        # Pagination can change an ordinal/continuation wrapper. Only compose
+        # checked base copy with a native UI marker; keep exact numeric checks
+        # and successful fitting, then expose the derived binding to coverage.
+        if source not in mapping:
+            requirements.copy_translations[source] = translated
         from copy import deepcopy
         first = paragraphs[0]
         properties = deepcopy(first._p.pPr) if first._p.pPr is not None else None
@@ -176,6 +217,8 @@ def localize_source_wrappers(presentation, result):
                         lambda m:'来源：文件披露（PDF 第 '+m[1]+' 页）',run.text)
                     run.text = run.text.replace('Source: Document disclosures (page references not available)',
                                                '来源：文件披露（无可用页码）')
+                    run.text = re.sub(r'Source image: document p\. (\d+)',
+                                      lambda m: '来源图片：PDF 第 ' + m[1] + ' 页', run.text)
                     if shape.name in {'customization:table_label','customization:source_footer'}:
                         run.text = re.sub(r'Source table (\d+) \(PDF page (\d+)\)',
                             lambda m:'原始表格 '+m[1]+'（PDF 第 '+m[2]+' 页）',run.text)

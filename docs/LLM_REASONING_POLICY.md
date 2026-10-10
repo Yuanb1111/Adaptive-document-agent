@@ -12,6 +12,9 @@ without changing prompts, response validation, routing, credentials or privacy:
   source validation and the eight-batch plus two-repair call budget remain required; incomplete
   coverage remains unresolved and cannot certify business acceptance.
 - `ExecutiveBriefPatch` uses the same reduction for its single targeted repair.
+- `SummaryEditorialDraft` uses the same opt-out reduction over its already
+  validated part-by-part reading facts. `SummaryReadBatch` and
+  `BriefMeaningReview` retain provider defaults and all source/semantic gates.
 - `ExecutiveBrief` and `ReportPlan` in `report`, and `VisualSelection` in
   `presentation`, use reduced reasoning after the user chose lighter writing
   and layout on 2026-10-09. Complete numeric, unit, quote, source and qualification

@@ -555,6 +555,15 @@ Original batch decisions and rationale scopes stay auditable, and selection is
 ranked once across the complete reviewed set. See [candidate scoring recovery
 and validation](docs/CANDIDATE_SCORING_RECOVERY_V109.md).
 
+The v110 follow-up translates complete introductory claims before native
+pagination, protects exact monetary coefficients, and reuses one display-box
+index during translation review. Independent introductory editorial batches
+share the gateway's bounded concurrency. Source references keep meaning-review
+responses compact; failed replacement claims no longer erase verified briefing
+findings. Final customization, failed requests and overlapping background work
+retain explicit timing records. See [v110 regression scope and live acceptance
+boundary](docs/COMPLETE_LOCALIZATION_TIMING_V110.md).
+
 If a standard cover subtitle exceeds the template's readable capacity, export
 uses a fitting document-type label or "Document analysis" and retains the full
 original subtitle and purpose in speaker notes. This adds no model call and

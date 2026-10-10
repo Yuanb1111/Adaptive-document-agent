@@ -301,7 +301,7 @@ def test_language_is_reviewed_separately_and_unsafe_copy_is_withheld(monkeypatch
     def generate(messages, model, **kwargs):
         calls.append(model)
         if model is CopyTranslations:
-            return model(items=[{'id':0, 'text':'FY2025收入RMB 10 million'}])
+            return model(items=[{'id':0, 'text':'FY2025收入⟦Q0⟧'}])
         assert model is TranslationReview
         return model(items=[{'id':0, 'accepted':True, 'reason':'Equivalent Chinese narrative with literal quantities'}])
     prepare_report_language(SimpleNamespace(generate_structured=generate), result)

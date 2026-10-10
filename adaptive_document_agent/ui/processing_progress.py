@@ -26,6 +26,8 @@ MILESTONES = {
     "Selecting presentation questions before chart generation": 80,
     "Planning presentation narrative": 85,
     "Complete": 90,
+    "Preparing complete display text for translation": 90,
+    "Verifying requested report coverage": 90,
     "Checking PowerPoint evidence": 91,
     "Building PowerPoint": 94,
     "Rendering and checking PowerPoint layout": 97,

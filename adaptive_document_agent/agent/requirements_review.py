@@ -22,7 +22,11 @@ def review_content_requirements(gateway, result):
     plan = result.presentation_plan
     slides = ([{'id': s.id, 'type': s.slide_type, 'title': s.title, 'message': s.message,
                 'bullets': s.bullets, 'source_pages': s.source_pages} for s in plan.slides] if plan else [])
-    introduction = ([p.model_dump(mode='json') for p in plan.company.summary_pages] if plan else [])
+    # Review all actual audience claims, without repeatedly echoing the long
+    # immutable source quotations already checked by introduction validation.
+    introduction = ([{'id': p.id, 'title': p.title, 'items': [
+        {'label': i.label, 'text': i.text, 'part_ids': i.part_ids, 'source_pages': i.source_pages}
+        for i in p.items]} for p in plan.company.summary_pages] if plan else [])
     payload = json.dumps({'requested': [r.model_dump(mode='json') for r in requested],
                           'slides': slides, 'introduction': introduction,
                           'brief': result.executive_brief.model_dump(mode='json') if result.executive_brief else None},

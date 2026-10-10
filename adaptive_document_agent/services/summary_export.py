@@ -11,7 +11,7 @@ def bind_summary_items(slide, page):
     bind_summary_pages([slide], page)
 
 
-def bind_summary_pages(slides, page):
+def bind_summary_pages(slides, page, *, texts=None):
     """A logical introductory page may occupy several complete-item slides."""
     from collections import defaultdict, Counter
     bodies = defaultdict(list)
@@ -19,11 +19,12 @@ def bind_summary_pages(slides, page):
         for shape in slide.shapes:
             if shape.has_text_frame and shape.name=='brief:body':
                 bodies[normalize_quote(display_text(shape.text))].append(shape)
-    expected = Counter(normalize_quote(display_text(item.text)) for item in page.items)
+    texts = texts if texts is not None else [item.text for item in page.items]
+    expected = Counter(normalize_quote(display_text(text)) for text in texts)
     if expected != Counter({key:len(values) for key,values in bodies.items()}):
         raise ValueError('Summary fact lacks one complete visible native body: ' + page.id)
     for index, item in enumerate(page.items):
-        shape = bodies[normalize_quote(display_text(item.text))].pop(0)
+        shape = bodies[normalize_quote(display_text(texts[index]))].pop(0)
         properties = shape.element.xpath('.//p:cNvPr')[0]
         properties.set('descr', _PREFIX + json.dumps({'page_id': page.id, 'item_index': index,
                                                      'part_ids': item.part_ids}, ensure_ascii=False))
@@ -35,6 +36,7 @@ def verify_summary_export(presentation, result):
     company = result.presentation_plan.company
     pages = {p.id: p for p in company.summary_pages}
     mapping = result.profile.report_requirements.copy_translations if result.profile.report_requirements else {}
+    localized = result.profile.report_requirements.summary_copy_translations if result.profile.report_requirements else {}
     used, seen = {}, set()
     for number, slide in enumerate(presentation.slides, 1):
         for shape in slide.shapes:
@@ -48,11 +50,14 @@ def verify_summary_export(presentation, result):
             if page is None or type(index) is not int or not 0 <= index < len(page.items):
                 raise ValueError('Unknown exported introductory item')
             item = page.items[index]
+            from .localized_summary_copy import summary_item_copy
             identity = page.id, index
             if identity in seen or record['part_ids'] != item.part_ids:
                 raise ValueError('Duplicate or changed exported introductory evidence binding')
             seen.add(identity)
-            expected = {normalize_quote(display_text(item.text)), normalize_quote(display_text(mapping.get(item.text, item.text)))}
+            expected = {normalize_quote(display_text(summary_item_copy(result, page, index)))}
+            if f'{page.id}:{index}' not in localized:
+                expected.add(normalize_quote(display_text(mapping.get(item.text, item.text))))
             if not shape.has_text_frame or normalize_quote(display_text(shape.text)) not in expected:
                 raise ValueError('Introductory evidence is missing from visible native slide copy')
             for pid in item.part_ids:
