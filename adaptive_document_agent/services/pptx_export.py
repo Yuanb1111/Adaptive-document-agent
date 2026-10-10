@@ -141,6 +141,45 @@ def _resolve_template_path(template_path: str | Path | None = None) -> Path:
 def build_presentation(result: PipelineResult, template_path: str | Path | None = None, *, artwork: bytes | None = None,
                        source_pdf: bytes | None = None, preflight_report: PreflightReport | None = None) -> bytes:
     """Return an editable, presentation-ready PowerPoint based on the FOURIER Light Version Template."""
+    presentation = _compose_presentation(result, template_path, artwork=artwork, source_pdf=source_pdf)
+    from .requested_tables import verify_requested_tables
+    from .summary_export import verify_summary_export
+    verify_summary_export(presentation, result)
+    preflight = PresentationPreflight(presentation)
+    report = preflight_report if preflight_report is not None else PreflightReport()
+    report.issues = list(preflight.validate_and_sanitize())
+    report.completed = True
+    if report.errors:
+        raise PreflightQAError(report)
+    verify_requested_tables(presentation, result)
+    from .slide_compositor import validate_composed_geometry
+    validate_composed_geometry(presentation)
+    from .presentation_brand_qa import validate_generated_brand
+    validate_generated_brand(presentation)
+    stream = io.BytesIO()
+    presentation.save(stream)
+    return stream.getvalue()
+
+
+def presentation_for_copy(result: PipelineResult):
+    """Private display-copy inventory; never an export or a validation verdict.
+
+    Source tables are literal and do not need translating. Their layout or an
+    unrelated export preflight must not prevent preparation of Chinese prose.
+    The normal build still runs every evidence, table and export gate.
+    """
+    draft = result.model_copy(deep=True)
+    draft.profile.report_requirements.copy_translations = {}
+    presentation = _compose_presentation(draft, source_tables=False, validate_plan=False)
+    from .requested_tables import requested_table_catalog
+    if requested_table_catalog(draft):
+        _base_slide(presentation, 'Data Index: Source tables', '')
+    return presentation
+
+
+def _compose_presentation(result, template_path=None, *, artwork=None, source_pdf=None,
+                          source_tables=True, validate_plan=True):
+    """Share native composition between validated exports and private copy inventory."""
     try:
         from pptx import Presentation
     except ImportError as exc:  # pragma: no cover - deployment configuration failure
@@ -187,7 +226,8 @@ def build_presentation(result: PipelineResult, template_path: str | Path | None 
     presentation._ada_colors = deck_color_map(color_keys, groups=color_groups)
 
     if result.presentation_plan:
-        PresentationPlanValidator().validate(result.presentation_plan, result)
+        if validate_plan:
+            PresentationPlanValidator().validate(result.presentation_plan, result)
         _build_planned_presentation(presentation, result)
     else:
         _build_legacy_presentation(presentation, result)
@@ -195,33 +235,14 @@ def build_presentation(result: PipelineResult, template_path: str | Path | None 
     from .presentation_sparse_pages import fold_sparse_text_pages
     fold_sparse_text_pages(presentation, result)
     from .requested_tables import render_requested_tables, verify_requested_tables
-    render_requested_tables(presentation, result)
+    if source_tables:
+        render_requested_tables(presentation, result)
     _add_thank_you_slide(presentation)
 
     _number_slides(presentation)
     from .report_language import apply_report_language
     apply_report_language(presentation, result)
-    from .summary_export import verify_summary_export
-    verify_summary_export(presentation, result)
-
-    # Pre-export preflight check and sanitization
-    preflight = PresentationPreflight(presentation)
-    report = preflight_report if preflight_report is not None else PreflightReport()
-    report.issues = list(preflight.validate_and_sanitize())
-    report.completed = True
-    # Keep the original findings: a text substitution cannot establish that an
-    # erroneous value/unit is now evidence-backed. Never rerun to erase errors.
-    if report.errors:
-        raise PreflightQAError(report)
-    verify_requested_tables(presentation, result)
-    from .slide_compositor import validate_composed_geometry
-    validate_composed_geometry(presentation)
-    from .presentation_brand_qa import validate_generated_brand
-    validate_generated_brand(presentation)
-
-    stream = io.BytesIO()
-    presentation.save(stream)
-    return stream.getvalue()
+    return presentation
 
 
 def _content_zone(slide: Any) -> tuple[float, float]:
@@ -690,11 +711,9 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
                 rendered = render_profile_with_source(presentation, page.title, items, source_visual, notes=notes)
             else:
                 rendered = render_profile(presentation, page.title, items, notes=notes)
-            if len(rendered) != 1:
-                raise ValueError('Summary page exceeds its layout budget; merge/shorten supported copy.')
+            from .summary_export import bind_summary_pages
+            bind_summary_pages(rendered, page)
             for slide in rendered:
-                from .summary_export import bind_summary_items
-                bind_summary_items(slide, page)
                 slide._ada_section_label = page.title
         # A fully read Summary with justified omissions needs no placeholder.
         return

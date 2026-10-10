@@ -33,7 +33,7 @@ def test_chinese_body_and_original_tables_are_compatible_and_independently_verif
             description='原表原文', language='original', language_scope='source_tables')])
     stream = BytesIO()
     deck.save(stream)
-    monkeypatch.setattr(pptx_export, 'build_presentation', lambda *a, **k: stream.getvalue())
+    monkeypatch.setattr(pptx_export, 'presentation_for_copy', lambda *a, **k: deck)
     seen = []
     def call(messages, model, **kwargs):
         seen.append(model)

@@ -504,6 +504,22 @@ are merged or omitted rather than padded. Reading/selection audits are available
 in JSON, speaker notes and Technical Details; missing or over-budget source fails
 explicitly rather than being sampled and called complete.
 
+The v105 editor returns compact reading-fact IDs; Python binds their literal
+quotes, source pages and owning parts. One source-bound correction handles schema
+failures, with the original validation diagnostics retained. Complete substantive
+part coverage remains mandatory, including in localized introductions. Chinese
+copy is prepared from a private prose inventory before export QA; only rejected
+translations are retried, and every accepted translation must preserve numeric
+tokens, meaning and readable text capacity. Original appendix content stays literal.
+
+Requested chapter appendices use the physical extraction inventory independently
+of analytical table selection. Single-column aligned tables, attached row
+footnotes and vertical period headers remain in the raw grids. Export verifies
+every retained cell and reserves source-footer space above inherited template
+footers. Source tables and their original units/qualifications are excluded from
+prose sanitizers; extraction ambiguity remains visible rather than being called
+complete. See [v105 validation notes](docs/SOURCE_BOUND_CUSTOMIZATION_V105.md).
+
 If a standard cover subtitle exceeds the template's readable capacity, export
 uses a fitting document-type label or "Document analysis" and retains the full
 original subtitle and purpose in speaker notes. This adds no model call and

@@ -35,7 +35,7 @@ def source(pages=6):
 
 
 def evidence_payload(messages):
-    text = messages[1]['content']
+    text = next(m['content'] for m in messages if m['content'].startswith('<UNTRUSTED_DOCUMENT_CONTENT>'))
     return json.loads(text.split('\n', 1)[1].rsplit('\n', 1)[0])
 
 
@@ -81,7 +81,7 @@ class SummaryClient(MockLLMClient):
             value = SummaryReadBatch(parts=parts)
             if self.edit_read:
                 self.edit_read(value, payload, messages)
-        elif operation == 'IntroductionDraft':
+        elif operation in {'IntroductionDraft', 'SummaryEditorialDraft'}:
             self.plan_inputs.append(payload)
             # Equivalent passages on repeated source pages remain read/audited;
             # the editor chooses unique, materially different source claims.
@@ -110,6 +110,13 @@ class SummaryClient(MockLLMClient):
                        'Reserved for later source-specific analysis.') for part in payload['parts']])
             if self.edit_plan:
                 self.edit_plan(value, payload, messages)
+            if operation == 'SummaryEditorialDraft':
+                facts = {f['id']: (part['id'], f) for part in payload['parts'] for f in part['facts']}
+                value = response_model(summary_decisions=value.summary_decisions, summary_pages=[{
+                    **page.model_dump(exclude={'items'}), 'items': [{'label': item.label, 'text': item.text,
+                        'fact_id': next((fid for fid, (pid, fact) in facts.items()
+                            if item.part_ids == [pid] and item.source_quote == fact['source_quote']), 'unknown')}
+                        for item in page.items]} for page in value.summary_pages])
         else:
             raise AssertionError(operation)
         return value, LLMResponse(text=value.model_dump_json())
@@ -495,7 +502,7 @@ def test_reader_repairs_unknown_block_once_before_editing_and_keeps_both_attempt
     client = SummaryClient(edit_read=edit)
     result = generate(distinct_source(1), client)
     review = result.presentation_plan.company.summary_review
-    assert client.operations == ['IntroductionPages', 'SummaryReadBatch', 'SummaryReadBatch', 'IntroductionDraft']
+    assert client.operations == ['IntroductionPages', 'SummaryReadBatch', 'SummaryReadBatch', 'SummaryEditorialDraft']
     attempts = review.read_audits[0]['attempts']
     assert 'unknown source block' in ' '.join(attempts[0]['errors'])
     assert attempts[1]['errors'] == [] and review.status == 'complete'

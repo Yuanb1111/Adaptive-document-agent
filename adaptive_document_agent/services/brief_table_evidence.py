@@ -132,18 +132,33 @@ def _header_dates(table, source, locate=_located_header):
         line = locate(raw, source)
         if not line:
             continue
-        match = _DATE_HEADER.fullmatch(line)
-        if match:
-            month_days.add((match[1].casefold(), str(int(match[2]))))
-            if match[3]:
-                explicit.add((match[1].casefold(), str(int(match[2])), match[3]))
+        # Extracted headers can contain several date groups on one line. A
+        # full match of only one group silently lost the interim dates and
+        # incorrectly lent their years to the annual date (Dec 31, 2024).
+        matches = list(_DATE_HEADER.finditer(line))
+        remainder = _DATE_HEADER.sub('', line).strip(' ,')
+        if matches and not remainder:
+            for match in matches:
+                month_days.add((match[1].casefold(), str(int(match[2]))))
+                if match[3]:
+                    explicit.add((match[1].casefold(), str(int(match[2])), match[3]))
         elif _YEAR_HEADER.fullmatch(line):
             years.update(re.findall(r"(?:19|20)\d{2}", line))
     # Split year columns can qualify a single shared month/day header. With
     # several date groups the text no longer proves column alignment; never
     # fabricate the Cartesian product of unrelated interim/year-end dates.
-    candidates = explicit | ({(month, day, year) for month, day in month_days for year in years}
-                             if len(month_days) == 1 else set())
+    bound = set()
+    for period in table.column_periods:
+        if period and re.fullmatch(r'(?:19|20)\d{2}-\d{2}-\d{2}', period):
+            try:
+                actual = date.fromisoformat(period)
+            except ValueError:
+                continue
+            pair = (_MONTHS[actual.month - 1].casefold(), str(actual.day))
+            if pair in month_days and str(actual.year) in years:
+                bound.add((*pair, str(actual.year)))
+    candidates = explicit | bound | ({(month, day, year) for month, day in month_days for year in years}
+                                      if len(month_days) == 1 and not bound else set())
     valid = set()
     for month, day, year in candidates:
         try:

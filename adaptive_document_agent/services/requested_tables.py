@@ -58,6 +58,18 @@ def _row_height(cells, widths, font=11):
                          for text, width in zip(cells, widths)), default=.32))
 
 
+def _footer_geometry(presentation, slide):
+    """Reserve native source space above visible inherited template footers."""
+    height, width = presentation.slide_height.inches, presentation.slide_width.inches
+    reserved = [s.top.inches for layer in (slide.slide_layout, slide.slide_layout.slide_master)
+                for s in layer.shapes if not s.is_placeholder and s.has_text_frame and s.text.strip()
+                and height * .75 < s.top.inches < height
+                and s.left.inches + s.width.inches > .45 and s.left.inches < min(width - .45, 11.25)]
+    footer_height = .20
+    footer_top = min([height - .55, *reserved]) - footer_height - .10
+    return footer_top, footer_height, footer_top - .14
+
+
 def render_requested_tables(presentation, result):
     """Use editable tables, repeated source headers and explicit cell coordinates."""
     from .pptx_export import (_base_slide, _content_zone, _text, _source_footer, _cell_style,
@@ -86,13 +98,14 @@ def render_requested_tables(presentation, result):
         for columns in groups:
             first_slide = _base_slide(presentation, 'Data Index: Source tables', section.title)
             content_top, _ = _content_zone(first_slide)
+            footer_top, footer_height, table_bottom = _footer_geometry(presentation, first_slide)
             top = content_top + label_height + .10
             first_width = (3.4 if width >= 3 else 11.7 / max(1, width))
             widths = ([11.7] if len(columns) == 1 else
                       [first_width, *[(11.7 - first_width) / (len(columns) - 1)] * (len(columns) - 1)])
             headers = [[row[c] for c in columns] for row in raw[:header_count]]
             header_heights = [_row_height(row, widths) for row in headers]
-            available = min(4.15, 6.25 - top) - sum(header_heights)
+            available = min(4.15, table_bottom - top) - sum(header_heights)
             if available < .4:
                 raise ValueError('Requested table headers exceed readable page capacity: ' + table.table_id)
             # Every source row/column survives. Oversized cells continue across
@@ -127,7 +140,7 @@ def render_requested_tables(presentation, result):
                 label.name = 'customization:table_label'
                 data = [*headers, *[row[2] for row in batch]]
                 heights = [*header_heights, *[row[3] for row in batch]]
-                if top + sum(heights) > 6.35:
+                if top + sum(heights) > table_bottom + .001:
                     raise ValueError('Requested table cannot fit a readable page: ' + table.table_id)
                 shape = slide.shapes.add_table(len(data), len(columns), Inches(.45), Inches(top),
                                                Inches(11.7), Inches(sum(heights)))
@@ -146,7 +159,7 @@ def render_requested_tables(presentation, result):
                                     bold=r < header_count, size=11)
                         coordinates.append([r, c, source_row, columns[c], segment])
                 _text(slide, _source_footer([page.page_number]) + ' | Original header text and context in notes.',
-                      .45, 6.43, 10.8, .18, size=9, color=FOURIER_MUTED).name = 'customization:source_footer'
+                      .45, footer_top, 10.8, footer_height, size=9, color=FOURIER_MUTED).name = 'customization:source_footer'
                 provenance = {'table_id': table.table_id, 'page': page.page_number, 'shape_name': shape.name,
                     'section_title': section.title,
                     'requirement_ids': record['requirement_ids'], 'columns': columns, 'cells': coordinates}
@@ -179,7 +192,8 @@ def pack_requested_tables(presentation):
                 break
             previous_tables = [s for s in candidate.shapes if s.has_table and s.name.startswith('customization:source_table:')]
             top = max(s.top.inches + s.height.inches for s in previous_tables) + .18
-            if top + height <= 6.25:
+            _, _, table_bottom = _footer_geometry(presentation, candidate)
+            if top + height <= table_bottom:
                 previous = candidate
                 break
         if previous is None:

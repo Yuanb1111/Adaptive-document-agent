@@ -57,11 +57,27 @@ def comparison_errors(comparison, item):
             errors.append('Comparison endpoint is not in its literal source context')
     try:
         def parse(value):
+            from adaptive_document_agent.services.executive_brief import _MONEY_QUANTITY, _quantities
+            from adaptive_document_agent.services.brief_table_evidence import canonical_quantity
+            # A reviewer may echo the literal unit with its coefficient. Accept
+            # one complete monetary quantity, never free prose or a conversion.
+            if _MONEY_QUANTITY.fullmatch(value.strip()):
+                currency, coefficient, unit = canonical_quantity(*next(iter(_quantities(value))))
+                return Decimal(coefficient), (currency, unit)
             raw = value.strip().rstrip('%').replace(',', '')
             if re.fullmatch(r'\(\s*\d+(?:\.\d+)?\s*\)', raw):
-                return -Decimal(raw[1:-1].strip())
-            return Decimal(raw)
-        start, end = parse(comparison.start_value), parse(comparison.end_value)
+                return -Decimal(raw[1:-1].strip()), ('', '%' if value.strip().endswith('%') else '')
+            return Decimal(raw), ('', '%' if value.strip().endswith('%') else '')
+        (start, start_unit), (end, end_unit) = parse(comparison.start_value), parse(comparison.end_value)
+        if start_unit != end_unit:
+            errors.append('Comparison endpoints use incompatible source currencies or scales')
+        from adaptive_document_agent.services.executive_brief import _quantities
+        from adaptive_document_agent.services.brief_table_evidence import canonical_quantity
+        for value, unit, context in [(start, start_unit, comparison.start_context),
+                                     (end, end_unit, comparison.end_context)]:
+            if unit[0] and not any(c == unit[0] and u == unit[1] and Decimal(v) == value
+                                  for c, v, u in (canonical_quantity(*q) for q in _quantities(context))):
+                errors.append('Comparison monetary endpoint changes its literal source unit')
         if not start.is_finite() or not end.is_finite():
             raise InvalidOperation
         if comparison.absolute_magnitude:
@@ -76,7 +92,7 @@ def comparison_errors(comparison, item):
     return errors
 
 
-def meaning_validator(gateway, *, cancelled=None):
+def meaning_validator(gateway, *, cancelled=None, result=None):
     """Run-owned memo; unchanged verified items do not incur another review."""
     checked = {}
 
@@ -113,6 +129,7 @@ def meaning_validator(gateway, *, cancelled=None):
         ids = {row['index'] for row in pending}
         if len(response.items) != len(ids) or {v.index for v in response.items} != ids:
             raise ValueError('Brief meaning review must cover every exact supplied index')
+        audit = {'response': response.model_dump(mode='json'), 'errors': {}}
         for verdict in response.items:
             item = brief.items[verdict.index]
             failed = [] if verdict.accepted else [verdict.reason]
@@ -123,5 +140,10 @@ def meaning_validator(gateway, *, cancelled=None):
             checked[item.model_dump_json()] = failed
             if failed:
                 errors[verdict.index] = failed
+                audit['errors'][str(verdict.index)] = failed
+        if result is not None:
+            from adaptive_document_agent.models import ValidationIssue
+            result.validation_warnings.append(ValidationIssue(code='executive_brief_meaning_audit',
+                stage='report', severity='info', message=json.dumps(audit, ensure_ascii=False)))
         return errors
     return validate

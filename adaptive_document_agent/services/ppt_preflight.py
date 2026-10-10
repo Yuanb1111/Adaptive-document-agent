@@ -163,6 +163,8 @@ class PresentationPreflight:
     def _check_raw_unit_tokens(self, idx: int, slide: Any) -> None:
         raw_token_pattern = re.compile(r"(?i)\b(rmb|cny|hkd|usd)(?:in)?(thousands?|millions?|billions?|'000)\b")
         for shape in self._shapes(slide):
+            if shape.name.startswith('customization:'):
+                continue  # Literal appendix cells, units and header context are immutable evidence.
             if shape.has_text_frame:
                 for p in shape.text_frame.paragraphs:
                     if raw_token_pattern.search(p.text):
@@ -195,6 +197,8 @@ class PresentationPreflight:
 
     def _check_banned_phrases(self, idx: int, slide: Any) -> None:
         for shape in self._shapes(slide):
+            if shape.name.startswith('customization:'):
+                continue
             if shape.has_text_frame:
                 text = shape.text
                 text_lower = text.casefold()
@@ -281,6 +285,8 @@ class PresentationPreflight:
 
     def _check_semantic_units(self, idx: int, slide: Any) -> None:
         for shape in self._shapes(slide):
+            if shape.name.startswith('customization:'):
+                continue
             if shape.has_text_frame:
                 text = shape.text
                 # Multiple metrics mistakenly formatted with %
@@ -351,6 +357,8 @@ class PresentationPreflight:
         pattern = re.compile(rf"(?i)\b({monetary_terms})\s*[:=]?\s*([0-9,]{{3,}}(?:\.[0-9]+)?)\s*%")
         extreme_pattern = re.compile(r"(?<![\w.])([0-9][0-9,]*(?:\.[0-9]+)?)\s*%")
         for shape in self._shapes(slide):
+            if shape.name.startswith('customization:'):
+                continue
             if shape.has_text_frame:
                 text = shape.text
                 monetary_spans = [match.span() for match in pattern.finditer(text)]
@@ -421,6 +429,8 @@ class PresentationPreflight:
         dangling_pattern = re.compile(r"(?i)\b(?:to|of|and|with|from|in|for|by|as|at|or|including|such\s+as)\s*$")
         broken_prefix_pattern = re.compile(r"^(?:[a-z]|ing|ed|tion|ment|ly|al|ic)\s+[a-z]{3,}")
         for shape in self._shapes(slide):
+            if shape.name.startswith('customization:'):
+                continue
             if shape.has_text_frame:
                 for p in shape.text_frame.paragraphs:
                     t = p.text.strip().rstrip(".,;:-–—")
@@ -611,6 +621,8 @@ class PresentationPreflight:
 
     def _check_template_completeness(self, idx: int, slide: Any) -> None:
         for shape in self._shapes(slide):
+            if shape.name.startswith('customization:'):
+                continue
             if shape.has_text_frame:
                 for p in shape.text_frame.paragraphs:
                     orig_text = p.text

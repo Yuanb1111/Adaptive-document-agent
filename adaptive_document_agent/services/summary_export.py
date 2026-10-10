@@ -7,8 +7,13 @@ _PREFIX = 'ADA_SUMMARY_ITEM_V2:'
 
 
 def bind_summary_items(slide, page):
+    bind_summary_pages([slide], page)
+
+
+def bind_summary_pages(slides, page):
+    """A logical introductory page may occupy several complete-item slides."""
     for index, item in enumerate(page.items):
-        shapes = [s for s in slide.shapes if s.has_text_frame
+        shapes = [s for slide in slides for s in slide.shapes if s.has_text_frame
                   and normalize_quote(s.text) == normalize_quote(item.text)
                   and s.name == 'brief:body']
         if len(shapes) != 1:

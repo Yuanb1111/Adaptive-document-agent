@@ -171,7 +171,7 @@ class ExecutiveBriefWriter:
         from .brief_meaning_review import meaning_validator
         brief = generate_with_item_repair(self.gateway, messages, result=result, excerpts=excerpts,
                                          topics=included_topics, source_context=payload, evidence_catalog=blocks,
-                                         cancelled=cancelled, semantic_validator=meaning_validator(self.gateway, cancelled=cancelled))
+                                         cancelled=cancelled, semantic_validator=meaning_validator(self.gateway, cancelled=cancelled, result=result))
         record_uncited_checks(result, brief)
         return brief
 

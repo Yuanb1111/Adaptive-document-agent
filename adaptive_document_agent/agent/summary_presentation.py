@@ -11,6 +11,7 @@ from adaptive_document_agent.services.source_quotes import normalize_quote
 from .prompting import untrusted_document_message
 from .summary_reader import read_summary
 from adaptive_document_agent.utils.ids import stable_id
+from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
 
 
 def planning_batches(parts, *, character_budget=24000, content_budget=12):
@@ -75,9 +76,9 @@ def _generate_summary_batch(gateway, result, pages, response_model, *, scope_ran
         if review_override is None:
             review.source_blocks = source_blocks(result, pages)
             read_summary(gateway, result, review, cancelled=cancelled)
-        payload = {'parts': [{key: value for key, value in part.model_dump(mode='json').items()
-                              if key not in {'source_text', 'block_id', 'start_line', 'end_line'}}
-                             for part in review.parts],
+        from .summary_editorial import SummaryEditorialDraft, editorial_parts, expand_editorial
+        parts, fact_catalog = editorial_parts(review.parts)
+        payload = {'parts': parts,
                    'purpose': result.profile.document_purpose, 'user_focus': result.profile.analysis_focus}
         messages = [{'role': 'system', 'content': (
             'Plan the introductory PPT section between the contents and analytical charts. '
@@ -91,30 +92,65 @@ def _generate_summary_batch(gateway, result, pages, response_model, *, scope_ran
             'document-type checklist, or one slide per part. Merge related sections and continuations. '
             'Use at most eight pages FOR THIS BATCH; the whole introduction has no eight-page quota. '
             'Use 1-4 useful items each, each item at most 180 characters. Multiple-item pages need at least 180 '
-            'characters of substantive body text; merge sparse material or use one concise item, never pad copy. '
+            'Latin-equivalent display characters of substantive body text (wide CJK characters count as two); '
+            'merge sparse material or use one concise item, never pad copy. '
             'Every content part must contribute a supported item; missing facts are a coverage failure, '
-            'never a reason to silently omit a part. Each item needs exact part_ids and must '
-            'reuse a supplied fact source_quote and source_pages verbatim. Keep source units, '
+            'never a reason to silently omit a part. Each item selects one exact fact_id from '
+            'the supplied reading. Python retains that fact\'s literal source_quote, source_pages '
+            'and owning part_id; do not repeat quotes or page lists in your response. Keep source units, '
             'numeric spellings, dates, attribution and conditions; never invent missing facts, '
             'causes or recommendations. Prefer a coherent overview followed by the most useful '
             'source-specific subjects; later analytical coverage does not replace introduction coverage. '
             'Do not put internal comments about excerpts, missing retrieval context or generation '
             'in slide copy. Retain a source-defined reference-date term when its calendar definition '
             'is unavailable, without guessing a date. '
-            'Leave legacy overview, business and value_chain empty. Supply a company name only '
-            'with a literal name_quote/name_page from supplied reading facts, otherwise leave it empty.')},
+            'Supply a company name only with name_fact_id selecting a literal supplied reading '
+            'fact containing that name, otherwise leave both fields empty.')},
             untrusted_document_message(json.dumps(payload, ensure_ascii=False))]
         from .report_requirements import instruction_messages
         messages[1:1] = instruction_messages(result.profile, purpose='introductory content selection and detail')
+        requirements = result.profile.report_requirements
+        from adaptive_document_agent.services.report_language import original_language
+        languages = {r.language for r in requirements.items if r.kind == 'output_language'
+                     and r.resolution == 'resolved' and r.language_scope in {'body', 'all'}
+                     and not original_language(r.language)} if requirements else set()
+        if len(languages) == 1:
+            messages.insert(1, {'role': 'user', 'content': 'Write introductory titles, labels and item text in '
+                + next(iter(languages)) + '. Preserve exact source numeric spellings, currency/scale labels, '
+                'technical names and qualification. Part IDs and source references stay unchanged.'})
         # Repair retains every original instruction and the source payload.
         initial_messages = list(messages)
         for attempt in range(2):
             if cancelled is not None and cancelled.is_set():
                 raise CancelledError('Summary presentation cancelled')
-            draft = gateway.generate_structured(messages, response_model, stage='presentation',
-                                                 allow_repair=False, cancelled=cancelled)
-            record = {'draft': draft.model_dump(mode='json')}
+            try:
+                response = gateway.generate_structured(messages, SummaryEditorialDraft, stage='presentation',
+                                                     allow_repair=False, cancelled=cancelled)
+            except LLMStructuredOutputError as exc:
+                record = {'error': str(exc), 'validation_detail': str(exc.__cause__ or exc),
+                          'raw_response': exc.response.text}
+                review.plan_audits.append(record)
+                if attempt or (exc.response.usage and exc.response.usage.finish_reason == 'length'):
+                    raise
+                messages = initial_messages + [untrusted_document_message(json.dumps(record, ensure_ascii=False)),
+                    {'role': 'user', 'content': 'Correct these schema failures using the original reading facts. '
+                     'Retain every substantive part and its exact evidence. Labels must be at most 60 characters, '
+                     'titles 65, item text 180, and at most four items per page. Merge related parts across '
+                     'pages within this batch, never drop content or invent missing fields.'}]
+                continue
+            record = {'reference_response': response.model_dump(mode='json')}
             review.plan_audits.append(record)
+            try:
+                draft = expand_editorial(response, fact_catalog, response_model)
+            except ValueError as exc:
+                record['errors'] = [str(exc)]
+                if attempt:
+                    raise ValueError('Summary presentation failed validation: ' + str(exc)) from exc
+                messages = initial_messages + [untrusted_document_message(json.dumps(record, ensure_ascii=False)),
+                    {'role': 'user', 'content': 'Correct these source references using only the exact supplied '
+                     'reading fact IDs. Preserve every substantive part and every include/omit decision.'}]
+                continue
+            record['draft'] = draft.model_dump(mode='json')
             review.decisions = draft.summary_decisions
             errors = presentation_errors(review, draft.summary_pages, result, validate_reading=review_override is None)
             if draft.overview or draft.business or draft.value_chain:

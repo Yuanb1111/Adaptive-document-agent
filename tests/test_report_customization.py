@@ -292,7 +292,7 @@ def test_language_is_reviewed_separately_and_unsafe_copy_is_withheld(monkeypatch
     slide.shapes.add_textbox(Inches(1), Inches(2), Inches(10), Inches(1)).text = text
     stream = BytesIO()
     deck.save(stream)
-    monkeypatch.setattr(pptx_export, 'build_presentation', lambda *a, **k: stream.getvalue())
+    monkeypatch.setattr(pptx_export, 'presentation_for_copy', lambda *a, **k: deck)
     result = table_result()
     result.document.pages[1].raw_tables = []
     result.profile.report_requirements = ReportRequirements(items=[ReportRequirement(id='language',

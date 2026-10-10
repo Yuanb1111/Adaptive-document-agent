@@ -221,7 +221,8 @@ def test_actual_litellm_transport_never_inherits_other_provider_key_or_endpoint(
 
     monkeypatch.setattr(httpx.Client, "send", send)
     monkeypatch.setattr(socket.socket, "connect", no_network)
-    with patch.dict(os.environ, {"OPENAI_API_KEY": DUMMY, "OPENAI_API_BASE": "https://ambient.invalid/v1",
+    infrastructure = {k: os.environ[k] for k in ('SYSTEMROOT', 'WINDIR', 'PATH', 'TEMP', 'TMP') if k in os.environ}
+    with patch.dict(os.environ, {**infrastructure, "OPENAI_API_KEY": DUMMY, "OPENAI_API_BASE": "https://ambient.invalid/v1",
                                "LITELLM_LOCAL_MODEL_COST_MAP": "True", "DO_NOT_TRACK": "True"}, clear=True):
         settings = LLMSettings(provider=ProviderName.OPENAI_COMPATIBLE, model="organization/model", base_url="https://custom.invalid/v1")
         assert LiteLLMProvider(settings).generate_text([]).text == "ok"
@@ -253,7 +254,8 @@ def test_actual_gemini_transport_preserves_versioned_default_and_custom_endpoint
 
     monkeypatch.setattr(httpx.Client, "send", send)
     monkeypatch.setattr(socket.socket, "connect", no_network)
-    with patch.dict(os.environ, {"GEMINI_API_BASE": "https://ambient.invalid/v1", "GEMINI_API_KEY": DUMMY,
+    infrastructure = {k: os.environ[k] for k in ('SYSTEMROOT', 'WINDIR', 'PATH', 'TEMP', 'TMP') if k in os.environ}
+    with patch.dict(os.environ, {**infrastructure, "GEMINI_API_BASE": "https://ambient.invalid/v1", "GEMINI_API_KEY": DUMMY,
                                "LITELLM_LOCAL_MODEL_COST_MAP": "True", "DO_NOT_TRACK": "True"}, clear=True):
         for base in (None, "https://chosen.invalid/v1beta"):
             settings = LLMSettings(provider=ProviderName.GEMINI, model=model, api_key=SecretStr(SECOND), base_url=base)
@@ -312,7 +314,8 @@ def test_actual_gemini_redirect_cannot_forward_key(monkeypatch, capsys):
 
     monkeypatch.setattr(httpx.Client, "_send_single_request", send)
     monkeypatch.setattr(socket.socket, "connect", no_network)
-    with patch.dict(os.environ, {"LITELLM_LOCAL_MODEL_COST_MAP": "True", "DO_NOT_TRACK": "True"}, clear=True):
+    infrastructure = {k: os.environ[k] for k in ('SYSTEMROOT', 'WINDIR', 'PATH', 'TEMP', 'TMP') if k in os.environ}
+    with patch.dict(os.environ, {**infrastructure, "LITELLM_LOCAL_MODEL_COST_MAP": "True", "DO_NOT_TRACK": "True"}, clear=True):
         settings = LLMSettings(provider=ProviderName.GEMINI, model="gemini-2.5-flash", api_key=SecretStr(DUMMY))
         gateway = LLMGateway(LiteLLMProvider(settings), settings)
         with pytest.raises(LLMTransportError) as failure:

@@ -134,10 +134,12 @@ class DocumentOrchestrator:
             if cached_tables is not None:
                 document = cached_tables
             else:
-                tables_by_page = TableExtractor().extract(raw, page_numbers=page_numbers)
+                table_extractor = TableExtractor()
+                tables_by_page = table_extractor.extract(raw, page_numbers=page_numbers)
+                raw_tables_by_page = getattr(table_extractor, 'raw_tables_by_page', tables_by_page)
                 for page in document.pages:
                     page.tables = tables_by_page.get(page.page_number, [])
-                    page.raw_tables = [t.model_copy(deep=True) for t in page.tables]
+                    page.raw_tables = [t.model_copy(deep=True) for t in raw_tables_by_page.get(page.page_number, [])]
                     if page_numbers is None or page.page_number in page_numbers:
                         page.table_extraction_status = ('processed' if page.page_number in tables_by_page else 'failed')
                 self._reconstruct_tables(document)

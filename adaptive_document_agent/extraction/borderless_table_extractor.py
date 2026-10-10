@@ -38,7 +38,7 @@ class BorderlessTableExtractor:
         lines = [self._clean_line(source.text) for source in sources]
         candidates = []
         for index, line in enumerate(lines):
-            if row := self._parse_row(index, line):
+            if row := self._parse_row(index, line, minimum_values=1):
                 matches = list(_VALUE.finditer(sources[index].text))[-len(row.values):]
                 boxes = [sources[index].bounds(m.start(), m.end()) for m in matches]
                 if [m.group() for m in matches] == row.values and all(boxes):
@@ -48,8 +48,13 @@ class BorderlessTableExtractor:
         tables: list[ExtractedTable] = []
         for group_index, group in enumerate(groups):
             maximum_values = max(len(row.values) for row in group)
-            year_index, years = self._nearest_year_header(lines, group[0].line_index)
-            has_dot_leaders = sum("..." in lines[row.line_index] for row in group) >= 2
+            year_index, years = self._nearest_year_header(lines, group[0].line_index, allow_single=maximum_values == 1)
+            has_dot_leaders = sum(bool(re.search(r'(?:\.\s*){2,}', lines[row.line_index])) for row in group) >= 2
+            if maximum_values == 1:
+                edges = [r.boxes[0][1] for r in group if len(r.boxes) == 1]
+                aligned = len(edges) == len(group) and len(edges) >= 2 and max(edges) - min(edges) <= 3
+                if not has_dot_leaders and not (years and aligned):
+                    continue
             if len(group) < 2 and not (years and maximum_values >= 3):
                 continue
             if not years and not has_dot_leaders:
@@ -61,14 +66,41 @@ class BorderlessTableExtractor:
                     periods = resolved
             headers = self._headers(lines, year_index, group[0].line_index, maximum_values)
             anchors = column_anchors([list(r.boxes) for r in group if len(r.values) == maximum_values], maximum_values)
-            header_sources = sources[year_index+1:group[0].line_index] if year_index is not None else []
+            vertical_header = next((i for i in range(group[0].line_index-1, max(-1, group[0].line_index-8), -1)
+                                    if self._period_from_line(lines[i])), None) if year_index is None else None
+            header_sources = (sources[year_index+1:group[0].line_index] if year_index is not None else
+                              sources[max(0, vertical_header-4):vertical_header] if vertical_header is not None else [])
             headers = geometric_headers(header_sources, anchors, headers)
             audit_statuses = (geometric_audit_statuses(header_sources, sources[year_index], maximum_values)
                               if year_index is not None else ["unknown"] * maximum_values)
             alignments = {r.line_index: align_sparse_values(r.values, r.boxes, anchors, maximum_values)
                           for r in group if len(r.values) < maximum_values}
             row_specs = self._rows_with_sections(group, lines, maximum_values, alignments=alignments, header_index=year_index, sources=sources)
-            raw_rows = [cells for cells, _, _ in row_specs]
+            raw_specs = self._rows_with_sections(group, lines, maximum_values, alignments=alignments,
+                header_index=year_index, sources=sources, preserve_period_headers=True)
+            raw_rows = [list(cells) for cells, _, _ in raw_specs]
+            if vertical_header is not None:
+                raw_rows.insert(0, [sources[vertical_header].text, *([None] * maximum_values)])
+            raw_header_sources = (sources[max(0, year_index-4):group[0].line_index] if year_index is not None
+                                  else header_sources)
+            # Label footnote markers are literal source content. Analytical
+            # labels may omit attached notes; the appendix must retain them.
+            for row in group:
+                original = sources[row.line_index].text
+                matches = list(_VALUE.finditer(original))[-len(row.values):]
+                if [m.group() for m in matches] == row.values:
+                    literal_label = re.sub(r'(?:\s*\.\s*){2,}', ' ', original[:matches[0].start()]).strip(' .:')
+                    if literal_label != row.label:
+                        for cells in raw_rows:
+                            if cells[0] and cells[0].endswith(row.label):
+                                cells[0] = cells[0][:-len(row.label)] + literal_label
+                                break
+            body_sources = sources[group[0].line_index:group[-1].line_index+1]
+            bbox = None
+            if body_sources and all(s.spans and s.top is not None and s.bottom is not None for s in body_sources):
+                bbox = (min(span[2] for s in body_sources for span in s.spans),
+                        min(s.top for s in body_sources), max(span[3] for s in body_sources for span in s.spans),
+                        max(s.bottom for s in body_sources))
             has_ambiguous_rows = any(ambiguous for _, _, ambiguous in row_specs)
             context_start = max(0, (year_index if year_index is not None else group[0].line_index) - 8)
             context = " ".join(lines[context_start : group[0].line_index + 1])
@@ -111,12 +143,15 @@ class BorderlessTableExtractor:
                     column_currencies=col_currs,
                     column_scales=col_scales,
                     column_audit_statuses=["unknown", *audit_statuses],
-                    rows=[TableRow(cells=cells, page=page_number, column_periods=row_periods,
+                    rows=[TableRow(cells=list(cells), page=page_number, column_periods=row_periods,
                                    alignment_status="ambiguous" if ambiguous else "resolved") for cells, row_periods, ambiguous in row_specs],
                     raw_cells=raw_rows,
-                    raw_header_lines=[s.text for s in sources[max(0, year_index-4):group[0].line_index]] if year_index is not None else [],
+                    bbox=bbox,
+                    raw_header_lines=[s.text for s in raw_header_sources],
+                    unit_header=next((s.text for s in raw_header_sources if re.search(
+                        r'(?i)\b(?:RMB|CNY|USD|HKD|EUR|GBP)\b.*\b(?:thousands?|millions?|billions?)\b', s.text)), None),
                     raw_body_lines=[s.text for s in sources[group[0].line_index:group[-1].line_index+1]],
-                    confidence=0.68 if years else 0.55,
+                    confidence=0.68 if years or vertical_header is not None else 0.55,
                     default_unit=unit,
                     default_raw_unit=raw_unit,
                     default_unit_scale=scale,
@@ -130,7 +165,7 @@ class BorderlessTableExtractor:
         return tables
 
     @staticmethod
-    def _parse_row(index: int, line: str) -> _CandidateRow | None:
+    def _parse_row(index: int, line: str, *, minimum_values: int = 2) -> _CandidateRow | None:
         # Only attached label annotations, including consecutive markers and a
         # marker after a closing label parenthesis. Whitespace-separated '(2)'
         # remains an accounting value. Mask rather than shift source offsets.
@@ -140,8 +175,13 @@ class BorderlessTableExtractor:
         # value. Keep real minus signs, parenthesised losses and empty cells.
         line = re.sub(r"^\s*[–—•-]\s+(?=[A-Za-z\u3400-\u9fff])", "", line)
         matches = list(_VALUE.finditer(line))
-        if len(matches) < 2:
+        if len(matches) < minimum_values:
             return None
+        if len(matches) == 1 and matches[0].start() and not line[matches[0].start()-1].isspace():
+            # A fractional suffix in prose (e.g. RMB33.8) is not a numeric
+            # cell. Single-column recovery still requires a literal separator.
+            if not re.search(r'(?:\.\s*){2,}$', line[:matches[0].start()]):
+                return None
         # Numeric substrings do not make a tabular row. Dates in wrapped prose
         # (e.g. 'March 31, 2025 had been settled.') used to be appended to the
         # preceding table and reported as unresolved sparse financial data.
@@ -194,12 +234,12 @@ class BorderlessTableExtractor:
         return groups
 
     @staticmethod
-    def _nearest_year_header(lines: list[str], first_row: int) -> tuple[int | None, list[str]]:
+    def _nearest_year_header(lines: list[str], first_row: int, *, allow_single=False) -> tuple[int | None, list[str]]:
         for index in range(first_row - 1, max(-1, first_row - 40), -1):
             matches = list(_PERIOD_TOKEN.finditer(lines[index]))
             years = [m.group().replace(" ", "") for m in matches]
             # A contiguous header tier, not dates scattered through prose.
-            if (len(years) >= 2 and not lines[index][matches[-1].end():].strip()
+            if (len(years) >= (1 if allow_single else 2) and not lines[index][matches[-1].end():].strip()
                     and all(not lines[index][a.end():b.start()].strip() for a,b in zip(matches,matches[1:]))):
                 years = [re.sub(r"^((?:19|20)\d{2})(H[12]|[12]H|Q[1-4])$", r"\2\1", y, flags=re.I) for y in years]
                 years = [re.sub(r"^H([12])", r"\1H", y, flags=re.I) for y in years]
@@ -319,7 +359,7 @@ class BorderlessTableExtractor:
         return " ".join(chunks[0])
 
     @staticmethod
-    def _rows_with_sections(group: list[_CandidateRow], lines: list[str], width: int, *, alignments=None, header_index=None, sources=None) -> list[tuple[list[str | None], list[str | None], bool]]:
+    def _rows_with_sections(group: list[_CandidateRow], lines: list[str], width: int, *, alignments=None, header_index=None, sources=None, preserve_period_headers=False) -> list[tuple[list[str | None], list[str | None], bool]]:
         output: list[tuple[list[str | None], list[str | None], bool]] = []
         initial_context = lines[max(0, group[0].line_index - 5) : group[0].line_index]
         active_period = next((period for line in reversed(initial_context) if (period := BorderlessTableExtractor._period_from_line(line))), None)
@@ -347,6 +387,10 @@ class BorderlessTableExtractor:
             period_updates = [period for line in between if (period := BorderlessTableExtractor._period_from_line(line))]
             if period_updates:
                 active_period = period_updates[-1]
+                if preserve_period_headers:
+                    for line in between:
+                        if BorderlessTableExtractor._period_from_line(line):
+                            output.append(([line, *([None] * width)], [None] * (width + 1), False))
             between = [line for line in between if not BorderlessTableExtractor._period_from_line(line)
                        and sum(bool(re.search(r"\d", m.group())) for m in _VALUE.finditer(line)) < 2]
             label = row.label

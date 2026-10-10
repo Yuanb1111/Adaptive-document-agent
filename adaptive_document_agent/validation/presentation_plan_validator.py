@@ -433,6 +433,9 @@ class PresentationPlanValidator:
     def _numbers(value: str) -> set[str]:
         value = PresentationPlanValidator._without_period_durations(value)
         value = PresentationPlanValidator._canonicalize_money_signs(value)
+        # A range separator is not the sign of its second endpoint. Keep real
+        # signed values (including a negative second endpoint) intact.
+        value = re.sub(r"(?<=\d)[ \t]*[-–][ \t]*(?=\d)|(?<=%)[ \t]*[-–][ \t]*(?=\d)", " ", value)
         # Separate explicit currency/fiscal prefixes before tokenising. Otherwise
         # RMB286.7m used to be read as just '7' after the decimal point.
         currency = r"(?:RMB|CNY|CNH|USD|HKD|SGD|GBP|EUR|JPY|AUD|CAD|CHF)"
@@ -452,7 +455,9 @@ class PresentationPlanValidator:
             r"(?<![A-Za-z0-9_.,])[+-]?(?:"
             r"\d{1,3}(?:[, '\u00a0\u202f\u2019]\d{3})+(?:\.\d+)?"
             r"|\d+(?:[.,]\d+)?"
-            r")(?:\s*%)?"
+            # A PDF year row followed by a percentage-header row is two fields.
+            # Only horizontal spacing can attach a percent unit to a number.
+            r")(?:[^\S\r\n]*%)?"
         )
         return {
             PresentationPlanValidator._normalize_number(match)

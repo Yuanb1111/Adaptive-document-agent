@@ -34,7 +34,9 @@ def check_requirements(result, presentation=None, *, export_verified=False):
             unprocessed = [p for p in numbers if p not in pages or pages[p].table_extraction_status != 'processed']
             uncertain = [p for p in numbers if p in pages and pages[p].requires_ocr]
             uncertain += [r['page'].page_number for r in records
-                          if r['table'].confidence < .6 or r['table'].warnings]
+                          if r['table'].confidence < .6 or any(w !=
+                              'Recovered from aligned text because no bordered table structure was detected.'
+                              for w in r['table'].warnings)]
             exported = sorted({p for identifier in ids for p in table_pages.get(identifier, [])})
             status = ('not_met' if not ids else 'partial' if unprocessed or uncertain else
                       'satisfied' if export_verified and exported else 'planned')

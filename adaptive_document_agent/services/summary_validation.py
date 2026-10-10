@@ -117,7 +117,10 @@ def presentation_errors(review: SummaryReview, slide_pages, result: PipelineResu
         if not page.title.strip() or not page.source_section.strip():
             errors.append('Summary slide needs a title and source section')
         # Two tiny sentences must not become a separate, nearly empty slide.
-        if len(page.items) > 1 and sum(len(item.text.strip()) for item in page.items) < 180:
+        import unicodedata
+        display_length = sum(2 if unicodedata.east_asian_width(c) in {'W', 'F'} else 1
+                             for item in page.items for c in item.text.strip())
+        if len(page.items) > 1 and display_length < 180:
             errors.append('Sparse Summary slide: merge its supported facts or omit it; never pad copy')
         for item in page.items:
             from .presentation_brief import is_technical_copy

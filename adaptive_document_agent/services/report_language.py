@@ -14,7 +14,8 @@ def text_frames(presentation):
     for slide in presentation.slides:
         for shape in slide.shapes:
             if shape.has_text_frame:
-                if shape.name in {'customization:table_label', 'customization:source_section'}:
+                if (shape.name in {'customization:table_label', 'customization:source_section', 'customization:source_footer'}
+                        or shape.text.lstrip().lower().startswith('source:')):
                     continue
                 yield shape.text_frame, shape.width.inches, shape.height.inches
             elif shape.has_table and not shape.name.startswith('customization:source_table:'):
@@ -26,6 +27,10 @@ def text_frames(presentation):
 def translatable(text):
     # Periods, source values and identifiers remain literal. A reader-facing
     # sentence with numbers remains eligible, with exact numeric validation.
+    from .executive_brief import _UNIT_ONLY_LABEL
+    if (_UNIT_ONLY_LABEL.fullmatch(text) or re.fullmatch(
+            r'\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4}\*?', text, re.I)):
+        return False
     return bool(re.search(r'[A-Za-z\u3400-\u9fff]', text) and not re.fullmatch(
         r'(?:FY|[QH][1-4]|[1-9]M)?[\d\s.,()\-+%*/:]+(?:[A-Za-z]{1,3})?\*?', text)
         and not re.fullmatch(r'(?:RMB|USD|HKD|EUR|GBP|CNY|US\$|HK\$|[$€£¥])?\s*[-+()\d.,]+\s*[mbx%]?', text))
@@ -35,6 +40,30 @@ def audience_copy(presentation):
     values = [frame.text for frame, _, _ in text_frames(presentation)]
     values.extend(element.text or '' for element in chart_display_strings(presentation))
     return list(dict.fromkeys(value for value in values if value.strip() and translatable(value)))
+
+
+def copy_limits(presentation):
+    """Conservative character budgets for CJK translation in existing native boxes."""
+    limits = {}
+    for frame, width, height in text_frames(presentation):
+        size = max((r.font.size.pt for p in frame.paragraphs for r in p.runs if r.font.size), default=
+                   max((p.font.size.pt for p in frame.paragraphs if p.font.size), default=14))
+        capacity = max(1, int(max(.1, width - .17) * 72 / size) * int((height + .06) * 72 / (size * 1.25)))
+        limits[frame.text] = min(limits.get(frame.text, capacity), capacity)
+    return limits
+
+
+def copy_fit_errors(presentation, source, translated):
+    for frame, width, height in text_frames(presentation):
+        if frame.text == source and not _fits(frame, width, height, translated):
+            return ['Localized copy exceeds its readable native text box; compact prose without omitting facts']
+    return []
+
+
+def _fits(frame, width, height, text):
+    size = max((run.font.size.pt for p in frame.paragraphs for run in p.runs if run.font.size), default=
+               max((p.font.size.pt for p in frame.paragraphs if p.font.size), default=14))
+    return len(wrap_copy(text, max(.1, width - .12), size)) * size * 1.25 / 72 <= height + .06
 
 
 def chart_display_strings(presentation):
@@ -76,9 +105,7 @@ def apply_report_language(presentation, result):
         if errors:
             raise ValueError('; '.join(errors))
         paragraphs = list(frame.paragraphs)
-        size = max((run.font.size.pt for p in paragraphs for run in p.runs if run.font.size), default=
-                   max((p.font.size.pt for p in paragraphs if p.font.size), default=14))
-        if len(wrap_copy(translated, max(.1, width - .12), size)) * size * 1.25 / 72 > height + .06:
+        if not _fits(frame, width, height, translated):
             # Preserve the whole source copy; a failed language requirement is
             # visible in its own report, never hidden by truncation/shrinkage.
             continue

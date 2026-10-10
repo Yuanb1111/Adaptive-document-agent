@@ -13,6 +13,7 @@ from .column_roles import percentage_column
 
 class TableExtractor:
     def extract(self, pdf_bytes: bytes, *, page_numbers: set[int] | None = None) -> dict[int, list[ExtractedTable]]:
+        self.raw_tables_by_page = {}
         try:
             import pdfplumber
         except ImportError:
@@ -67,6 +68,8 @@ class TableExtractor:
                             )
                         )
                     borderless_tables = BorderlessTableExtractor().extract(page, page_number)
+                    from .raw_table_inventory import retain_source_tables
+                    self.raw_tables_by_page[page_number] = retain_source_tables([*page_tables, *borderless_tables])
                     if borderless_tables:
                         from .table_candidate_selector import TableCandidateSelector
                         page_tables = TableCandidateSelector.merge_or_replace_tables(page_tables, borderless_tables)
