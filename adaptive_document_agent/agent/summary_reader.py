@@ -20,7 +20,7 @@ class ReadFact(BaseModel):
     label: str = Field(min_length=1, max_length=60)
     # Reading is evidence capture, not slide copy. Retain qualifications up to
     # the canonical fact limit; the separate editor compacts audience wording.
-    text: str = Field(min_length=1, max_length=280)
+    text: str = Field(min_length=1, max_length=600)
     quote_start_line: int = Field(ge=1)
     quote_end_line: int = Field(ge=1)
 
@@ -71,7 +71,7 @@ _RULES = (
     'a part merely because it is not suitable for a slide. If no safe fact can be extracted, facts may '
     'be empty, but explain the limitation in reading_note. Layout parts have no facts. '
     'Keep reading_note under 400 characters (hard limit 800); do not repeat the source paragraph. '
-    'Every fact needs a concise label/text (target 180, hard limit 280 characters) and quote_start_line/quote_end_line '
+    'Every fact needs a concise label/text (target 180, hard limit 600 characters for necessary qualifications) and quote_start_line/quote_end_line '
     'for a short contiguous passage entirely within its part. Python retains the literal source quote '
     'and page from those lines, so do not repeat source text or supply source_pages in the JSON. '
     'Choose only the lines needed to substantiate the fact, between 8 and 1800 source characters. Preserve source '
@@ -80,6 +80,8 @@ _RULES = (
     'the meaning of the selected row values. A bare row without its headers is insufficient. '
     'If the headers fall outside this part, adjust the partition or leave facts empty and explain '
     'the limitation; never borrow a period or currency from elsewhere on the page. '
+    'Before returning, verify that each quote includes the end of any wrapped sentence it relies on, '
+    'and that monetary per-unit prices retain their complete denominator (such as per unit). '
     'Do not put PDF page numbers in titles or reading notes; source-page metadata is already retained. '
     'Reading notes describe only the supplied block, not unseen continuations or other pages. '
     'Keep literal period spelling: do not change source "six months" into an unsourced numeric "6M". '
@@ -149,7 +151,11 @@ def _read_batch(gateway, result, blocks, cancelled: Event) -> ReadOutcome:
                 raise ValueError('; '.join(errors))
             messages = messages[:2] + [untrusted_document_message(json.dumps(record, ensure_ascii=False)),
                 {'role': 'user', 'content': 'Correct these validation failures using only the original '
-                 'source lines. Return every part and account for every line; never invent or pad facts.'}]
+                 'source lines. Check quote line endpoints against wrapped sentences; include missing '
+                 'continuation and table header lines within the same part. Retain complete source '
+                 'currency, scale, sign, percentage column and per-unit denominator. Correct unsupported '
+                 'reading-note numbers too. If exact evidence remains unavailable, leave that fact empty '
+                 'and explain the limitation; preserve its part and every source line. Never invent or pad facts.'}]
     except Exception as exc:
         # Preserve failed requests, including privacy/adapter errors, before the
         # owner re-raises them. No provider fallback or semantic salvage occurs.

@@ -248,6 +248,36 @@ def test_reading_preserves_a_qualified_fact_between_220_and_280_characters():
     assert fact.text == text
 
 
+def test_long_qualified_reading_fact_keeps_semantic_repair_available():
+    from adaptive_document_agent.agent.summary_reader import _read_batch
+    from adaptive_document_agent.models.summary import SummaryReview
+    text = ('The organisation offers 3 services, subject to customer integration, staff training '
+            'and continuing access to licensed software; delivery conditions depend on the '
+            'customer environment and the source does not guarantee adoption, a completion '
+            'date, a financial return, future purchases or any improvement in operating results.')
+    assert 280 < len(text) <= 600
+    result = source(1)
+    result.document.pages[0].text = text.replace('3 services', 'several services') + '\nIt offers 3 services.\n'
+    blocks = source_blocks(result, [1])
+    calls = []
+    class Reader:
+        def generate_structured(self, messages, model, **kwargs):
+            calls.append(messages)
+            return SummaryReadBatch(parts=[ReadPart(block_id=blocks[0].id,
+                start_line=1, end_line=2, title='Delivery', role='content',
+                reading_note='Delivery depends on customer prerequisites.', facts=[ReadFact(
+                    label='Delivery', text=text, quote_start_line=1,
+                    quote_end_line=1 if len(calls) == 1 else 2)])])
+    outcome = _read_batch(Reader(), result, blocks, Event())
+    assert outcome.error is None and len(calls) == 2
+    assert outcome.audit['attempts'][0]['errors'] == ["Delivery: unsupported numeric claims ['3']."]
+    assert 'quote line endpoints' in calls[1][-1]['content']
+    assert outcome.parts[0].facts[0].text == text
+    assert outcome.audit['attempts'][1]['errors'] == []
+    with pytest.raises(ValueError):
+        SummarySlideItem(text=text, part_ids=['part'], source_pages=[1], source_quote=text)
+
+
 def test_failed_introduction_does_not_render_an_evidence_limitation_placeholder():
     from adaptive_document_agent.models import ValidationIssue
     from tests.test_presentation_brief import blank_deck

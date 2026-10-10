@@ -38,6 +38,7 @@ class ReportRequirements(BaseModel):
     interpretation_error: str = ''
     # Only exact source -> display wording. Never modify analytical facts.
     copy_translations: dict[str, str] = Field(default_factory=dict)
+    navigation_audit: list[dict] = Field(default_factory=list)
 
 
 class RequirementCheck(BaseModel):

@@ -22,17 +22,17 @@ _UNIT_ONLY_LABEL = re.compile(
 _QUANTITY = re.compile(
     r"(?i)(?<![A-Za-z0-9_.])(?P<currency>US\$|HK\$|RMB|CNY|USD|HKD|EUR|GBP|人民币|美元|港元|欧元|\$|€|£|¥|￥)?\s*"
     r"(?P<value>(?>[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?))\s*"
-    r"(?P<unit>trillion|billion|million|thousand|bn|mn|[mkb]|%|percent\b|万亿|亿|万|千)?"
+    r"(?P<unit>trillion|billion|million|thousand|bn|mn|[mkb]|%|percent\b|万亿|十亿|百万|亿|万|千)?"
     r"(?P<currency_suffix>美元|港元|欧元|人民币|元)?(?![A-Za-z0-9_])"
 )
 
 _MONEY_QUANTITY = re.compile(
     r"(?ix)(?<![A-Za-z0-9_.])"
-    r"(?:(?P<prefix>US\$|HK\$|RMB|CNY|CNH|USD|HKD|SGD|GBP|EUR|JPY|AUD|CAD|CHF|[$€£¥￥])\s*)?"
+    r"(?:(?P<prefix>US\$|HK\$|RMB|CNY|CNH|USD|HKD|SGD|GBP|EUR|JPY|AUD|CAD|CHF|人民币|美元|港元|欧元|[$€£¥￥])\s*)?"
     r"(?P<open>\()?\s*(?P<sign>[+\-\u2212])?\s*"
     r"(?P<value>(?>\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s*"
-    r"(?P<unit>trillion|billion|million|thousand|bn|mn|[mkb])\b\s*(?(open)\))\s*"
-    r"(?P<suffix>US\$|HK\$|RMB|CNY|CNH|USD|HKD|SGD|GBP|EUR|JPY|AUD|CAD|CHF|[$€£¥￥])?"
+    r"(?P<unit>trillion\b|billion\b|million\b|thousand\b|bn\b|mn\b|[mkb]\b|万亿|十亿|百万|亿|万|千)(?:元)?\s*(?(open)\))\s*"
+    r"(?P<suffix>US\$|HK\$|RMB|CNY|CNH|USD|HKD|SGD|GBP|EUR|JPY|AUD|CAD|CHF|人民币|美元|港元|欧元|[$€£¥￥])?"
     r"(?![A-Za-z0-9_])"
 )
 

@@ -14,6 +14,7 @@ _SCALES = {1: "", 1000: "thousand", 1_000_000: "million",
 _MONTHS = "January February March April May June July August September October November December".split()
 _MONTH = "(?:" + "|".join(_MONTHS) + ")"
 _DATE = re.compile(r"\b(" + _MONTH + r")\s+(\d{1,2}),?\s+((?:19|20)\d{2})\b", re.I)
+_CHINESE_DATE = re.compile(r"(?<!\d)((?:19|20)\d{2})年\s*(\d{1,2})月\s*(\d{1,2})日(?!\d)")
 _DATE_HEADER = re.compile(
     r"(?:(?:as of|for the|the|year|years|months?|ended|ending|quarter|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+)*"
     r"(" + _MONTH + r")\s+(\d{1,2})(?:,?\s+((?:19|20)\d{2}))?[,]?", re.I)
@@ -52,8 +53,10 @@ def canonical_quantity(currency, value, unit):
     """Equivalent currency/scale spellings, never currency conversion."""
     from .financial_formatter import normalize_currency_symbol
     aliases = {"k": "thousand", "m": "million", "mn": "million",
-               "b": "billion", "bn": "billion", "percent": "%"}
-    return normalize_currency_symbol(currency).casefold(), value, aliases.get(unit, unit)
+               "b": "billion", "bn": "billion", "percent": "%",
+               "千": "thousand", "百万": "million", "十亿": "billion", "万亿": "trillion"}
+    currencies = {"人民币": "RMB", "美元": "USD", "港元": "HKD", "欧元": "EUR", "元": "RMB"}
+    return normalize_currency_symbol(currencies.get(currency, currency)).casefold(), value, aliases.get(unit, unit)
 
 
 def _number(value):
@@ -73,8 +76,10 @@ class TableQuoteContext:
 
     def numeric_claim_text(self, text):
         """Exempt complete supported dates, never authorize their digits elsewhere."""
-        return _DATE.sub(lambda m: " " if (m[1].casefold(), str(int(m[2])), m[3]) in self.dates
-                         else m[0], text)
+        text = _DATE.sub(lambda m: " " if (m[1].casefold(), str(int(m[2])), m[3]) in self.dates
+                        else m[0], text)
+        return _CHINESE_DATE.sub(lambda m: " " if 1 <= int(m[2]) <= 12 and (
+            _MONTHS[int(m[2]) - 1].casefold(), str(int(m[3])), m[1]) in self.dates else m[0], text)
 
     def basis_errors(self, text):
         from .executive_brief import _MONEY_QUANTITY, _QUANTITY, _quantities
@@ -219,6 +224,7 @@ def quoted_table_context(item, result, *, excerpts=None):
     context = TableQuoteContext()
     positive_coefficients = set()
     non_percentage_coefficients = set()
+    recovered_tables = {}
     for quote in continuous_quote_passages(item.evidence, {number: p.text for number, p in pages.items()}):
         page = pages.get(quote.page)
         source = excerpts.get(quote.page, "") if excerpts is not None else (page.text if page else "")
@@ -230,7 +236,16 @@ def quoted_table_context(item, result, *, excerpts=None):
         # Competing same-label rows still require identical complete bindings.
         from collections import defaultdict
         plausible, matched = defaultdict(set), defaultdict(list)
-        for table in page.tables:
+        # The independent introductory reader runs before analytical extraction.
+        # Recover literal aligned source rows locally when no parsed tables were
+        # supplied; never borrow observations or mutate the run's document model.
+        tables = page.tables
+        if not tables:
+            from adaptive_document_agent.extraction.borderless_table_extractor import BorderlessTableExtractor
+            if page.page_number not in recovered_tables:
+                recovered_tables[page.page_number] = BorderlessTableExtractor().extract(page, page.page_number)
+            tables = recovered_tables[page.page_number]
+        for table in tables:
             for row in table.rows:
                 cells = [str(cell).strip() for cell in row.cells if cell and str(cell).strip()]
                 labels = [cell for cell in cells if parse_number(cell) is None]

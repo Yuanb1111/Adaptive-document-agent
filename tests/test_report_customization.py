@@ -61,16 +61,21 @@ def test_interpreter_uses_gateway_separates_user_from_untrusted_pdf():
     calls = []
     def generate(messages, model, **kwargs):
         calls.append((messages, kwargs))
-        return model(items=[table_requirement()])
+        req = table_requirement()
+        if len(calls) == 1:
+            req.sections = []
+            req.resolution = 'ambiguous'
+        return model(items=[req])
     parsed = interpret_requirements(SimpleNamespace(generate_structured=generate), document(), 'All Results tables')
     assert parsed.original_request == 'All Results tables'
     assert not parsed.interpretation_error
-    assert len(calls) == 1
+    assert len(calls) == 2
     assert calls[0][1]['stage'] == 'presentation'
     assert calls[0][1]['allow_repair'] is False
     assert 'All Results tables' in calls[0][0][1]['content']
-    assert '<UNTRUSTED_DOCUMENT_CONTENT>' in calls[0][0][2]['content']
-    assert 'delete the source' in calls[0][0][2]['content']
+    assert '<UNTRUSTED_DOCUMENT_CONTENT>' not in calls[0][0][2]['content']
+    assert 'source_sections' in calls[1][0][2]['content']
+    assert 'Results' in calls[1][0][2]['content']
 
 
 def test_invalid_intent_has_one_correction_and_no_guessed_fallback():

@@ -73,8 +73,15 @@ Even a successful cell comparison proves fidelity to retained extracted grids,
 not that source detection was exhaustive. This distinction appears in the user's
 completion report rather than being hidden behind an “all tables completed” claim.
 
-The parser normally adds one lightweight model call, with at most one correction
-for invalid interpretations. Semantic review adds a call for emphasis/detail;
+Intent interpretation adds one lightweight model call, with at most one correction
+for invalid interpretations. It does not include PDF text: long navigation cannot
+suppress independent language, emphasis or detail requests. Chapter requests then
+use the complete reliable outline, or bounded batches containing every page opening
+character, followed by source-bound range resolution. Independent navigation batches
+use gateway-approved concurrency; loopback models remain serial. Failed or excessive
+navigation marks chapter location ambiguous while retaining the other requirements.
+Successful batch coverage is recorded in `report_requirements.navigation_audit`.
+Semantic review adds a call for emphasis/detail;
 language requests add bounded translation/review batches. Full-table requests
 increase native slide creation and render verification according to chapter size.
 There is no promised fixed generation duration. Existing scoring and analytical
@@ -92,3 +99,17 @@ raw/unselected cells, wide/long table pagination, short-table packing, visible h
 context, tamper/missing-cell rejection, incomplete extraction reporting, slide-budget
 conflicts, translation guards/review and finalization immutability. Pipeline, export,
 privacy, reasoning-policy and UI regressions run alongside these tests.
+
+`tests/test_requirement_navigation.py` exercises the actual interpretation entry
+point with oversized navigation, complete split-record coverage, immutable user
+intent, transport failure and privacy rejection. Chinese amount regression tests
+check equivalent currency/scale spelling without conversion and exact signed
+magnitude annotations. Introductory reading can recover aligned raw table rows
+before analytical extraction, with no document mutation; quotes still require their
+own headers, periods and units. Reading facts retain necessary qualifications up to
+600 characters; audience slide items retain their separate 180-character limit.
+Topic selection also receives the latest strictly comparable numeric interval for
+each validated series. Python calculates its change; the model decides its meaning
+and whether a recent counterpoint qualifies a historical claim. Annual/interim bases,
+currencies and source contexts remain separate. Invalid or missing latest values
+cannot produce a misleading stale comparison.

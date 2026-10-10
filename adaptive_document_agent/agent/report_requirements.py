@@ -1,11 +1,11 @@
-"""Resolve user intent once, using navigation evidence instead of a document template."""
+"""Interpret user intent independently of subsequent source chapter location."""
 
 import json
 
 from adaptive_document_agent.models.customization import ReportRequirements
 from adaptive_document_agent.services.source_quotes import normalize_quote
 from adaptive_document_agent.services.llm.exceptions import LLMTransportError, PrivacyViolationError
-from .prompting import load_prompt, untrusted_document_message
+from .prompting import load_prompt
 
 
 def interpret_requirements(gateway, document, instruction):
@@ -17,27 +17,28 @@ def interpret_requirements(gateway, document, instruction):
     if gateway is None:
         requirements.interpretation_error = 'A configured model is required to interpret custom report instructions.'
         return requirements
-    page_index = [{'page': p.page_number, 'opening_lines': p.text.splitlines()[:12]}
-                  for p in document.pages]
-    payload = json.dumps({'physical_page_count': document.page_count,
-                         'source_sections': [s.model_dump(mode='json') for s in document.outline],
-                         'page_index': page_index}, ensure_ascii=False)
-    if len(payload) > 180_000:
-        requirements.interpretation_error = 'The complete navigation index exceeds the request budget; no sections were silently sampled.'
-        return requirements
     messages = [{'role': 'system', 'content': load_prompt('report_requirements.txt')},
                 {'role': 'user', 'content': 'Report instructions supplied by the user:\n' + instruction},
-                untrusted_document_message(payload)]
+                {'role': 'user', 'content': 'This first step interprets intent only. No PDF navigation is '
+                 'supplied yet. Keep requested section names in description; leave sections empty and '
+                 'mark section_tables ambiguous pending source location. Other supported requirements '
+                 'can be resolved without document navigation. Do not guess physical pages.'}]
     for attempt in range(2):
         try:
             draft = gateway.generate_structured(messages, ReportRequirements, stage='presentation',
                                                 allow_repair=False, max_tokens=4096)
+            if any(r.sections or r.kind == 'section_tables' and r.resolution == 'resolved'
+                   for r in draft.items):
+                raise ValueError('Intent parsing has no source navigation; leave chapter bindings ambiguous and empty')
             errors = validate_requirements(draft, document, instruction)
             if errors:
                 raise ValueError('; '.join(errors))
             draft.original_request = instruction
             draft.copy_translations = {}
+            draft.navigation_audit = []
             draft.interpretation_error = ''
+            from .requirement_navigation import resolve_requested_sections
+            resolve_requested_sections(gateway, draft, document, instruction)
             return draft
         except PrivacyViolationError:
             raise

@@ -338,12 +338,14 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
     # A complete analytical claim may not fit the template's 32 pt title role.
     # Reuse the planner's section heading and place the claim in the subtitle
     # or commentary according to available space, without rewriting its meaning.
-    if len(_lines(heading, 8.91, 32)) > 2:
+    from .presentation_labels import compact_section_heading
+    section = compact_section_heading(slide_plan.section_title)
+    title_lines = len(_lines(heading, 8.91, 32))
+    if title_lines > 2 or (title_lines == 2 and section and section != heading
+                           and len(_lines(section, 8.91, 32)) == 1):
         # A selected topic can itself be a full sentence. When neither authored
         # heading fits, name the plotted measures and keep the complete claim
         # visibly below it; never truncate an analytical statement to fit.
-        from .presentation_labels import compact_section_heading
-        section = compact_section_heading(slide_plan.section_title)
         measures = list(dict.fromkeys(readable_chart_heading(chart.title) for chart in charts))
         measured = " and ".join(measures)
         if len(_lines(measured, 8.91, 32)) > 2 and measures:
@@ -354,10 +356,15 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
             heading = composition_heading(heading, charts[0], values, totals)
         if slide_plan.title.endswith(" (continued)"):
             heading += " (continued)"
-        subtitle = "\n".join(part for part in (
-            display_message if display_message and ("?" in scoped_title or (
-                display_message != slide_plan.message.strip() and '?' not in slide_plan.message)) else scoped_title,
-            convention) if part)
+        if title_lines > 2:
+            subtitle = "\n".join(part for part in (
+                display_message if display_message and ("?" in scoped_title or (
+                    display_message != slide_plan.message.strip() and '?' not in slide_plan.message)) else scoped_title,
+                convention) if part)
+        elif scoped_title.strip() != display_message.strip():
+            # Compact a two-line heading without overwriting the planner's
+            # fuller analysis message. Preserve its separate title visibly too.
+            text = "\n".join(part for part in (scoped_title, text) if part)
     convention_h = 0.0
     if len(_lines(subtitle, 8.91, 18)) > 3 and convention:
         subtitle = subtitle.removesuffix("\n" + convention)

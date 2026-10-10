@@ -118,6 +118,8 @@ def series_directory(result: PipelineResult) -> tuple[list[dict[str, object]], d
              o.audited_status, o.validation_status, sorted({e.page for e in o.evidence})]
             for o in group
         ]
+        from adaptive_document_agent.services.presentation_interval_evidence import latest_numeric_intervals
+        item['latest_numeric_intervals'] = latest_numeric_intervals(group) if item['visual_kind'] == 'series' else []
         from adaptive_document_agent.services.source_row_qualifications import source_row_qualifications
         item['source_qualifications'] = source_row_qualifications(group, result.document, pages=source_pages)
     return directory, lookup
@@ -154,6 +156,7 @@ class PresentationTopicSelector:
             "first_reported_value", "last_reported_value", "evidence_status",
             "visual_kind",
             "reported_points",
+            "latest_numeric_intervals",
         )
         payload = {
             "document_purpose": result.profile.document_purpose,
@@ -164,6 +167,7 @@ class PresentationTopicSelector:
             "reported_point_columns": ["observation_id", "period", "raw_value", "value", "unit_scale",
                 "period_basis", "period_type", "period_start", "period_end", "definition_basis",
                 "audited_status", "validation_status", "source_pages"],
+            'latest_numeric_interval_columns': ['start_period', 'end_period', 'normalized_value_change'],
             "all_extracted_series": [[item[column] for column in columns] for item in directory],
             "ratio_definitions": [
                 {"series_id": item["id"], "definitions": item["ratio_definitions"]}
