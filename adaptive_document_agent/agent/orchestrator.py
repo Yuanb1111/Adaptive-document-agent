@@ -176,6 +176,13 @@ class DocumentOrchestrator:
             index = DocumentModelBuilder().build(observations)
 
         notify("Generating analysis candidates")
+        if attach_introduction is not None and attach_introduction.failed():
+            from .introduction_checkpoint import failed_introduction_result
+            return failed_introduction_result(attach_introduction,
+                PipelineResult(document=document, profile=profile, observations=index.observations,
+                    validation_warnings=self._validate_analysis(profile, observations, [])),
+                self.gateway, resources, timings, details, pipeline_started, notify,
+                before_scoring=True)
         with record_timing(timings, "candidate_generation"):
             candidates = AnalysisCandidateGenerator().generate(index, profile)
             scores = AnalysisValueScorer(self.gateway).score(candidates, index, profile, progress=notify)

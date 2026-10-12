@@ -8,7 +8,7 @@ from adaptive_document_agent.utils.timing import record_timing
 
 
 def failed_introduction_result(prepared, result, gateway, resources, timings, details,
-                               pipeline_started, notify):
+                               pipeline_started, notify, *, before_scoring=False):
     # Caller checks failed() first: this never waits on a healthy ongoing read.
     try:
         prepared(PresentationPlan(title='Introduction verification'), result)
@@ -23,8 +23,9 @@ def failed_introduction_result(prepared, result, gateway, resources, timings, de
         resources.close()
     result.validation_warnings.append(ValidationIssue(
         code='editorial_stages_skipped', severity='info', stage='report',
-        message='Introduction verification failed. Retained extracted evidence and completed '
-                'calculations; skipped insight writing, topic selection, briefing and localization.'))
+        message=('Introduction verification failed. Retained extracted evidence and any completed '
+                 'calculations; skipped ' + ('candidate scoring, ' if before_scoring else '') +
+                 'insight writing, topic selection, briefing and localization.')))
     result.pipeline_version = PIPELINE_VERSION
     result.llm_usage = list(gateway.usage)
     result.timings_ms = dict(timings)

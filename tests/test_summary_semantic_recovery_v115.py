@@ -33,7 +33,7 @@ def diagram_fixture():
 def test_repeated_diagram_and_empty_qualitative_fact_failures_get_one_targeted_read():
     result, blocks, rows, fixes = diagram_fixture()
     original = deepcopy(rows)
-    client = Responses([rows, rows, fixes])
+    client = Responses([rows, rows, fixes[:1]])
     outcome = _read_batch(client, result, blocks, Event())
     assert_complete(result, blocks, outcome)
     assert len(client.calls) == 3
@@ -41,7 +41,9 @@ def test_repeated_diagram_and_empty_qualitative_fact_failures_get_one_targeted_r
     assert outcome.parts[1].facts[0].text == rows[1]['facts'][0]['text']
     assert [p.role for p in outcome.parts] == ['heading','content','content','content']
     audit = outcome.audit['rejected_part_read']
-    assert [r['start_line'] for r in audit['ranges']] == [3,4]
+    assert [r['start_line'] for r in audit['ranges']] == [3]
+    assert outcome.parts[-1].facts[0].evidence_only
+    assert outcome.parts[-1].facts[0].text == result.document.pages[0].text.splitlines()[-1]
     assert audit['errors'] == []
     assert all(p.facts[0].source_pages == [1] for p in outcome.parts if p.role == 'content')
 
@@ -49,8 +51,9 @@ def test_repeated_diagram_and_empty_qualitative_fact_failures_get_one_targeted_r
 @pytest.mark.parametrize('bad', ['unchanged','overwrite','invention','outside_quote','omit','overlap'])
 def test_targeted_read_still_rejects_missing_substance_and_invalid_evidence(bad):
     result, blocks, rows, fixes = diagram_fixture()
+    fixes = fixes[:1]
     if bad == 'unchanged':
-        fixes = rows[2:]
+        fixes = rows[2:3]
     elif bad == 'overwrite':
         fixes.insert(0, rows[1])
     elif bad == 'invention':
@@ -108,7 +111,7 @@ def test_targeted_recovery_reaches_native_ppt_with_source_bound_business_opening
     from tests.test_complete_summary_reading import SummaryClient, gateway, complete_deck
     from adaptive_document_agent.models import PresentationPlan
     result, _, rows, fixes = diagram_fixture()
-    replies = iter([rows, rows, fixes])
+    replies = iter([rows, rows, fixes[:1]])
     class Client(SummaryClient):
         def generate_structured(self, messages, response_model, **kwargs):
             if response_model is SummaryReadBatch:

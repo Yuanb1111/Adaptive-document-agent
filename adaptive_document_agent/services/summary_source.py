@@ -32,9 +32,12 @@ def source_blocks(result: PipelineResult, pages: list[int]) -> list[SummarySourc
     blocks = []
     for page in pages:
         text = selected[page]
+        # A page that fits one request must not be broken at the smaller
+        # fallback block size: that can strand table headers or half a sentence.
+        block_limit = len(text) if len(text) <= BATCH_CHARACTERS else BLOCK_CHARACTERS
         start = 0
         while start < len(text):
-            end = min(start + BLOCK_CHARACTERS, len(text))
+            end = min(start + block_limit, len(text))
             if end < len(text):
                 newline = text.rfind('\n', start, end)
                 if newline >= start:

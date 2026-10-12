@@ -33,9 +33,25 @@ def bind_reading(response, blocks, result, record, *, literal_fallback=False):
                         'end_line': fact.quote_end_line, 'rejected_paraphrase': fact.text,
                         'errors': failures})
                     bound = bound.model_copy(update={'text': bound.source_quote})
+                    from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
+                    if PresentationPlanValidator._numbers(bound.label) - PresentationPlanValidator._numbers(source):
+                        record['literal_extracts'][-1]['rejected_label'] = bound.label
+                        bound = bound.model_copy(update={'label': 'Source passage'})
                 facts.append(bound)
             except ValueError as exc:
                 errors.append('Invalid Summary fact source span: ' + str(exc))
+        if (literal_fallback and part.role == 'content' and not part.facts
+                and 1 <= part.start_line <= part.end_line <= len(lines) and len(source.strip()) >= 8):
+            # The model has classified and assigned this passage, but cannot
+            # safely paraphrase it (e.g. a table lead-in). Retain literal internal
+            # evidence, not an invented claim. The editor must still author copy.
+            from adaptive_document_agent.services.source_quotes import split_literal_quote
+            for quote in split_literal_quote(source.strip(), limit=6000):
+                facts.append(SummaryFact(label='Source passage', text=quote, source_quote=quote,
+                                         source_pages=[block.page], evidence_only=True))
+            record.setdefault('literal_passages', []).append({'block_id': block.id,
+                'start_line': part.start_line, 'end_line': part.end_line,
+                'reason': 'Model-assigned content has no safe paraphrase; retained literal evidence for editing.'})
         parts.append(SummaryPart(**part.model_dump(exclude={'facts'}), facts=facts,
             id=stable_id('summary_part', block.id, part.start_line, part.end_line),
             source_page=block.page, source_text=source))

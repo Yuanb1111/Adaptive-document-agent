@@ -12,6 +12,8 @@ def reading_presentation(review, result, response_model):
     those facts with their exact citations and then runs the normal gates.
     """
     from adaptive_document_agent.services.summary_validation import presentation_errors
+    if any(f.evidence_only for p in review.parts for f in p.facts):
+        raise ValueError('Literal reading passages require model-authored editorial copy before presentation')
     payload, catalog = editorial_parts(review.parts)
     pages, decisions = [], []
     for part in payload:

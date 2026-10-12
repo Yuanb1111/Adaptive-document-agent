@@ -27,9 +27,13 @@ def export_diagnostics(result, error=None, visual_report=None, preflight_report=
                     "message": issue.message, "slide_id": str(issue.slide) if issue.slide else None,
                     "related_ids": list(issue.shape_ids)})
     if error:
-        stage = ("preflight" if preflight_report and preflight_report.errors else "rendering" if visual_report
+        stopped = any(w.code == 'editorial_stages_skipped' for w in result.validation_warnings)
+        stage = ("introduction" if stopped else "preflight" if preflight_report and preflight_report.errors else "rendering" if visual_report
                  else "financial" if financial.has_critical_errors else "generation")
         report["export_error"] = {"stage": stage, "message": str(error)}
+        if stopped:
+            report['critical_errors'].insert(0, {'code': 'INTRODUCTION_VERIFICATION_FAILED',
+                'severity': 'CRITICAL', 'message': str(error), 'slide_id': None, 'related_ids': []})
         if not report["critical_errors"]:
             report["critical_errors"].append({"code": "EXPORT_FAILED", "severity": "CRITICAL",
                 "message": str(error), "slide_id": None, "related_ids": []})

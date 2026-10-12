@@ -64,6 +64,8 @@ def compact_input(review):
                 quote_ids[key] = f'q{len(quotes)}'
                 quotes.append({'id':quote_ids[key],'pages':fact.source_pages,'text':fact.source_quote})
             value = {'id':fid,'label':fact.label,'quote_ref':quote_ids[key]}
+            if fact.evidence_only:
+                value['evidence_only'] = True
             if fact.text != fact.source_quote:
                 value['text'] = fact.text
             row['facts'].append(value)
@@ -112,6 +114,8 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None):
         'one slide per part or copy tables as prose. EVERY substantive part must contribute a real '
         'supported summary; citing its fact ID without stating its subject or qualification is insufficient. '
         'Each item may combine multiple fact_ids, including facts from different source pages. '
+        'An evidence_only entry is literal internal source, not finished copy. Interpret it and merge '
+        'headers or lead-ins with the related substantive material; do not publish isolated fragments. '
         'Use at most four paragraphs per page, target 160-240 Latin-equivalent characters each '
         '(CJK characters count as two). Keep complete sentences, attribution and material qualifications. '
         'Prefer qualitative synthesis over enumerating all table cells; source tables are independent '

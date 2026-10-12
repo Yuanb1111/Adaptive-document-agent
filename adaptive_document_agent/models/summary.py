@@ -24,6 +24,7 @@ class SummaryFact(BaseModel):
     text: str = Field(min_length=1, max_length=6000)
     source_quote: str = Field(min_length=8, max_length=6000)
     source_pages: list[int] = Field(min_length=1)
+    evidence_only: bool = False
 
 
 class SummaryPart(BaseModel):

@@ -26,6 +26,20 @@ def _result():
     )
 
 
+def test_early_introduction_failure_is_not_misreported_as_unrelated_financial_qa():
+    from adaptive_document_agent.models import ValidationIssue
+    result = _result()
+    result.validation_warnings.append(ValidationIssue(code='editorial_stages_skipped',
+        message='Introduction verification failed', severity='info', stage='report'))
+    financial = QAReport(document_title='Report', critical_errors=[QAItem(
+        code='ambiguous_table_alignment',severity='CRITICAL',message='Unselected raw table is ambiguous')])
+    error = CriticalQAError('Verified introduction unavailable',financial_report=financial)
+    report = diagnostics.export_diagnostics(result,error)
+    assert report['export_error']['stage'] == 'introduction'
+    assert report['critical_errors'][0]['code'] == 'INTRODUCTION_VERIFICATION_FAILED'
+    assert report['financial_qa']['critical_errors'][0]['code'] == 'ambiguous_table_alignment'
+
+
 class DownloadUI:
     def __init__(self):
         self.session_state = {}

@@ -1,6 +1,7 @@
 """Known introduction failures retain diagnostics without buying report copy."""
 import json
 from threading import Event
+from concurrent.futures import Future
 
 import pytest
 
@@ -48,3 +49,20 @@ def test_failure_before_reporting_skips_editorial_work_and_preserves_audit(monke
     with pytest.raises(ValueError, match='source-verified opening'):
         export_pptx_with_report(result)
     assert result.presentation_plan is None  # No legacy recovery disguises failure.
+
+
+def test_known_failure_before_scoring_does_not_purchase_candidate_scores(monkeypatch):
+    def prepare(self, gateway, source):
+        self._caller = __import__('threading').get_ident()
+        self._cancelled = Event()
+        self._current = self._source = source
+        self._pool = None
+        self.duration_ms = 1
+        self._future = Future()
+        self._future.set_exception(ValueError('Synthetic mandatory introduction failure'))
+    monkeypatch.setattr(introduction.PreparedCompanyIntroduction, '__init__', prepare)
+    harness = configure_pipeline(monkeypatch)
+    result = harness.run()
+    assert not {'candidate_scoring','reporting','slide_plan'} & {i['name'] for i in harness.intervals}
+    assert not result.candidate_scores and not result.analysis_results
+    assert any('candidate scoring' in w.message for w in result.validation_warnings)

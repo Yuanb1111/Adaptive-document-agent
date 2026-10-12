@@ -103,11 +103,12 @@ def reading_errors(review: SummaryReview, result: PipelineResult, *, complete_sc
             errors.append('Layout-only material cannot supply factual slide copy')
         if part.role == 'content' and not part.facts:
             errors.append('Every substantive Summary part needs a supported fact for complete coverage')
-        if part.role == 'heading' and (len(source.strip()) > 180 or len([line for line in source.splitlines() if line.strip()]) > 2):
+        visible_length = len(' '.join(source.split()))
+        if part.role == 'heading' and (visible_length > 180 or len([line for line in source.splitlines() if line.strip()]) > 2):
             errors.append('Heading-only classification cannot hide a substantive source passage')
         # A compact multi-tier header can have several nonempty lines.
         # Reject long body text, not a legitimate year/unit/header group.
-        if part.role == 'layout' and len(source.strip()) > 180:
+        if part.role == 'layout' and visible_length > 180:
             errors.append('Layout-only classification cannot hide a substantive source passage')
         for fact in part.facts:
             errors.extend(fact_errors(fact, result, source, block.page, literal_reading=True))
@@ -148,6 +149,8 @@ def presentation_errors(review: SummaryReview, slide_pages, result: PipelineResu
             if is_technical_copy(item.text):
                 errors.append('Summary slide copy would be withheld by audience layout checks')
             known = [parts[pid] for pid in item.part_ids if pid in parts]
+            if item.evidence_only or (item.reading_fact_copy and any(f.evidence_only for p in known for f in p.facts)):
+                errors.append('Literal reading passages require model-authored editorial copy before presentation')
             if len(known) != len(item.part_ids) or len(set(item.part_ids)) != len(item.part_ids):
                 errors.append('Summary slide item cites unknown or repeated parts')
                 continue
