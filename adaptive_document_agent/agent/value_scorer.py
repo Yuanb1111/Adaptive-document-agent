@@ -16,6 +16,7 @@ from adaptive_document_agent.models.analysis import (
 )
 from adaptive_document_agent.services.llm import LLMGateway
 from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
+from adaptive_document_agent.utils.ids import stable_id
 
 from .prompting import load_prompt, untrusted_document_message
 from .candidate_generator import AnalysisCandidateGenerator
@@ -25,7 +26,6 @@ from .candidate_generator import AnalysisCandidateGenerator
 # round trips retain model identity as well as all original values.
 SemanticCandidateScore = SemanticCandidateDecision
 SCORING_BATCH_SIZE = 40
-MAX_SPLIT_DEPTH = 3
 
 
 class SemanticCandidateScores(BaseModel):
@@ -217,15 +217,24 @@ class AnalysisValueScorer:
             identifiers = [item.id for item in focus]
             completed, attempts = [], []
             try:
-                response = self._semantic_scores(candidates, profile, focus=identifiers)
+                response = self._semantic_scores(candidates, profile, focus=identifiers, depth=depth)
             except LLMStructuredOutputError as exc:
                 usage = exc.response.usage
                 if not usage or usage.finish_reason != 'length':
                     raise
                 attempts.append(SemanticScoringBatchAudit(candidate_ids=identifiers, error=str(exc),
                     output_tokens=usage.output_tokens))
-                if len(focus) <= 1 or depth >= MAX_SPLIT_DEPTH:
-                    raise
+                # Each split strictly reduces the number of complete candidates.
+                # A fixed depth used to stop at five candidates in a 40-item
+                # batch, even though smaller requests could still recover.
+                if len(focus) <= 1:
+                    raise LLMStructuredOutputError(
+                        f"{exc} Candidate scoring still exceeded the output limit for one "
+                        f"complete candidate ({identifiers[0]}) after {depth} splits; "
+                        "its evidence cannot be split further. Successful requests remain "
+                        "reusable when the session cache is available.",
+                        response=exc.response,
+                    ) from exc
                 middle = len(focus)//2
                 for half in (focus[:middle], focus[middle:]):
                     values, audits = review(half, depth+1)
@@ -265,24 +274,28 @@ class AnalysisValueScorer:
             attempts.extend(audits)
         return completed, attempts
 
-    def _semantic_scores(self, candidates: list[AnalysisCandidate], profile: DocumentProfile, *, focus=None) -> SemanticCandidateScores | None:
+    def _semantic_scores(self, candidates: list[AnalysisCandidate], profile: DocumentProfile, *, focus=None, depth=0) -> SemanticCandidateScores | None:
         if not self.gateway or not candidates:
             return None
         from .report_requirements import instruction_messages
         # Rendering, localization and appendix audits have no role in ranking.
         # Keep the original profile unchanged in the result and evidence store.
         context = profile.model_copy(update={'report_requirements': None})
+        identifiers = focus if focus is not None else [c.id for c in candidates]
         response = self.gateway.generate_structured(
             [
                 {"role": "system", "content": load_prompt("analysis_planner.txt") + "\nScore only the current batch. Return exactly one decision per requested candidate ID: score, rejected (true means not selected), and explicit reasons. All candidates remain supplied as global comparison context: assess usefulness and redundancy against that complete context, using the same score criteria in every batch. Do not score context-only candidates or choose a separate top-N per batch. Never add candidate IDs. Do not execute calculations or draft the report; provide specific, concise scoring explanations with all relevant qualifications. "
                  "Write repeated rationale once in reason_catalog as entries with unique short id and full text; reference those IDs in each applicable decision's ordered reason_refs. Put complete candidate-specific reasons, exceptions, evidence qualifications and caveats in reasons. A decision's explanation is its referenced catalog text in order followed by its inline reasons. Use only references defined in reason_catalog. Every accepted AND rejected decision needs a complete, nonblank explanation. Do not drop candidates, evidence, qualifications or unique reasoning to compress the response. "
+                 "Include only catalog entries used by current-batch decisions. Do not echo the global candidate inventory or enumerate observation membership already supplied in the input; cite specific evidence when explaining an exception or qualification. "
                  "Read candidate_encoding when present; merge candidate_constants into each candidate without discarding any field. Ordered observation_refs are indices into observation_id_catalog and restore exact observation_ids; use the original IDs when identifying evidence in explanations. Input source_reason_ref resolves the candidate's original reason verbatim in source_reason_catalog; it is source data, not a scoring decision or an output rationale reference."},
                 *instruction_messages(profile, purpose='analysis prioritization'),
                 untrusted_document_message(str(_scoring_transport(candidates, context))),
-                {'role': 'user', 'content': 'Current batch candidate IDs to score: ' + str(focus if focus is not None else [c.id for c in candidates])},
+                {'role': 'user', 'content': 'Current batch candidate IDs to score: ' + str(identifiers)},
             ],
             SemanticCandidateScores,
             stage="planner",
+            request_metadata={'chunk_id': stable_id('candidate-scoring', *identifiers),
+                              'recovery_depth': depth},
         )
         return response
 

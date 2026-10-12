@@ -64,7 +64,7 @@ def test_parallel_scoring_retains_source_order_and_caller_progress():
 def test_scoring_reduces_verified_deepseek_reasoning_and_caps_output():
     p=request_reasoning_policy(LLMSettings(),stage='planner',operation='SemanticCandidateScores',model='deepseek-flash')
     assert p['options']=={'extra_body':{'thinking':{'type':'disabled'}}}
-    assert p['output_token_limit']==6000
+    assert p['output_token_limit']==12000
     assert request_reasoning_policy(LLMSettings(),stage='presentation',operation='SummaryReadBatch',model='deepseek-flash')['output_token_limit']==12000
 
 
@@ -86,7 +86,7 @@ def test_real_adapter_applies_scoring_output_cap_through_gateway(monkeypatch):
     complete=Mock(return_value=SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='{"scores":[]}'),finish_reason='stop')],usage=None))
     monkeypatch.setattr(provider,'_completion',complete)
     LLMGateway(provider,provider.settings).generate_structured([],SemanticCandidateScores,stage='planner')
-    assert complete.call_args.kwargs['max_tokens']==6000
+    assert complete.call_args.kwargs['max_tokens']==12000
     assert complete.call_args.kwargs['extra_body']=={'thinking':{'type':'disabled'}}
 
 

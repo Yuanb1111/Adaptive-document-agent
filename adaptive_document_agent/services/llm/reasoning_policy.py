@@ -34,7 +34,7 @@ _SIMPLE_OPERATIONS = frozenset({("presentation", "IntroductionPages"), ("report"
                               ("planner", "SemanticCandidateScores")})
 
 # Bound structured responses without changing evidence or numerical validation.
-_OUTPUT_LIMITS = {('planner', 'SemanticCandidateScores'): 6000,
+_OUTPUT_LIMITS = {('planner', 'SemanticCandidateScores'): 12000,
                   ('presentation', 'SummaryReadBatch'): 12000,
                   ('presentation', 'CompactSummaryDraft'): 8000,
                   ('presentation', 'CompactSummaryReview'): 8000}

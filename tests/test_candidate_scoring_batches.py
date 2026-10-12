@@ -133,6 +133,6 @@ def test_privacy_and_transport_errors_do_not_trigger_smaller_batches(failure):
 
 def test_repeated_truncation_has_bounded_retries_and_remains_a_visible_failure():
     candidates,index,profile,client,gateway=score_fixture(always_truncated=True)
-    with pytest.raises(LLMStructuredOutputError,match='65536'):
+    with pytest.raises(LLMStructuredOutputError,match='one complete candidate'):
         AnalysisValueScorer(gateway).score(candidates,index,profile)
-    assert list(map(len,client.targets))==[40,20,10,5]
+    assert list(map(len,client.targets))==[40,20,10,5,2,1]

@@ -86,3 +86,9 @@ candidate scoring 6,000 tokens, Summary reading 12,000, compact drafting/review
 8,000 each. These apply through the provider adapter; an explicit caller token
 limit takes precedence. Truncation remains an error with bounded recovery, never
 permission to accept incomplete JSON or invent missing evidence.
+
+v113 raises only candidate scoring's ceiling to 12,000 tokens. Its unchanged
+40-candidate batches can now bisect down to single complete candidates, instead
+of stopping after three splits with five candidates still present. The output
+limit is already part of the gateway cache identity; other operation policies
+and their cached successful responses retain their existing identities.
