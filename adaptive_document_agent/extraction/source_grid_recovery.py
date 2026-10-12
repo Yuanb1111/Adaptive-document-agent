@@ -45,8 +45,15 @@ def recover_source_grids(page, page_number, existing, *, words=None):
         runs.append([item])
     tables = []
     for run in runs:
-        if len(run) < 3:
+        if len(run) < 2:
             continue
+        if len(run)==2 and (len(run[0][1])<3 or not all(
+                any(re.fullmatch(r'[+\-\d,.()%]+|[—–-]',c[0].strip()) for c in row[1:])
+                for _,row in run)):
+            continue  # Two-row recovery needs repeated quantitative columns.
+        if all(re.fullmatch(r'(?:\(cid:129\)|[•●–—-]|\(\d+\))',row[0][0].strip())
+               for _,row in run):
+            continue  # List/footnote markers alone are not a source label column.
         first, last = run[0][0], run[-1][0]
         bbox = (min(c[1] for _,row in run for c in row), lines[first].top,
                 max(c[2] for _,row in run for c in row), lines[last].bottom)

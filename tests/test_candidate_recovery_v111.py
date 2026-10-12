@@ -121,7 +121,7 @@ def test_summary_server_retry_reaches_complete_compact_introduction(monkeypatch)
         elif name == 'CompactSummaryReview':
             content=next(m['content'] for m in messages if m['content'].startswith('<UNTRUSTED_DOCUMENT_CONTENT>'))
             data = json.loads(content.split('\n',1)[1].rsplit('\n',1)[0])
-            response = {'parts':[dict(part_id=p['id'],accepted=True,
+            response = {'opening_accepted':True,'parts':[dict(part_id=p['id'],accepted=True,
                 reason='The fixture retains the source training requirement.') for p in data['source']['parts']]}
         else:
             raise AssertionError(name)

@@ -14,23 +14,52 @@ from .column_roles import percentage_column
 class TableExtractor:
     def extract(self, pdf_bytes: bytes, *, page_numbers: set[int] | None = None) -> dict[int, list[ExtractedTable]]:
         self.raw_tables_by_page = {}
+        self.source_inventory_by_page = {}
         try:
             import pdfplumber
         except ImportError:
             return {}
 
         result: dict[int, list[ExtractedTable]] = {}
+        geometry=None
+        try:
+            import pymupdf
+            import pypdfium2
+            geometry=(pymupdf.open(stream=pdf_bytes,filetype='pdf'),pypdfium2.PdfDocument(pdf_bytes))
+        except (ImportError,ValueError,RuntimeError):
+            pass
         try:
             with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
                 for page_number, page in enumerate(pdf.pages, start=1):
                     if page_numbers is not None and page_number not in page_numbers:
                         continue
-                    page_tables: list[ExtractedTable] = []
+                    literal=[]
+                    crop=getattr(page,'cropbox',None) or getattr(page,'bbox',(0,0,0,0))
+                    media=getattr(page,'bbox',(0,0,0,0))
+                    offset=(crop[0]-media[0],crop[1]-media[1])
+                    if geometry is not None:
+                        from .ruled_source_tables import extract_ruled_source_tables
+                        native_page=geometry[1][page_number-1]
+                        textpage=native_page.get_textpage()
+                        try:
+                            literal,audit=extract_ruled_source_tables(textpage,geometry[0][page_number-1],page_number)
+                        finally:
+                            textpage.close()
+                            native_page.close()
+                        self.source_inventory_by_page[page_number]=audit
+                        if literal and not audit.get('outside_aligned_rows'):
+                            self.raw_tables_by_page[page_number]=literal
+                            result[page_number]=[self._analytical_copy(t) for t in literal]
+                            page.close()
+                            continue
+                    page_tables: list[ExtractedTable] = [self._analytical_copy(t) for t in literal]
                     found_tables = page.find_tables()
                     # Word geometry is identical for all table-header lookups
                     # on this page; avoid rebuilding it several times per table.
                     words = page.extract_words(x_tolerance=2, y_tolerance=2) if found_tables else []
                     for index, found in enumerate(found_tables):
+                        if self._inside_literal(found.bbox,literal,offset):
+                            continue
                         raw = [[self._clean(cell) for cell in row] for row in found.extract()]
                         if not raw:
                             continue
@@ -67,15 +96,22 @@ class TableExtractor:
                                 context_label=table_title or self._context_label(context),
                             )
                         )
-                    borderless_tables = BorderlessTableExtractor().extract(page, page_number)
+                    borderless_tables = [t for t in BorderlessTableExtractor().extract(page, page_number)
+                                         if not self._inside_literal(t.bbox,literal,offset)]
                     from .raw_table_inventory import retain_source_tables
                     from .source_grid_recovery import recover_source_grids
-                    source_tables = [*page_tables, *borderless_tables]
+                    source_tables = [*literal,*[t for t in page_tables if t.table_id not in {s.table_id for s in literal}],
+                                     *borderless_tables]
                     source_tables.extend(recover_source_grids(page, page_number, source_tables,
                                                              words=words if found_tables else None))
+                    source_tables=[t for t in source_tables if t in literal or not self._inside_literal(t.bbox,literal,offset)]
                     self.raw_tables_by_page[page_number] = retain_source_tables(source_tables)
+                    if any(t.table_id not in {s.table_id for s in literal} for t in source_tables):
+                        self.source_inventory_by_page[page_number]={'method':'legacy_layout_fallback',
+                            'status':'unchecked','table_ids':[t.table_id for t in self.raw_tables_by_page[page_number]],
+                            'unresolved_regions':len(source_tables)}
                     from .table_footnotes import retain_table_footnotes
-                    retain_table_footnotes(page, self.raw_tables_by_page[page_number])
+                    retain_table_footnotes(page, [t for t in self.raw_tables_by_page[page_number] if t not in literal])
                     if borderless_tables:
                         from .table_candidate_selector import TableCandidateSelector
                         page_tables = TableCandidateSelector.merge_or_replace_tables(page_tables, borderless_tables)
@@ -85,7 +121,35 @@ class TableExtractor:
                     page.close()
         except Exception:
             return result
+        finally:
+            if geometry is not None:
+                geometry[0].close()
+                geometry[1].close()
         return result
+
+    @staticmethod
+    def _inside_literal(box,literal,offset=(0,0)):
+        if box is None:
+            return False
+        x,y=(box[0]+box[2])/2-offset[0],(box[1]+box[3])/2-offset[1]
+        return any(t.bbox and t.bbox[0]<=x<=t.bbox[2] and t.bbox[1]<=y<=t.bbox[3] for t in literal)
+
+    def _analytical_copy(self, literal):
+        """Analytical labels may normalize; the literal appendix remains separate."""
+        from .table_reconstructor import TableReconstructor
+        header=[row[:] for row in literal.raw_header_cells]
+        for row,start,end in literal.raw_header_spans:
+            for column in range(start+1,end+1):
+                header[row][column]=header[row][start]
+        defaults=self._infer_defaults(literal.raw_cells,' '.join(literal.raw_header_lines))
+        unit,scale,currency,raw_unit=defaults
+        labels,periods,_,types,currencies,scales=TableReconstructor.reconstruct_multi_tier_headers(
+            [*header,*literal.raw_cells],default_unit=unit,default_currency=currency,default_scale=scale,
+            context='\n'.join(literal.raw_header_lines))
+        return literal.model_copy(deep=True,update={'headers':labels,'column_periods':periods,'column_types':types,
+            'column_currencies':currencies,'column_scales':scales,
+            'rows':self._build_table_rows(literal.raw_cells,literal.page),
+            'default_unit':unit,'default_raw_unit':raw_unit,'default_unit_scale':scale,'default_currency':currency})
 
     @staticmethod
     def _clean(value: object) -> str | None:

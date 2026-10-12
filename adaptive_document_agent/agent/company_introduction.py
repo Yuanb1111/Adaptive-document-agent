@@ -202,10 +202,15 @@ def ensure_company_introduction(gateway, result, plan, *, cancelled: Event | Non
     ], IntroductionPages, stage="presentation", cancelled=cancelled)
     _check_cancelled(cancelled)
     by_page = {p["page"]: p for p in candidates}
-    if not set(selected.pages) <= by_page.keys():
-        raise ValueError('No supported introductory pages were selected')
     from adaptive_document_agent.services.summary_source import summary_scope
     complete_pages = summary_scope(result, selected.summary_ranges)
+    result.validation_warnings.append(ValidationIssue(
+        code='company_introduction_selection_audit', severity='info', stage='presentation',
+        message=json.dumps({'candidate_pages': sorted(by_page),
+                            'selection': selected.model_dump(mode='json'),
+                            'complete_source_pages': complete_pages}, ensure_ascii=False)))
+    if not set(selected.pages) <= set(by_page) | set(complete_pages):
+        raise ValueError('No supported introductory pages were selected')
     if complete_pages:
         from .summary_presentation import generate_summary_presentation
         company = generate_summary_presentation(gateway, result, complete_pages, IntroductionDraft,

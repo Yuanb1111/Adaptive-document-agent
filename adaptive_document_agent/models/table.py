@@ -32,8 +32,14 @@ class ExtractedTable(BaseModel):
     raw_cells: list[list[str | None]] = Field(default_factory=list)
     raw_header_cells: list[list[str | None]] = Field(default_factory=list)
     raw_header_lines: list[str] = Field(default_factory=list)
+    raw_header_spans: list[tuple[int, int, int]] = Field(default_factory=list)
     raw_body_lines: list[str] = Field(default_factory=list)
+    raw_context_lines: list[str] = Field(default_factory=list)
     raw_footnotes: list[str] = Field(default_factory=list)
+    # Reading coordinates can differ for rotated text; bbox remains source-page coordinates.
+    reading_bbox: tuple[float, float, float, float] | None = None
+    source_rotation: int = 0
+    source_layout_status: str = 'unchecked'
     bbox: tuple[float, float, float, float] | None = None
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     default_unit: str | None = None

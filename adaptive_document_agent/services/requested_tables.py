@@ -60,6 +60,17 @@ def _row_height(cells, widths, font=11):
                          for text, width in zip(cells, widths)), default=.32))
 
 
+def _column_groups(table,width):
+    if width<=8:
+        return [list(range(width))]
+    for row in sorted({s[0] for s in table.raw_header_spans}):
+        spans=sorted((a,b) for r,a,b in table.raw_header_spans if r==row)
+        covered=[c for a,b in spans for c in range(a,b+1)]
+        if covered==list(range(1,width)) and all(b-a<7 for a,b in spans):
+            return [[0,*range(a,b+1)] for a,b in spans]
+    return [[0,*range(start,min(start+7,width))] for start in range(1,width,7)]
+
+
 def _footer_geometry(presentation, slide):
     """Reserve native source space above visible inherited template footers."""
     height, width = presentation.slide_height.inches, presentation.slide_width.inches
@@ -86,8 +97,7 @@ def render_requested_tables(presentation, result):
         raw = [row + [''] * (width - len(row)) for row in raw]
         header_count = (len(table.raw_header_cells) if table.raw_header_cells else 1 if table.raw_header_lines else
                         min(max(1, TableReconstructor.detect_header_row_count(raw)), max(1, len(raw) - 1)))
-        groups = ([list(range(width))] if width <= 8 else
-                  [[0, *range(start, min(start + 7, width))] for start in range(1, width, 7)])
+        groups = _column_groups(table,width)
         table_title = table.table_title or f'Source table {ordinal} (PDF page {page.page_number})'
         context = [table.unit_header] if table.unit_header else []
         # Copy standalone original header qualifications verbatim; no inferred
@@ -96,6 +106,8 @@ def render_requested_tables(presentation, result):
                        if line.strip().startswith('(') and line.strip().endswith(')'))
         if context:
             table_title += '\n' + ' | '.join(dict.fromkeys(context))
+        if table.raw_context_lines:
+            table_title += '\n' + '\n'.join(table.raw_context_lines)
         label_height = len(wrap_copy(table_title, 11.6, 13)) * .22 + .05
         for columns in groups:
             first_slide = _base_slide(presentation, 'Data Index: Source tables', section.title)
@@ -106,7 +118,14 @@ def render_requested_tables(presentation, result):
             widths = ([11.7] if len(columns) == 1 else
                       [first_width, *[(11.7 - first_width) / (len(columns) - 1)] * (len(columns) - 1)])
             headers = [[row[c] for c in columns] for row in raw[:header_count]]
-            header_heights = [_row_height(row, widths) for row in headers]
+            header_heights = []
+            for r,row in enumerate(headers):
+                effective=list(widths)
+                for sr,start,end in table.raw_header_spans:
+                    if sr==r and start in columns and end in columns:
+                        first,last=columns.index(start),columns.index(end)
+                        effective[first]=sum(widths[first:last+1])
+                header_heights.append(_row_height(row,effective))
             available = min(4.15, table_bottom - top) - sum(header_heights)
             if available < .4:
                 raise ValueError('Requested table headers exceed readable page capacity: ' + table.table_id)
@@ -166,7 +185,10 @@ def render_requested_tables(presentation, result):
                             fill = OxmlElement('a:solidFill');color = OxmlElement('a:srgbClr');color.set('val','000000')
                             fill.append(color);line.append(fill);properties.append(line)
                         coordinates.append([r, c, source_row, columns[c], segment])
-                _text(slide, _source_footer([page.page_number]) + ' | Original header text and context in notes.',
+                for r,start,end in table.raw_header_spans:
+                    if start in columns and end in columns:
+                        shape.table.cell(r,columns.index(start)).merge(shape.table.cell(r,columns.index(end)))
+                _text(slide, _source_footer([page.page_number]),
                       .45, footer_top, 10.8, footer_height, size=9, color=FOURIER_MUTED).name = 'customization:source_footer'
                 provenance = {'table_id': table.table_id, 'page': page.page_number, 'shape_name': shape.name,
                     'section_title': section.title,
@@ -191,23 +213,24 @@ def pack_requested_tables(presentation):
             continue
         label = next(s for s in slide.shapes if s.name == 'customization:table_label')
         incoming = json.loads(slide.notes_slide.notes_text_frame.text)
+        sections={r['section_title'] for r in incoming['CUSTOM_SOURCE_TABLES_V1']}
         height = label.height.inches + .10 + sum(s.height.inches for s in tables)
         previous = None
         # A one-row source table may fit an earlier page in the same chapter,
         # even if the immediately preceding page is full. Keep its own label,
         # physical source citation and grid; never discard it to hide sparsity.
         for candidate in reversed(retained):
-            old = json.loads(candidate.notes_slide.notes_text_frame.text)
-            if {r['section_title'] for r in old['CUSTOM_SOURCE_TABLES_V1']} != {r['section_title'] for r in incoming['CUSTOM_SOURCE_TABLES_V1']}:
+            if candidate['sections'] != sections:
                 break
-            previous_tables = [s for s in candidate.shapes if s.has_table and s.name.startswith('customization:source_table:')]
-            top = max(s.top.inches + s.height.inches for s in previous_tables) + .18
-            _, _, table_bottom = _footer_geometry(presentation, candidate)
-            if top + height <= table_bottom:
-                previous = candidate
+            top = candidate['next_top']
+            if top + height <= candidate['table_bottom']:
+                previous = candidate['slide']
+                old = candidate['metadata']
                 break
         if previous is None:
-            retained.append(slide)
+            _,_,table_bottom=_footer_geometry(presentation,slide)
+            retained.append({'slide':slide,'metadata':incoming,'sections':sections,'table_bottom':table_bottom,
+                             'next_top':max(s.top.inches+s.height.inches for s in tables)+.18})
             continue
         label_copy = _copy_shape(previous, label)
         label_copy.top = Inches(top)
@@ -216,10 +239,11 @@ def pack_requested_tables(presentation):
             copied = _copy_shape(previous, table)
             copied.top = Inches(top)
             top += table.height.inches
+        candidate['next_top']=top+.18
         old['CUSTOM_SOURCE_TABLES_V1'].extend(incoming['CUSTOM_SOURCE_TABLES_V1'])
         previous.notes_slide.notes_text_frame.text = json.dumps(old, ensure_ascii=False, indent=2)
         footer = next(s for s in previous.shapes if s.name == 'customization:source_footer')
-        footer.text = _source_footer({r['page'] for r in old['CUSTOM_SOURCE_TABLES_V1']}) + ' | Original header text and context in notes.'
+        footer.text = _source_footer({r['page'] for r in old['CUSTOM_SOURCE_TABLES_V1']})
         # Assigning .text creates a new run; preserve the approved footer style.
         from .pptx_export import FOURIER_MUTED, _rgb
         from pptx.util import Pt
@@ -237,6 +261,7 @@ def verify_requested_tables(presentation, result):
     from .requested_table_notes import verify_table_notes
     verify_table_notes(presentation, records)
     expected = {record['table'].table_id: _grid(record['table']) for record in records}
+    source_pages={record['table'].table_id:record['page'].page_number for record in records}
     actual = defaultdict(lambda: defaultdict(dict))
     slide_numbers = defaultdict(set)
     for number, slide in enumerate(presentation.slides, 1):
@@ -244,11 +269,15 @@ def verify_requested_tables(presentation, result):
         if not shapes:
             continue
         metadata = json.loads(slide.notes_slide.notes_text_frame.text)['CUSTOM_SOURCE_TABLES_V1']
+        from .customization_presentation_checks import verify_source_footer
+        verify_source_footer(slide,{source_pages[r['table_id']] for r in metadata if r['table_id'] in source_pages})
         by_name = {s.name: s for s in shapes}
         for record in metadata:
             identifier = record['table_id']
             if identifier not in expected or record['shape_name'] not in by_name:
                 raise ValueError('Unknown requested table in export')
+            if record.get('page')!=source_pages[identifier]:
+                raise ValueError('Requested source page provenance changed: '+identifier)
             for r, c, sr, sc, segment in record['cells']:
                 text = by_name[record['shape_name']].table.cell(r, c).text
                 pieces = actual[identifier][sr, sc]

@@ -2,6 +2,18 @@
 from .fourier_brand import PRIMARY, WHITE
 
 
+def verify_source_footer(slide,pages):
+    """Verify literal physical page references, including packed table pages."""
+    import re
+    from .pptx_export import _source_footer
+    original=_source_footer(pages)
+    chinese=re.sub(r'Source: Document disclosures \(p\. ([\d, -]+)\)',
+                   lambda m:'来源：文件披露（PDF 第 '+m[1]+' 页）',original)
+    actual=[s.text for s in slide.shapes if s.has_text_frame and s.name=='customization:source_footer']
+    if len(actual)!=1 or actual[0] not in {original,chinese}:
+        raise ValueError('Requested source page footer was omitted or changed')
+
+
 def table_presentation_errors(presentation):
     errors, numbers = [], []
     for number, slide in enumerate(presentation.slides,1):

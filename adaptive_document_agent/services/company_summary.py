@@ -6,6 +6,18 @@ from .source_quotes import normalize_quote
 from adaptive_document_agent.models import DocumentProfile, ParsedDocument
 
 
+def is_summary_heading(title: str) -> bool:
+    """Recognize compound Summary headings as retrieval hints, not workflows."""
+    return bool(re.fullmatch(
+        r"(?i)(?:summary|executive\s+summary|概要|摘要)"
+        r"(?:\s*(?:and|&|/|[–—:：-])\s*\S.*)?", title.strip()))
+
+
+def summary_outline_pages(document: ParsedDocument) -> list[int]:
+    return sorted({number for section in document.outline if is_summary_heading(section.title)
+                   for number in range(section.start_page, section.end_page + 1)})
+
+
 def summary_page_numbers(document: ParsedDocument) -> list[int]:
     """Find explicit Summary running headers, excluding contents entries.
 
@@ -16,8 +28,7 @@ def summary_page_numbers(document: ParsedDocument) -> list[int]:
     for page in document.pages:
         lines = [line.strip() for line in page.text.splitlines() if line.strip()]
         headings = lines[:8] + lines[-4:]
-        if any(re.fullmatch(r"(?i)(?:summary|executive\s+summary|概要|摘要)", line)
-               for line in headings):
+        if any(is_summary_heading(line) for line in headings):
             if not re.search(r"(?im)^\s*(?:contents|table of contents|目錄|目录)\s*$", page.text):
                 selected.append(page.page_number)
     return selected
@@ -36,14 +47,14 @@ def summary_excerpts(document: ParsedDocument, profile: DocumentProfile | None =
         *(profile.document_summary_pages if profile else []),
         *CompanyProfileDiscovery.rank_profile_pages(document, profile, max_pages=10),
     ]))
+    explicit = set(summary_page_numbers(document)) | set(summary_outline_pages(document))
     candidates = list(dict.fromkeys([
-        *summary_page_numbers(document),
+        *sorted(explicit),
+        *range(1, min(document.page_count, 40) + 1),
         *anchors,
         *(p + offset for p in anchors for offset in (-1, 1, 2)),
-        *range(1, min(document.page_count, 40) + 1),
     ]))
     by_number = {p.page_number: p for p in document.pages if p.text.strip()}
-    explicit = set(summary_page_numbers(document))
     other = [p for p in candidates if p in by_number and p not in explicit][:60]
     selected = list(dict.fromkeys([*(p for p in candidates if p in explicit and p in by_number), *other]))
     return [{"page": p, "text": by_number[p].text[:6000],
@@ -101,3 +112,17 @@ def validate_summary(company, result) -> list[str]:
         if claimed - allowed:
             errors.append(f"value_chain: unsupported numeric claims {sorted(claimed - allowed)}")
     return errors
+
+
+def require_verified_introduction(result) -> None:
+    """An explicitly failed introductory stage cannot become a delivered deck."""
+    company = result.presentation_plan.company if result.presentation_plan else None
+    attempted = any(issue.code in {'company_introduction_unavailable', 'company_introduction_selection_audit'}
+                    for issue in result.validation_warnings)
+    if attempted and (company is None or not (company.summary_overview or company.summary_business
+                                               or company.summary_pages)):
+        raise ValueError('PowerPoint requires a source-verified opening introduction; '
+                         'the introductory stage failed. Retain diagnostics and retry the failed stage.')
+    if company and company.summary_review and (
+            company.summary_review.status != 'complete' or not company.summary_pages):
+        raise ValueError('PowerPoint requires complete, visible introductory Summary coverage')

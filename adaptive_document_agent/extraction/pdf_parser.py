@@ -73,6 +73,10 @@ class PDFParser:
             tables_by_page = self.table_extractor.extract(data, page_numbers=table_pages)
             for page in pages:
                 page.tables = tables_by_page.get(page.page_number, [])
+                page.raw_tables = [t.model_copy(deep=True) for t in self.table_extractor.raw_tables_by_page.get(page.page_number,[])]
+                page.source_table_inventory=self.table_extractor.source_inventory_by_page.get(page.page_number,{})
+                if table_pages is None or page.page_number in table_pages:
+                    page.table_extraction_status='processed' if page.page_number in tables_by_page else 'failed'
         warnings = [warning for page in pages for warning in page.warnings]
         return ParsedDocument(
             document_id=document_id,

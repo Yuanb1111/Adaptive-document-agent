@@ -22,6 +22,7 @@ class DocumentPage(BaseModel):
     # Snapshot before cross-page reconstruction; retain every physical fragment.
     raw_tables: list[ExtractedTable] = Field(default_factory=list)
     table_extraction_status: str = 'not_attempted'
+    source_table_inventory: dict = Field(default_factory=dict)
     images: list[PageImage] = Field(default_factory=list)
     extraction_quality: float = Field(default=1.0, ge=0.0, le=1.0)
     requires_ocr: bool = False

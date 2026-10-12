@@ -225,6 +225,7 @@ def presentation_errors(review: SummaryReview, slide_pages, result: PipelineResu
         for audit in review.plan_audits:
             verdicts = audit.get('compact_semantic_review',{}).get('parts',[])
             if (audit.get('compact_digest')==digest and len(verdicts)==len(required)
+                    and audit.get('compact_semantic_review',{}).get('opening_accepted') is True
                     and {v['part_id'] for v in verdicts}==required and all(v['accepted'] for v in verdicts)):
                 accepted = True
         if not accepted:

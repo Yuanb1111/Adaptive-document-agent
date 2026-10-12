@@ -141,6 +141,8 @@ def _resolve_template_path(template_path: str | Path | None = None) -> Path:
 def build_presentation(result: PipelineResult, template_path: str | Path | None = None, *, artwork: bytes | None = None,
                        source_pdf: bytes | None = None, preflight_report: PreflightReport | None = None) -> bytes:
     """Return an editable, presentation-ready PowerPoint based on the FOURIER Light Version Template."""
+    from .company_summary import require_verified_introduction
+    require_verified_introduction(result)
     presentation = _compose_presentation(result, template_path, artwork=artwork, source_pdf=source_pdf)
     from .requested_tables import verify_requested_tables
     from .summary_export import verify_summary_export

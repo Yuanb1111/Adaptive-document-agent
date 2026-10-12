@@ -33,6 +33,9 @@ def check_requirements(result, presentation=None, *, export_verified=False):
             ids = [r['table'].table_id for r in records]
             unprocessed = [p for p in numbers if p not in pages or pages[p].table_extraction_status != 'processed']
             uncertain = [p for p in numbers if p in pages and pages[p].requires_ocr]
+            from adaptive_document_agent.extraction.source_table_audit import page_inventory_errors
+            layout_unverified=[p for p in numbers if p in pages and page_inventory_errors(pages[p])]
+            uncertain += layout_unverified
             uncertain += [r['page'].page_number for r in records
                           if r['table'].confidence < .6 or any(w not in {
                               'Recovered from aligned text because no bordered table structure was detected.',
@@ -48,10 +51,13 @@ def check_requirements(result, presentation=None, *, export_verified=False):
                 message += ' Extraction incomplete on pages: ' + ', '.join(map(str, unprocessed)) + '.'
             if uncertain:
                 message += ' Source parsing needs review on pages: ' + ', '.join(map(str, sorted(set(uncertain)))) + '.'
+            if layout_unverified:
+                message += ' Export-cell equality does not establish complete source tables, literal headers or annotations.'
             message += ' Counts concern detected tables; digital extraction cannot certify that no table was undetected.'
             checks.append(RequirementCheck(requirement_id=req.id, status=status, message=message,
                 source_pages=numbers, table_ids=ids, slide_numbers=exported,
-                verification='source_fragment_cells' if export_verified else 'extraction_inventory'))
+                verification=('independent_source_layout_and_export_cells' if export_verified and not uncertain
+                              else 'source_fragment_cells' if export_verified else 'extraction_inventory')))
         elif req.kind == 'slide_limit':
             count = len(presentation.slides) if presentation is not None else None
             checks.append(RequirementCheck(requirement_id=req.id,

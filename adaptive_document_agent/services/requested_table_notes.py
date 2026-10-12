@@ -48,6 +48,7 @@ def render_table_notes(presentation, record):
 def verify_table_notes(presentation, records):
     expected = {r['table'].table_id: '\n\n'.join(r['table'].raw_footnotes)
                 for r in records if r['table'].raw_footnotes}
+    source_pages={r['table'].table_id:r['page'].page_number for r in records}
     actual = defaultdict(dict)
     for slide in presentation.slides:
         shapes = {s.name: s for s in slide.shapes if s.name.startswith('customization:source_footnote:')}
@@ -57,6 +58,10 @@ def verify_table_notes(presentation, records):
         identifier, segment = record['table_id'], record['segment']
         if identifier not in expected or segment in actual[identifier] or record['shape_name'] not in shapes:
             raise ValueError('Invalid requested source footnote provenance')
+        if record.get('page')!=source_pages[identifier]:
+            raise ValueError('Requested source footnote page provenance changed')
+        from .customization_presentation_checks import verify_source_footer
+        verify_source_footer(slide,{source_pages[identifier]})
         actual[identifier][segment] = shapes[record['shape_name']].text
     for identifier, literal in expected.items():
         segments = actual[identifier]

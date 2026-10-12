@@ -219,6 +219,9 @@ def localize_source_wrappers(presentation, result):
                                                '来源：文件披露（无可用页码）')
                     run.text = re.sub(r'Source image: document p\. (\d+)',
                                       lambda m: '来源图片：PDF 第 ' + m[1] + ' 页', run.text)
+                    run.text = run.text.replace(
+                        'Rounded display; — = no retained value. Source variants and exact values: CSV.',
+                        '数值经显示舍入；— 表示无保留值。来源差异及准确数值见 CSV。')
                     if shape.name in {'customization:table_label','customization:source_footer'}:
                         run.text = re.sub(r'Source table (\d+) \(PDF page (\d+)\)',
                             lambda m:'原始表格 '+m[1]+'（PDF 第 '+m[2]+' 页）',run.text)

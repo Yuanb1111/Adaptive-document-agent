@@ -47,6 +47,7 @@ class CompactPartVerdict(BaseModel):
 class CompactSummaryReview(BaseModel):
     parts: list[CompactPartVerdict]
     identity_accepted: bool | None = None
+    opening_accepted: bool = False
 
 
 def compact_input(review):
@@ -123,7 +124,11 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None):
         'including traditional characters; do not translate or normalize legal names. '
         'If its literal company name or stock code appears in identity_pages, return it with its exact '
         'quote and physical page; otherwise leave its value and quote empty and page null. '
-        'Python preserves the complete original reading and builds exact source bindings.'},
+        'Python preserves the complete original reading and builds exact source bindings. '
+        'The FIRST page must explain what the main subject/company does: its actual '
+        'products/services, intended users and business scope where the source supports them. '
+        'A company name, document purpose, financial result or topic list alone is insufficient. '
+        'For a non-company source explain the document subject and scope without inventing a company.'},
         untrusted_document_message(json.dumps(payload,ensure_ascii=False))]
     if len(languages)==1:
         messages.insert(1,{'role':'user','content':'Write every title, label and paragraph in '+next(iter(languages))+
@@ -158,13 +163,18 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None):
                      'interpretation or source fragments presented as a coherent summary. '
                      'If identity fields are proposed, return identity_accepted explicitly. Accept only '
                      'the document issuer/main subject with literal source quotations, not an advisor '
-                     'or another entity. Do not rewrite.'},
+                     'or another entity. Return opening_accepted explicitly: accept only if the FIRST '
+                     'page explains what the subject does and its products/services or actual scope '
+                     'from the source. Reject a name, document purpose, topic list or financial results '
+                     'without this introduction. Non-company sources must explain their subject/scope. Do not rewrite.'},
                     untrusted_document_message(json.dumps({'source':payload,
                         'identity':draft.model_dump(exclude={'pages'}),'pages':[p.model_dump(mode='json',
                         exclude={'items':{'__all__':{'source_quote'}}}) for p in pages]},ensure_ascii=False))],
                     CompactSummaryReview,stage='presentation',allow_repair=False,cancelled=cancelled)
                 ids = {p.id for p in review.parts if p.role=='content'}
                 audit['compact_semantic_review'] = response.model_dump(mode='json')
+                if response.opening_accepted is not True:
+                    raise ValueError('The first introductory page does not explain the source subject and actual business/scope')
                 if len(response.parts)!=len(ids) or {v.part_id for v in response.parts}!=ids:
                     raise ValueError('Compact semantic review must cover every exact content part once')
                 rejected = [v.part_id+': '+v.reason for v in response.parts if not v.accepted]

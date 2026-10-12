@@ -144,6 +144,7 @@ class DocumentOrchestrator:
                 for page in document.pages:
                     page.tables = tables_by_page.get(page.page_number, [])
                     page.raw_tables = [t.model_copy(deep=True) for t in raw_tables_by_page.get(page.page_number, [])]
+                    page.source_table_inventory = getattr(table_extractor,'source_inventory_by_page',{}).get(page.page_number,{})
                     if page_numbers is None or page.page_number in page_numbers:
                         page.table_extraction_status = ('processed' if page.page_number in tables_by_page else 'failed')
                 self._reconstruct_tables(document)

@@ -146,7 +146,8 @@ def test_appendix_retains_unselected_text_missing_and_negative_source_cells():
               for row in shape.table.rows for c in row.cells]
     assert {'Unselected measure', '(10)', 'Not available', ''} <= set(values)
     check_requirements(result, deck, export_verified=True)
-    assert result.customization_report[0].status == 'satisfied'
+    assert result.customization_report[0].status == 'partial'
+    assert 'Export-cell equality does not establish complete source tables' in result.customization_report[0].message
     assert result.customization_report[0].table_ids == ['original']
 
 
@@ -389,7 +390,7 @@ def test_orchestrator_expands_only_table_extraction_and_keeps_raw_fragments(monk
     assert result.document.pages[1].raw_tables[0].raw_cells[1][1] == '987'
     assert not any(o.raw_value == '987' for o in result.observations)
     assert result.customization_report[0].table_ids == ['unselected']
-    assert result.customization_report[0].status == 'planned'
+    assert result.customization_report[0].status == 'partial'  # No independent source layout was provided.
 
 
 def test_customization_transport_failure_is_not_a_semantic_retry_and_privacy_errors_propagate():
