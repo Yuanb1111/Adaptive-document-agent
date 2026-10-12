@@ -116,13 +116,12 @@ def test_summary_server_retry_reaches_complete_compact_introduction(monkeypatch)
                 facts=[dict(label='Scheduling',text=line.strip(),quote_start_line=n,quote_end_line=n)])
                 for b in data for n,line in b['lines']]
             response = {'parts':parts}
-        elif name == 'CompactSummaryDraft':
-            response = draft
-        elif name == 'CompactSummaryReview':
-            content=next(m['content'] for m in messages if m['content'].startswith('<UNTRUSTED_DOCUMENT_CONTENT>'))
-            data = json.loads(content.split('\n',1)[1].rsplit('\n',1)[0])
-            response = {'opening_accepted':True,'parts':[dict(part_id=p['id'],accepted=True,
-                reason='The fixture retains the source training requirement.') for p in data['source']['parts']]}
+        elif name in {'SummaryThemePlan', 'CompactSummaryDraft', 'CompactSummaryReview'}:
+            from tests.test_summary_themes_v118 import Themes
+            from adaptive_document_agent.agent.summary_themes import SummaryThemePlan
+            from adaptive_document_agent.agent.compact_summary import CompactSummaryDraft, CompactSummaryReview
+            model = {m.__name__: m for m in (SummaryThemePlan, CompactSummaryDraft, CompactSummaryReview)}[name]
+            response = Themes().generate_structured(messages, model).model_dump(mode='json')
         else:
             raise AssertionError(name)
         return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(
@@ -136,8 +135,9 @@ def test_summary_server_retry_reaches_complete_compact_introduction(monkeypatch)
     from adaptive_document_agent.models.summary import SummaryPageRange
     company = generate_summary_presentation(gateway,result,[1],CompanyProfile,
         scope_ranges=[SummaryPageRange(start_page=1,end_page=1,reason='Complete introductory source.')])
-    assert company.summary_review.status=='complete' and len(company.summary_pages)==5
+    assert company.summary_review.status=='complete' and len(company.summary_pages)==7
     assert len(company.summary_review.parts)==70
     assert not presentation_errors(company.summary_review,company.summary_pages,result)
-    assert attempted==['SummaryReadBatch','SummaryReadBatch','CompactSummaryDraft','CompactSummaryReview']
+    assert attempted == ['SummaryReadBatch', 'SummaryReadBatch', 'SummaryThemePlan'] + [
+        'CompactSummaryDraft', 'CompactSummaryReview'] * 7
     assert [a['status'] for a in gateway.usage[0]['attempts']]==['failed','success']
