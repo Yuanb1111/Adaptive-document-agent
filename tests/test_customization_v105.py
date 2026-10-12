@@ -17,7 +17,7 @@ def test_pdf_year_row_does_not_borrow_percent_from_next_header_line():
     assert PresentationPlanValidator._numbers('Margin 44 %; loss -44%; change - 44') == {'44%', '-44%', '-44'}
 
 
-def test_complete_summary_accepts_supported_year_annotation_but_rejects_invented_year():
+def test_complete_summary_accepts_supported_year_annotation_and_quarantines_invented_year():
     result = distinct_source(1)
     result.document.pages[0].text = result.document.pages[0].text.replace(
         'SUMMARY\n', 'SUMMARY\n2021 2022 2023 2023 2024\n% of Total\n')
@@ -27,8 +27,12 @@ def test_complete_summary_accepts_supported_year_annotation_but_rejects_invented
 
     assert generate(result, SummaryClient(edit_read=edit)).presentation_plan.company.summary_review.status == 'complete'
     bad = distinct_source(1)
-    with pytest.raises(ValueError, match='unsupported numbers'):
-        generate(bad, SummaryClient(edit_read=edit))
+    generate(bad, SummaryClient(edit_read=edit))
+    review = bad.presentation_plan.company.summary_review
+    assert review.status == 'complete'
+    assert review.read_audits[0]['attempts'][1]['quarantined_annotations'][0]['reading_note'] == 'Periods include 2024.'
+    assert all('2024' not in p.reading_note for p in review.parts)
+    assert all('2024' not in item.text for page in bad.presentation_plan.company.summary_pages for item in page.items)
 
 
 def test_intro_schema_failure_gets_one_source_bound_repair_and_keeps_diagnostic():

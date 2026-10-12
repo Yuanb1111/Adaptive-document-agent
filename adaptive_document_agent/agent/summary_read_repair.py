@@ -83,7 +83,8 @@ def repair_rejected_parts(gateway, result, blocks, parts, response, previous,
                        r['start_line'] <= p.start_line <= p.end_line <= r['end_line']
                        for r in ranges) for p in replacement.parts):
             raise ValueError('Summary targeted reading changed already accepted source lines')
-        additions, errors = bind_reading(replacement, blocks, result, record)
+        additions, errors = bind_reading(replacement, blocks, result, record,
+                                        literal_fallback=True, recover_cross_part=True)
         combined = reconcile_layout(retained + additions, blocks, record)
         errors += reading_errors(probe(combined), result, complete_scope=False)
         record['errors'] = errors

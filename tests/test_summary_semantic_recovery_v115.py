@@ -48,7 +48,7 @@ def test_repeated_diagram_and_empty_qualitative_fact_failures_get_one_targeted_r
     assert all(p.facts[0].source_pages == [1] for p in outcome.parts if p.role == 'content')
 
 
-@pytest.mark.parametrize('bad', ['unchanged','overwrite','invention','outside_quote','omit','overlap'])
+@pytest.mark.parametrize('bad', ['unchanged','overwrite','out_of_block_quote','omit','overlap'])
 def test_targeted_read_still_rejects_missing_substance_and_invalid_evidence(bad):
     result, blocks, rows, fixes = diagram_fixture()
     fixes = fixes[:1]
@@ -56,10 +56,8 @@ def test_targeted_read_still_rejects_missing_substance_and_invalid_evidence(bad)
         fixes = rows[2:3]
     elif bad == 'overwrite':
         fixes.insert(0, rows[1])
-    elif bad == 'invention':
-        fixes[0]['facts'][0]['text'] = 'There are 999 devices.'
-    elif bad == 'outside_quote':
-        fixes[0]['facts'][0]['quote_start_line'] = 2
+    elif bad == 'out_of_block_quote':
+        fixes[0]['facts'][0]['quote_end_line'] = 999
     elif bad == 'omit':
         fixes.pop()
     else:
@@ -152,7 +150,10 @@ def test_table_repartition_binds_period_and_units_inside_repaired_part(include_h
         assert_complete(result,blocks,outcome)
         assert outcome.parts[1].facts[0].source_quote == 'Year ended 2024 (RMB million)\nRevenue 30'
     else:
-        assert outcome.error is not None
+        assert_complete(result,blocks,outcome)
+        fact = outcome.parts[1].facts[0]
+        assert fact.evidence_only
+        assert fact.text == fact.source_quote == 'Year ended 2024 (RMB million)\nRevenue 30'
 
 
 def test_long_internal_label_keeps_literal_fact_through_reading_layout():

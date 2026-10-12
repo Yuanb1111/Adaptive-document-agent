@@ -14,6 +14,17 @@ class SummaryEvidenceItem(ExecutiveBriefItem):
     text: str = Field(min_length=1, max_length=6000)
 
 
+def annotation_numbers(part, block):
+    """Unsupported internal annotation tokens, separate from factual claims."""
+    import re
+    annotation = part.title + ' ' + part.reading_note
+    annotation = re.sub(r'(?i)\bpage\s+' + str(block.page) + r'\b', 'page', annotation)
+    annotation = re.sub(r'(?i)\blines?\s+(\d+)(?:\s*[-–]\s*(\d+))?',
+        lambda m: 'source lines' if part.start_line <= int(m[1]) <= int(m[2] or m[1]) <= part.end_line
+        else m[0], annotation)
+    return PresentationPlanValidator._numbers(annotation) - PresentationPlanValidator._numbers(block.text)
+
+
 def fact_errors(fact, result: PipelineResult, source_text: str, page: int, *, literal_reading=False) -> list[str]:
     errors = []
     if fact.source_pages != [page]:
@@ -91,13 +102,7 @@ def reading_errors(review: SummaryReview, result: PipelineResult, *, complete_sc
         # block, including nearby headings and explicit page/line metadata.
         # They are never eligible slide facts. Facts below remain bound to
         # their own literal passage; context cannot lend them values or units.
-        import re
-        annotation = part.title + ' ' + part.reading_note
-        annotation = re.sub(r'(?i)\bpage\s+' + str(block.page) + r'\b', 'page', annotation)
-        annotation = re.sub(r'(?i)\blines?\s+(\d+)(?:\s*[-–]\s*(\d+))?',
-            lambda m: 'source lines' if part.start_line <= int(m[1]) <= int(m[2] or m[1]) <= part.end_line
-            else m[0], annotation)
-        if PresentationPlanValidator._numbers(annotation) - PresentationPlanValidator._numbers(block.text):
+        if annotation_numbers(part, block):
             errors.append('Summary part title/reading note contains unsupported numbers')
         if part.role in {'layout', 'heading'} and part.facts:
             errors.append('Layout-only material cannot supply factual slide copy')

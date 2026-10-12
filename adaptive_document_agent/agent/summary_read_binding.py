@@ -4,9 +4,10 @@ from collections import Counter
 from adaptive_document_agent.models.summary import SummaryFact, SummaryPart
 from adaptive_document_agent.services.summary_validation import fact_errors
 from adaptive_document_agent.utils.ids import stable_id
+from .summary_literal_evidence import literal_facts, quarantine_annotation, terminal_layout_endpoint
 
 
-def bind_reading(response, blocks, result, record, *, literal_fallback=False):
+def bind_reading(response, blocks, result, record, *, literal_fallback=False, recover_cross_part=False):
     by_id = {b.id: b for b in blocks}
     parts, errors = [], []
     for part in response.parts:
@@ -14,16 +15,42 @@ def bind_reading(response, blocks, result, record, *, literal_fallback=False):
         if block is None:
             errors.append('Summary reader cites an unknown source block')
             continue
+        if literal_fallback:
+            part = terminal_layout_endpoint(part, block, record)
+            part = quarantine_annotation(part, block, record)
         lines = block.text.splitlines(keepends=True)
         source = ''.join(lines[part.start_line-1:part.end_line])
         facts = []
+        retain_full_passage = False
+        # After semantic repartitioning has been attempted, a still-crossing
+        # quote cannot substantiate a claim. Keep the entire assigned passage
+        # for the editor instead; never borrow the neighbouring part's evidence.
+        crossing = [f for f in part.facts if not part.start_line <= f.quote_start_line <= f.quote_end_line <= part.end_line]
+        if (recover_cross_part and part.role == 'content' and crossing
+                and 1 <= part.start_line <= part.end_line <= len(lines)
+                and all(1 <= f.quote_start_line <= f.quote_end_line <= len(lines) for f in part.facts)
+                and len(source.strip()) >= 8):
+            record.setdefault('quarantined_cross_part_facts', []).append({
+                'block_id': block.id, 'start_line': part.start_line, 'end_line': part.end_line,
+                'facts': [f.model_dump() for f in part.facts]})
+            facts = literal_facts(source, block.page)
+            part = part.model_copy(update={'facts': []})
         for fact in part.facts:
             if not part.start_line <= fact.quote_start_line <= fact.quote_end_line <= part.end_line <= len(lines):
                 errors.append('Summary fact source span is outside its assigned part')
                 continue
             try:
+                quote = ''.join(lines[fact.quote_start_line-1:fact.quote_end_line]).strip()
+                if len(quote) > 6000:
+                    # The page fits the request but its exact quote need not fit
+                    # one fact. Preserve all words; discard no source or qualifiers.
+                    facts.extend(literal_facts(quote, block.page))
+                    record.setdefault('long_literal_quotes', []).append({
+                        'block_id': block.id, 'start_line': fact.quote_start_line,
+                        'end_line': fact.quote_end_line, 'model_fact': fact.model_dump()})
+                    continue
                 bound = SummaryFact(label=fact.label, text=fact.text,
-                    source_quote=''.join(lines[fact.quote_start_line-1:fact.quote_end_line]).strip(),
+                    source_quote=quote,
                     source_pages=[block.page])
                 failures = fact_errors(bound, result, source, block.page, literal_reading=True)
                 if failures and literal_fallback:
@@ -32,23 +59,24 @@ def bind_reading(response, blocks, result, record, *, literal_fallback=False):
                         'block_id': block.id, 'start_line': fact.quote_start_line,
                         'end_line': fact.quote_end_line, 'rejected_paraphrase': fact.text,
                         'errors': failures})
-                    bound = bound.model_copy(update={'text': bound.source_quote})
+                    retain_full_passage = True
                     from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
                     if PresentationPlanValidator._numbers(bound.label) - PresentationPlanValidator._numbers(source):
                         record['literal_extracts'][-1]['rejected_label'] = bound.label
-                        bound = bound.model_copy(update={'label': 'Source passage'})
-                facts.append(bound)
+                else:
+                    facts.append(bound)
             except ValueError as exc:
                 errors.append('Invalid Summary fact source span: ' + str(exc))
-        if (literal_fallback and part.role == 'content' and not part.facts
+        if retain_full_passage and 1 <= part.start_line <= part.end_line <= len(lines):
+            # A rejected paraphrase can have omitted a header or qualification.
+            # Give the editor the whole owned passage, not only the narrow quote.
+            facts = literal_facts(source, block.page)
+        if (literal_fallback and part.role == 'content' and not part.facts and not facts
                 and 1 <= part.start_line <= part.end_line <= len(lines) and len(source.strip()) >= 8):
             # The model has classified and assigned this passage, but cannot
             # safely paraphrase it (e.g. a table lead-in). Retain literal internal
             # evidence, not an invented claim. The editor must still author copy.
-            from adaptive_document_agent.services.source_quotes import split_literal_quote
-            for quote in split_literal_quote(source.strip(), limit=6000):
-                facts.append(SummaryFact(label='Source passage', text=quote, source_quote=quote,
-                                         source_pages=[block.page], evidence_only=True))
+            facts = literal_facts(source, block.page)
             record.setdefault('literal_passages', []).append({'block_id': block.id,
                 'start_line': part.start_line, 'end_line': part.end_line,
                 'reason': 'Model-assigned content has no safe paraphrase; retained literal evidence for editing.'})
