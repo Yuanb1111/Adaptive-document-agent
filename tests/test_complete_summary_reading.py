@@ -117,6 +117,10 @@ class SummaryClient(MockLLMClient):
                         'fact_id': next((fid for fid, (pid, fact) in facts.items()
                             if item.part_ids == [pid] and item.source_quote == fact['source_quote']), 'unknown')}
                         for item in page.items]} for page in value.summary_pages])
+        elif operation == 'SummaryThemePlan':
+            value = response_model(themes=[dict(title='Operations and delivery',
+                part_ids=[p['id'] for p in payload['parts'][i:i+12]])
+                for i in range(0, len(payload['parts']), 12)])
         elif operation == 'CompactSummaryDraft':
             by_topic = {}
             for part in payload['parts']:

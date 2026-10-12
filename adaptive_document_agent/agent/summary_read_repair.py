@@ -17,8 +17,9 @@ def repair_rejected_parts(gateway, result, blocks, parts, response, previous,
                           source_messages, cancelled, audit):
     from .summary_reader import SummaryReadBatch
     coverage = line_coverage(parts, blocks)
-    # Ambiguous ownership or unknown IDs cannot be repaired by replacing a span.
-    if (any(row['overlap_lines'] or row['outside_lines'] for row in coverage)
+    # Real overlapping spans can be repartitioned by the model. Unknown source
+    # IDs and out-of-block endpoints still have no trustworthy repair scope.
+    if (any(row['outside_lines'] for row in coverage)
             or any(p.block_id not in {b.id for b in blocks} for p in response.parts)):
         return None
 
@@ -27,7 +28,9 @@ def repair_rejected_parts(gateway, result, blocks, parts, response, previous,
             document_sha256=result.document.sha256, source_pages=sorted({b.page for b in blocks}),
             source_blocks=blocks, parts=items)
 
-    rejected, ranges = [], missing_ranges(coverage)
+    overlap = {row['block_id']: set(row['overlap_lines']) for row in coverage}
+    gap_coverage = [dict(row, overlap_lines=[]) for row in coverage]
+    rejected, ranges = [], missing_ranges(gap_coverage)
     lengths = {b.id: len(b.text.splitlines(keepends=True)) for b in blocks}
     raw_parts = {(p.block_id, p.start_line, p.end_line): p for p in response.parts}
     for part in parts:
@@ -38,6 +41,8 @@ def repair_rejected_parts(gateway, result, blocks, parts, response, previous,
                                              literal_fallback=True)
         errors = binding_errors + [e for e in reading_errors(probe([part]), result,
                                     complete_scope=False) if e not in _COVERAGE]
+        if any(part.start_line <= line <= part.end_line for line in overlap.get(part.block_id, ())):
+            errors.append('Repartition overlapping content so every source line belongs to exactly one part')
         if not errors:
             continue
         span = dict(block_id=part.block_id, start_line=part.start_line, end_line=part.end_line)
@@ -110,10 +115,14 @@ def _whole_part_ranges(ranges, parts):
     """Expand only intersected ownership spans; merge overlapping repair scopes."""
     ranges = [dict(r) for r in ranges]
     for span in ranges:
-        for part in parts:
-            if _intersects(part.block_id, part.start_line, part.end_line, span):
-                span['start_line'] = min(span['start_line'], part.start_line)
-                span['end_line'] = max(span['end_line'], part.end_line)
+        changed = True
+        while changed:
+            before = span['start_line'], span['end_line']
+            for part in parts:
+                if _intersects(part.block_id, part.start_line, part.end_line, span):
+                    span['start_line'] = min(span['start_line'], part.start_line)
+                    span['end_line'] = max(span['end_line'], part.end_line)
+            changed = before != (span['start_line'], span['end_line'])
     merged = []
     for span in sorted(ranges, key=lambda r: (r['block_id'], r['start_line'])):
         if merged and _intersects(span['block_id'], span['start_line'], span['end_line'], merged[-1]):

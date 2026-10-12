@@ -112,14 +112,26 @@ def test_missing_range_read_cannot_change_accepted_parts_or_invent_support(inval
     assert outcome.audit['missing_range_read']['error']
 
 
-def test_substantive_overlap_still_fails_without_targeted_gap_call():
+def test_substantive_overlap_still_fails_after_bounded_targeted_read():
     result, blocks, rows, _ = fixture()
     rows.append(deepcopy(rows[1]))
-    client = Responses([rows,rows])
+    client = Responses([rows,rows,[rows[1],rows[1]]])
     outcome = _read_batch(client,result,blocks,Event())
-    assert outcome.error is not None and len(client.calls) == 2
+    assert outcome.error is not None and len(client.calls) == 3
     assert 'overlap' in str(outcome.error)
     assert 'missing_range_read' not in outcome.audit
+
+
+def test_model_repartitions_overlap_without_changing_accepted_parts():
+    result, blocks, rows, _ = fixture()
+    rows.append(deepcopy(rows[1]))
+    client = Responses([rows, rows, [rows[1]]])
+    outcome = _read_batch(client, result, blocks, Event())
+    assert_complete(result, blocks, outcome)
+    assert len(client.calls) == 3
+    assert outcome.audit['rejected_part_read']['ranges'] == [
+        dict(block_id=blocks[0].id, start_line=3, end_line=3)]
+    assert next(p for p in outcome.parts if p.start_line == 5).facts[0].text == rows[2]['facts'][0]['text']
 
 
 def test_missing_range_read_privacy_failure_is_preserved():
