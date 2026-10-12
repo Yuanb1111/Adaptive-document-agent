@@ -124,6 +124,20 @@ def test_analytical_mutations_cannot_change_the_original_source_grid():
     assert extractor.raw_tables_by_page[1][0].raw_cells[0][1]=='12'
 
 
+def test_period_specific_unaudited_header_does_not_become_a_whole_table_caption():
+    result=table_result()
+    table=next(t for p in result.document.pages for t in p.raw_tables)
+    table.raw_header_cells=[['','2023','6M2024'],['','','(Unaudited)']]
+    table.raw_header_lines=['2023 6M2024','(Unaudited)']
+    deck=presentation();render_requested_tables(deck,result)
+    labels=[sh.text for s in deck.slides for sh in s.shapes if sh.name=='customization:table_label']
+    assert labels and all('Unaudited' not in text for text in labels)
+    shape=next(sh for s in deck.slides for sh in s.shapes if sh.has_table)
+    assert shape.table.cell(1,1).text==''
+    assert shape.table.cell(1,2).text=='(Unaudited)'
+    assert verify_requested_tables(deck,result)
+
+
 @pytest.mark.parametrize('target',['table_footer','notes_footer','provenance'])
 def test_native_page_references_are_verified_not_just_the_cell_values(target):
     import json

@@ -102,8 +102,9 @@ def render_requested_tables(presentation, result):
         context = [table.unit_header] if table.unit_header else []
         # Copy standalone original header qualifications verbatim; no inferred
         # currency/scale or assignment of audit status to particular columns.
-        context.extend(line.strip() for line in table.raw_header_lines
-                       if line.strip().startswith('(') and line.strip().endswith(')'))
+        if not table.raw_header_cells:
+            context.extend(line.strip() for line in table.raw_header_lines
+                           if line.strip().startswith('(') and line.strip().endswith(')'))
         if context:
             table_title += '\n' + ' | '.join(dict.fromkeys(context))
         if table.raw_context_lines:

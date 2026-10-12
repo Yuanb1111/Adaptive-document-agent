@@ -40,6 +40,8 @@ subtotals, incomplete notes, or incorrect source-page references.
   and split wide tables at proved header-group boundaries when available.
   Verify native cells, complete footnotes, metadata pages and actual visible
   physical PDF page footers, including packed pages and Chinese footers.
+  Period-specific qualifications stay in their original header cells; do not
+  duplicate them into a whole-table caption that expands their meaning.
 - Cache source-table packing metadata and geometry for each retained slide;
   avoid repeated XML scans and full source-note JSON decoding while searching
   earlier slides. Prefer decoded ruled extraction over repeated legacy parsing
@@ -53,7 +55,8 @@ retained results rather than reusing the v111 omissions.
 
 ## Verification
 
-The final local suite passes 3,362 tests with 8 skipped in 345 seconds. Five
+The full local suite passes 3,362 tests with 8 skipped in 345 seconds. The final
+period-qualification correction passes 103 focused regressions. Five
 non-failing diagnostics concern preloaded pytest plugins, SDK deprecations and
 Windows event-loop cleanup. The SDK credential regressions retain their network
 interception and use preloaded public tokenizer data for offline execution.
@@ -68,7 +71,7 @@ The private PDF comparison uses the original 776-page source. Its 91-page
 requested chapter independently contains 72 physical table blocks on 53 pages.
 The new inventory agrees on every page, has no unresolved source-layout audit
 errors, and excludes the former list/footnote false positives. All 72 tables and
-their annotations survive editable native save/reload; 170 readable appendix
+their annotations survive editable native save/reload; 162 readable appendix
 pages pass local full-deck rendering diagnostics. Original raw tables, page text,
 review images, dependency caches and exported decks stay in ignored local output.
 
