@@ -8,11 +8,11 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from adaptive_document_agent.models.summary import SummaryFact, SummaryPart, SummaryReview
+from adaptive_document_agent.models.summary import SummaryPart, SummaryReview
 from adaptive_document_agent.services.summary_source import reading_batches
-from adaptive_document_agent.services.summary_validation import reading_errors, fact_errors
+from adaptive_document_agent.services.summary_validation import reading_errors
 from adaptive_document_agent.services.llm.exceptions import PrivacyViolationError
-from adaptive_document_agent.utils.ids import stable_id
+from .summary_read_binding import bind_reading, line_coverage, missing_ranges, reconcile_layout
 from .prompting import untrusted_document_message
 from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
 
@@ -122,49 +122,27 @@ def _read_batch(gateway, result, blocks, cancelled: Event) -> ReadOutcome:
                 continue
             record = {'response': response.model_dump(mode='json')}
             audit['attempts'].append(record)
-            by_id = {b.id: b for b in blocks}
-            parts, unknown = [], []
-            for part in response.parts:
-                block = by_id.get(part.block_id)
-                if block is None:
-                    unknown.append('Summary reader cites an unknown source block')
-                    continue
-                lines = block.text.splitlines(keepends=True)
-                source = ''.join(lines[part.start_line-1:part.end_line])
-                facts = []
-                for fact in part.facts:
-                    if not part.start_line <= fact.quote_start_line <= fact.quote_end_line <= part.end_line <= len(lines):
-                        unknown.append('Summary fact source span is outside its assigned part')
-                        continue
-                    try:
-                        bound = SummaryFact(label=fact.label, text=fact.text,
-                            source_quote=''.join(lines[fact.quote_start_line-1:fact.quote_end_line]).strip(),
-                            source_pages=[block.page])
-                        failures = fact_errors(bound, result, source, block.page, literal_reading=True)
-                        if failures and attempt:
-                            # Keep the model's selected material passage, not an
-                            # unsupported paraphrase. No extract is published as
-                            # a summary: the separate editor must summarize it.
-                            record.setdefault('literal_extracts', []).append({
-                                'block_id': block.id, 'start_line': fact.quote_start_line,
-                                'end_line': fact.quote_end_line, 'rejected_paraphrase': fact.text,
-                                'errors': failures})
-                            bound = bound.model_copy(update={'text': bound.source_quote})
-                        facts.append(bound)
-                    except ValueError as exc:
-                        unknown.append('Invalid Summary fact source span: ' + str(exc))
-                parts.append(SummaryPart(**part.model_dump(exclude={'facts'}), facts=facts,
-                    id=stable_id('summary_part', block.id, part.start_line, part.end_line),
-                    source_page=block.page, source_text=source))
+            parts, unknown = bind_reading(response, blocks, result, record, literal_fallback=bool(attempt))
+            parts = reconcile_layout(parts, blocks, record)
             probe = SummaryReview(document_id=result.document.document_id, document_sha256=result.document.sha256,
                 source_pages=sorted({b.page for b in blocks}), source_blocks=blocks, parts=parts)
             # Full-page supply is validated once by the owner, because another
             # batch may contain the remainder of a long source page.
             errors = unknown + reading_errors(probe, result, complete_scope=False)
             record['errors'] = errors
+            record['line_coverage'] = line_coverage(parts, blocks)
             if not errors:
                 return ReadOutcome(parts, audit)
             if attempt:
+                ranges = missing_ranges(record['line_coverage'])
+                coverage_only = {'Summary parts skip or overlap supplied source lines',
+                                 'Summary block was not completely read and assigned'}
+                if ranges and set(errors) <= coverage_only:
+                    # One bounded follow-up reads only unassigned nonblank lines.
+                    # Existing facts and their ownership cannot be replaced.
+                    parts = _read_missing(gateway, result, blocks, parts, ranges,
+                                          messages[:2], cancelled, audit)
+                    return ReadOutcome(parts, audit)
                 raise ValueError('; '.join(errors))
             messages = messages[:2] + [untrusted_document_message(json.dumps(record, ensure_ascii=False)),
                 {'role': 'user', 'content': 'Correct these validation failures using only the original '
@@ -180,6 +158,44 @@ def _read_batch(gateway, result, blocks, cancelled: Event) -> ReadOutcome:
         return ReadOutcome([], audit, exc)
     finally:
         audit['duration_ms'] = int((perf_counter() - started) * 1000)
+
+
+def _read_missing(gateway, result, blocks, parts, ranges, source_messages, cancelled, audit):
+    record = {'missing_ranges': ranges}
+    audit['missing_range_read'] = record
+    if cancelled.is_set():
+        raise CancelledError('Summary reading cancelled')
+    try:
+        response = gateway.generate_structured([
+            *source_messages,
+            {'role': 'user', 'content': 'Read ONLY the unassigned inclusive line ranges below. '
+             'The original blocks are context. Return parts that partition these ranges exactly once; '
+             'do not return or modify any already assigned lines. Decide from the source whether '
+             'each range is substantive content, a heading, or layout. Every substantive range '
+             'still needs supported facts. Never assume a short line is a footer. '
+             + json.dumps(ranges)}], SummaryReadBatch, stage='presentation',
+            allow_repair=False, cancelled=cancelled)
+        record['response'] = response.model_dump(mode='json')
+        # Reject modifications to accepted lines before binding or merging facts.
+        if any(not any(p.block_id == r['block_id'] and
+                       r['start_line'] <= p.start_line <= p.end_line <= r['end_line']
+                       for r in ranges) for p in response.parts):
+            raise ValueError('Summary missing-line reading changed already assigned source lines')
+        additions, errors = bind_reading(response, blocks, result, record)
+        combined = parts + additions
+        probe = SummaryReview(document_id=result.document.document_id, document_sha256=result.document.sha256,
+            source_pages=sorted({b.page for b in blocks}), source_blocks=blocks, parts=combined)
+        errors += reading_errors(probe, result, complete_scope=False)
+        record['errors'] = errors
+        record['line_coverage'] = line_coverage(combined, blocks)
+        if errors:
+            raise ValueError('; '.join(errors))
+        return combined
+    except Exception as exc:
+        record['error'] = str(exc)
+        if isinstance(exc, LLMStructuredOutputError):
+            record['raw_response'] = exc.response.text
+        raise
 
 
 def read_summary(gateway, result, review: SummaryReview, *, cancelled: Event | None = None) -> None:
