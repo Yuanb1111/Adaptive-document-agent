@@ -12,15 +12,20 @@ without changing prompts, response validation, routing, credentials or privacy:
   source validation and the eight-batch plus two-repair call budget remain required; incomplete
   coverage remains unresolved and cannot certify business acceptance.
 - `ExecutiveBriefPatch` uses the same reduction for its single targeted repair.
-- `SummaryEditorialDraft` uses the same opt-out reduction over its already
-  validated part-by-part reading facts. `SummaryReadBatch` and
-  `BriefMeaningReview` retain provider defaults and all source/semantic gates.
+- `SummaryEditorialDraft`, `CompactSummaryDraft` and `CompactSummaryReview`
+  use the same opt-out reduction. `SummaryReadBatch` now uses it for bounded
+  structural reading and source-span capture. Complete line assignment, literal
+  source ownership, numerical checks and independent compact-part meaning review
+  remain required. `BriefMeaningReview` retains provider defaults.
+- `SemanticCandidateScores` uses the opt-out reduction for bounded ranking of
+  the supplied evidence-backed candidate set. Global context, explicit rationales,
+  incomplete-decision quarantine and LLM semantic selection remain unchanged.
 - `ExecutiveBrief` and `ReportPlan` in `report`, and `VisualSelection` in
   `presentation`, use reduced reasoning after the user chose lighter writing
   and layout on 2026-10-09. Complete numeric, unit, quote, source and qualification
   checks remain in place. Models, prompts and semantic selection stay unchanged.
-- Semantic resolution, candidate scoring, analytical topic selection, insight generation,
-  `SummaryReadBatch`, `IntroductionDraft`, unknown operations and plain text generation keep defaults
+- Semantic resolution, analytical topic selection, insight generation,
+  `IntroductionDraft`, unknown operations and plain text generation keep defaults
 - The existing `discovery_thinking` setting remains independent and unchanged
 
 `LLM_SIMPLE_TASK_REASONING=reduced` is the default. Set `provider_default` to opt
@@ -75,3 +80,9 @@ They cover exact routing, safe opt-outs, both selector operations, preserved
 complex operations, repair/context restoration, concurrency, cache invalidation,
 compatibility downgrade auditing and local/credential isolation. No paid requests
 or live generation latency/quality claims are part of this verification.
+
+v111 also records bounded output budgets in the structured-cache policy identity:
+candidate scoring 6,000 tokens, Summary reading 12,000, compact drafting/review
+8,000 each. These apply through the provider adapter; an explicit caller token
+limit takes precedence. Truncation remains an error with bounded recovery, never
+permission to accept incomplete JSON or invent missing evidence.

@@ -66,6 +66,9 @@ def verify_summary_export(presentation, result):
     required = {p.id for p in company.summary_review.parts if p.role == 'content'}
     if seen != expected_items or not required <= used.keys():
         raise ValueError('Exported introduction does not cover every substantive source part')
+    limit = company.summary_review.max_intro_slides
+    if limit is not None and len({n for values in used.values() for n in values})>limit:
+        raise ValueError('Exported company introduction exceeds its five-page limit')
     for record in result.presentation_export_trace:
         if record['planned_slide_id'] in {s.id for s in result.presentation_plan.slides if s.slide_type == 'company_overview'}:
             record['summary_part_ids'] = sorted(pid for pid, numbers in used.items()

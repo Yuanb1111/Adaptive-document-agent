@@ -88,6 +88,16 @@ class DocumentOrchestrator:
         if scope and (scope.document_sha256 != digest or scope.page_count != document.page_count):
             raise ValueError("The confirmed analysis scope does not belong to this PDF.")
 
+        from .report_requirements import interpret_requirements, appendix_pages
+        requirements = None
+        if analysis_focus and analysis_focus.strip():
+            notify('Interpreting analysis and presentation requirements')
+            with record_timing(timings, 'report_requirements'):
+                requirements = interpret_requirements(self.gateway, document, analysis_focus)
+            if not requirements.interpretation_error:
+                analysis_focus = '; '.join(r.request_quote for r in requirements.items
+                    if r.resolution == 'resolved' and r.kind == 'analysis_focus') or None
+
         notify("Understanding document")
         with record_timing(timings, "document_discovery"):
             profile = DocumentDiscovery(self.gateway, cache=self.cache).discover(
@@ -100,17 +110,11 @@ class DocumentOrchestrator:
             )
 
         from .company_introduction import prepare_company_introduction
-        from .report_requirements import interpret_requirements, appendix_pages
-        if analysis_focus and analysis_focus.strip():
-            notify('Interpreting analysis and presentation requirements')
-            with record_timing(timings, 'report_requirements'):
-                profile.report_requirements = interpret_requirements(self.gateway, document, analysis_focus)
-                if not profile.report_requirements.interpretation_error:
-                    profile.analysis_focus = '; '.join(r.request_quote for r in profile.report_requirements.items
-                        if r.resolution == 'resolved' and r.kind in {'analysis_focus', 'content_detail'}) or None
-                    analysis_focus = profile.analysis_focus
-                for requirement in profile.report_requirements.items:
-                    notify('Report requirement: ' + requirement.description)
+        if requirements is not None:
+            profile.report_requirements = requirements
+            profile.analysis_focus = analysis_focus
+            for requirement in requirements.items:
+                notify('Report requirement: ' + requirement.description)
         attach_introduction = None
         if self.gateway and self.gateway.discovery_workers > 1:
             # Discovery is the earliest stable source/profile boundary. Copy it
@@ -173,7 +177,7 @@ class DocumentOrchestrator:
         notify("Generating analysis candidates")
         with record_timing(timings, "candidate_generation"):
             candidates = AnalysisCandidateGenerator().generate(index, profile)
-            scores = AnalysisValueScorer(self.gateway).score(candidates, index, profile)
+            scores = AnalysisValueScorer(self.gateway).score(candidates, index, profile, progress=notify)
 
         notify("Selecting useful analyses")
         with record_timing(timings, "analysis_planning"):

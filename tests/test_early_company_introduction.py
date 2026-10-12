@@ -112,7 +112,7 @@ def configure_pipeline(monkeypatch, *, delays=None, local=False, concurrent=True
     monkeypatch.setattr(orchestrator.TableExtractor, "extract", lambda *args, **kwargs: stage("table_extraction", {}))
     monkeypatch.setattr(orchestrator.ObservationExtractor, "extract", lambda *args, **kwargs: [])
     monkeypatch.setattr(orchestrator.SemanticResolver, "resolve_metrics", lambda *args, **kwargs: [])
-    monkeypatch.setattr(orchestrator.AnalysisValueScorer, "score", lambda *args: stage("candidate_scoring", []))
+    monkeypatch.setattr(orchestrator.AnalysisValueScorer, "score", lambda *args,**kwargs: stage("candidate_scoring", []))
 
     def report(self, document, profile, *args):
         return stage("reporting", PipelineResult(document=document, profile=profile,

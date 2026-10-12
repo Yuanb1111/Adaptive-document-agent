@@ -104,7 +104,7 @@ def test_verified_direct_deepseek_selectors_disable_thinking(monkeypatch, model,
 
 @pytest.mark.parametrize("stage,operation", [
     ("semantic", "SemanticMappings"), ("planner", "AnalysisPlan"), ("insight", "InsightBatch"),
-    ("planner", "SemanticCandidateScores"), ("semantic", "SemanticResolution"), ("insight", "InsightList"),
+    ("semantic", "SemanticResolution"), ("insight", "InsightList"),
     ("presentation", "PresentationTopicSelection"), ("presentation", "IntroductionDraft"),
     ("presentation", "ExecutiveBrief"), ("insight", "ReportPlan"), ("report", "VisualSelection"),
     ("presentation", "PresentationPlan"), ("report", "text"),

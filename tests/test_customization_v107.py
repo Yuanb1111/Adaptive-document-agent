@@ -48,7 +48,7 @@ def test_unverified_reading_paraphrase_is_replaced_by_exact_selected_source_not_
 
 
 def test_long_internal_extract_does_not_expand_published_slide_limit():
-    text = 'Delivery depends on integration and customer training. ' * 20
+    text = 'Delivery depends on integration and customer training. ' * 30
     result = distinct_source(1);result.document.pages[0].text = text
     blocks = source_blocks(result,[1])
     class Reader:

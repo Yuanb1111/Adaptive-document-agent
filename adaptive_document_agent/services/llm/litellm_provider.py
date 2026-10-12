@@ -150,7 +150,7 @@ class LiteLLMProvider(LLMClient):
                             request_kwargs.pop(param, None)
                     compatibility_retry_used = True
                     continue
-                transient = any(marker in type(exc).__name__.casefold() for marker in ("timeout", "rate", "connection", "serviceunavailable"))
+                transient = self._transient_failure(exc)
                 if not transient or transient_retries == 1:
                     raise
                 transient_retries += 1
@@ -160,6 +160,17 @@ class LiteLLMProvider(LLMClient):
                 event["completed_at"] = datetime.now(timezone.utc).isoformat()
                 if _attempts.get() is not None:
                     _attempts.get().append(event)
+
+    @staticmethod
+    def _transient_failure(exc: Exception) -> bool:
+        """Retry one transport/server failure, never authentication or bad input."""
+        status = getattr(exc, 'status_code', None)
+        if status is None:
+            status = getattr(getattr(exc, 'response', None), 'status_code', None)
+        if isinstance(status, int):
+            return status in {408, 429, 500, 502, 503, 504}
+        return any(marker in type(exc).__name__.casefold() for marker in (
+            'timeout', 'ratelimit', 'connection', 'serviceunavailable', 'internalservererror'))
 
     @contextmanager
     def _request_client(self):
@@ -250,7 +261,8 @@ class LiteLLMProvider(LLMClient):
         try:
             policy = self.request_policy(stage=_stage.get(), operation=_operation.get(), model=model or self.settings.model)
             options = policy.pop("options")
-            raw = self._completion(messages, temperature=temperature, max_tokens=max_tokens, model=model, **options)
+            output_limit = max_tokens if max_tokens is not None else policy.get('output_token_limit')
+            raw = self._completion(messages, temperature=temperature, max_tokens=output_limit, model=model, **options)
             # "applied" records controls on the successful LiteLLM call; actual
             # reasoning consumption is separately reported by provider token usage.
             policy["applied"] = (attempt_log[-1]["reasoning_parameters"] if attempt_log else dict(policy["requested"]))

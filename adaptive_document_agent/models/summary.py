@@ -37,9 +37,16 @@ class SummaryPart(BaseModel):
     facts: list[SummaryFact] = Field(default_factory=list)
 
 
+class SummaryFactRef(BaseModel):
+    part_id: str
+    fact_index: int = Field(ge=0)
+
+
 class SummarySlideItem(SummaryFact):
-    text: str = Field(min_length=1, max_length=180)
+    text: str = Field(min_length=1, max_length=1200)
+    source_quote: str = Field(min_length=8, max_length=80000)
     part_ids: list[str] = Field(min_length=1)
+    source_refs: list[SummaryFactRef] = Field(default_factory=list)
     continuation_group: str = ''
     continuation_index: int = Field(default=0, ge=0)
     continuation_count: int = Field(default=1, ge=1)
@@ -52,6 +59,7 @@ class SummarySlidePage(BaseModel):
     title: str = Field(min_length=1, max_length=65)
     source_section: str = Field(min_length=1, max_length=160)
     items: list[SummarySlideItem] = Field(min_length=1, max_length=4)
+    compact: bool = False
 
 
 class SummaryPartDecision(BaseModel):
@@ -73,3 +81,4 @@ class SummaryReview(BaseModel):
     read_audits: list[dict] = Field(default_factory=list)
     plan_audits: list[dict] = Field(default_factory=list)
     timings_ms: dict[str, int] = Field(default_factory=dict)
+    max_intro_slides: int | None = Field(default=None, ge=1, le=5)

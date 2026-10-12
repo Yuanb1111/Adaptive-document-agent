@@ -24,12 +24,12 @@ def test_long_editorial_copy_preserves_complete_claim_and_missing_continuation_i
     part = next(p for p in review.parts if p.role=='content')
     _,catalog = editorial_parts([part])
     fact_id = next(iter(catalog))
-    text = part.facts[0].text+' '+part.facts[0].text
+    text = ' '.join([part.facts[0].text]*5)
     draft = SummaryEditorialDraft(summary_pages=[dict(id='long',title='Operations',source_section='Operations',
         items=[dict(fact_id=fact_id,label=part.facts[0].label,text=text)])])
     expanded = expand_editorial(draft,catalog,IntroductionDraft)
     items = [item for p in expanded.summary_pages for item in p.items]
-    assert ''.join(item.text for item in items)==text and all(len(item.text)<=180 for item in items)
+    assert ''.join(item.text for item in items)==text and all(len(item.text)<=600 for item in items)
     assert not any('continuation' in e for e in presentation_errors(review,expanded.summary_pages,result,validate_reading=False))
     expanded.summary_pages[-1].items.pop()
     assert 'Invalid Summary continuation provenance' in presentation_errors(review,expanded.summary_pages,result,validate_reading=False)

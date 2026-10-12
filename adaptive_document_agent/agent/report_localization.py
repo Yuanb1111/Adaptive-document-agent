@@ -2,6 +2,7 @@
 
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from time import perf_counter
 
 from pydantic import BaseModel, Field
@@ -67,11 +68,14 @@ def prepare_report_language(gateway, result, *, progress=None):
                                              if result.presentation_plan else []) for text in
                                              (page.title, *[item.label for item in page.items]) if text.strip()],
                                          *[unit['source'] for unit in units]]))
-            presentation._ada_reflow_copy = {unit['source'] for unit in units}
+            review = result.presentation_plan.company.summary_review if result.presentation_plan else None
+            can_reflow = review is None or review.max_intro_slides is None
+            presentation._ada_reflow_copy = {unit['source'] for unit in units} if can_reflow else set()
             limits = copy_limits(presentation)
             # A complete claim has several original layout slots. Its prose
             # is paginated after translation, not squeezed into one old box.
-            limits.update({unit['source']: max(180, len(unit['source'])) for unit in units})
+            if can_reflow:
+                limits.update({unit['source']: max(180, len(unit['source'])) for unit in units})
         batches, batch, size = [], [], 0
         for index, text in enumerate(strings):
             if (re.search(r'(?i)中文|chinese|^zh(?:-|$)', requests[0].language)
@@ -88,22 +92,54 @@ def prepare_report_language(gateway, result, *, progress=None):
             size += len(text)
         if batch:
             batches.append(batch)
-        for number, batch in enumerate(batches, 1):
+        # Warm immutable geometry before independent translation/review workers.
+        if strings:
+            from adaptive_document_agent.services.report_language import copy_fit_errors
+            copy_fit_errors(presentation,strings[0],strings[0]+' ')
+        def process_batch(number,batch):
+            batch_accepted,batch_missing,batch_audits,batch_times = {},[],[],{}
             pending, failures = batch, None
             for attempt in range(2):
-                notify(f'Translating and reviewing display text ({number}/{len(batches)}; attempt {attempt + 1})')
                 verified, failed, audit = _translate_batch(gateway, pending, requests[0].language,
-                    presentation, failures=failures, timings=details)
-                audits.append(dict(audit, attempt=attempt + 1))
-                accepted.update(verified)
+                    presentation, failures=failures, timings=batch_times)
+                batch_audits.append(dict(audit, attempt=attempt + 1,batch=number))
+                batch_accepted.update(verified)
                 if not failed:
                     break
                 if attempt or audit.get('retryable') is False:
-                    missing.extend(failed)
+                    batch_missing.extend(failed)
                     break
                 # Never replace a verified translation when repairing another.
                 pending = [item for item in pending if item['id'] in failed]
                 failures = audit
+            return batch_accepted,batch_missing,batch_audits,batch_times
+        def retain(outcome):
+            values,failed,records,clock = outcome
+            accepted.update(values)
+            missing.extend(failed)
+            audits.extend(records)
+            for key,value in clock.items():
+                details[key] = details.get(key,0)+value
+        workers = min(2,getattr(gateway,'discovery_workers',1),len(batches))
+        if workers>1:
+            notify(f'Translating and reviewing display text (0/{len(batches)} batches complete)')
+            with ThreadPoolExecutor(max_workers=workers,thread_name_prefix='display-translation') as pool:
+                futures = {pool.submit(process_batch,n,b):n for n,b in enumerate(batches,1)}
+                outcomes = {}
+                try:
+                    for future in as_completed(futures):
+                        outcomes[futures[future]]=future.result()
+                        notify(f'Translating and reviewing display text ({len(outcomes)}/{len(batches)} batches complete)')
+                except BaseException:
+                    for future in futures:
+                        future.cancel()
+                    raise
+                for n in sorted(outcomes):
+                    retain(outcomes[n])
+        else:
+            for number,batch in enumerate(batches,1):
+                notify(f'Translating and reviewing display text ({number}/{len(batches)}; attempt 1)')
+                retain(process_batch(number,batch))
         retain_summary_translations(result, units, accepted)
     except PrivacyViolationError:
         raise

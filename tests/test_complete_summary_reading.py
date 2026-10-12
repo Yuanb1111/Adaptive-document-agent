@@ -113,10 +113,36 @@ class SummaryClient(MockLLMClient):
             if operation == 'SummaryEditorialDraft':
                 facts = {f['id']: (part['id'], f) for part in payload['parts'] for f in part['facts']}
                 value = response_model(summary_decisions=value.summary_decisions, summary_pages=[{
-                    **page.model_dump(exclude={'items'}), 'items': [{'label': item.label, 'text': item.text,
+                    **page.model_dump(exclude={'items','compact'}), 'items': [{'label': item.label, 'text': item.text,
                         'fact_id': next((fid for fid, (pid, fact) in facts.items()
                             if item.part_ids == [pid] and item.source_quote == fact['source_quote']), 'unknown')}
                         for item in page.items]} for page in value.summary_pages])
+        elif operation == 'CompactSummaryDraft':
+            by_topic = {}
+            for part in payload['parts']:
+                for fact in part['facts']:
+                    topic = part['title']
+                    group = by_topic.setdefault(topic,{'ids':[],'claims':[]})
+                    group['ids'].append(fact['id'])
+                    text = fact.get('text') or next(q['text'] for q in payload['source_quotes'] if q['id']==fact['quote_ref'])
+                    if text not in group['claims']:
+                        group['claims'].append(text)
+            # Synthetic domains are written explicitly; the mock is a source-
+            # bound authored fixture, not a production condensation algorithm.
+            items=[]
+            for topic,group in by_topic.items():
+                claims=group['claims']
+                if len(claims)>3:
+                    words=['manufacturing','warehouse','retail','hospital','transport','hospitality']
+                    text=("Cedar provides scheduling software for manufacturing, warehouse, retail, hospital, transport and hospitality teams, covering shift planning, employee availability and on-site production coordination." if topic=='Operations' else
+                          "Delivery depends on customer integration and staff training across manufacturing, warehouse, retail, hospital, transport and hospitality; completion dates and adoption are not guaranteed.")
+                else:
+                    text=' '.join(claims)
+                items.append(dict(label=topic,text=text,fact_ids=group['ids']))
+            value=response_model(pages=[dict(title='Operations and delivery',items=items)])
+        elif operation == 'CompactSummaryReview':
+            value=response_model(parts=[dict(part_id=p['id'],accepted=True,reason='The authored fixture covers this source part.')
+                                       for p in payload['source']['parts']])
         else:
             raise AssertionError(operation)
         return value, LLMResponse(text=value.model_dump_json())
@@ -161,9 +187,8 @@ def test_all_parts_read_then_merged_into_dynamic_pages_with_omission_reasons():
     assert any(w.code == 'company_introduction_summary_audit' for w in result.validation_warnings)
     from adaptive_document_agent.services.llm.reasoning_policy import request_reasoning_policy
     settings = LLMSettings(provider=ProviderName.DEEPSEEK, model='deepseek-v4-pro')
-    for operation in ('SummaryReadBatch', 'IntroductionDraft'):
-        assert request_reasoning_policy(settings, stage='presentation', operation=operation,
-                                        model=settings.model)['intent'] == 'preserve'
+    assert request_reasoning_policy(settings,stage='presentation',operation='IntroductionDraft',model=settings.model)['intent']=='preserve'
+    assert request_reasoning_policy(settings,stage='presentation',operation='SummaryReadBatch',model=settings.model)['intent']=='reduce'
 
 
 def test_full_scope_includes_more_than_twenty_header_pages_and_long_page_tail():

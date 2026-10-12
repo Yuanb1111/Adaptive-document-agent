@@ -56,6 +56,9 @@ class ProcessingProgress:
                 target = 10 + int(35 * max(0, min(finished, total)) / total)
         elif stage.startswith("Understanding selected sections with"):
             target = 10
+        scoring = re.fullmatch(r'Scoring analysis candidates \((\d+)/(\d+)\)', stage)
+        if scoring and int(scoring[2]) > 0:
+            target = 66 + int(3 * min(int(scoring[1]), int(scoring[2])) / int(scoring[2]))
         self.percent = min(99, max(self.percent, target))
         self.label = "Analysis complete; preparing PowerPoint" if stage == "Complete" else stage
         self.state = "running"

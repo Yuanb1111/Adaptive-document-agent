@@ -35,15 +35,26 @@ def planning_batches(parts, *, character_budget=24000, content_budget=12):
 
 def generate_summary_presentation(gateway, result, pages, response_model, *, scope_ranges=(), cancelled=None) -> CompanyProfile:
     review = SummaryReview(document_id=result.document.document_id, document_sha256=result.document.sha256,
-                           source_pages=pages, scope_ranges=list(scope_ranges))
+                           source_pages=pages, scope_ranges=list(scope_ranges),max_intro_slides=5)
     company = CompanyProfile(summary_review=review)
     try:
         review.source_blocks = source_blocks(result, pages)
         with record_timing(review.timings_ms, 'reading'):
             read_summary(gateway, result, review, cancelled=cancelled)
+        if sum(p.role=='content' for p in review.parts)>20:
+            from .compact_summary import generate_compact_summary
+            with record_timing(review.timings_ms,'editorial'):
+                generate_compact_summary(gateway,result,review,company,cancelled=cancelled)
+            errors = presentation_errors(review,company.summary_pages,result)
+            if errors:
+                raise ValueError('Compact Summary failed validation: '+'; '.join(errors))
+            review.status = 'complete'
+            company.source_pages = sorted(set(pages) | {p for values in company.field_source_pages.values() for p in values})
+            return company
         batches = planning_batches(review.parts)
         def edit(parts):
             probe = review.model_copy(update={'parts': parts, 'decisions': [], 'plan_audits': []})
+            probe.max_intro_slides = None  # Only the final merged introduction owns the total budget.
             probe.timings_ms = {}
             with record_timing(probe.timings_ms, 'batch_editorial'):
                 try:
@@ -75,6 +86,11 @@ def generate_summary_presentation(gateway, result, pages, response_model, *, sco
                     raise ValueError('Introductory batches disagree on company identity')
                 company.name, company.identity_state = draft.name, 'RESOLVED'
                 company.field_source_pages.update(draft.field_source_pages)
+        from adaptive_document_agent.services.compact_summary import compact_layout_errors
+        if len(company.summary_pages)>5 or compact_layout_errors(company.summary_pages):
+            from .compact_summary import generate_compact_summary
+            with record_timing(review.timings_ms,'compact_editorial'):
+                generate_compact_summary(gateway,result,review,company,cancelled=cancelled)
         errors = presentation_errors(review, company.summary_pages, result)
         if errors:
             raise ValueError('Summary presentation failed validation: ' + '; '.join(errors))

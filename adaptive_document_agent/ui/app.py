@@ -66,7 +66,9 @@ def _render_analysis_failure(st, failure, progress=None):
 
 
 def _retry_analysis_button(st, scope_key):
-    return st.button("Retry analysis (reuse successful cache)", key=f"retry_analysis_{scope_key}")
+    active=st.session_state.get('analysis_attempts',{}).get(scope_key,{})
+    return st.button("Retry analysis (reuse successful cache)", key=f"retry_analysis_{scope_key}",
+                     disabled=active.get('state')=='running')
 
 
 def _render_active_attempt(st, attempt, progress):

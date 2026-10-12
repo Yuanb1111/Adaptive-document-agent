@@ -52,7 +52,7 @@ def expand_editorial(draft, catalog, response_model):
             if item.fact_id not in catalog:
                 raise ValueError('Summary editorial item cites an unknown reading fact: ' + item.fact_id)
             part, fact = catalog[item.fact_id]
-            pieces = split_editorial_copy(item.text)
+            pieces = split_editorial_copy(item.text,limit=600)
             from hashlib import sha256
             digest = sha256(item.text.encode('utf-8')).hexdigest() if len(pieces)>1 else ''
             group = stable_id('summary_copy', page.id, item.fact_id, item.text) if len(pieces)>1 else ''

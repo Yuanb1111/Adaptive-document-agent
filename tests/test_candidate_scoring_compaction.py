@@ -332,10 +332,11 @@ def test_compact_gateway_cache_reexpands_without_aliasing_or_model_call(tmp_path
 
 
 @pytest.mark.parametrize("provider", list(ProviderName))
-def test_semantic_candidate_scoring_keeps_complex_reasoning_default_for_every_provider(provider):
-    policy = request_reasoning_policy(LLMSettings(provider=provider), stage="planner",
+def test_candidate_scoring_reasoning_opt_out_keeps_provider_defaults(provider):
+    policy = request_reasoning_policy(LLMSettings(provider=provider,simple_task_reasoning='provider_default'), stage="planner",
                                       operation="SemanticCandidateScores", model="deepseek-flash")
     assert policy["intent"] == "preserve" and policy["options"] == {}
+    assert policy['output_token_limit']==6000
 
 
 def test_empty_and_no_gateway_scoring_remain_deterministic():

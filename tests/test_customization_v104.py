@@ -95,7 +95,7 @@ def test_period_headers_never_restore_a_percent_sign_on_a_year(text):
     assert restore_percentage_symbols('Share was 8.8', ['Share was 8.8%']) == 'Share was 8.8%'
 
 
-def test_more_than_eight_introduction_pages_cover_every_content_part():
+def test_long_introduction_covers_every_content_part_within_five_pages():
     result = distinct_source(20)
     for page in result.document.pages:
         page.text = page.text.replace('Cedar provides', f'Cedar provides {chr(64 + page.page_number)}')
@@ -103,7 +103,8 @@ def test_more_than_eight_introduction_pages_cover_every_content_part():
     client = SummaryClient()
     generated = generate(result, client)
     company = generated.presentation_plan.company
-    assert len(company.summary_pages) > 8 and len(client.plan_inputs) > 1
+    assert len(company.summary_pages)<=5
+    assert 'CompactSummaryDraft' in client.operations and 'CompactSummaryReview' in client.operations
     content = {p.id for p in company.summary_review.parts if p.role == 'content'}
     covered = {pid for page in company.summary_pages for item in page.items for pid in item.part_ids}
     assert covered == content

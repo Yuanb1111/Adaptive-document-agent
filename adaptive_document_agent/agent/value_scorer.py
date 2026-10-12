@@ -1,6 +1,7 @@
 """Bound candidate volume using relevance, evidence, and redundancy signals."""
 
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from pydantic import BaseModel, Field
 
@@ -135,9 +136,9 @@ class AnalysisValueScorer:
     def __init__(self, gateway: LLMGateway | None = None) -> None:
         self.gateway = gateway
 
-    def score(self, candidates: list[AnalysisCandidate], index: DocumentIndex, profile: DocumentProfile, *, maximum: int = 20) -> list[CandidateScore]:
+    def score(self, candidates: list[AnalysisCandidate], index: DocumentIndex, profile: DocumentProfile, *, maximum: int = 20, progress=None) -> list[CandidateScore]:
         bounded = AnalysisCandidateGenerator._prefilter(candidates, index, profile) if self.gateway else candidates
-        batches, attempts = self._semantic_batches(bounded, profile)
+        batches, attempts = self._semantic_batches(bounded, profile, progress=progress)
         bounded_ids = {item.id for item in bounded}
         decisions: dict[str, list[SemanticCandidateDecision]] = defaultdict(list)
         catalogs: dict[int, dict[str, list[str]]] = {}
@@ -205,16 +206,16 @@ class AnalysisValueScorer:
         return ranked
 
     def _semantic_batches(
-        self, candidates: list[AnalysisCandidate], profile: DocumentProfile,
+        self, candidates: list[AnalysisCandidate], profile: DocumentProfile, *, progress=None,
     ) -> tuple[list[tuple[list[str], SemanticCandidateScores]], list[SemanticScoringBatchAudit]]:
         """Keep global comparison context; retry only an explicitly truncated batch."""
         if not self.gateway or not candidates:
             return [], []
-        completed: list[tuple[list[str], SemanticCandidateScores]] = []
-        attempts: list[SemanticScoringBatchAudit] = []
+        notify = progress or (lambda _: None)
 
-        def review(focus: list[AnalysisCandidate], depth: int = 0) -> None:
+        def review(focus: list[AnalysisCandidate], depth: int = 0):
             identifiers = [item.id for item in focus]
+            completed, attempts = [], []
             try:
                 response = self._semantic_scores(candidates, profile, focus=identifiers)
             except LLMStructuredOutputError as exc:
@@ -226,30 +227,58 @@ class AnalysisValueScorer:
                 if len(focus) <= 1 or depth >= MAX_SPLIT_DEPTH:
                     raise
                 middle = len(focus)//2
-                review(focus[:middle], depth+1)
-                review(focus[middle:], depth+1)
-                return
+                for half in (focus[:middle], focus[middle:]):
+                    values, audits = review(half, depth+1)
+                    completed.extend(values)
+                    attempts.extend(audits)
+                return completed, attempts
             audit = _response_audit(response, set(identifiers))
             attempts.append(SemanticScoringBatchAudit(candidate_ids=identifiers,
                 reason_catalog=response.reason_catalog, scores=response.scores,
                 validation_errors=audit.validation_errors))
             completed.append((identifiers, response))
+            return completed, attempts
 
-        for start in range(0, len(candidates), SCORING_BATCH_SIZE):
-            review(candidates[start:start+SCORING_BATCH_SIZE])
+        groups = [candidates[start:start+SCORING_BATCH_SIZE] for start in range(0, len(candidates), SCORING_BATCH_SIZE)]
+        notify(f'Scoring analysis candidates (0/{len(groups)})')
+        workers = min(2, getattr(self.gateway, 'discovery_workers', 1), len(groups))
+        outcomes = {}
+        if workers > 1:
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix='candidate-scoring') as pool:
+                futures = {pool.submit(review, group): index for index, group in enumerate(groups)}
+                try:
+                    for future in as_completed(futures):
+                        outcomes[futures[future]] = future.result()
+                        notify(f'Scoring analysis candidates ({len(outcomes)}/{len(groups)})')
+                except BaseException:
+                    for future in futures:
+                        future.cancel()
+                    raise
+        else:
+            for index, group in enumerate(groups):
+                outcomes[index] = review(group)
+                notify(f'Scoring analysis candidates ({len(outcomes)}/{len(groups)})')
+        completed, attempts = [], []
+        for index in sorted(outcomes):
+            values, audits = outcomes[index]
+            completed.extend(values)
+            attempts.extend(audits)
         return completed, attempts
 
     def _semantic_scores(self, candidates: list[AnalysisCandidate], profile: DocumentProfile, *, focus=None) -> SemanticCandidateScores | None:
         if not self.gateway or not candidates:
             return None
         from .report_requirements import instruction_messages
+        # Rendering, localization and appendix audits have no role in ranking.
+        # Keep the original profile unchanged in the result and evidence store.
+        context = profile.model_copy(update={'report_requirements': None})
         response = self.gateway.generate_structured(
             [
                 {"role": "system", "content": load_prompt("analysis_planner.txt") + "\nScore only the current batch. Return exactly one decision per requested candidate ID: score, rejected (true means not selected), and explicit reasons. All candidates remain supplied as global comparison context: assess usefulness and redundancy against that complete context, using the same score criteria in every batch. Do not score context-only candidates or choose a separate top-N per batch. Never add candidate IDs. Do not execute calculations or draft the report; provide specific, concise scoring explanations with all relevant qualifications. "
                  "Write repeated rationale once in reason_catalog as entries with unique short id and full text; reference those IDs in each applicable decision's ordered reason_refs. Put complete candidate-specific reasons, exceptions, evidence qualifications and caveats in reasons. A decision's explanation is its referenced catalog text in order followed by its inline reasons. Use only references defined in reason_catalog. Every accepted AND rejected decision needs a complete, nonblank explanation. Do not drop candidates, evidence, qualifications or unique reasoning to compress the response. "
                  "Read candidate_encoding when present; merge candidate_constants into each candidate without discarding any field. Ordered observation_refs are indices into observation_id_catalog and restore exact observation_ids; use the original IDs when identifying evidence in explanations. Input source_reason_ref resolves the candidate's original reason verbatim in source_reason_catalog; it is source data, not a scoring decision or an output rationale reference."},
                 *instruction_messages(profile, purpose='analysis prioritization'),
-                untrusted_document_message(str(_scoring_transport(candidates, profile))),
+                untrusted_document_message(str(_scoring_transport(candidates, context))),
                 {'role': 'user', 'content': 'Current batch candidate IDs to score: ' + str(focus if focus is not None else [c.id for c in candidates])},
             ],
             SemanticCandidateScores,

@@ -12,7 +12,7 @@ from .config import LLMSettings, ProviderName
 from .costs import direct_deepseek
 from .credentials import DEFAULT_ENDPOINTS, provider_endpoint
 
-REASONING_POLICY_VERSION = "operation-reasoning-v7"
+REASONING_POLICY_VERSION = "operation-reasoning-v8"
 # Documented model IDs, independent of pricing data. New aliases/models do not
 # inherit transport capabilities by prefix. See docs/LLM_REASONING_POLICY.md.
 _DEEPSEEK_THINKING_MODELS = frozenset({"deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro"})
@@ -27,7 +27,17 @@ _SIMPLE_OPERATIONS = frozenset({("presentation", "IntroductionPages"), ("report"
                               ("presentation", "SectionBindings"),
                               ("presentation", "CopyTranslations"),
                               ("presentation", "TranslationReview"),
-                              ("presentation", "SummaryEditorialDraft")})
+                              ("presentation", "SummaryEditorialDraft"),
+                              ("presentation", "SummaryReadBatch"),
+                              ("presentation", "CompactSummaryDraft"),
+                              ("presentation", "CompactSummaryReview"),
+                              ("planner", "SemanticCandidateScores")})
+
+# Bound structured responses without changing evidence or numerical validation.
+_OUTPUT_LIMITS = {('planner', 'SemanticCandidateScores'): 6000,
+                  ('presentation', 'SummaryReadBatch'): 12000,
+                  ('presentation', 'CompactSummaryDraft'): 8000,
+                  ('presentation', 'CompactSummaryReview'): 8000}
 
 
 def reasoning_parameters(options: dict[str, Any]) -> dict[str, Any]:
@@ -125,6 +135,9 @@ def request_reasoning_policy(settings: LLMSettings, *, stage: str | None,
         if direct_deepseek(settings, model):
             options = {"extra_body": {"thinking": {"type": intent}}}
         status = "requested" if options else "unsupported"
-    return {"version": REASONING_POLICY_VERSION, "operation": operation,
+    result = {"version": REASONING_POLICY_VERSION, "operation": operation,
             "intent": intent, "status": status, "requested": reasoning_parameters(options),
             "options": options}
+    if (stage, operation) in _OUTPUT_LIMITS:
+        result['output_token_limit'] = _OUTPUT_LIMITS[stage, operation]
+    return result

@@ -714,7 +714,9 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
                 notes += '\n\nComplete Summary reading and decisions:\n' + (
                     plan.company.summary_review.model_dump_json(indent=2))
             source_visual = getattr(presentation, '_ada_source_visual', None)
-            if index == 0 and source_visual:
+            if page.compact or plan.company.summary_review.max_intro_slides is not None:
+                rendered = render_profile(presentation,page.title,items,notes=notes)
+            elif index == 0 and source_visual:
                 from .presentation_source_visual import render_profile_with_source
                 rendered = render_profile_with_source(presentation, page.title, items, source_visual, notes=notes)
             else:
@@ -3243,7 +3245,9 @@ def _appendix_display_value(item: Observation, semantic: Any) -> str:
         # 0.0659 and 0.0566 million both look like 0.06). Keep enough
         # significant digits for the displayed trend without changing units.
         return f"{value_in_millions:,.3g}"
-    return f"{value_in_millions:,.2f}".rstrip('0').rstrip('.')
+    from decimal import Decimal, ROUND_HALF_UP
+    rounded = Decimal(str(value_in_millions)).quantize(Decimal('.01'),rounding=ROUND_HALF_UP)
+    return f"{rounded:,.2f}".rstrip('0').rstrip('.')
 
 
 def _cell_style(cell: Any, *, fill: str, color: str, bold: bool, size: float) -> None:

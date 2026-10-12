@@ -122,11 +122,14 @@ def reading_errors(review: SummaryReview, result: PipelineResult, *, complete_sc
     return list(dict.fromkeys(errors))
 
 
-def presentation_errors(review: SummaryReview, slide_pages, result: PipelineResult, *, validate_reading=True) -> list[str]:
+def presentation_errors(review: SummaryReview, slide_pages, result: PipelineResult, *, validate_reading=True,
+                        verify_compact_review=True) -> list[str]:
     errors = reading_errors(review, result) if validate_reading else []
     parts = {p.id: p for p in review.parts}
     used, copy_seen, page_ids = set(), set(), set()
     continuations = {}
+    if review.max_intro_slides is not None and len(slide_pages)>review.max_intro_slides:
+        errors.append('Complete introduction exceeds its five-page limit')
     for page in slide_pages:
         if page.id in page_ids:
             errors.append('Summary slide IDs repeat')
@@ -149,6 +152,15 @@ def presentation_errors(review: SummaryReview, slide_pages, result: PipelineResu
                 continue
             if any(part.role != 'content' for part in known):
                 errors.append('Summary slide item cites layout-only material')
+            if page.compact:
+                from .compact_summary import compact_item_errors
+                errors.extend(compact_item_errors(item,review,result))
+                used.update(item.part_ids)
+                key = normalize_quote(item.text)
+                if key in copy_seen:
+                    errors.append('Summary presentation repeats a finding')
+                copy_seen.add(key)
+                continue
             if not known or not any(f.source_quote == item.source_quote and f.source_pages == item.source_pages
                                     for part in known for f in part.facts):
                 errors.append('Summary slide quote must retain a fact from the complete reading')
@@ -205,4 +217,17 @@ def presentation_errors(review: SummaryReview, slide_pages, result: PipelineResu
     for part in review.parts:
         if part.role == 'content' and part.id not in used:
             errors.append('Every substantive Summary part must appear in the introduction: ' + part.id)
+    if any(p.compact for p in slide_pages) and verify_compact_review:
+        from .compact_summary import compact_digest, compact_layout_errors
+        digest = compact_digest(slide_pages)
+        required = {p.id for p in review.parts if p.role=='content'}
+        accepted = False
+        for audit in review.plan_audits:
+            verdicts = audit.get('compact_semantic_review',{}).get('parts',[])
+            if (audit.get('compact_digest')==digest and len(verdicts)==len(required)
+                    and {v['part_id'] for v in verdicts}==required and all(v['accepted'] for v in verdicts)):
+                accepted = True
+        if not accepted:
+            errors.append('Compact Summary lacks an independent complete part-meaning review')
+        errors.extend(compact_layout_errors(slide_pages))
     return list(dict.fromkeys(errors))

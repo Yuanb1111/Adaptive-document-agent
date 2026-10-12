@@ -72,7 +72,7 @@ class LLMGateway:
                 )
         except LLMTransportError as exc:
             self._record_failure(exc, stage, operation="text")
-            raise
+            raise self._located_failure(exc, stage, 'text') from exc
         self._record(response, stage=stage)
         return response.text
 
@@ -159,7 +159,7 @@ class LLMGateway:
                                             cancelled=cancelled, repair_policy=repair_policy, model_name=model_name)
         except LLMTransportError as exc:
             self._record_failure(exc, stage, operation=response_model.__name__, request_metadata=metadata)
-            raise
+            raise self._located_failure(exc, stage, response_model.__name__) from exc
         if self.cache and self.cache_enabled:
             self.cache.set_model(f"llm-{key}", value)
         return value
@@ -200,7 +200,7 @@ class LLMGateway:
             return validate_structured_text(response.text, response_model)
         except LLMTransportError as exc:
             self._record_failure(exc, stage, operation=response_model.__name__, request_metadata=request_metadata)
-            raise
+            raise self._located_failure(exc, stage, response_model.__name__) from exc
         except (LLMResponseError, ValueError, TypeError) as exc:
             detail = type(exc).__name__
             raise LLMResponseError(
@@ -215,6 +215,12 @@ class LLMGateway:
                                "estimated_cost": None,
                                "model": self.settings.model_for(stage), "status": "request_failed",
                                "attempts": exc.attempts})
+
+    @staticmethod
+    def _located_failure(exc: LLMTransportError, stage: str, operation: str) -> LLMTransportError:
+        return LLMTransportError(f'{exc} (stage {stage!r}, operation {operation!r}, '
+                                 f'attempts: {len(exc.attempts)}). Retry to reuse successful cached work.',
+                                 attempts=exc.attempts)
 
     def record_cache_hit(self, *, stage: str, operation: str,
                          request_metadata: dict[str, str | int] | None = None) -> None:
