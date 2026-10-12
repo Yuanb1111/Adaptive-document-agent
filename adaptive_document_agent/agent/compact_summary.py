@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from adaptive_document_agent.models.summary import SummarySlideItem, SummarySlidePage, SummaryPartDecision, SummaryFactRef
 from adaptive_document_agent.services.source_quotes import normalize_quote
-from adaptive_document_agent.services.llm.exceptions import LLMResponseError, LLMTransportError, PrivacyViolationError
+from adaptive_document_agent.services.llm.exceptions import LLMResponseError, LLMTransportError, PrivacyViolationError, LLMStructuredOutputError
 from adaptive_document_agent.services.compact_summary import compact_digest, compact_layout_errors
 from adaptive_document_agent.services.summary_validation import presentation_errors
 from adaptive_document_agent.utils.timing import record_timing
@@ -47,7 +47,8 @@ class CompactPartVerdict(BaseModel):
 class CompactSummaryReview(BaseModel):
     parts: list[CompactPartVerdict]
     identity_accepted: bool | None = None
-    opening_accepted: bool = False
+    opening_accepted: bool
+    opening_reason: str = Field(min_length=1, max_length=600)
 
 
 def compact_input(review):
@@ -192,7 +193,9 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
                      'interpretation or source fragments presented as a coherent summary. '
                      'If identity fields are proposed, return identity_accepted explicitly. Accept only '
                      'the document issuer/main subject with literal source quotations, not an advisor '
-                     'or another entity. Return opening_accepted explicitly: accept only if the FIRST '
+                     'or another entity. Return opening_accepted and opening_reason explicitly. '
+                     'In opening_reason identify the actual first-page statement of what the subject does, '
+                     'or explain precisely what is missing. Accept only if the FIRST '
                      'page explains what the subject does and its products/services or actual scope '
                      'from the source. Reject a name, document purpose, topic list or financial results '
                      'without this introduction. Non-company sources must explain their subject/scope. Do not rewrite.'
@@ -206,7 +209,8 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
                 ids = {p.id for p in review.parts if p.role=='content'}
                 audit['compact_semantic_review'] = response.model_dump(mode='json')
                 if require_opening and response.opening_accepted is not True:
-                    raise ValueError('The first introductory page does not explain the source subject and actual business/scope')
+                    raise ValueError('The first introductory page does not explain the source subject and actual '
+                                     'business/scope: ' + response.opening_reason)
                 if len(response.parts)!=len(ids) or {v.part_id for v in response.parts}!=ids:
                     raise ValueError('Compact semantic review must cover every exact content part once')
                 rejected = [v.part_id+': '+v.reason for v in response.parts if not v.accepted]
@@ -242,12 +246,16 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
             raise  # Transport retries belong to the gateway adapter, not the editor.
         except (ValueError,LLMResponseError) as exc:
             audit['errors'] = [str(exc)]
+            if isinstance(exc, LLMStructuredOutputError):
+                audit['raw_response'] = exc.response.text
+                audit['validation_detail'] = str(exc.__cause__ or exc)
             if attempt:
                 raise ValueError('Complete introduction theme unavailable: '+str(exc)) from exc
             used = {pid for page in pages for item in page.items for pid in item.part_ids}
             missing = [row for row in payload['parts'] if row['id'] not in used]
             messages = original + [untrusted_document_message(json.dumps({
                 'previous_draft':audit.get('draft'), 'errors':audit['errors'],
+                'raw_response':audit.get('raw_response'), 'validation_detail':audit.get('validation_detail'),
                 'uncovered_parts':missing},ensure_ascii=False)),
                 {'role':'user','content':'Correct the failed source, capacity or meaning checks. Retain every '
                  'supplied substantive part within five pages. Repair the previous draft instead of expanding '

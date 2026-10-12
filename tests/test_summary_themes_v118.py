@@ -40,7 +40,7 @@ class Themes:
                 label='Scheduling', text='Teams '+', '.join(names)+' support scheduling; staff training '
                 'is required before service delivery.', fact_ids=[f['id'] for f in facts])])])
         assert schema is CompactSummaryReview
-        return schema(opening_accepted=self.opening, parts=[dict(part_id=p['id'],
+        return schema(opening_accepted=self.opening, opening_reason='Scheduling and training are explained.', parts=[dict(part_id=p['id'],
             accepted=p['id'] != self.reject, reason='Training dependency is retained.')
             for p in payload['source']['parts']])
 
