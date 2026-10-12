@@ -216,6 +216,14 @@ class DocumentOrchestrator:
         elif candidates_images:
             profile.data_quality_notes.append("Chart candidates were detected; no vision model is configured.")
 
+        if attach_introduction is not None and attach_introduction.failed():
+            from .introduction_checkpoint import failed_introduction_result
+            return failed_introduction_result(attach_introduction,
+                PipelineResult(document=document, profile=profile, observations=index.observations,
+                    candidates=candidates, candidate_scores=scores, analysis_plan=plan,
+                    analysis_results=results, validation_warnings=issues),
+                self.gateway, resources, timings, details, pipeline_started, notify)
+
         notify("Generating insights and dynamic report")
         with record_timing(timings, "reporting"):
             reporting = self._generate_report(document, profile, index, plan, results, issues, notify, analysis_focus)

@@ -114,6 +114,11 @@ class PreparedCompanyIntroduction:
         from adaptive_document_agent.services.presentation_identity import reconcile_presentation_identity
         reconcile_presentation_identity(plan, current)
 
+    def failed(self) -> bool:
+        """Nonblocking checkpoint; inspection never starts deferred/local work."""
+        return bool(self._future is not None and self._future.done()
+                    and (self._future.cancelled() or self._future.exception() is not None))
+
     def close(self) -> None:
         """Stop subsequent requests and drain the bounded in-flight operation.
 

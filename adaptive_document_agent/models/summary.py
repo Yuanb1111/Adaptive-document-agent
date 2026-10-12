@@ -18,7 +18,9 @@ class SummarySourceBlock(BaseModel):
 
 
 class SummaryFact(BaseModel):
-    label: str = Field(min_length=1, max_length=60)
+    # Internal reading metadata is retained verbatim; audience labels have
+    # their own compact contract below.
+    label: str = Field(min_length=1, max_length=6000)
     text: str = Field(min_length=1, max_length=6000)
     source_quote: str = Field(min_length=8, max_length=6000)
     source_pages: list[int] = Field(min_length=1)
@@ -43,6 +45,7 @@ class SummaryFactRef(BaseModel):
 
 
 class SummarySlideItem(SummaryFact):
+    label: str = Field(min_length=1, max_length=60)
     text: str = Field(min_length=1, max_length=1200)
     source_quote: str = Field(min_length=8, max_length=80000)
     part_ids: list[str] = Field(min_length=1)

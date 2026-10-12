@@ -2,6 +2,8 @@
 
 import json
 from collections.abc import Iterator
+from concurrent.futures import CancelledError, ThreadPoolExecutor
+from threading import Event, Lock
 
 from adaptive_document_agent.models import Insight
 from adaptive_document_agent.services.llm import LLMGateway
@@ -44,13 +46,17 @@ def generate_batches(gateway: LLMGateway, records: list[dict], schema: type,
                     "Do not repeat source_context, input_observations or result dictionaries in the output. "
                     "Retain essential scope and caveats; optional unsupported fields must be null.")
 
+    cancelled = Event()
+
     def request(batch: list[dict], depth: int = 0):
+        if cancelled.is_set():
+            raise CancelledError('Insight batch generation cancelled')
         ids = [record["task_id"] for record in batch]
         try:
             generated = gateway.generate_structured(
                 [{"role": "system", "content": instructions},
                  untrusted_document_message(json.dumps(batch, ensure_ascii=False))],
-                schema, stage="insight", request_metadata={
+                schema, stage="insight", cancelled=cancelled, request_metadata={
                     "chunk_id": stable_id("insight-batch", *ids), "recovery_depth": depth,
                 },
             ).insights
@@ -69,5 +75,39 @@ def generate_batches(gateway: LLMGateway, records: list[dict], schema: type,
             return
         yield ids, generated
 
-    for batch in _batches(records):
-        yield from request(batch)
+    batches = list(_batches(records))
+    workers = min(2, getattr(gateway, 'discovery_workers', 1), len(batches))
+    if workers <= 1:
+        for batch in batches:
+            yield from request(batch)
+        return
+    # Independent cloud batches overlap, but output stays in source order.
+    # Gateway admission remains shared with every other pipeline stage.
+    pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix='insight-writing')
+    failures, failure_lock = [], Lock()
+    def collect(batch):
+        try:
+            return list(request(batch))
+        except BaseException as exc:
+            with failure_lock:
+                if not failures:
+                    failures.append(exc)
+                cancelled.set()
+            raise
+    futures = [pool.submit(collect, batch) for batch in batches]
+    try:
+        for future in futures:
+            try:
+                values = future.result()
+            except BaseException:
+                # A neighbour cancelled by a privacy/transport failure must
+                # not mask that original cause with a CancelledError.
+                if failures:
+                    raise failures[0]
+                raise
+            yield from values
+    finally:
+        cancelled.set()
+        for future in futures:
+            future.cancel()
+        pool.shutdown(wait=True, cancel_futures=True)

@@ -99,6 +99,8 @@ def export_pptx_with_report(
     # Presentation Plan -> Claim Validation -> Repair contradictory wording -> Revalidate -> Export only if valid.
     started = perf_counter()
     notify = progress or (lambda _: None)
+    from .company_summary import require_verified_introduction
+    require_verified_introduction(result)
     notify("Checking PowerPoint evidence")
     from adaptive_document_agent.agent.presentation_plan_recovery import PresentationPlanRecovery
     from .finalization import assert_stable

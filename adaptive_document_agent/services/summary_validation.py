@@ -10,6 +10,7 @@ from pydantic import Field
 
 class SummaryEvidenceItem(ExecutiveBriefItem):
     """Reading facts keep their own limit; brief display limits do not apply."""
+    label: str = Field(min_length=1, max_length=6000)
     text: str = Field(min_length=1, max_length=6000)
 
 

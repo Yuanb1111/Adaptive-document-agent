@@ -21,13 +21,16 @@ def reading_presentation(review, result, response_model):
         if not included:
             continue
         title = part['facts'][0]['label']  # Already authored by the reading model.
+        if len(title) > 60:
+            title = 'Introduction'
         from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
         if PresentationPlanValidator._numbers(title) - PresentationPlanValidator._numbers(
                 ' '.join(f['source_quote'] for f in part['facts'])):
             title = 'Introduction'
         for offset in range(0,len(part['facts']),4):
             pages.append(EditorialPage(id=stable_id('reading_layout',part['id'],offset),title=title,
-                source_section=title,items=[EditorialItem(fact_id=f['id'],label=f['label'],text=f['text'])
+                source_section=title,items=[EditorialItem(fact_id=f['id'],
+                    label=f['label'] if len(f['label']) <= 60 else 'Source disclosure',text=f['text'])
                                            for f in part['facts'][offset:offset+4]]))
     # No model response quota applies to deterministic layout of retained facts.
     draft = SummaryEditorialDraft.model_construct(summary_pages=pages, summary_decisions=decisions,

@@ -18,7 +18,7 @@ from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputE
 
 
 class ReadFact(BaseModel):
-    label: str = Field(min_length=1, max_length=60)
+    label: str = Field(min_length=1, max_length=6000)
     # Reading is evidence capture, not slide copy. Retain qualifications up to
     # the canonical fact limit; the separate editor compacts audience wording.
     text: str = Field(min_length=1, max_length=6000)
@@ -30,9 +30,9 @@ class ReadPart(BaseModel):
     block_id: str
     start_line: int = Field(ge=1)
     end_line: int = Field(ge=1)
-    title: str = Field(min_length=1, max_length=160)
+    title: str = Field(min_length=1, max_length=6000)
     role: Literal['content', 'heading', 'layout']
-    reading_note: str = Field(min_length=1, max_length=800)
+    reading_note: str = Field(min_length=1, max_length=6000)
     facts: list[ReadFact] = Field(default_factory=list, max_length=2)
 
 
@@ -67,14 +67,20 @@ _RULES = (
     'may merge them. Split a block when a new subsection starts. Source headings need not be familiar. '
     'Use role content for source substance, heading for a standalone subsection title without '
     'body text, and layout only for running headers/footers/blank layout. '
+    'Diagrams, architecture labels, product lists and table introductions can convey substance even '
+    'without continuous prose or numbers. Read their stated components/relationships as content; '
+    'never dismiss them as graphic layout. A qualitative fact is valid: it need not contain a value, '
+    'period or currency. For a transitional lead-in, describe what the source introduces without '
+    'borrowing details from unseen following text; combine adjacent lines where needed. '
     'Group continuous lines under their actual subsection, rather than creating a part per line. '
     'For each content part extract up to two material source-supported facts and a concise reading_note '
     'explaining its subject, significant qualifications, and what is unresolved. Do not silently discard '
     'a part merely because it is not suitable for a slide. If no safe fact can be extracted, facts may '
     'be empty, but explain the limitation in reading_note; complete introduction coverage then fails '
     'rather than pretending the part was summarized. Standalone headings and layout have no facts. '
-    'Keep reading_note under 400 characters (hard limit 800); do not repeat the source paragraph. '
-    'Every fact label is a SHORT topic name, target 30 and hard limit 60 characters. '
+    'Keep reading_note under 400 characters; do not repeat the source paragraph. '
+    'Every fact label is a SHORT topic name, target 30 characters. Internal metadata can retain '
+    'up to 6000 characters without clipping; visible slide labels are written separately. '
     'Put the substantive claim and qualifications in text, never in the label. '
     'Every fact needs concise text (target 180; up to 6000 characters for internal evidence capture) and quote_start_line/quote_end_line '
     'for a short contiguous passage entirely within its part. Python retains the literal source quote '
@@ -143,6 +149,11 @@ def _read_batch(gateway, result, blocks, cancelled: Event) -> ReadOutcome:
                     parts = _read_missing(gateway, result, blocks, parts, ranges,
                                           messages[:2], cancelled, audit)
                     return ReadOutcome(parts, audit)
+                from .summary_read_repair import repair_rejected_parts
+                repaired = repair_rejected_parts(gateway, result, blocks, parts, response,
+                    record, messages[:2], cancelled, audit)
+                if repaired is not None:
+                    return ReadOutcome(repaired, audit)
                 raise ValueError('; '.join(errors))
             messages = messages[:2] + [untrusted_document_message(json.dumps(record, ensure_ascii=False)),
                 {'role': 'user', 'content': 'Correct these validation failures using only the original '
