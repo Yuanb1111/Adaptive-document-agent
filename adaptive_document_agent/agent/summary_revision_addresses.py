@@ -12,7 +12,7 @@ def revision_addresses(draft):
              for i in range(len(page.items))}
     item_id = Literal[tuple(items)]
     group_id = Literal[tuple(groups)]
-    support = [key for key, p in groups.items() if draft.pages[p].placement == 'appendix']
+    support = [key for key, p in groups.items() if getattr(draft.pages[p], 'placement', 'body') == 'appendix']
     addition_id = Literal[tuple(support or groups)]
     class Strict(BaseModel):
         model_config = ConfigDict(extra='forbid')
@@ -26,7 +26,7 @@ def revision_addresses(draft):
         replacements=(list[replacement], Field(default_factory=list, max_length=64)),
         additions=(list[addition], Field(default_factory=list, max_length=16)),
         titles=(list[title], Field(default_factory=list, max_length=12)))
-    payload = [dict(group_id=key, title=draft.pages[p].title, placement=draft.pages[p].placement,
+    payload = [dict(group_id=key, title=draft.pages[p].title, placement=getattr(draft.pages[p], 'placement', 'body'),
         items=[dict(item_id=f'g{p}_i{i}', **item.model_dump(mode='json'))
                for i, item in enumerate(draft.pages[p].items)]) for key, p in groups.items()]
     return schema, payload, groups, items

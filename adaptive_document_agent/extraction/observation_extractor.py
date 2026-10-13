@@ -363,7 +363,7 @@ class ObservationExtractor:
         # Explicit flow headers outrank a word such as cash or liabilities in
         # the measure name. A six-month movement is not a June closing balance.
         header_text=' '.join(table.raw_header_lines)
-        explicit_flow=bool(re.search(r'(?i)\b(?:months?|years?)\s+ended\b',header_text))
+        explicit_flow=bool(re.search(r'(?i)\b(?:months?|years?)\s+ended\b|\b(?:[1-9]|1[0-2])M\s*(?:19|20)\d{2}\b',header_text))
         explicit_stock=bool(re.search(r'(?i)\bas\s+(?:at|of)\b',header_text))
         if explicit_flow and not explicit_stock:
             is_bs=False

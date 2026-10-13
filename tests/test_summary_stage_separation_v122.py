@@ -18,10 +18,10 @@ def test_content_omission_then_format_failure_then_six_items_is_recoverable():
     class Client(Reviewer):
         drafts = 0
         def generate_structured(self,messages,schema,**kwargs):
-            if schema is CompactSummaryDraft:
+            if schema is CompactSummaryDraft or schema.__name__ == 'SummarySynthesisRevision':
                 self.drafts += 1
                 if self.drafts==2:
-                    raw = json.dumps({'pages':[{'title':'Scheduling','items':[]}]})
+                    raw = json.dumps({'replacements': 'invalid format'})
                     try: schema.model_validate_json(raw)
                     except ValidationError as exc:
                         raise LLMStructuredOutputError('Schema error',response=LLMResponse(text=raw)) from exc

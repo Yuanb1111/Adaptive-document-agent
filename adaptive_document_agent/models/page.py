@@ -18,6 +18,8 @@ class PageImage(BaseModel):
 class DocumentPage(BaseModel):
     page_number: int = Field(ge=1)
     text: str = ""
+    raw_text: str | None = None
+    reading_rotation: int = 0
     tables: list[ExtractedTable] = Field(default_factory=list)
     # Snapshot before cross-page reconstruction; retain every physical fragment.
     raw_tables: list[ExtractedTable] = Field(default_factory=list)

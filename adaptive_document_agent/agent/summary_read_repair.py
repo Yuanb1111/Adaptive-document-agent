@@ -84,10 +84,26 @@ def repair_rejected_parts(gateway, result, blocks, parts, response, previous,
              'Do not hide substance as headings/layout to pass validation.'}],
             SummaryReadBatch, stage='presentation', allow_repair=False, cancelled=cancelled)
         record['response'] = replacement.model_dump(mode='json')
-        if any(not any(p.block_id == r['block_id'] and
-                       r['start_line'] <= p.start_line <= p.end_line <= r['end_line']
-                       for r in ranges) for p in replacement.parts):
-            raise ValueError('Summary targeted reading changed already accepted source lines')
+        scoped = []
+        for candidate in replacement.parts:
+            if any(candidate.block_id == r['block_id'] and
+                   r['start_line'] <= candidate.start_line <= candidate.end_line <= r['end_line']
+                   for r in ranges):
+                scoped.append(candidate)
+                continue
+            # Some replies repeat neighbouring accepted paragraphs. Discard
+            # those proposals rather than overwriting accepted evidence. A
+            # boundary-crossing edit or unknown/unowned line is still invalid.
+            owned = {line for part in retained if part.block_id == candidate.block_id
+                     for line in range(part.start_line, part.end_line + 1)}
+            if (1 <= candidate.start_line <= candidate.end_line <= lengths.get(candidate.block_id, 0)
+                    and set(range(candidate.start_line, candidate.end_line + 1)) <= owned):
+                record.setdefault('ignored_out_of_scope_parts', []).append(candidate.model_dump(mode='json'))
+            else:
+                raise ValueError('Summary targeted reading changed already accepted source lines')
+        if not scoped:
+            raise ValueError('Summary targeted reading returned no requested source ranges')
+        replacement = replacement.model_copy(update={'parts': scoped})
         additions, errors = bind_reading(replacement, blocks, result, record,
                                         literal_fallback=True, recover_cross_part=True)
         combined = reconcile_layout(retained + additions, blocks, record)

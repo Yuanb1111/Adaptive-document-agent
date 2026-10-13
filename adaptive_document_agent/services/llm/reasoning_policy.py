@@ -35,10 +35,15 @@ _SIMPLE_OPERATIONS = frozenset({("presentation", "IntroductionPages"), ("report"
                               ("presentation", "SummaryStringRepairs"),
                               ("presentation", "SummarySynthesisRevision"),
                               ("presentation", "SummaryBodyAllocation"),
+                              # Only a failed, split mapping assignment uses the
+                              # configured reduced-reasoning recovery policy.
+                              ("semantic", "SemanticResolutionRecovery"),
                               ("planner", "SemanticCandidateScores")})
 
 # Bound structured responses without changing evidence or numerical validation.
 _OUTPUT_LIMITS = {('planner', 'SemanticCandidateScores'): 12000,
+                  ('semantic', 'SemanticResolution'): 12000,
+                  ('semantic', 'SemanticResolutionRecovery'): 12000,
                   ('presentation', 'TakeawayCorrection'): 2000,
                   ('presentation', 'SummaryThemePlan'): 12000,
                   ('presentation', 'SummaryReadBatch'): 12000,

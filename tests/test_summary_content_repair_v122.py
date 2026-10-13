@@ -26,7 +26,7 @@ def test_attribution_repair_cannot_regenerate_other_accepted_paragraphs():
     assert 'cited report' not in original.pages[1].items[0].text
 
 
-def test_revision_rejects_duplicate_unknown_and_empty_targets():
+def test_revision_rejects_unknown_empty_and_repeated_noop_targets():
     original = draft()
     item = original.pages[0].items[0].model_dump()
     for patch in [dict(), dict(replacements=[dict(page_index=8, item_index=0, replacement=item)]),
@@ -34,6 +34,29 @@ def test_revision_rejects_duplicate_unknown_and_empty_targets():
                   dict(replacements=[dict(page_index=0, item_index=0, replacement=item)] * 2)]:
         with pytest.raises(ValueError):
             apply_content_revision(original, SummarySynthesisRevision(**patch), SummarySynthesisDraft)
+
+
+@pytest.mark.parametrize('conflict', [None, 'text', 'facts', 'title'])
+def test_identical_targeted_edits_are_idempotent_but_conflicts_fail(conflict):
+    from copy import deepcopy
+    original = draft()
+    edit = dict(page_index=1, item_index=0, replacement=dict(label='Market position',
+        text='The source report ranks the issuer first domestically.', fact_ids=['f2']))
+    other = deepcopy(edit)
+    titles = [dict(page_index=1, title='Market evidence')] * 2
+    if conflict == 'text': other['replacement']['text'] = 'A different statement.'
+    elif conflict == 'facts': other['replacement']['fact_ids'] = ['f3']
+    elif conflict == 'title': titles = [titles[0], dict(page_index=1, title='Different title')]
+    patch = SummarySynthesisRevision(replacements=[edit, other], titles=titles)
+    if conflict:
+        with pytest.raises(ValueError, match='conflicting'):
+            apply_content_revision(original, patch, SummarySynthesisDraft)
+    else:
+        revised = apply_content_revision(original, patch, SummarySynthesisDraft)
+        assert revised.pages[0] == original.pages[0]
+        assert len(revised.pages[1].items) == len(original.pages[1].items)
+        assert revised.pages[1].items[0].model_dump() == edit['replacement']
+        assert revised.pages[1].title == 'Market evidence'
 
 
 def test_omitted_source_part_can_be_added_without_changing_existing_evidence():

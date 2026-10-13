@@ -659,11 +659,11 @@ class DocumentOrchestrator:
         )
 
     def _load_document(self, raw: bytes, digest: str) -> ParsedDocument:
-        document = self.cache.get_model(f"document-v2-{digest}", ParsedDocument) if self.cache else None
+        document = self.cache.get_model(f"document-v4-{digest}", ParsedDocument) if self.cache else None
         if document is None:
             document = PDFParser().parse(raw, extract_tables=False)
             if self.cache:
-                self.cache.set_model(f"document-v2-{digest}", document)
+                self.cache.set_model(f"document-v4-{digest}", document)
         return document
 
     @staticmethod

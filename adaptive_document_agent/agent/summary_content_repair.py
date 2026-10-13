@@ -37,7 +37,7 @@ class SummarySynthesisRevision(BaseModel):
 
 def apply_content_revision(draft, revision, schema):
     data = deepcopy(draft.model_dump(mode='json'))
-    seen = set()
+    seen = {}
     def page(index):
         if not 0 <= index < len(data['pages']):
             raise ValueError('Content repair references an unknown logical page')
@@ -45,17 +45,22 @@ def apply_content_revision(draft, revision, schema):
     for edit in revision.replacements:
         target = page(edit.page_index)
         key = edit.page_index, edit.item_index
-        if key in seen or not 0 <= edit.item_index < len(target['items']):
-            raise ValueError('Content repair references a duplicate or unknown item')
-        seen.add(key)
-        target['items'][edit.item_index] = edit.replacement.model_dump(mode='json')
+        if not 0 <= edit.item_index < len(target['items']):
+            raise ValueError('Content repair references an unknown item')
+        replacement = edit.replacement.model_dump(mode='json')
+        if key in seen and seen[key] != replacement:
+            raise ValueError('Content repair has conflicting replacements for one item')
+        # An identical edit repeated for two review findings is idempotent.
+        # Conflicting copy or evidence IDs still require a new model decision.
+        seen[key] = replacement
+        target['items'][edit.item_index] = replacement
     for addition in revision.additions:
         page(addition.page_index)['items'].append(addition.item.model_dump(mode='json'))
-    titles = set()
+    titles = {}
     for edit in revision.titles:
-        if edit.page_index in titles:
-            raise ValueError('Content repair repeats a title target')
-        titles.add(edit.page_index)
+        if edit.page_index in titles and titles[edit.page_index] != edit.title:
+            raise ValueError('Content repair has conflicting replacements for one title')
+        titles[edit.page_index] = edit.title
         page(edit.page_index)['title'] = edit.title
     corrected = schema.model_validate(data)
     if corrected == draft:
@@ -93,8 +98,15 @@ def revise_content(gateway, draft, messages, schema, audit, *, source=None, erro
         'Use titles only to fix a reported title error. Do not change identity, placement or ordering. '
         'Use the full supplied source catalog for exact fact IDs; never invent them. '
         'For unsupported numerical claims, locate the exact quantity, unit, period or ordinal '
-        'in source_facts.source_quote. Correct the affected paragraph fact_ids to include ALL facts '
-        'supporting its existing and added claims, even if the prose itself is already correct. '
+        'in source_facts.source_quote. '
+        'Preserve accounting signs: parentheses around a source table cell mean a negative value. '
+        'Use an explicit minus sign in that quoted currency and magnitude; a loss label alone '
+        'does not authorize changing a negative reported value into a positive number. '
+        'When feedback gives an exact quoted candidate, verify its meaning in the supplied source '
+        'and use that exact source-native coefficient, currency, scale and sign. Do not round or '
+        'rescale amounts yourself; deterministic display formatting handles readability later. '
+        'Correct the affected paragraph fact_ids to include ALL facts supporting its existing '
+        'and added claims, even if the prose itself is already correct. '
         'A related topic quote is insufficient when the actual number appears in another fact. '
         'If no quote supports a claim, remove only that unsupported claim. Never return the '
         'unchanged rejected text and fact_ids as a correction. '
@@ -109,4 +121,7 @@ def revise_content(gateway, draft, messages, schema, audit, *, source=None, erro
         additions=[dict(page_index=groups[e.group_id], item=e.item) for e in response.additions],
         titles=[dict(page_index=groups[e.group_id], title=e.title) for e in response.titles])
     audit['content_revision'] = revision.model_dump(mode='json')
-    return apply_content_revision(draft, revision, schema)
+    try:
+        return apply_content_revision(draft, revision, schema)
+    except ValueError as exc:
+        raise ValueError(str(exc) + '; unresolved checks: ' + '; '.join(errors or [])) from exc

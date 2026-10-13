@@ -42,6 +42,16 @@ class Reviewer:
     def generate_structured(self,messages,schema,**kwargs):
         self.calls.append(schema.__name__)
         if issubclass(schema, CompactSummaryDraft):return schema.model_validate(self.draft)
+        if schema.__name__ == 'SummarySynthesisRevision':
+            payload=json.loads(messages[1]['content'].split('\n',1)[1].rsplit('\n',1)[0])
+            replacements, additions = [], []
+            for p, page in enumerate(self.draft['pages']):
+                existing = payload['editable_groups'][p]['items']
+                for i, item in enumerate(page['items']):
+                    if i >= len(existing): additions.append(dict(group_id=f'g{p}', item=item))
+                    elif any(existing[i][k] != item[k] for k in ('label','text','fact_ids')):
+                        replacements.append(dict(item_id=f'g{p}_i{i}', replacement=item))
+            return schema(replacements=replacements, additions=additions)
         payload=json.loads(messages[-1]['content'].split('\n',1)[1].rsplit('\n',1)[0])
         return CompactSummaryReview(opening_slide_id=(payload.get('opening_target') or {}).get('slide_id'), opening_item_texts=(payload.get('opening_target') or {}).get('item_texts'), opening_accepted=True,opening_reason='The opening explains the scheduling service and training prerequisite.',identity_accepted=self.identity,parts=[dict(part_id=p['id'],accepted=p['id']!=self.reject,
             reason='Training dependency is retained.' if p['id']!=self.reject else 'Source meaning is absent.')
@@ -71,8 +81,8 @@ def test_citing_all_ids_cannot_override_failed_part_meaning_review():
     client=Reviewer(draft,reject='part-69')
     with pytest.raises(ValueError,match='Source meaning is absent'):
         generate_compact_summary(client,result,review,CompanyProfile(summary_review=review))
-    assert client.calls==['CompactSummaryDraft','CompactSummaryReview','CompactSummaryDraft']
-    assert review.plan_audits[-1]['repeated_draft'] is True
+    assert client.calls==['CompactSummaryDraft','CompactSummaryReview','SummarySynthesisRevision']
+    assert review.plan_audits[-1]['revision_failed'] is True
 
 
 def test_omitted_part_and_changed_fact_bindings_fail_closed():

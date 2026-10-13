@@ -27,6 +27,8 @@ def paginate_draft(
     for attempt in range(2):
         record = {'attempt': attempt + 1}
         attempts.append(record)
+        from .summary_draft_duplicates import deduplicate_draft
+        draft = deduplicate_draft(draft, record)
         # Evidence-ID/coverage problems remain content errors. Only geometry
         # failures enter this independent layout budget.
         pages = expand(draft, catalog, review)

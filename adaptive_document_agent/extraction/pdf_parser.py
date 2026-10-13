@@ -58,6 +58,8 @@ class PDFParser:
             if pdf.page_count == 0:
                 raise PDFValidationError("The PDF contains no pages.")
             pages = [self._parse_page(page, number) for number, page in enumerate(pdf, start=1)]
+            from .rotated_page_reading import restore_rotated_reading
+            restore_rotated_reading(data, pdf, pages)
             from adaptive_document_agent.models.coverage import SourceSection
             entries = [entry for entry in pdf.get_toc() if 1 <= entry[2] <= len(pages)]
             outline = []
@@ -96,6 +98,15 @@ class PDFParser:
             for block in raw_blocks
             if len(block) >= 6
         ]
+        # Block boxes can combine a wrapped right-hand amount with the next
+        # left-hand label. Retain exact line boxes for evidence-only unit binding.
+        import pymupdf
+        geometry = page.get_text('dict', flags=pymupdf.TEXTFLAGS_DICT & ~pymupdf.TEXT_PRESERVE_IMAGES)
+        lines_by_block = {block['number']: [dict(bbox=tuple(line['bbox']),
+            text=''.join(span['text'] for span in line['spans'])) for line in block.get('lines', [])]
+            for block in geometry.get('blocks', []) if block.get('type') == 0}
+        for block in blocks:
+            block['lines'] = lines_by_block.get(block['block_number'], [])
         images: list[PageImage] = []
         for index, image in enumerate(page.get_images(full=True)):  # type: ignore[attr-defined]
             width = int(image[2]) if len(image) > 2 else None

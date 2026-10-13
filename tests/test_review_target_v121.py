@@ -63,4 +63,4 @@ def test_correctly_bound_rejection_is_not_auto_accepted():
     client = Client(draft)
     with pytest.raises(ValueError,match='repeated the rejected draft'):
         generate_compact_summary(client,result,review,CompanyProfile(summary_review=review))
-    assert client.calls == ['CompactSummaryDraft','CompactSummaryReview','CompactSummaryDraft']
+    assert client.calls == ['CompactSummaryDraft','CompactSummaryReview','SummarySynthesisRevision']

@@ -57,3 +57,31 @@ def test_withheld_claim_requires_a_corrected_validated_takeaway(valid):
         assert original.topics[0].takeaway == rejected
         assert all(a['status'] == 'rejected' for a in audits)
         assert gateway.calls == 2
+
+@pytest.mark.parametrize('title', ['Reported loss measures', 'Loss for the year rose'])
+def test_repair_validates_title_and_takeaway_atomically(title):
+    result = _synthetic_result('metric_alias')
+    topic = result.presentation_topics.topics[0]
+    topic.title = 'Loss for the year widened'
+    topic.takeaway = 'Loss for the year amounted to USD 140 in FY2023 and USD 230 in FY2025 in the reported source periods.'
+    original = topic.model_dump()
+    plan = compile_topic_plan(result)
+    assert withheld_topic_ids(plan) == {'scope'}
+
+    class Gateway:
+        def generate_structured(self, messages, response_model, **kwargs):
+            return TakeawayCorrection(title=title, takeaway=topic.takeaway)
+
+    repaired = repair_withheld_takeaways(Gateway(), result, plan)
+    if title == 'Reported loss measures':
+        assert not withheld_topic_ids(repaired)
+        assert topic.title == title
+        assert topic.takeaway == original['takeaway']
+        assert topic.question == original['question']
+        assert topic.series_ids == original['series_ids']
+        audit = json.loads(result.validation_warnings[-1].message)
+        assert audit['original_title'] == original['title']
+        assert audit['proposed_title'] == title
+    else:
+        assert withheld_topic_ids(repaired) == {'scope'}
+        assert topic.model_dump() == original

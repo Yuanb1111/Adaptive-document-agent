@@ -67,3 +67,39 @@ def test_parallel_failure_does_not_return_partial_mappings():
     gateway = SimpleNamespace(discovery_workers=4, generate_structured=Mock(side_effect=ValueError("failed")))
     with pytest.raises(ValueError, match="failed"):
         SemanticResolver(gateway).resolve_metrics([f"M{i}" for i in range(100)])
+
+
+def truncated_response(reason='length'):
+    from adaptive_document_agent.services.llm.base import LLMResponse
+    from adaptive_document_agent.services.llm.usage import LLMUsage
+    from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
+    return LLMStructuredOutputError('truncated', response=LLMResponse(text='', usage=LLMUsage(
+        provider='test', model='test', finish_reason=reason)))
+
+
+def test_truncated_semantic_batch_splits_without_losing_context_or_terms():
+    names = ['Gross revenue', 'Net revenue', 'Segment revenue', 'Total revenue']
+    calls = []
+    def generate(messages, schema, **kwargs):
+        text = messages[-1]['content']
+        assigned = [line[2:] for line in text.splitlines() if line.startswith('- ')]
+        calls.append(assigned)
+        assert 'same source context' in text
+        assert all(name in text for name in names)
+        if len(assigned) > 2:
+            raise truncated_response()
+        return schema(mappings=[SemanticMapping(original_name=n, confidence=.8) for n in reversed(assigned)])
+    gateway = SimpleNamespace(discovery_workers=1, generate_structured=generate)
+    result = SemanticResolver(gateway).resolve_metrics(names, context='same source context')
+    assert [m.original_name for m in result] == names
+    assert calls == [names, names[:2], names[2:]]
+
+
+@pytest.mark.parametrize('reason,expected_calls', [('length', 3), ('stop', 1)])
+def test_semantic_split_is_bounded_and_only_for_truncation(reason, expected_calls):
+    error = truncated_response(reason)
+    generate = Mock(side_effect=error)
+    gateway = SimpleNamespace(discovery_workers=1, generate_structured=generate)
+    with pytest.raises(type(error)):
+        SemanticResolver(gateway).resolve_metrics([f'M{i}' for i in range(16)])
+    assert generate.call_count == expected_calls

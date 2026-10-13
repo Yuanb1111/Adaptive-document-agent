@@ -21,6 +21,9 @@ def test_parse_preserves_page_text_and_hash() -> None:
     assert "Revenue" in parsed.pages[0].text
     assert len(parsed.sha256) == 64
     assert parsed.safe_filename.startswith("document_")
+    lines = [line for block in parsed.pages[0].text_blocks for line in block['lines']]
+    assert any(line['text'] == 'Revenue 2025 was 1250.' for line in lines)
+    assert all(len(line['bbox']) == 4 for line in lines)
 
 
 @pytest.mark.parametrize("value", [b"", b"not a pdf"])

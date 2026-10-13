@@ -261,7 +261,14 @@ class PresentationTopicSelector:
                     )):
                         from adaptive_document_agent.validation.presentation_parallel_series import validate_parallel_series
                         try:
-                            validate_parallel_series([lookup[sid] for sid in topic.series_ids])
+                            invalid_series = []
+                            for sid in topic.series_ids:
+                                try:
+                                    validate_parallel_series([lookup[sid]])
+                                except ValueError as invalid:
+                                    invalid_series.append(f'series {sid}: {invalid}')
+                            if invalid_series:
+                                raise ValueError('; '.join(invalid_series))
                         except ValueError as exc:
                             raise ValueError(f'Topic {topic.id} has incompatible parallel evidence: {exc}') from exc
             if primary_pages and any(
@@ -285,7 +292,15 @@ class PresentationTopicSelector:
                     parsed = parse_number(item.raw_value)
                     if parsed is not None:
                         allowed.update(PresentationPlanValidator._numbers(str(parsed.value)))
-            claimed = PresentationPlanValidator._numbers(" ".join(
+                    if item.unit == 'percent' or item.unit_family == 'percentage':
+                        allowed.update(PresentationPlanValidator._numbers(f'{item.value}%'))
+                        if parsed is not None:
+                            allowed.update(PresentationPlanValidator._numbers(f'{parsed.value}%'))
+            from adaptive_document_agent.validation.source_label_numbers import without_source_label_annotations
+            members = [item for sid in topic.series_ids for item in lookup[sid]]
+            def numeric_claims(text):
+                return PresentationPlanValidator._numbers(without_source_label_annotations(text, members))
+            claimed = numeric_claims(" ".join(
                 (topic.title, topic.question, topic.rationale, topic.takeaway, *topic.caveats)
             ))
             if claimed - allowed:
@@ -293,7 +308,7 @@ class PresentationTopicSelector:
                           'rationale': topic.rationale, 'takeaway': topic.takeaway,
                           **{f'caveats[{i}]': text for i, text in enumerate(topic.caveats)}}
                 rejected = {name: text for name, text in fields.items()
-                            if PresentationPlanValidator._numbers(text) - allowed}
+                            if numeric_claims(text) - allowed}
                 periods = sorted({item.period for sid in topic.series_ids for item in lookup[sid] if item.period})
                 raise ValueError(f"Topic {topic.id} contains unsupported numeric claims: {sorted(claimed - allowed)}; "
                                  f"rejected fields: {json.dumps(rejected, ensure_ascii=False)}; "

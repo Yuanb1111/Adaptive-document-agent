@@ -6,7 +6,10 @@ from pydantic import BaseModel, Field
 class SummaryPageRange(BaseModel):
     start_page: int = Field(ge=1)
     end_page: int = Field(ge=1)
-    reason: str = Field(min_length=1, max_length=400)
+    # Internal source-selection audit, not audience-facing slide copy. The
+    # gateway output budget bounds generation; never truncate the explanation
+    # or reject valid source ranges because it exceeds a display-copy limit.
+    reason: str = Field(min_length=1)
 
 
 class SummarySourceBlock(BaseModel):

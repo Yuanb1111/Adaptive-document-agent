@@ -55,6 +55,19 @@ def _quantities(text: str) -> set[tuple[str, str, str]]:
     return output
 
 
+def _explicit_nonparenthesized_quantities(text):
+    """Literal typed narrative quantities cannot be erased by another signed cell."""
+    text = PresentationPlanValidator._canonicalize_money_signs(text)
+    output = set()
+    for match in _QUANTITY.finditer(text):
+        if not (match['currency'] or match['currency_suffix'] or match['unit']):
+            continue
+        if text[:match.start()].rstrip().endswith('(') and text[match.end():].lstrip().startswith(')'):
+            continue
+        output.update(_quantities(match[0]))
+    return output
+
+
 def restore_percentage_symbols(text: str, quotes: list[str], *, source_percentages=frozenset()) -> str:
     """Restore only an unambiguous, item-bound literal percentage unit."""
     units = {}
@@ -263,6 +276,7 @@ def validate_executive_brief(brief: ExecutiveBrief, result: PipelineResult, *,
                     errors.append(f'{item.label}: comparison table omits a quoted conditional outcome or its unit: {missing}.')
         allowed = set()
         quantities = set()
+        explicit_quantities = set()
         for quote in item.evidence:
             if (not normalized(quote.text)
                     or normalized(quote.text) not in normalized(pages.get(quote.page, ''))
@@ -276,6 +290,7 @@ def validate_executive_brief(brief: ExecutiveBrief, result: PipelineResult, *,
                 if re.fullmatch(r'\s*(?:(?:19|20)\d{2}\s+)+(?:19|20)\d{2}\s*', line):
                     allowed.update(PresentationPlanValidator._numbers(line))
             quantities.update(_quantities(passage.text))
+            explicit_quantities.update(_explicit_nonparenthesized_quantities(passage.text))
         source_percentages = _quoted_table_percentages(item, result, quotations=passages)
         from .brief_table_evidence import quoted_table_context, canonical_quantity
         table_context = quoted_table_context(item, result, excerpts=excerpts)
@@ -284,7 +299,10 @@ def validate_executive_brief(brief: ExecutiveBrief, result: PipelineResult, *,
         # authorization to publish a positive amount with the same digits.
         allowed.difference_update(table_context.misparsed_positive_numbers)
         allowed.update(table_context.signed_numbers)
-        quantities = {q for q in quantities if q[1] not in table_context.misparsed_positive_numbers}
+        quantities = {q for q in quantities if q[1] not in table_context.misparsed_positive_numbers
+                      or q in explicit_quantities}
+        allowed.update(value + '%' if unit in {'%', 'percent'} else value
+                       for _, value, unit in quantities & explicit_quantities)
         quantities.update(table_context.quantities)
         quantities = {canonical_quantity(*quantity) for quantity in quantities}
         from .brief_quantity_representation import magnitude_claim_text
@@ -298,7 +316,7 @@ def validate_executive_brief(brief: ExecutiveBrief, result: PipelineResult, *,
         claimed = PresentationPlanValidator._numbers(table_context.numeric_claim_text(claim_text))
         if claimed - allowed:
             errors.append(f'{item.label}: unsupported numeric claims {sorted(claimed - allowed)}.')
-        for currency, value, unit in _quantities(claim_text):
+        for currency, value, unit in sorted(_quantities(claim_text)):
             currency, value, unit = canonical_quantity(currency, value, unit)
             # A PDF table often stores the percentage sign once in its column
             # header.  The source quote then legitimately contains a bare cell
@@ -308,7 +326,18 @@ def validate_executive_brief(brief: ExecutiveBrief, result: PipelineResult, *,
                 continue
             if (currency or unit) and not any(value == v and (not currency or currency == c)
                                               and (not unit or unit == u) for c, v, u in quantities):
-                errors.append(f'{item.label}: amount changes a source currency or magnitude.')
+                opposite = value[1:] if value.startswith('-') else '-' + value
+                if any(opposite == v and (not currency or currency == c)
+                       and (not unit or unit == u) for c, v, u in quantities):
+                    errors.append(f'{item.label}: amount changes a source accounting sign: '
+                                  f'claimed {currency} {value} {unit}; source {currency} {opposite} {unit}.')
+                    continue
+                from .brief_quantity_representation import source_native_quantity_hint
+                hint = source_native_quantity_hint(currency, value, unit, quantities)
+                detail = (' Exact quoted candidate: ' + ' '.join(hint)
+                          + '; use source-native quantity without rounding or changing sign.' if hint else '')
+                errors.append(f'{item.label}: amount changes a source currency or magnitude: '
+                              f'{currency or "(no currency)"} {value} {unit or "(unscaled)"}.' + detail)
         all_numbers.update(allowed)
     if PresentationPlanValidator._numbers(brief.title) - all_numbers:
         errors.append('Brief title contains unsupported numbers.')

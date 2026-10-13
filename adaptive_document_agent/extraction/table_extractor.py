@@ -145,7 +145,7 @@ class TableExtractor:
         unit,scale,currency,raw_unit=defaults
         labels,periods,_,types,currencies,scales=TableReconstructor.reconstruct_multi_tier_headers(
             [*header,*literal.raw_cells],default_unit=unit,default_currency=currency,default_scale=scale,
-            context='\n'.join(literal.raw_header_lines))
+            context='\n'.join(literal.raw_header_lines), header_row_count=len(header))
         return literal.model_copy(deep=True,update={'headers':labels,'column_periods':periods,'column_types':types,
             'column_currencies':currencies,'column_scales':scales,
             'rows':self._build_table_rows(literal.raw_cells,literal.page),

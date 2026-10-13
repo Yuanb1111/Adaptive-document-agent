@@ -55,7 +55,9 @@ def test_targeted_read_still_rejects_missing_substance_and_invalid_evidence(bad)
     if bad == 'unchanged':
         fixes = rows[2:3]
     elif bad == 'overwrite':
-        fixes.insert(0, rows[1])
+        crossing = deepcopy(rows[1])
+        crossing['end_line'] = 3
+        fixes.insert(0, crossing)
     elif bad == 'out_of_block_quote':
         fixes[0]['facts'][0]['quote_end_line'] = 999
     elif bad == 'omit':
@@ -66,6 +68,17 @@ def test_targeted_read_still_rejects_missing_substance_and_invalid_evidence(bad)
     outcome = _read_batch(client, result, blocks, Event())
     assert outcome.error is not None and not outcome.parts
     assert len(client.calls) == 3 and outcome.audit['rejected_part_read']['error']
+
+
+def test_targeted_read_discards_out_of_scope_proposals_without_changing_accepted_content():
+    result, blocks, rows, fixes = diagram_fixture()
+    unrelated = deepcopy(rows[1])
+    unrelated['facts'][0]['text'] = 'An unsupported replacement must never be applied.'
+    client = Responses([rows, rows, [unrelated, fixes[0]]])
+    outcome = _read_batch(client, result, blocks, Event())
+    assert_complete(result, blocks, outcome)
+    assert outcome.parts[1].facts[0].text == rows[1]['facts'][0]['text']
+    assert outcome.audit['rejected_part_read']['ignored_out_of_scope_parts'] == [unrelated]
 
 
 def test_invalid_quote_can_be_reread_without_borrowing_another_parts_source():

@@ -7,12 +7,17 @@ from pydantic import BaseModel, Field
 
 from adaptive_document_agent.models.entity import SemanticMapping
 from adaptive_document_agent.services.llm import LLMGateway
+from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
 
 from .prompting import load_prompt, untrusted_document_message
 
 
 class SemanticResolution(BaseModel):
     mappings: list[SemanticMapping] = Field(default_factory=list)
+
+
+class SemanticResolutionRecovery(SemanticResolution):
+    """Smaller conservative assignment after an output-limit failure."""
 
 
 class SemanticResolver:
@@ -40,7 +45,26 @@ class SemanticResolver:
             return [mapping for response in responses for mapping in response]
         return self._resolve_batch(unique, context=context)
 
-    def _resolve_batch(self, unique: list[str], *, context: str, vocabulary: str = "") -> list[SemanticMapping]:
+    def _resolve_batch(self, unique: list[str], *, context: str, vocabulary: str = "",
+                       split_depth: int = 0) -> list[SemanticMapping]:
+        try:
+            return self._request_batch(unique, context=context, vocabulary=vocabulary,
+                                       recovery=split_depth > 0)
+        except LLMStructuredOutputError as exc:
+            # Truncated reasoning/output cannot be repaired as JSON. Retry a
+            # smaller assignment, preserving all terms and the shared context.
+            # Never turn provider, privacy or ordinary schema errors into splits.
+            usage = exc.response.usage
+            if not usage or usage.finish_reason != 'length' or len(unique) < 2 or split_depth >= 2:
+                raise
+            middle = len(unique) // 2
+            shared = vocabulary or "\n".join(unique)
+            return [mapping for batch in (unique[:middle], unique[middle:])
+                    for mapping in self._resolve_batch(batch, context=context, vocabulary=shared,
+                                                       split_depth=split_depth + 1)]
+
+    def _request_batch(self, unique: list[str], *, context: str, vocabulary: str,
+                       recovery: bool = False) -> list[SemanticMapping]:
         # Stable shared prefix before the changing batch lets provider prefix
         # caching reuse the context. Every batch still sees all source terms.
         payload = "Context:\n" + context[:12_000]
@@ -57,7 +81,7 @@ class SemanticResolver:
                 )},
                 untrusted_document_message(payload),
             ],
-            SemanticResolution,
+            SemanticResolutionRecovery if recovery else SemanticResolution,
             stage="semantic",
         )
         by_original = {mapping.original_name: mapping for mapping in response.mappings}

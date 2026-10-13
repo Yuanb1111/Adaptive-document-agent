@@ -344,3 +344,35 @@ def test_large_catalog_reviews_more_than_eight_batches_without_sampling(monkeypa
     assert set(gateway.requested) == candidates
     assert len(gateway.requested) == len(candidates)
     assert result.validation_warnings[-1].code == 'presentation_topic_coverage_review'
+
+@pytest.mark.parametrize('different_field,value', [('parent_section','Reconciliation'), ('period_type','instant')])
+def test_binding_repair_exposes_scope_and_requires_an_action(different_field, value):
+    from adaptive_document_agent.agent.topic_coverage_review import _review_batch
+    from tests.test_topic_coverage_review import _review
+    _, lookup, annual, interim, adverse, payload = context_fixture()
+    for item in lookup[adverse]:
+        setattr(item, different_field, value)
+    current = PresentationTopicSelection(topics=[_topic(annual)])
+    bad = _review(annual, interim, adverse)
+    bad.topics = current.topics
+    corrected = bad.model_copy(deep=True)
+    for decision in corrected.coverage_decisions:
+        decision.decision = 'omit'
+        decision.reason = 'This distinct source definition is redundant for the selected question.'
+    class Gateway:
+        calls = []
+        def generate_structured(self, messages, model, **kwargs):
+            self.calls.append(messages)
+            if len(self.calls) == 2:
+                feedback=json.loads(messages[2]['content'].split('\n',1)[1].rsplit('\n',1)[0])
+                assert set(feedback['unbound_include_series_ids']) == {interim, adverse}
+                assert all(f[different_field] == value for f in feedback['included_but_unrepresented_facts'][adverse])
+                assert 'add that exact series ID' in messages[3]['content']
+                assert 'redundancy judgment is an omit reason' in messages[3]['content']
+            return bad if len(self.calls) == 1 else corrected
+    gateway=Gateway()
+    revised, decisions = _review_batch(batch_context(compact_context(payload),current,[interim,adverse]),
+        current,[interim,adverse],lookup,set(),gateway,PresentationTopicSelector._validate,{})
+    assert revised.topics == current.topics
+    assert all(d.decision == 'omit' for d in decisions.values())
+    assert len(gateway.calls) == 2

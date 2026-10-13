@@ -8,6 +8,9 @@ from .summary_literal_evidence import literal_facts, quarantine_annotation, term
 
 
 def bind_reading(response, blocks, result, record, *, literal_fallback=False, recover_cross_part=False):
+    if literal_fallback:
+        from .summary_span_ownership import reconcile_contained_spans
+        response = reconcile_contained_spans(response, blocks, record)
     by_id = {b.id: b for b in blocks}
     parts, errors = [], []
     for part in response.parts:
@@ -114,6 +117,19 @@ def reconcile_layout(parts, blocks, record):
         counts = _counts(parts, block.id, len(lines))
         retained = []
         for part in parts:
+            if (part.block_id == block.id and part.role != 'layout' and not part.facts
+                    and 1 <= part.start_line <= part.end_line <= len(lines)
+                    and part.source_text == ''.join(lines[part.start_line-1:part.end_line])
+                    and not part.source_text.strip()):
+                # Whitespace has no semantic claim to extract. Keep its exact
+                # ownership and raw text without asking the model to invent a
+                # supporting fact. Nonblank passages and facts never enter here.
+                changes.append({'action': 'classify_blank_lines', 'part_id': part.id,
+                    'block_id': block.id, 'start_line': part.start_line, 'end_line': part.end_line,
+                    'original_role': part.role, 'original_title': part.title,
+                    'original_reading_note': part.reading_note})
+                part = part.model_copy(update={'role': 'layout', 'title': 'Blank layout',
+                    'reading_note': 'Only whitespace occurs in these literal source lines.'})
             if (part.block_id == block.id and part.role == 'layout' and not part.facts
                     and 1 <= part.start_line <= part.end_line <= len(lines)
                     and all(counts[i] > 1 for i in range(part.start_line, part.end_line+1))):

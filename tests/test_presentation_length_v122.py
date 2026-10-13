@@ -190,7 +190,7 @@ def test_source_correction_leaves_one_revision_for_independent_meaning_review():
         authored = 0
         reviewed = 0
         def generate_structured(self, messages, schema, **kwargs):
-            if schema is CompactSummaryDraft:
+            if schema is CompactSummaryDraft or schema.__name__ == 'SummarySynthesisRevision':
                 self.draft = [missing, complete, final][self.authored]
                 self.authored += 1
             else:
@@ -219,7 +219,7 @@ def test_meaning_patch_can_correct_new_evidence_binding_after_prior_source_repai
         authored = 0
         reviewed = 0
         def generate_structured(self, messages, schema, **kwargs):
-            if schema is CompactSummaryDraft:
+            if schema is CompactSummaryDraft or schema.__name__ == 'SummarySynthesisRevision':
                 self.draft = [missing, complete, unsupported, final][self.authored]
                 self.authored += 1
             else:
@@ -244,7 +244,7 @@ def test_second_meaning_correction_requires_strictly_fewer_rejected_parts():
             authored = 0
             reviewed = 0
             def generate_structured(self, messages, schema, **kwargs):
-                if schema is CompactSummaryDraft:
+                if schema is CompactSummaryDraft or schema.__name__ == 'SummarySynthesisRevision':
                     self.draft = copy.deepcopy(initial)
                     self.draft['pages'][0]['items'][0]['text'] += ' Training is required.' * self.authored
                     self.authored += 1

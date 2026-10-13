@@ -29,9 +29,10 @@ def _missing_included_facts(reviewed, lookup):
     """Explain the exact failed bindings; do not infer semantic equivalence."""
     selected = [o for topic in reviewed.topics for sid in topic.series_ids for o in lookup.get(sid, [])]
     missing = {}
-    fields = ('id', 'metric_original', 'period', 'period_basis', 'period_start', 'period_end',
+    fields = ('id', 'metric_original', 'parent_section', 'period', 'period_basis', 'period_type', 'period_start', 'period_end',
               'as_of_date', 'raw_value', 'value', 'unit', 'raw_unit', 'unit_scale', 'currency',
-              'entity', 'audited_status', 'ifrs_status', 'fact_type', 'dimensions', 'category_dimensions')
+              'entity', 'audited_status', 'ifrs_status', 'fact_type', 'dimensions', 'category_dimensions',
+              'validation_status', 'anomaly_notes')
     for decision in reviewed.coverage_decisions:
         if decision.decision != 'include':
             continue
@@ -148,8 +149,10 @@ def _review_batch(context, current, requested, lookup, primary_pages, gateway, v
             if attempt == 2 or str(exc) in rejected_errors:
                 raise
             rejected_errors.add(str(exc))
+            missing_facts = _missing_included_facts(reviewed, lookup)
             feedback = {'validation_error': str(exc),
-                        'included_but_unrepresented_facts': _missing_included_facts(reviewed, lookup),
+                        'included_but_unrepresented_facts': missing_facts,
+                        'unbound_include_series_ids': list(missing_facts),
                         'rejected_topics': [t.model_dump(mode='json') for t in reviewed.topics]}
             if len(encoded) + len(encode(feedback)) > MAX_REVIEW_CHARACTERS:
                 feedback.pop('rejected_topics')
@@ -162,6 +165,15 @@ def _review_batch(context, current, requested, lookup, primary_pages, gateway, v
                  'Read included_but_unrepresented_facts: these exact raw values, periods, units and '
                  'source rows are absent from your selected evidence. Similar measure names and '
                  'a single matching period do not cover different rows or other periods. '
+                 'For each unbound_include_series_id, either add that exact series ID to a '
+                 'suitable topic.series_ids, or change its decision to omit with your explicit '
+                 'reason. Do not repeat include while pointing to a different series with equal '
+                 'numbers: its source row, parent section, definition or status failed exact binding. '
+                 'An analytical redundancy judgment is an omit reason, not proof of exact inclusion. '
+                 'A caveat cannot supply a missing period, citation or valid value. If a selected '
+                 'series is structurally ineligible, remove it from the topic and give an explicit '
+                 'evidence-limitation omission decision; do not invent its missing metadata or '
+                 'repeat the same invalid series under another topic title. '
                  'Explicitly explain omissions. Preserve all previously accepted observations.'}]
 
 

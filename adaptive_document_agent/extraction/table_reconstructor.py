@@ -92,6 +92,7 @@ class TableReconstructor:
         default_scale: float | None = None,
         context: str = "",
         existing_periods: list[str | None] | None = None,
+        header_row_count: int | None = None,
     ) -> tuple[list[str], list[str | None], list[list[str | None]], list[str], list[str | None], list[float | None]]:
         """Extract multi-tier headers, periods, and column semantic roles from raw table grid."""
         if not raw:
@@ -101,7 +102,8 @@ class TableReconstructor:
             headers = ["label"] + [f"column_{i + 1}" for i in range(1, width)]
             return headers, [None] * width, raw, ["label"] + ["unknown"] * (width - 1), [None] * width, [None] * width
 
-        num_headers = cls.detect_header_row_count(raw)
+        num_headers = (header_row_count if header_row_count is not None
+                       else cls.detect_header_row_count(raw))
         header_rows = raw[:num_headers]
         data_rows = raw[num_headers:]
 

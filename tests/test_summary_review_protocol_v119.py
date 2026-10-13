@@ -49,10 +49,10 @@ def test_rejected_opening_reason_reaches_editorial_repair():
     class Client(Reviewer):
         attempts = 0
         def generate_structured(self, messages, schema, **kwargs):
-            if schema is CompactSummaryDraft:
+            if schema is CompactSummaryDraft or schema.__name__ == 'SummarySynthesisRevision':
                 self.attempts += 1
                 if self.attempts == 2:
-                    assert 'Missing actual service scope' in messages[-2]['content']
+                    assert 'Missing actual service scope' in messages[-1]['content']
             value = super().generate_structured(messages, schema, **kwargs)
             if schema is CompactSummaryDraft and self.attempts == 1:
                 value.pages[0].items[0].text = 'This page lists teams and the topics described in the document.'

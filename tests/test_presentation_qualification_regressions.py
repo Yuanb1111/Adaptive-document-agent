@@ -45,6 +45,29 @@ def test_corroborating_view_requires_the_complete_same_fact(different):
     assert representation_links([duplicate], [selected]) is None
 
 
+@pytest.mark.parametrize('different', [None, 'qualifier', 'raw_unit', 'scale', 'period', 'value', 'generic'])
+def test_corroborating_unit_suffix_preserves_all_other_fact_boundaries(different):
+    selected = _observation('Revenue', 'FY2023', 70)
+    selected.unit, selected.raw_unit, selected.unit_scale = 'currency', 'RMB’000', 1000
+    selected.currency = 'RMB'
+    duplicate = selected.model_copy(deep=True, update={'id': 'unit-annotated'})
+    duplicate.evidence[0].row_label = 'Revenue (RMB’000)'
+    before = duplicate.model_dump()
+    assert representation_links([duplicate], [selected]) == {duplicate.id: [selected.id]}
+    assert duplicate.model_dump() == before
+    if different is None:
+        return
+    if different == 'qualifier': duplicate.evidence[0].row_label = 'Revenue (adjusted) (RMB’000)'
+    elif different == 'raw_unit': duplicate.raw_unit = 'USD’000'
+    elif different == 'scale': duplicate.unit_scale = 1
+    elif different == 'period': duplicate.period = 'FY2024'
+    elif different == 'value': duplicate.value = 71
+    elif different == 'generic':
+        selected.evidence[0].row_label = 'Total'
+        duplicate.evidence[0].row_label = 'Total (RMB’000)'
+    assert representation_links([duplicate], [selected]) is None
+
+
 def test_comparison_restores_adjacent_shared_assumption_without_definition_leak():
     definition = 'Response rate is defined as average monthly operating activity.'
     conditions = 'assuming no optional expansion is exercised and assuming a rate of USD19.80 per unit.'

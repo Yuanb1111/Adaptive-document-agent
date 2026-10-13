@@ -15,6 +15,8 @@ _MONTHS = "January February March April May June July August September October N
 _MONTH = "(?:" + "|".join(_MONTHS) + ")"
 _DATE = re.compile(r"\b(" + _MONTH + r")\s+(\d{1,2}),?\s+((?:19|20)\d{2})\b", re.I)
 _CHINESE_DATE = re.compile(r"(?<!\d)((?:19|20)\d{2})年\s*(\d{1,2})月\s*(\d{1,2})日(?!\d)")
+_MONTH_YEAR = re.compile(r"\b(" + _MONTH + r")\s+((?:19|20)\d{2})\b", re.I)
+_CHINESE_MONTH_YEAR = re.compile(r"(?<!\d)((?:19|20)\d{2})年\s*(\d{1,2})月(?!\s*\d|日)")
 _DATE_HEADER = re.compile(
     r"(?:(?:as of|for the|the|year|years|months?|ended|ending|quarter|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+)*"
     r"(" + _MONTH + r")\s+(\d{1,2})(?:,?\s+((?:19|20)\d{2}))?[,]?", re.I)
@@ -73,6 +75,7 @@ class TableQuoteContext:
     signed_numbers: set[str] = field(default_factory=set)
     misparsed_positive_numbers: set[str] = field(default_factory=set)
     dates: set[tuple[str, str, str]] = field(default_factory=set)
+    month_years: set[tuple[str, str]] = field(default_factory=set)
     bases: dict[tuple[str, str, str], set[str]] = field(default_factory=dict)
     percentages: set[str] = field(default_factory=set)
 
@@ -82,6 +85,8 @@ class TableQuoteContext:
                         else m[0], text)
         text = _CHINESE_DATE.sub(lambda m: " " if 1 <= int(m[2]) <= 12 and (
             _MONTHS[int(m[2]) - 1].casefold(), str(int(m[3])), m[1]) in self.dates else m[0], text)
+        text = _CHINESE_MONTH_YEAR.sub(lambda m: ' ' if 1 <= int(m[2]) <= 12 and (
+            _MONTHS[int(m[2])-1].casefold(), m[1]) in self.month_years else m[0], text)
         # Narrative quotes may bind a shared month/day followed by several
         # years (June 30, 2023 and 2024). Only their evidenced pair is exempt.
         text = re.sub(r'(?<![\d年])(\d{1,2})月\s*(\d{1,2})日',
@@ -291,6 +296,7 @@ def quoted_table_context(item, result, *, excerpts=None):
     context = TableQuoteContext()
     positive_coefficients = set()
     non_percentage_coefficients = set()
+    literal_row_percentages = set()
     recovered_tables = {}
     for quote in continuous_quote_passages(item.evidence, {number: p.text for number, p in pages.items()}):
         page = pages.get(quote.page)
@@ -301,6 +307,31 @@ def quoted_table_context(item, result, *, excerpts=None):
         # Literal narrative dates do not require a parsed table. Preserve
         # exact shared-date/year bindings; never borrow dates from the page.
         context.dates.update((m[1].casefold(),str(int(m[2])),m[3]) for m in _DATE.finditer(quote.text))
+        context.month_years.update((m[1].casefold(),m[2]) for m in _MONTH_YEAR.finditer(quote.text))
+        # Row units are independent of column units: ratio tables can mix (%)
+        # and (times) rows under the same year columns. Require a complete
+        # literal numeric row, never infer percentage from the metric name.
+        for line in source.splitlines():
+            if normalize_quote(line) not in quoted:
+                continue
+            row = re.fullmatch(r'.+?\(\s*%\s*\)(?:\s*\(\d+\))*\s+('
+                r'(?:[+−-]?\d[\d,]*(?:\.\d+)?|\(\d[\d,]*(?:\.\d+)?\))'
+                r'(?:\s+(?:[+−-]?\d[\d,]*(?:\.\d+)?|\(\d[\d,]*(?:\.\d+)?\)))*)\s*', line)
+            if row:
+                for cell in row[1].split():
+                    parsed = parse_number(cell.replace('−', '-'))
+                    if parsed is not None:
+                        literal_row_percentages.add(_number(parsed.value))
+        from .brief_quantity_geometry import wrapped_quantity_support
+        context.quantities.update(wrapped_quantity_support(page, quote.text, source))
+        from .brief_literal_table_units import uniform_quoted_rows
+        for quantity in uniform_quoted_rows(source, quote.text):
+            context.quantities.add(quantity)
+            if quantity[1].startswith('-'):
+                context.signed_numbers.add(quantity[1])
+                context.misparsed_positive_numbers.add(quantity[1][1:])
+            else:
+                positive_coefficients.add(quantity[1])
         for m in re.finditer(r'\b(' + _MONTH + r')\s+(\d{1,2}),?\s+((?:19|20)\d{2}(?:\s*(?:,|and|&)\s*(?:19|20)\d{2})*)',quote.text,re.I):
             context.dates.update((m[1].casefold(),str(int(m[2])),year) for year in re.findall(r'(?:19|20)\d{2}',m[3]))
         # Resolve each quoted row independently. A complete product table and
@@ -401,7 +432,8 @@ def quoted_table_context(item, result, *, excerpts=None):
                     continue
                 quantity = (currency, coefficient, _SCALES[scale])
                 context.bases.setdefault(quantity, set()).add(basis)
-    context.quantities = {q for q, bases in context.bases.items() if len(bases) == 1}
+    context.quantities.update(q for q, bases in context.bases.items() if len(bases) == 1)
     context.misparsed_positive_numbers.difference_update(positive_coefficients)
     context.percentages.difference_update(non_percentage_coefficients)
+    context.percentages.update(literal_row_percentages)
     return context

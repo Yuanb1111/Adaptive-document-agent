@@ -396,7 +396,11 @@ class PresentationPlanValidator:
                                 suffix = "%" if magnitude.endswith("%") else ""
                                 allowed_numbers.add(f"{float(magnitude.rstrip('%')):g}{suffix}")
                 block_titles = [re.sub(r"(?i)^(?:block|chart|panel)\s+\d+$", "", b.title.strip()) for b in slide.visual_blocks]
-                claimed_numbers = self._numbers(" ".join((slide.title, slide.message, slide.analytical_question, slide.selection_reason, *slide.bullets, *block_titles)))
+                from .source_label_numbers import without_source_label_annotations
+                claim_text = " ".join((slide.title, slide.message, slide.analytical_question, slide.selection_reason, *slide.bullets, *block_titles))
+                claim_text = without_source_label_annotations(claim_text,
+                    [observation_by_id[oid] for oid in referenced_observation_ids if oid in observation_by_id])
+                claimed_numbers = self._numbers(claim_text)
                 unsupported_numbers = claimed_numbers - allowed_numbers
                 if unsupported_numbers:
                     errors.append(f"slide {slide.id} contains unsupported numeric claims: {sorted(unsupported_numbers)}")
@@ -517,6 +521,7 @@ class PresentationPlanValidator:
         currency = r"(?:US\$|HK\$|RMB|CNY|CNH|USD|HKD|SGD|GBP|EUR|JPY|AUD|CAD|CHF|人民币|美元|港元|欧元|[$€£¥￥])"
         magnitude = r"(?:trillion\b|billion\b|million\b|thousand\b|bn\b|mn\b|[mkb]\b|万亿|十亿|百万|亿|万|千)(?:元)?"
         amount = r"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?\s*" + magnitude
+        value = re.sub(rf"(?i)(?<![\w-])negative\s+({currency})\s*({amount})", r"\1 -\2", value)
         value = re.sub(rf"(?i)(?<![A-Za-z0-9_])([+-])\s*({currency})\s*(?=\d)", r"\2 \1", value)
         value = re.sub(rf"(?i)({currency})\s*\(\s*({amount})\s*\)", r"\1 -\2", value)
         coefficient = r"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"

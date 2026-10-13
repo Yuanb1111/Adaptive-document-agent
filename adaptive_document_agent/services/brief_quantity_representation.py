@@ -2,6 +2,27 @@
 from decimal import Decimal, InvalidOperation
 
 
+def source_native_quantity_hint(currency, value, unit, quantities):
+    """Offer one exact source candidate for repair; never authorize rounding."""
+    scales = {'': 1, 'thousand': 1000, 'million': 1000000,
+              'billion': 1000000000, 'trillion': 1000000000000}
+    if not currency or unit not in scales:
+        return None
+    try:
+        claim = Decimal(value)
+        precision = Decimal(1).scaleb(claim.as_tuple().exponent)
+        candidates = set()
+        for c, v, u in quantities:
+            if c != currency or u not in scales:
+                continue
+            converted = abs(Decimal(v)) * scales[u] / scales[unit]
+            if converted.quantize(precision) == abs(claim):
+                candidates.add((c, v, u))
+        return next(iter(candidates)) if len(candidates) == 1 else None
+    except InvalidOperation:
+        return None
+
+
 def magnitude_claim_text(item, context, quantities):
     """Return a validation-only signed view; display copy and sources stay intact.
 

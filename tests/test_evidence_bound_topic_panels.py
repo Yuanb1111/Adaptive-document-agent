@@ -161,6 +161,21 @@ def test_more_than_three_valid_series_paginate_with_distinct_page_scope():
     type(plan).model_validate(plan.model_dump())
 
 
+def test_parallel_topic_repair_identifies_every_series_with_missing_period():
+    lookup = {
+        f'series-{row}': [observation(label, 100 + row, row, period=None, unit='currency')]
+        for row, label in enumerate(['Revenue', 'Assets', 'Borrowings', 'Inventory'])
+    }
+    topic = PresentationTopic(id='incomplete-periods', title='Reported balances',
+        question='How did balances change?', rationale='Compare reported balances.',
+        series_ids=list(lookup))
+    with pytest.raises(ValueError) as error:
+        PresentationTopicSelector._validate(PresentationTopicSelection(topics=[topic]), lookup)
+    for sid, items in lookup.items():
+        assert sid in str(error.value)
+        assert items[0].id + ' lacks source-bound period' in str(error.value)
+
+
 def test_repair_budget_is_per_topic_even_when_combined_payload_is_large():
     result = _result()
     records = result.observations

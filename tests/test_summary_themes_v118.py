@@ -39,6 +39,7 @@ class Themes:
             return schema(pages=[dict(title='Service prerequisites', items=[dict(
                 label='Scheduling', text='Teams '+', '.join(names)+' support scheduling; staff training '
                 'is required before service delivery.', fact_ids=[f['id'] for f in facts])])])
+        if schema.__name__ == 'SummarySynthesisRevision': return schema()
         assert schema is CompactSummaryReview
         return schema(opening_slide_id=(payload.get('opening_target') or {}).get('slide_id'), opening_item_texts=(payload.get('opening_target') or {}).get('item_texts'), opening_accepted=self.opening, opening_reason='Scheduling and training are explained.', parts=[dict(part_id=p['id'],
             accepted=p['id'] != self.reject, reason='Training dependency is retained.')

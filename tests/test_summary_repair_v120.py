@@ -91,8 +91,36 @@ def test_unchanged_numeric_repair_is_detected_before_another_review():
     client = Reviewer(draft)
     with pytest.raises(ValueError, match='repeated the rejected draft'):
         generate_compact_summary(client, result, review, CompanyProfile(summary_review=review))
-    assert client.calls == ['CompactSummaryDraft'] * 2
-    assert review.plan_audits[-1]['repeated_draft']
+    assert client.calls == ['CompactSummaryDraft', 'SummarySynthesisRevision']
+    assert review.plan_audits[-1]['revision_failed']
+
+
+@pytest.mark.parametrize('progress', [True, False])
+def test_source_repair_gets_one_extra_attempt_only_for_strictly_fewer_failures(progress):
+    from copy import deepcopy
+    result, review, valid = fixture(20)
+    invalid=deepcopy(valid)
+    invalid['pages'][0]['items'][0]['text']='Unsupported amount RMB999 million.'
+    invalid['pages'][1]['items'][0]['text']='Unsupported amount RMB888 million.'
+    class Client(Reviewer):
+        repairs=0
+        def generate_structured(self,messages,schema,**kwargs):
+            if schema.__name__=='SummarySynthesisRevision':
+                self.repairs+=1
+                self.calls.append(schema.__name__)
+                index=0 if self.repairs==1 else 1
+                item=deepcopy(valid['pages'][index]['items'][0])
+                if not progress: item['text']='Another unsupported amount RMB777 million.'
+                return schema(replacements=[dict(item_id=f'g{index}_i0',replacement=item)])
+            return super().generate_structured(messages,schema,**kwargs)
+    client=Client(invalid)
+    company=CompanyProfile(summary_review=review)
+    if progress:
+        assert generate_compact_summary(client,result,review,company).summary_pages
+        assert client.repairs==2
+    else:
+        with pytest.raises(ValueError): generate_compact_summary(client,result,review,company)
+        assert client.repairs==1
 
 
 def test_numeric_repair_has_exact_previous_copy_errors_and_succeeds_after_correction():
@@ -100,15 +128,15 @@ def test_numeric_repair_has_exact_previous_copy_errors_and_succeeds_after_correc
     class Client(Reviewer):
         attempts = 0
         def generate_structured(self, messages, schema, **kwargs):
-            if schema is CompactSummaryDraft:
+            if schema is CompactSummaryDraft or schema.__name__ == 'SummarySynthesisRevision':
                 self.attempts += 1
                 if self.attempts == 2:
-                    assert 'RMB999 million' in messages[-2]['content']
-                    assert 'unsupported numeric claims' in messages[-2]['content']
+                    assert 'RMB999 million' in messages[-1]['content']
+                    assert 'unsupported numeric claims' in messages[-1]['content']
             response = super().generate_structured(messages, schema, **kwargs)
             if schema is CompactSummaryDraft and self.attempts == 1:
                 response.pages[0].items[0].text = 'Teams generated RMB999 million revenue.'
             return response
     client = Client(draft)
     generate_compact_summary(client, result, review, CompanyProfile(summary_review=review))
-    assert client.calls == ['CompactSummaryDraft', 'CompactSummaryDraft', 'CompactSummaryReview']
+    assert client.calls == ['CompactSummaryDraft', 'SummarySynthesisRevision', 'CompactSummaryReview']

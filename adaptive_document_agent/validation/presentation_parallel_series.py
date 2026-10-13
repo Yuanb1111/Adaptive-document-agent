@@ -7,9 +7,15 @@ def validate_parallel_series(series):
     for items in series:
         if not items or len(items) > 40:
             raise ValueError("Independent series needs one to forty retained observations")
-        if any(o.value is None or not math.isfinite(o.value) or not o.period or not o.evidence
-               or o.validation_status != "valid" or o.anomaly_notes for o in items):
-            raise ValueError("Independent series requires valid reported values and citations")
+        for o in items:
+            missing = []
+            if o.value is None or not math.isfinite(o.value): missing.append('finite reported value')
+            if not o.period: missing.append('source-bound period')
+            if not o.evidence: missing.append('source citation')
+            if o.validation_status != 'valid' or o.anomaly_notes: missing.append('validated unambiguous evidence')
+            if missing:
+                raise ValueError('Independent series requires valid reported values and citations; '
+                                 + o.id + ' lacks ' + ', '.join(missing))
         units = {(o.unit_family or o.unit, o.currency, o.unit_scale, o.raw_unit) for o in items}
         if len(units) != 1:
             raise ValueError("Independent series mixes units or currencies")
