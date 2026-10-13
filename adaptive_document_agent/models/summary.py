@@ -64,6 +64,9 @@ class SummarySlidePage(BaseModel):
     source_section: str = Field(min_length=1, max_length=160)
     items: list[SummarySlideItem] = Field(min_length=1, max_length=4)
     compact: bool = False
+    placement: Literal['body', 'appendix'] = 'body'
+    # Shared logical-group heading evidence survives whole-item pagination.
+    title_source_refs: list[SummaryFactRef] = Field(default_factory=list)
 
 
 class SummaryPartDecision(BaseModel):

@@ -53,6 +53,25 @@ def compact_item_errors(item, review, result):
     return errors
 
 
+def compact_continuation_errors(groups, review, result):
+    errors = []
+    for items in groups.values():
+        ordered = sorted(items, key=lambda item: item.continuation_index)
+        first = ordered[0]
+        text = ''.join(item.text for item in ordered)
+        fields = ('label', 'part_ids', 'source_refs', 'source_quote', 'source_pages',
+                  'continuation_count', 'continuation_digest')
+        if ([item.continuation_index for item in ordered] != list(range(first.continuation_count))
+                or len(text) > 6000 or sha256(text.encode('utf-8')).hexdigest() != first.continuation_digest
+                or any(any(getattr(item, field) != getattr(first, field) for field in fields) for item in ordered)):
+            errors.append('Invalid compact Summary continuation provenance')
+            continue
+        # Validate the complete original claim so a currency/unit spanning a
+        # layout boundary cannot be misinterpreted as a new isolated quantity.
+        errors.extend(compact_item_errors(first.model_copy(update={'text': text}), review, result))
+    return errors
+
+
 def compact_layout_errors(pages):
     from .presentation_brief import BriefItem, _item_height, _heading_height, _copy_height, is_technical_copy
     from .slide_compositor import _lines

@@ -134,9 +134,20 @@ def presentation_errors(review: SummaryReview, slide_pages, result: PipelineResu
     errors = reading_errors(review, result) if validate_reading else []
     parts = {p.id: p for p in review.parts}
     used, copy_seen, page_ids = set(), set(), set()
-    continuations = {}
-    if review.max_intro_slides is not None and len(slide_pages)>review.max_intro_slides:
-        errors.append('Complete introduction exceeds its five-page limit')
+    continuations, compact_continuations = {}, {}
+    body_pages = [page for page in slide_pages if page.placement == 'body']
+    if review.max_intro_slides is not None and len(body_pages)>review.max_intro_slides:
+        errors.append(f'Complete introduction exceeds its {review.max_intro_slides}-page limit: '
+                      f'pagination produced {len(body_pages)} physical body slides from '
+                      f'{sum(len(p.items) for p in body_pages)} paragraphs. Logical groups are not physical slides; '
+                      'synthesize shorter body copy and combine related claims without losing their evidence.')
+    if slide_pages and not body_pages:
+        errors.append('The introduction needs a verified opening in the presentation body')
+    requirements = result.profile.report_requirements
+    if len(body_pages) != len(slide_pages) and not (requirements and any(
+            r.kind == 'slide_limit' and r.resolution == 'resolved' and r.slide_scope == 'body'
+            for r in requirements.items)):
+        errors.append('Supporting introduction appendices require an explicit body-only slide budget')
     for page in slide_pages:
         if page.id in page_ids:
             errors.append('Summary slide IDs repeat')
@@ -163,9 +174,13 @@ def presentation_errors(review: SummaryReview, slide_pages, result: PipelineResu
                 errors.append('Summary slide item cites layout-only material')
             if page.compact:
                 from .compact_summary import compact_item_errors
-                errors.extend(compact_item_errors(item,review,result))
+                if item.continuation_group:
+                    compact_continuations.setdefault(item.continuation_group, []).append(item)
+                else:
+                    errors.extend(compact_item_errors(item,review,result))
                 used.update(item.part_ids)
-                key = normalize_quote(item.text)
+                key = ((item.continuation_group, item.continuation_index) if item.continuation_group
+                       else normalize_quote(item.text))
                 if key in copy_seen:
                     errors.append('Summary presentation repeats a finding')
                 copy_seen.add(key)
@@ -192,8 +207,18 @@ def presentation_errors(review: SummaryReview, slide_pages, result: PipelineResu
                 errors.extend(fact_errors(item, result, known[0].source_text, known[0].source_page,
                                          literal_reading=item.reading_fact_copy and item.text==item.source_quote))
         supporting = ' '.join(item.source_quote for item in page.items)
+        if page.title_source_refs:
+            title_keys = [(ref.part_id, ref.fact_index) for ref in page.title_source_refs]
+            if (len(set(title_keys)) != len(title_keys) or any(
+                    pid not in parts or parts[pid].role != 'content' or index >= len(parts[pid].facts)
+                    for pid, index in title_keys)):
+                errors.append('Summary slide title cites unknown or repeated source facts')
+            else:
+                supporting = ' '.join(parts[pid].facts[index].source_quote for pid, index in title_keys)
         if PresentationPlanValidator._numbers(page.title) - PresentationPlanValidator._numbers(supporting):
             errors.append('Summary slide title contains unsupported numbers')
+    from .compact_summary import compact_continuation_errors
+    errors.extend(compact_continuation_errors(compact_continuations, review, result))
     for group, items in continuations.items():
         ordered = sorted(items,key=lambda item:item.continuation_index)
         first = ordered[0]

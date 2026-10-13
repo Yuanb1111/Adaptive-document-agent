@@ -238,11 +238,20 @@ def _compose_presentation(result, template_path=None, *, artwork=None, source_pd
     else:
         _build_legacy_presentation(presentation, result)
 
+    if result.presentation_plan and any(p.placement == 'appendix' for p in result.presentation_plan.company.summary_pages):
+        _add_company_at_a_glance(presentation, result, PresentationSlide(
+            id='summary_supporting_appendix', slide_type='appendix', title='Supporting context'),
+            placement='appendix')
+
     from .presentation_sparse_pages import fold_sparse_text_pages
     fold_sparse_text_pages(presentation, result)
     from .requested_tables import render_requested_tables, verify_requested_tables
     if source_tables:
+        existing_ids = {s.slide_id for s in presentation.slides}
         render_requested_tables(presentation, result)
+        for slide in presentation.slides:
+            if slide.slide_id not in existing_ids:
+                slide.element.cSld.set('name', 'ada:appendix')
     _add_thank_you_slide(presentation)
 
     _number_slides(presentation)
@@ -380,7 +389,8 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
     if plan.company.summary_review:
         contents_slides = [entry.model_copy(update={'section_title': page.title, 'title': page.title})
                           for entry in contents_slides for page in
-                          (plan.company.summary_pages if entry.slide_type == 'company_overview' else [entry])]
+                          ([p for p in plan.company.summary_pages if p.placement == 'body']
+                           if entry.slide_type == 'company_overview' else [entry])]
     elif plan.company.summary_overview and plan.company.summary_business:
         company_index = next((i for i, s in enumerate(contents_slides) if s.slide_type == "company_overview"), None)
         if company_index is not None:
@@ -690,7 +700,8 @@ def _presentation_company_identity(result: PipelineResult) -> tuple[str, list[in
     return " ".join(company.name.split()), sorted(set(pages))
 
 
-def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_plan: PresentationSlide) -> None:
+def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_plan: PresentationSlide,
+                           *, placement: str = 'body') -> None:
     plan = result.presentation_plan
     if plan is None:  # pragma: no cover - guarded by caller
         return
@@ -708,6 +719,8 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
                 '\n\nComplete Summary reading and omission decisions:\n'
                 + plan.company.summary_review.model_dump_json(indent=2))
         for index, page in enumerate(plan.company.summary_pages):
+            if page.placement != placement:
+                continue
             from .localized_summary_copy import summary_item_copy
             items = [BriefItem(item.label, summary_item_copy(result, page, i), item.source_pages)
                      for i, item in enumerate(page.items)]
@@ -727,6 +740,8 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
             bind_summary_pages(rendered, page, texts=[item.text for item in items])
             for slide in rendered:
                 slide._ada_section_label = page.title
+                if placement == 'appendix':
+                    slide.element.cSld.set('name', 'ada:appendix')
         # A fully read Summary with justified omissions needs no placeholder.
         return
 
@@ -2309,6 +2324,7 @@ def _add_evidence_table_slides(
         generic_section = bool(thematic_labels) or all(t == "Reported Measures" for t, _ in theme_entries)
         slide_subtitle = subtitle or "Reported values with separate period headers and source provenance"
         slide = _base_slide(presentation, title, slide_subtitle)
+        slide.element.cSld.set('name', 'ada:appendix')
         appendix_slides.append(slide)
         source_notes = []
         page_observations = []

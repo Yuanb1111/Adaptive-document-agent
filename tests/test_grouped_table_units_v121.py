@@ -78,3 +78,19 @@ Shipments ... 3000 4000''')
     table = BorderlessTableExtractor().extract(source,1)[0]
     assert table.rows[0].cells == ['Orders','2021','2022']
     assert len(table.rows)==2
+
+
+def test_body_section_row_cannot_overwrite_geometric_units_during_reconstruction():
+    from adaptive_document_agent.extraction.table_reconstructor import TableReconstructor
+    from adaptive_document_agent.models.table import TableRow
+    extracted = BorderlessTableExtractor().extract(MixedPage(), 245)[0]
+    extracted.raw_cells.insert(0, ['Finished products'] + [None] * 12)
+    extracted.rows.insert(0, TableRow(cells=extracted.raw_cells[0], page=245, is_section_header=True))
+    repaired = TableReconstructor().reconstruct(extracted)
+    assert repaired.headers == [' '.join(h.split()) for h in extracted.headers]
+    assert repaired.column_types == ['label'] + ['count'] * 8 + ['percentage'] * 4
+    assert repaired.column_periods == extracted.column_periods
+    assert repaired.raw_cells == extracted.raw_cells
+    assert repaired.rows[0].is_section_header
+    rate = next(o for o in ObservationExtractor()._table_observations(repaired) if o.raw_value == '32.9')
+    assert rate.value == 32.9 and rate.unit == 'percent'

@@ -67,7 +67,7 @@ def test_complete_introduction_can_exceed_five_pages_with_verified_native_bindin
 
 def test_explicit_page_budget_still_fails_instead_of_omitting_parts():
     result, review, _ = fixture()
-    with pytest.raises(ValueError, match='five-page limit'):
+    with pytest.raises(ValueError, match='5-page limit'):
         generate_thematic_summary(Themes(), result, review, CompanyProfile(summary_review=review))
 
 

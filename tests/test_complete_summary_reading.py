@@ -113,7 +113,7 @@ class SummaryClient(MockLLMClient):
             if operation == 'SummaryEditorialDraft':
                 facts = {f['id']: (part['id'], f) for part in payload['parts'] for f in part['facts']}
                 value = response_model(summary_decisions=value.summary_decisions, summary_pages=[{
-                    **page.model_dump(exclude={'items','compact'}), 'items': [{'label': item.label, 'text': item.text,
+                    **page.model_dump(exclude={'items','compact','title_source_refs','placement'}), 'items': [{'label': item.label, 'text': item.text,
                         'fact_id': next((fid for fid, (pid, fact) in facts.items()
                             if item.part_ids == [pid] and item.source_quote == fact['source_quote']), 'unknown')}
                         for item in page.items]} for page in value.summary_pages])

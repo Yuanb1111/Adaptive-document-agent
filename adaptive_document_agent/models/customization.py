@@ -29,6 +29,7 @@ class ReportRequirement(BaseModel):
     language_scope: Literal['body', 'source_tables', 'all'] = 'body'
     detail: Literal['concise', 'balanced', 'detailed'] = 'balanced'
     max_slides: int | None = Field(default=None, ge=1, le=500)
+    slide_scope: Literal['all', 'body'] = 'all'
 
 
 class ReportRequirements(BaseModel):

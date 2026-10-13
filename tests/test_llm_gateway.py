@@ -78,6 +78,19 @@ def test_malformed_json_fails_after_one_repair_and_names_the_stage() -> None:
     assert len(client.calls) == 2
 
 
+def test_format_repair_receives_failed_field_and_reports_it_if_still_invalid():
+    from pydantic import Field
+    class Selection(BaseModel):
+        pages: list[int] = Field(max_length=2)
+    client = MockLLMClient([{'pages': [1, 2, 3]}, {'pages': [1, 2, 3]}])
+    gateway = LLMGateway(client, LLMSettings(provider=ProviderName.MOCK, model='mock'))
+    with pytest.raises(LLMResponseError, match=r'pages \(too_long\)'):
+        gateway.generate_structured([], Selection, stage='presentation')
+    repair = client.calls[-1][-1]['content']
+    assert 'Validation errors:' in repair and 'max_length' in repair and 'pages' in repair
+    assert '<untrusted_model_output>' in repair
+
+
 def test_local_only_rejects_cloud_provider() -> None:
     settings = LLMSettings(provider=ProviderName.OPENAI, model="example", privacy_mode=PrivacyMode.LOCAL_ONLY)
     with pytest.raises(PrivacyViolationError):

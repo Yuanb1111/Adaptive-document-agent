@@ -41,7 +41,7 @@ def test_schema_retry_supplies_raw_draft_and_exact_field_failure():
     client = Client(draft)
     company = generate_compact_summary(client, result, review, CompanyProfile(summary_review=review))
     assert company.summary_pages and client.attempts == 2
-    assert review.plan_audits[0]['raw_response'] == raw
+    assert review.plan_audits[0]['draft_format_attempts'][0]['raw_response'] == raw
 
 
 def test_rejected_opening_reason_reaches_editorial_repair():

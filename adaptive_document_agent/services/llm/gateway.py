@@ -7,7 +7,7 @@ from copy import deepcopy
 from threading import BoundedSemaphore, Event, Lock
 from typing import Any, TypeVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from adaptive_document_agent.utils.caching import DiskCache
 from adaptive_document_agent.utils.hashing import sha256_bytes
 from adaptive_document_agent.utils.pipeline_version import ANALYSIS_VERSION
@@ -171,6 +171,16 @@ class LLMGateway:
         if repair_policy is None:
             repair_policy = deepcopy(self.client.request_policy(stage=stage, operation="format_repair", model=model_name))
         schema = json.dumps(response_model.model_json_schema(), separators=(",", ":"))
+        # Give the repair its actual failing paths/constraints, not just the
+        # schema that the first response already failed to follow. Keep source
+        # values out of diagnostic messages; the output stays untrusted data.
+        validation_errors = []
+        try:
+            validate_structured_text(invalid_text, response_model)
+        except ValidationError as exc:
+            validation_errors = exc.errors(include_input=False, include_url=False)
+        except (ValueError, TypeError):
+            validation_errors = [{'type': 'invalid_json', 'msg': 'Return one complete JSON value.'}]
         repair_messages = [
             {
                 "role": "system",
@@ -181,7 +191,8 @@ class LLMGateway:
                     + schema
                 ),
             },
-            {"role": "user", "content": "<untrusted_model_output>" + invalid_text + "</untrusted_model_output>"},
+            {"role": "user", "content": "Validation errors: " + json.dumps(validation_errors, default=str)
+             + "\n<untrusted_model_output>" + invalid_text + "</untrusted_model_output>"},
         ]
         try:
             with (self._request_admission(cancelled), self.client.request_context(stage=stage),
@@ -203,6 +214,9 @@ class LLMGateway:
             raise self._located_failure(exc, stage, response_model.__name__) from exc
         except (LLMResponseError, ValueError, TypeError) as exc:
             detail = type(exc).__name__
+            if isinstance(exc, ValidationError):
+                detail += ': ' + '; '.join('.'.join(map(str, e['loc'])) + ' (' + e['type'] + ')'
+                                          for e in exc.errors(include_input=False)[:8])
             raise LLMResponseError(
                 f"Structured response for stage '{stage}' remained invalid after one repair attempt ({detail})."
             ) from exc

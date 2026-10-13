@@ -25,7 +25,7 @@ def test_601_character_complete_paragraph_is_preserved_and_checked_for_real_capa
     assert pages[0].items[0].text == text
     assert len(pages[0].items[0].text) == 601
     with pytest.raises(ValidationError):
-        CompactSummaryItem(label='Scheduling', text='a' * 1201, fact_ids=['f0'])
+        CompactSummaryItem(label='Scheduling', text='a' * 6001, fact_ids=['f0'])
 
 
 def test_reason_above_160_characters_does_not_discard_valid_verdicts():

@@ -37,7 +37,7 @@ def verify_summary_export(presentation, result):
     pages = {p.id: p for p in company.summary_pages}
     mapping = result.profile.report_requirements.copy_translations if result.profile.report_requirements else {}
     localized = result.profile.report_requirements.summary_copy_translations if result.profile.report_requirements else {}
-    used, seen = {}, set()
+    used, seen, body_slides = {}, set(), set()
     for number, slide in enumerate(presentation.slides, 1):
         for shape in slide.shapes:
             properties = shape.element.xpath('.//p:cNvPr')
@@ -55,6 +55,8 @@ def verify_summary_export(presentation, result):
             if identity in seen or record['part_ids'] != item.part_ids:
                 raise ValueError('Duplicate or changed exported introductory evidence binding')
             seen.add(identity)
+            if page.placement == 'body':
+                body_slides.add(number)
             expected = {normalize_quote(display_text(summary_item_copy(result, page, index)))}
             if f'{page.id}:{index}' not in localized:
                 expected.add(normalize_quote(display_text(mapping.get(item.text, item.text))))
@@ -67,8 +69,8 @@ def verify_summary_export(presentation, result):
     if seen != expected_items or not required <= used.keys():
         raise ValueError('Exported introduction does not cover every substantive source part')
     limit = company.summary_review.max_intro_slides
-    if limit is not None and len({n for values in used.values() for n in values})>limit:
-        raise ValueError('Exported company introduction exceeds its five-page limit')
+    if limit is not None and len(body_slides)>limit:
+        raise ValueError(f'Exported company introduction exceeds its {limit}-page limit')
     for record in result.presentation_export_trace:
         if record['planned_slide_id'] in {s.id for s in result.presentation_plan.slides if s.slide_type == 'company_overview'}:
             record['summary_part_ids'] = sorted(pid for pid, numbers in used.items()

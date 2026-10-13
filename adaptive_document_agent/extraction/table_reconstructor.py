@@ -212,7 +212,7 @@ class TableReconstructor:
         repaired.headers = self._fill_header_blanks(repaired.headers)
         repaired.rows = [row for row in repaired.rows if any(cell for cell in row.cells)]
 
-        raw_has_header = bool(repaired.raw_cells) and not any(
+        raw_has_header = repaired.raw_cells_include_headers is not False and bool(repaired.raw_cells) and not any(
             _is_data_number(cell) for cell in repaired.raw_cells[0][1:]
         )
         if raw_has_header and (

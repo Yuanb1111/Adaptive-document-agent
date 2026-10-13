@@ -31,6 +31,9 @@ _SIMPLE_OPERATIONS = frozenset({("presentation", "IntroductionPages"), ("report"
                               ("presentation", "SummaryReadBatch"),
                               ("presentation", "CompactSummaryDraft"),
                               ("presentation", "CompactSummaryReview"),
+                              ("presentation", "SummaryStringRepairs"),
+                              ("presentation", "SummarySynthesisRevision"),
+                              ("presentation", "SummaryBodyAllocation"),
                               ("planner", "SemanticCandidateScores")})
 
 # Bound structured responses without changing evidence or numerical validation.
@@ -38,7 +41,10 @@ _OUTPUT_LIMITS = {('planner', 'SemanticCandidateScores'): 12000,
                   ('presentation', 'SummaryThemePlan'): 12000,
                   ('presentation', 'SummaryReadBatch'): 12000,
                   ('presentation', 'CompactSummaryDraft'): 8000,
-                  ('presentation', 'CompactSummaryReview'): 8000}
+                  ('presentation', 'CompactSummaryReview'): 8000,
+                  ('presentation', 'SummaryStringRepairs'): 3000,
+                  ('presentation', 'SummarySynthesisRevision'): 8000,
+                  ('presentation', 'SummaryBodyAllocation'): 8000}
 
 
 def reasoning_parameters(options: dict[str, Any]) -> dict[str, Any]:

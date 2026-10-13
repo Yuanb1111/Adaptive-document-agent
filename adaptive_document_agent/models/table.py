@@ -30,6 +30,9 @@ class ExtractedTable(BaseModel):
     section_path: list[str] = Field(default_factory=list)
     rows: list[TableRow] = Field(default_factory=list)
     raw_cells: list[list[str | None]] = Field(default_factory=list)
+    # None preserves legacy inference; False means headers are stored separately
+    # and body section rows must never be reinterpreted as column headings.
+    raw_cells_include_headers: bool | None = None
     raw_header_cells: list[list[str | None]] = Field(default_factory=list)
     raw_header_lines: list[str] = Field(default_factory=list)
     raw_header_spans: list[tuple[int, int, int]] = Field(default_factory=list)

@@ -185,6 +185,7 @@ class BorderlessTableExtractor:
                     rows=[TableRow(cells=list(cells), page=page_number, column_periods=row_periods,
                                    alignment_status="ambiguous" if ambiguous else "resolved") for cells, row_periods, ambiguous in row_specs],
                     raw_cells=raw_rows,
+                    raw_cells_include_headers=False,
                     bbox=bbox,
                     raw_header_lines=[s.text for s in raw_header_sources],
                     unit_header=next((s.text for s in raw_header_sources if re.search(
