@@ -28,6 +28,8 @@ The responsibility split is:
 
 PDF contents are untrusted source material. Instructions embedded in a document are treated as data, never as commands.
 
+The v121 update binds opening reviews to the generated first slide and repairs misdirected reviews before requesting editorial changes. Borderless tables resolve grouped count/percentage units from source geometry and preserve date headers separately from body values. See [the v121 validation notes](docs/REVIEW_TARGET_GROUPED_UNITS_V121.md).
+
 Presentation topic validation also checks supporting measures against the model's exact selected evidence and a literal source relation or a same-column, signed subtotal. This applies only to the slide's topic scope; each chart's own title/data check remains independent. Valid series beyond three continue on independently cited pages under the same question. Source conflicts, units, period bases, incomplete matrices and incomplete reconciliation bridges remain guarded. Rejected topic corrections have a separate bounded budget per topic, and cached retained drafts can be revalidated offline after a compilation capability change. The final presentation shows coverage boundaries and remaining interpretation limits. Count labels retain their scaled units and whole-count precision; missing percentage symbols require item-bound quotations or resolved percentage source columns. Raw extracted values and authored drafts remain in the analysis audit.
 
 ## Architecture

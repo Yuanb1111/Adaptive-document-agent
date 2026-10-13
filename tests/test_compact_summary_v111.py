@@ -43,7 +43,7 @@ class Reviewer:
         self.calls.append(schema.__name__)
         if schema is CompactSummaryDraft:return schema.model_validate(self.draft)
         payload=json.loads(messages[-1]['content'].split('\n',1)[1].rsplit('\n',1)[0])
-        return CompactSummaryReview(opening_accepted=True,opening_reason='The opening explains the scheduling service and training prerequisite.',identity_accepted=self.identity,parts=[dict(part_id=p['id'],accepted=p['id']!=self.reject,
+        return CompactSummaryReview(opening_slide_id=(payload.get('opening_target') or {}).get('slide_id'), opening_item_texts=(payload.get('opening_target') or {}).get('item_texts'), opening_accepted=True,opening_reason='The opening explains the scheduling service and training prerequisite.',identity_accepted=self.identity,parts=[dict(part_id=p['id'],accepted=p['id']!=self.reject,
             reason='Training dependency is retained.' if p['id']!=self.reject else 'Source meaning is absent.')
             for p in payload['source']['parts']])
 

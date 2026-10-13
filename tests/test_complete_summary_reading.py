@@ -145,7 +145,7 @@ class SummaryClient(MockLLMClient):
                 items.append(dict(label=topic,text=text,fact_ids=group['ids']))
             value=response_model(pages=[dict(title='Operations and delivery',items=items)])
         elif operation == 'CompactSummaryReview':
-            value=response_model(opening_accepted=True,opening_reason='The opening explains scheduling software and customer integration.',parts=[dict(part_id=p['id'],accepted=True,reason='The authored fixture covers this source part.')
+            value=response_model(opening_slide_id=(payload.get('opening_target') or {}).get('slide_id'), opening_item_texts=(payload.get('opening_target') or {}).get('item_texts'), opening_accepted=True,opening_reason='The opening explains scheduling software and customer integration.',parts=[dict(part_id=p['id'],accepted=True,reason='The authored fixture covers this source part.')
                                        for p in payload['source']['parts']])
         else:
             raise AssertionError(operation)

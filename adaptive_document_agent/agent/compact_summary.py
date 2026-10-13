@@ -12,7 +12,7 @@ from adaptive_document_agent.services.compact_summary import compact_digest, com
 from adaptive_document_agent.services.summary_validation import presentation_errors
 from adaptive_document_agent.utils.timing import record_timing
 from .prompting import untrusted_document_message
-from .compact_summary_review import CompactReviewProtocolError, review_compact
+from .compact_summary_review import CompactReviewProtocolError, review_compact, validate_review_target
 
 
 class CompactSummaryItem(BaseModel):
@@ -52,6 +52,8 @@ class CompactSummaryReview(BaseModel):
     identity_accepted: bool | None = None
     opening_accepted: bool
     opening_reason: str = Field(min_length=1, max_length=2000)
+    opening_slide_id: str | None = None
+    opening_item_texts: list[str] | None = None
 
 
 def compact_input(review):
@@ -205,7 +207,11 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
                      'If identity fields are proposed, return identity_accepted explicitly. Accept only '
                      'the document issuer/main subject with literal source quotations, not an advisor '
                      'or another entity. Return opening_accepted and opening_reason explicitly. '
-                     'In opening_reason identify the actual first-page statement of what the subject does, '
+                     'The ONLY opening review target is opening_target, the first GENERATED introduction slide '
+                     'after pagination. Source PDF pages (including identity_source_pdf_pages) are evidence, '
+                     'never the slides being reviewed. Return opening_slide_id and opening_item_texts copied '
+                     'exactly from opening_target.slide_id and ALL its item_texts in order, for BOTH acceptance '
+                     'and rejection. In opening_reason identify the actual generated first-slide statement of what the subject does, '
                      'or explain precisely what is missing. Accept only if the FIRST '
                      'page explains what the subject does and its products/services or actual scope '
                      'from the source. Reject a name, document purpose, topic list or financial results '
@@ -214,10 +220,14 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
                      + ('' if require_opening else
                         ' This is a continuation theme, not the opening. Do not require business introduction here; '
                         'still verify every supplied part against its actual paragraph.')},
-                    untrusted_document_message(json.dumps({'source':payload,
+                    untrusted_document_message(json.dumps({'source':{k:v for k,v in payload.items() if k!='identity_pages'},
+                        'identity_source_pdf_pages':payload['identity_pages'],
+                        'opening_target':{'slide_id':pages[0].id, 'item_texts':[i.text for i in pages[0].items]} if require_opening else None,
                         'identity':draft.model_dump(exclude={'pages'}),'pages':[p.model_dump(mode='json',
                         exclude={'items':{'__all__':{'source_quote'}}}) for p in pages]},ensure_ascii=False))],
-                    CompactSummaryReview, audit, cancelled=cancelled)
+                    CompactSummaryReview, audit, cancelled=cancelled,
+                    validate=lambda response: validate_review_target(response, pages,
+                        {p.id for p in review.parts if p.role=='content'}, require_opening))
                 ids = {p.id for p in review.parts if p.role=='content'}
                 audit['compact_semantic_review'] = response.model_dump(mode='json')
                 if require_opening and response.opening_accepted is not True:

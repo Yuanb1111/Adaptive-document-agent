@@ -14,7 +14,7 @@ from .period_header_geometry import geometric_periods, MONTH_DURATION, month_cou
 
 _VALUE = re.compile(r"(?<![A-Za-z0-9])(?:\(?[+-]?(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)\)?[%％]?|N/A(?![A-Za-z])|[—–]|-(?!\S))")
 _YEAR = re.compile(r"\b(?:19|20)\d{2}\b")
-_PERIOD_TOKEN = re.compile(r"\b(?:(?:FY|CY|H[12]|[12]H|Q[1-4])\s*)?(?:19|20)\d{2}(?:\s*(?:H[12]|[12]H|Q[1-4]))?\b", re.I)
+_PERIOD_TOKEN = re.compile(r"\b(?:(?:of|FY|CY|H[12]|[12]H|Q[1-4])\s*)?(?:19|20)\d{2}(?:\s*(?:H[12]|[12]H|Q[1-4]))?\b", re.I)
 _WORD = re.compile(r"[%A-Za-z][%A-Za-z/-]*")
 
 
@@ -38,6 +38,15 @@ class BorderlessTableExtractor:
         lines = [self._clean_line(source.text) for source in sources]
         candidates = []
         for index, line in enumerate(lines):
+            # Date superheaders and labelled year tiers are retained as header
+            # evidence, never numeric body rows. Require a nearby year tier
+            # for date fragments so a real metric containing a day is kept.
+            is_year_tier = self._year_tier(lines, index)
+            date_fragment = self._date_header(line)
+            nearby_year_tier = any(self._year_tier(lines, i)
+                                  for i in range(index+1, min(index+4,len(lines))))
+            if is_year_tier or date_fragment and nearby_year_tier:
+                continue
             if row := self._parse_row(index, line, minimum_values=1):
                 matches = list(_VALUE.finditer(sources[index].text))[-len(row.values):]
                 boxes = [sources[index].bounds(m.start(), m.end()) for m in matches]
@@ -81,6 +90,14 @@ class BorderlessTableExtractor:
                     header_lines = lines[:year_index+1] + [s.text for s in header_sources]
                     headers = self._headers(header_lines, year_index, len(header_lines), maximum_values)
             headers = geometric_headers(header_sources, anchors, headers)
+            from .grouped_unit_headers import grouped_unit_headers
+            grouped = grouped_unit_headers(header_sources,
+                sources[max(0,year_index-3):year_index] if year_index is not None else [], anchors)
+            if grouped:
+                headers = grouped
+            if year_index is not None:
+                from .grouped_unit_headers import qualified_year_periods
+                periods = qualified_year_periods(sources[year_index], sources[max(0,year_index-3):year_index], periods)
             audit_statuses = (geometric_audit_statuses(header_sources, sources[year_index], maximum_values)
                               if year_index is not None else ["unknown"] * maximum_values)
             alignments = {r.line_index: align_sparse_values(r.values, r.boxes, anchors, maximum_values)
@@ -122,6 +139,11 @@ class BorderlessTableExtractor:
             context_start = max(0, (year_index if year_index is not None else group[0].line_index) - 8)
             context = " ".join(lines[context_start : group[0].line_index + 1])
             unit, scale, currency, raw_unit = self._defaults(context)
+            # A percent symbol somewhere in nearby prose or a mixed unit tier
+            # is not a table-wide declaration. Columns carry scoped units.
+            if unit == 'percent' and not any(re.fullmatch(r'\s*\(?\s*[%％]\s*\)?\s*', s.text)
+                                             for s in raw_header_sources):
+                unit, scale, currency, raw_unit = None, None, None, None
             table_id = stable_id("borderless_table", page_number, group_index, group[0].line_index, group[-1].line_index)
             context_label = self._context_label(lines, year_index if year_index is not None else group[0].line_index)
             col_types = ["label"]
@@ -180,6 +202,21 @@ class BorderlessTableExtractor:
                 )
             )
         return tables
+
+    @staticmethod
+    def _date_header(line):
+        return re.fullmatch(r'(?i)(?:year\s*ended\s*|ended\s*)?'
+            r'(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?', line)
+
+    @classmethod
+    def _year_tier(cls, lines, index):
+        line = lines[index]
+        if cls._nearest_year_header([line, ''], 1)[0] is None:
+            return False
+        prefix = line[:_PERIOD_TOKEN.search(line).start()].strip()
+        # Labelled year tiers need an immediately preceding date caption.
+        # A metric whose amounts happen to be 2021/2022 remains a body row.
+        return not prefix or index > 0 and bool(cls._date_header(lines[index-1]))
 
     @staticmethod
     def _parse_row(index: int, line: str, *, minimum_values: int = 2) -> _CandidateRow | None:
@@ -255,7 +292,7 @@ class BorderlessTableExtractor:
     def _nearest_year_header(lines: list[str], first_row: int, *, allow_single=False) -> tuple[int | None, list[str]]:
         for index in range(first_row - 1, max(-1, first_row - 40), -1):
             matches = list(_PERIOD_TOKEN.finditer(lines[index]))
-            years = [m.group().replace(" ", "") for m in matches]
+            years = [re.sub(r'^of', '', m.group().replace(" ", ""), flags=re.I) for m in matches]
             # A contiguous header tier, not dates scattered through prose.
             if (len(years) >= (1 if allow_single else 2) and not lines[index][matches[-1].end():].strip()
                     and all(not lines[index][a.end():b.start()].strip() for a,b in zip(matches,matches[1:]))):
