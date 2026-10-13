@@ -54,6 +54,8 @@ def test_rejected_opening_reason_reaches_editorial_repair():
                 if self.attempts == 2:
                     assert 'Missing actual service scope' in messages[-2]['content']
             value = super().generate_structured(messages, schema, **kwargs)
+            if schema is CompactSummaryDraft and self.attempts == 1:
+                value.pages[0].items[0].text = 'This page lists teams and the topics described in the document.'
             if schema is CompactSummaryReview and self.attempts == 1:
                 value.opening_accepted = False
                 value.opening_reason = 'Missing actual service scope'

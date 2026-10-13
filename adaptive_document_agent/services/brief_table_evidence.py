@@ -111,7 +111,8 @@ class TableQuoteContext:
                                re.search(r'每(?:台|单位)\s*$',text[max(0,match.start()-6):match.start()]))
                 if relevant and (len(supported) != 1 or not (prefix_unit or _claim_keeps_basis(
                         text[match.end():], next(iter(supported))))):
-                    errors.append("amount changes or omits its source unit denominator")
+                    errors.append("amount changes or omits its source unit denominator: "
+                                  + repr(match[0].strip()) + "; source bases=" + repr(sorted(supported)))
         return errors
 
 
@@ -207,6 +208,14 @@ def _column_basis(table, column, source, locate=_located_header):
         text = located.strip()
         if text.startswith("(") and text.endswith(")"):
             text = text[1:-1].strip()
+        # A literal "for <column>" scopes the declaration; it is not part
+        # of the denominator. Require that exact column before removing it.
+        qualifier = re.search(r"\s+for\s+(.+)$", text, re.I)
+        if qualifier:
+            header = table.headers[column] if column < len(table.headers) else ''
+            if ''.join(normalize_quote(qualifier[1]).split()) != ''.join(normalize_quote(header).split()):
+                return None
+            text = text[:qualifier.start()].rstrip()
         numerator, basis = split_unit_basis(text)
         if not _UNIT_NUMERATOR.fullmatch(numerator) or not _BASIS_WORDS.fullmatch(basis):
             return None  # Do not extract a denominator from surrounding prose.
@@ -251,6 +260,22 @@ def _unit_supported(table, column, currency, scale, source, parsed, locate=_loca
                 and (unit.scale or 1) == scale):
             return True
     return False
+
+
+def _quoted_complete_row(cells: list[str], quoted: str) -> bool:
+    """Match ordered cells, allowing only attached numeric label footnotes.
+
+    Analytical labels may omit attached footnotes retained in raw source.
+    Do not remove words or numerical cells, or join discontinuous quotes.
+    """
+    literal = normalize_quote(" ".join(cells))
+    if literal in quoted:
+        return True
+    if not cells or parse_number(cells[0]) is not None:
+        return False
+    label = re.escape(normalize_quote(cells[0]))
+    values = re.escape(normalize_quote(" ".join(cells[1:])))
+    return bool(re.search(r"(?<!\w)" + label + r"(?:\(\d+\))+ " + values + r"(?![\w.])", quoted))
 
 
 def quoted_table_context(item, result, *, excerpts=None):
@@ -302,7 +327,7 @@ def quoted_table_context(item, result, *, excerpts=None):
                     continue
                 key = tuple(normalize_quote(label) for label in labels)
                 plausible[key].add(table.table_id)
-                if row.alignment_status == "resolved" and normalize_quote(" ".join(cells)) in quoted:
+                if row.alignment_status == "resolved" and _quoted_complete_row(cells, quoted):
                     matched[key].append((table, row))
         complete = []
         # An exact distinctive unit declaration inside the quotation scopes its

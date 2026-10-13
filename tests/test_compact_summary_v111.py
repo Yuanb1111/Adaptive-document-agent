@@ -71,7 +71,8 @@ def test_citing_all_ids_cannot_override_failed_part_meaning_review():
     client=Reviewer(draft,reject='part-69')
     with pytest.raises(ValueError,match='Source meaning is absent'):
         generate_compact_summary(client,result,review,CompanyProfile(summary_review=review))
-    assert client.calls==['CompactSummaryDraft','CompactSummaryReview']*2
+    assert client.calls==['CompactSummaryDraft','CompactSummaryReview','CompactSummaryDraft']
+    assert review.plan_audits[-1]['repeated_draft'] is True
 
 
 def test_omitted_part_and_changed_fact_bindings_fail_closed():

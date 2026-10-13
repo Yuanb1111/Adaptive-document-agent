@@ -68,12 +68,13 @@ The Streamlit UI starts analysis automatically after upload. It uses document di
 
 The optional **Analysis and PPT requirements** field supports analysis emphasis, content detail, chapter-wide source-table appendices, narrative language and a requested slide limit. Requirements are interpreted before generation and their completion is reported after verified export. Source-table fidelity is checked cell by cell; detected-table counts do not certify that extraction found every table in the PDF. See [executable report requirements](docs/REPORT_CUSTOMIZATION.md) for examples, execution boundaries and limitations.
 
-The v111 update bounds company introductions to five physical pages while
-retaining every substantive Summary part through exact many-part citations and
-an independent meaning review. Presentation-only requirements no longer broaden
-analysis discovery or candidate scoring. Scoring and translation/review batches
-use bounded concurrency with real completion updates; transient server failures
-receive one transport retry. See [v111 regression scope and limits](docs/BOUNDED_SCORING_COMPACT_INTRODUCTION_V111.md).
+Complete introductions use source-selected themes with exact many-part citations
+and an independent meaning review. Related paragraphs are packed into readable
+pages without omitting substantive Summary parts. The v120 update validates
+attached table footnotes and column-scoped rate units, measures paragraph layout
+instead of imposing the former 600-character cutoff, and repairs reviewer schema
+failures separately from editorial copy. An unchanged rejected editorial repair
+fails with its original diagnostics. See [v120 regression scope and limits](docs/SUMMARY_EVIDENCE_STAGE_REPAIR_V120.md).
 
 ## Repository Layout
 
