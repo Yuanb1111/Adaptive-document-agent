@@ -202,3 +202,27 @@ def test_composition_colors_unique_and_thin_segments_unlabelled():
     small = next(series for series in chart.series if series.name == "Small")
     assert all(point.data_label._dLbl.xpath("c:showVal")[0].get("val") == "0" for point in small.points)
     assert sorted(sum(s.values) for s in chart.series) == [2, 80, 118]
+
+
+def test_stacked_labels_reserve_space_for_wrapped_legend_without_changing_values():
+    from adaptive_document_agent.services.composition_renderer import add_composition_chart
+    categories = [(f'Long component description {i}', 4) for i in range(6)] + [
+        ('Long moderate component description', 13), ('Main component', 63)]
+    values = [obs(f'{p}-{c}', v, p, category=c) for p in ('FY2023', 'FY2024') for c, v in categories]
+    for item in values:
+        item.unit, item.unit_family, item.currency = 'percent', 'percentage', None
+        item.raw_value = f'{item.value}%'
+    plan = ChartPlan(id='dense', title='Composition', question='Composition', chart_type='stacked_percent',
+                     series_dimension='component', observation_ids=[o.id for o in values], show_data_labels=True)
+    deck = Presentation()
+    slide = deck.slides.add_slide(deck.slide_layouts[6])
+    add_composition_chart(slide, plan, values, (.5, .5, 5.5, 2.2))
+    chart = next(s.chart for s in slide.shapes if s.has_chart)
+    assert sorted(s.values[0] for s in chart.series) == [.04] * 6 + [.13, .63]
+    for series in chart.series:
+        for point in series.points:
+            flags = point.data_label._get_or_add_dLbl().xpath('c:showVal')
+            if series.name == 'Main component':
+                assert not flags or flags[0].get('val') != '0'
+            else:
+                assert flags[0].get('val') == '0'

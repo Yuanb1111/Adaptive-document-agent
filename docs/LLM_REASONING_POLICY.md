@@ -9,9 +9,12 @@ without changing prompts, response validation, routing, credentials or privacy:
 - `TopicCoverageReview` in `presentation` uses the same opt-out reduction. Its
   bounded output must contain explicit evidence decisions rather than spend
   the entire token allowance on internal reasoning. Full point context,
-  source validation and the eight-batch plus two-repair call budget remain required; incomplete
+  source validation and the 24-batch, 36-call ceiling remain required; incomplete
   coverage remains unresolved and cannot certify business acceptance.
 - `ExecutiveBriefPatch` uses the same reduction for its single targeted repair.
+- `TakeawayCorrection` uses the same opt-out reduction and a 2,000-token output
+  bound. It rewrites only a withheld conclusion from its selected evidence;
+  strict compilation must succeed before the conclusion is restored.
 - `SummaryEditorialDraft`, `CompactSummaryDraft` and `CompactSummaryReview`
   use the same opt-out reduction. `SummaryReadBatch` now uses it for bounded
   structural reading and source-span capture. Complete line assignment, literal

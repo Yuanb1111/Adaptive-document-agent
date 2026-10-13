@@ -41,6 +41,20 @@ def _style_labels(labels, *, share, doughnut, compact, color):
     labels.number_format_is_linked = False
 
 
+def _minimum_label_share(bounds, categories, *, compact):
+    """Reserve legend and axis space before estimating stacked label fit."""
+    font = 10 if compact else 11
+    width = max(1, bounds[2] * 72 - 24)
+    rows, occupied = 1, 0
+    for category in categories:
+        item = len(category) * font * .52 + 18
+        if occupied and occupied + item > width:
+            rows, occupied = rows + 1, 0
+        occupied += item
+    plot_height = max(font * 1.4, bounds[3] * 72 - 30 - rows * font * 1.5)
+    return max(.06, font * 1.4 / plot_height)
+
+
 def add_composition_chart(slide, plan, observations, bounds, *, totals=None, compact=False):
     from .pptx_export import _display_scale, _normalize_axis_ids, _rgb
 
@@ -107,7 +121,8 @@ def add_composition_chart(slide, plan, observations, bounds, *, totals=None, com
     # Thin pie slices use outside labels. For stacked charts, hide only labels
     # that cannot fit their segment; all source values remain in the workbook.
     column_totals = [sum(row[i] for row in matrix.values) for i in range(len(matrix.periods))]
-    labels_fit = all(v / column_totals[i] >= .06 for row in matrix.values for i, v in enumerate(row))
+    minimum_share = .06 if doughnut else _minimum_label_share(bounds, matrix.categories, compact=compact)
+    labels_fit = all(v / column_totals[i] >= minimum_share for row in matrix.values for i, v in enumerate(row))
     outside = doughnut and not labels_fit
     plot.has_data_labels = plan.show_data_labels
     if plot.has_data_labels:
@@ -123,7 +138,7 @@ def add_composition_chart(slide, plan, observations, bounds, *, totals=None, com
         if not doughnut and not labels_fit:
             for series, row in zip(chart.series, matrix.values):
                 for i, value in enumerate(row):
-                    if value / column_totals[i] < .06:
+                    if value / column_totals[i] < minimum_share:
                         label = series.points[i].data_label
                         # A deleted point label cannot also carry the styling
                         # and content nodes python-pptx adds. Office repairs

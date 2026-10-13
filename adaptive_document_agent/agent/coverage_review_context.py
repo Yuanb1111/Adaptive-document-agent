@@ -110,7 +110,8 @@ def batch_context(compact, selection, ids):
     rows = compact['all_extracted_series']
     result = {key: value for key, value in compact.items()
               if key not in {'all_extracted_series', 'same_source_row_period_views',
-                             'ratio_definitions', 'series_requiring_coverage_decision'}}
+                             'ratio_definitions', 'source_row_qualifications',
+                             'series_requiring_coverage_decision'}}
     result['all_extracted_series'] = [row for row in rows if row['id'] in visible]
     # Catalog preserves global question context; omitted points are explicitly
     # deferred to other batches, never treated as absent or less important.
@@ -120,6 +121,12 @@ def batch_context(compact, selection, ids):
     result['same_source_row_period_views'] = [view for view in compact.get('same_source_row_period_views', [])
         if any(entry['series_id'] in set(ids) for entry in view['same_source_row'])]
     result['ratio_definitions'] = [row for row in compact.get('ratio_definitions', []) if row['series_id'] in visible]
+    # Qualifications travel with their full source series. Sending all deferred
+    # rows' notes on every request can consume the entire batch budget before
+    # a single new series is visible. Each deferred note is reviewed when its
+    # series is requested; selected-series qualifications remain in every batch.
+    result['source_row_qualifications'] = [row for row in compact.get('source_row_qualifications', [])
+                                          if row['series_id'] in visible]
     result['current_selection'] = selection.model_dump(mode='json')
     result['series_requiring_coverage_decision'] = ids
     result['selectable_series_ids'] = sorted(visible)

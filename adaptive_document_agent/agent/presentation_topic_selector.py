@@ -260,7 +260,10 @@ class PresentationTopicSelector:
                         for order in permutations(index)
                     )):
                         from adaptive_document_agent.validation.presentation_parallel_series import validate_parallel_series
-                        validate_parallel_series([lookup[sid] for sid in topic.series_ids])
+                        try:
+                            validate_parallel_series([lookup[sid] for sid in topic.series_ids])
+                        except ValueError as exc:
+                            raise ValueError(f'Topic {topic.id} has incompatible parallel evidence: {exc}') from exc
             if primary_pages and any(
                 not any(e.page in primary_pages for item in lookup[sid] for e in item.evidence)
                 for sid in topic.series_ids
@@ -271,11 +274,33 @@ class PresentationTopicSelector:
                 for value in (item.raw_value, item.value, item.period)
                 if value is not None
             ))
+            # Standalone source cells use accounting parentheses without a
+            # currency prefix. The prose tokenizer recognises RMB(123), but
+            # cannot infer that a bare parenthesised number is accounting data.
+            # Parse the complete raw cell with the numeric engine and retain
+            # its sign; no scaling or missing unit is inferred here.
+            from adaptive_document_agent.extraction.numeric_parser import parse_number
+            for sid in topic.series_ids:
+                for item in lookup[sid]:
+                    parsed = parse_number(item.raw_value)
+                    if parsed is not None:
+                        allowed.update(PresentationPlanValidator._numbers(str(parsed.value)))
             claimed = PresentationPlanValidator._numbers(" ".join(
                 (topic.title, topic.question, topic.rationale, topic.takeaway, *topic.caveats)
             ))
             if claimed - allowed:
-                raise ValueError(f"Topic {topic.id} contains unsupported numeric claims: {sorted(claimed - allowed)}")
+                fields = {'title': topic.title, 'question': topic.question,
+                          'rationale': topic.rationale, 'takeaway': topic.takeaway,
+                          **{f'caveats[{i}]': text for i, text in enumerate(topic.caveats)}}
+                rejected = {name: text for name, text in fields.items()
+                            if PresentationPlanValidator._numbers(text) - allowed}
+                periods = sorted({item.period for sid in topic.series_ids for item in lookup[sid] if item.period})
+                raise ValueError(f"Topic {topic.id} contains unsupported numeric claims: {sorted(claimed - allowed)}; "
+                                 f"rejected fields: {json.dumps(rejected, ensure_ascii=False)}; "
+                                 f"selected source periods: {periods}. Correct every rejected field, including caveats; "
+                                 "remove unsupported dates/values entirely from this topic. Negating them as "
+                                 "'not covered' or 'unavailable' still repeats the unsupported token. "
+                                 "Use a general scope qualification without that date/value, or cite only the listed source periods.")
             from adaptive_document_agent.validation.topic_period_consistency import topic_period_errors
             period_errors = topic_period_errors(topic, lookup)
             if period_errors:

@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from typing import Callable, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from adaptive_document_agent.models import Observation, PipelineResult, PresentationTopicSelection, ValidationIssue
 from adaptive_document_agent.models.presentation import PresentationOmission
@@ -19,8 +19,8 @@ from .prompting import load_prompt, untrusted_document_message
 from .coverage_representation import representation_links
 
 MAX_REVIEW_CHARACTERS = 120_000
-MAX_REVIEW_BATCHES = 8
-MAX_REVIEW_CALLS = MAX_REVIEW_BATCHES + 2
+MAX_REVIEW_BATCHES = 24
+MAX_REVIEW_CALLS = MAX_REVIEW_BATCHES + 12
 MAX_REVIEW_OUTPUT_TOKENS = 8192
 MAX_REVIEW_DECISIONS = 32
 
@@ -67,14 +67,24 @@ def _validate_batch(reviewed, current, requested, lookup, primary_pages, validat
                          + ', '.join(sorted(set(requested) - set(local))))
     links = {sid: representation_links(lookup[sid], selected) for sid in requested}
     mismatches = [sid for sid, d in local.items() if not d.reason.strip()
-                  or (d.decision == 'include') != (links[sid] is not None)]
+                  or (d.decision == 'include' and links[sid] is None)]
     if mismatches:
         raise ValueError('Coverage decision must match the evidence actually selected: ' + ', '.join(mismatches))
+    for sid, decision in list(local.items()):
+        if decision.decision == 'omit' and links[sid] is not None:
+            # A model may call a duplicate view "omitted" because it need not
+            # occupy another topic. Every exact source fact is nevertheless
+            # already selected. Reconcile coverage bookkeeping, not importance
+            # or topic choice; the untouched model decision stays in the audit.
+            local[sid] = CoverageDecision(series_id=sid, decision='include',
+                reason='All source facts are represented by model-selected evidence; '
+                       'the original omission reasoning remains in the batch audit.')
+    revised.omissions = [o for o in revised.omissions if links.get(o.series_id) is None]
     return revised, local, {sid: link for sid, link in links.items() if link is not None}
 
 
 def _review_batch(context, current, requested, lookup, primary_pages, gateway, validate, audit, budget=None):
-    """One targeted semantic repair; retain all facts and every rejected attempt."""
+    """Bound targeted repairs; stop repeated errors and retain every attempt."""
     from .coverage_review_context import encode
     budget = budget if budget is not None else {'calls': 0}
     encoded = encode(context)
@@ -88,12 +98,43 @@ def _review_batch(context, current, requested, lookup, primary_pages, gateway, v
          'definitions, categories and audit status; matching page numbers or measure names is insufficient.'},
         untrusted_document_message(encoded),
     ]
-    for attempt in range(2):
+    topic_limit = PresentationTopicSelection.model_json_schema()['properties']['topics']['maxItems']
+    if len(current.topics) >= topic_limit - 1:
+        messages[0]['content'] += (
+            f' The accepted selection has {len(current.topics)} topics; the complete response has a hard limit '
+            f'of {topic_limit} topics, leaving {topic_limit - len(current.topics)} additional slots. '
+            'Regroup complementary evidence under a supported shared question when needed. '
+            'Do not return one topic for every requested series or drop accepted observations to meet the limit.')
+    rejected_errors = set()
+    for attempt in range(3):
         if budget['calls'] >= MAX_REVIEW_CALLS:
             raise ValueError('Coverage model-call budget exhausted; remaining evidence requires review.')
         budget['calls'] += 1
-        reviewed = gateway.generate_structured(messages, TopicCoverageReview,
-                                               stage='presentation', allow_repair=False,max_tokens=MAX_REVIEW_OUTPUT_TOKENS)
+        try:
+            reviewed = gateway.generate_structured(messages, TopicCoverageReview,
+                                                   stage='presentation', allow_repair=False,max_tokens=MAX_REVIEW_OUTPUT_TOKENS)
+        except LLMResponseError as exc:
+            # A topic-count overflow needs a semantic regrouping with source
+            # context, not truncation or an evidence-blind format-only repair.
+            cause = exc.__cause__
+            response = getattr(exc, 'response', None)
+            if not isinstance(cause, ValidationError) or response is None:
+                raise
+            errors = cause.errors(include_input=False, include_url=False)
+            error = json.dumps(errors, default=str, sort_keys=True)
+            audit.setdefault('attempts', []).append({'invalid_response': response.text, 'validation_error': error})
+            if attempt == 2 or error in rejected_errors:
+                raise
+            rejected_errors.add(error)
+            feedback = {'schema_errors': errors, 'rejected_output': response.text}
+            if len(encoded) + len(encode(feedback)) > MAX_REVIEW_CHARACTERS:
+                raise ValueError('Schema correction context exceeds the bounded review budget.') from exc
+            messages = messages[:2] + [untrusted_document_message(encode(feedback)),
+                {'role': 'user', 'content': f'Correct the listed schema paths. Return at most {topic_limit} topics '
+                 'and all requested coverage decisions. Preserve every accepted source observation. '
+                 'For topic-count overflow, regroup evidence only when it answers a shared question; '
+                 'do not truncate topics or remove accepted evidence. The original full source context remains above.'}]
+            continue
         entry = {'review': reviewed.model_dump(mode='json')}
         audit.setdefault('attempts', []).append(entry)
         audit['review'] = entry['review']
@@ -104,8 +145,9 @@ def _review_batch(context, current, requested, lookup, primary_pages, gateway, v
             return revised, decisions
         except ValueError as exc:
             entry['validation_error'] = str(exc)
-            if attempt:
+            if attempt == 2 or str(exc) in rejected_errors:
                 raise
+            rejected_errors.add(str(exc))
             feedback = {'validation_error': str(exc),
                         'included_but_unrepresented_facts': _missing_included_facts(reviewed, lookup),
                         'rejected_topics': [t.model_dump(mode='json') for t in reviewed.topics]}
@@ -143,8 +185,8 @@ def coverage_review_pending(result: PipelineResult) -> bool:
     _, lookup = series_directory(result)
     selected = {sid for topic in (result.presentation_topics.topics if result.presentation_topics else [])
                 for sid in topic.series_ids}
-    represented = {item.id for sid in selected if sid in lookup for item in lookup[sid]}
-    return any(sid not in lookup or not {item.id for item in lookup[sid]} <= represented
+    represented = [item for sid in selected if sid in lookup for item in lookup[sid]]
+    return any(sid not in lookup or representation_links(lookup[sid], represented) is None
                for sid in latest.related_ids)
 
 
@@ -186,9 +228,9 @@ def review_topic_coverage(
 ) -> PresentationTopicSelection:
     """Retain the valid draft if coverage review fails; never select by Python rank."""
     selected_ids = {sid for topic in selection.topics for sid in topic.series_ids}
-    represented = {item.id for sid in selected_ids for item in lookup[sid]}
+    represented = [item for sid in selected_ids for item in lookup[sid]]
     candidates = [sid for sid, group in lookup.items()
-        if not {item.id for item in group} <= represented
+        if representation_links(group, represented) is None
         and (not primary_pages or any(e.page in primary_pages for item in group for e in item.evidence))]
     if not candidates:
         return selection
@@ -225,8 +267,12 @@ def review_topic_coverage(
         final_observations = {item.id for sid in final_ids for item in lookup[sid]}
         for sid, decision in decisions.items():
             included = representation_links(lookup[sid], [o for selected_sid in final_ids for o in lookup[selected_sid]]) is not None
-            if not decision.reason.strip() or (decision.decision == "include") != included:
+            if not decision.reason.strip() or (decision.decision == "include" and not included):
                 raise ValueError("Coverage decision must match the evidence actually selected.")
+            if decision.decision == 'omit' and included:
+                decisions[sid] = CoverageDecision(series_id=sid, decision='include',
+                    reason='All source facts are represented by model-selected evidence; '
+                           'the original omission reasoning remains in the review audit.')
         # A completeness review may regroup topics, but must not silently erase
         # already accepted evidence to make room for a newly selected question.
         removed = selected_ids - final_ids
@@ -240,14 +286,17 @@ def review_topic_coverage(
         return selection
     # Promote explicit model-authored exclusion reasons to the existing plan
     # coverage notes; the complete decisions remain in the durable audit.
+    revised.omissions = [o for o in revised.omissions
+                         if o.series_id not in decisions or decisions[o.series_id].decision == 'omit']
     omitted = {item.series_id for item in revised.omissions}
-    for decision in reviewed.coverage_decisions:
+    for decision in decisions.values():
         if len(revised.omissions) >= 12:
             break
         if decision.decision == "omit" and decision.series_id not in omitted:
             revised.omissions.append(PresentationOmission(series_id=decision.series_id, reason=decision.reason))
             omitted.add(decision.series_id)
-    record("presentation_topic_coverage_review", "info", {"review": reviewed.model_dump(mode="json")})
+    record("presentation_topic_coverage_review", "info", {"review": reviewed.model_dump(mode="json"),
+        "reconciled_coverage_decisions": [d.model_dump(mode='json') for d in decisions.values()]})
     return revised
 
 
@@ -262,10 +311,10 @@ def _review_bounded(selection, candidates, lookup, primary_pages, payload, gatew
     budget = {'calls': 0}
     try:
         while remaining:
-            represented = {o.id for topic in current.topics for sid in topic.series_ids for o in lookup[sid]}
+            represented = [o for topic in current.topics for sid in topic.series_ids for o in lookup[sid]]
             # Exact overlapping views are already structurally represented by
             # accepted semantic choices, not chosen by a Python importance rank.
-            covered = [sid for sid in remaining if {o.id for o in lookup[sid]} <= represented]
+            covered = [sid for sid in remaining if representation_links(lookup[sid], represented) is not None]
             for sid in covered:
                 decisions[sid] = CoverageDecision(series_id=sid, decision='include',
                     reason='All source observations are represented in an accepted model-selected view.')
@@ -316,14 +365,14 @@ def _review_bounded(selection, candidates, lookup, primary_pages, payload, gatew
             current = revised
             remaining = [sid for sid in remaining if sid not in local]
         final_ids = {sid for topic in current.topics for sid in topic.series_ids}
-        represented = {o.id for sid in final_ids for o in lookup[sid]}
+        represented = [o for sid in final_ids for o in lookup[sid]]
         for sid, decision in list(decisions.items()):
-            if decision.decision == 'omit' and {o.id for o in lookup[sid]} <= represented:
+            if decision.decision == 'omit' and representation_links(lookup[sid], represented) is not None:
                 # A later accepted complete composition can represent an earlier
                 # excluded individual view. Keep its semantic decision in the
                 # batch audit and reconcile only final structural coverage.
                 decisions[sid] = CoverageDecision(series_id=sid, decision='include',
-                    reason='Represented by a later model-selected complete view; original review: ' + decision.reason)
+                    reason='Represented by a later model-selected complete view; the original reasoning remains in the batch audit.')
         if set(decisions) != set(candidates):
             raise ValueError('Complete coverage review left series without a decision.')
         omitted = {o.series_id for o in current.omissions}

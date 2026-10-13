@@ -31,6 +31,10 @@ def test_bounded_coverage_output_keeps_reasoning_inside_existing_opt_out_policy(
     policy = request_reasoning_policy(settings, stage='presentation', operation='TopicCoverageReview',
                                       model='deepseek-flash')
     assert policy['options'] == options
+    correction = request_reasoning_policy(settings, stage='presentation', operation='TakeawayCorrection',
+                                          model='deepseek-flash')
+    assert correction['options'] == options
+    assert correction['output_token_limit'] == 2000
     assert request_reasoning_policy(settings, stage='report', operation='ExecutiveBriefPatch',
                                     model='deepseek-flash')['options'] == options
     assert request_reasoning_policy(settings, stage='report', operation='ExecutiveBrief',

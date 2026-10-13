@@ -22,4 +22,14 @@ def validate_parallel_series(series):
             key = (o.period, o.entity, tuple(sorted(o.category_dimensions.items())))
             cells.setdefault(key, set()).add(o.value)
         if any(len(values) > 1 for values in cells.values()):
+            # A complete category composition is a panel, not one time series.
+            # Extractors may preserve categories in literal source row labels
+            # rather than category_dimensions. Reuse the full composition gate;
+            # never reinterpret conflicting scalar cells by their metric names.
+            from adaptive_document_agent.document_model import DocumentIndex
+            from adaptive_document_agent.services.composition_candidates import presentation_compositions
+            ids = {o.id for o in items}
+            if any(ids == set([*chart.observation_ids, *chart.total_observation_ids])
+                   for chart in presentation_compositions(DocumentIndex(items))):
+                continue
             raise ValueError("Independent series has conflicting values in one period/category")

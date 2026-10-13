@@ -254,6 +254,8 @@ def _compose_presentation(result, template_path=None, *, artwork=None, source_pd
                 slide.element.cSld.set('name', 'ada:appendix')
     _add_thank_you_slide(presentation)
 
+    from .presentation_body_budget import place_continuations_in_appendix
+    place_continuations_in_appendix(presentation, result)
     _number_slides(presentation)
     from .report_language import apply_report_language
     apply_report_language(presentation, result)

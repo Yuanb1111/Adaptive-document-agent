@@ -71,6 +71,62 @@ def test_dictionary_and_period_views_roundtrip_without_touching_source_text():
     assert json.loads(encode(fresh)) == fresh
 
 
+def test_distinct_new_binding_error_can_be_corrected_without_repeating_a_failure():
+    from adaptive_document_agent.agent.topic_coverage_review import _review_batch
+    from tests.test_topic_coverage_review import _review
+    _, lookup, annual, interim, adverse, payload = context_fixture()
+    current = PresentationTopicSelection(topics=[_topic(annual)])
+    first = _review(annual, interim, adverse)
+    first.topics = current.topics
+    second = _review(annual, interim, adverse)
+    second.topics[-1].series_ids = ['unknown-source']
+    good = _review(annual, interim, adverse)
+    class Gateway:
+        def __init__(self): self.calls = 0
+        def generate_structured(self, messages, model, **kwargs):
+            self.calls += 1
+            return [first, second, good][self.calls - 1]
+    gateway, audit = Gateway(), {}
+    revised, decisions = _review_batch(batch_context(compact_context(payload), current, [interim, adverse]),
+        current, [interim, adverse], lookup, set(), gateway, PresentationTopicSelector._validate, audit)
+    assert gateway.calls == 3
+    assert set(decisions) == {interim, adverse}
+    assert len({a['validation_error'] for a in audit['attempts'][:2]}) == 2
+    assert 'validation_error' not in audit['attempts'][-1]
+
+
+def test_topic_count_overflow_is_regrouped_with_full_source_context():
+    from pydantic import ValidationError
+    from adaptive_document_agent.agent.topic_coverage_review import _review_batch
+    from adaptive_document_agent.services.llm.base import LLMResponse
+    from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
+    from tests.test_topic_coverage_review import _review
+    _, lookup, annual, interim, adverse, payload = context_fixture()
+    current = PresentationTopicSelection(topics=[_topic(annual)])
+    good = _review(annual, interim, adverse)
+    raw = good.model_dump()
+    raw['topics'] = raw['topics'] * 3
+    class Gateway:
+        def __init__(self): self.calls = []
+        def generate_structured(self, messages, model, **kwargs):
+            self.calls.append(messages)
+            if len(self.calls) == 1:
+                try:
+                    model.model_validate(raw)
+                except ValidationError as exc:
+                    raise LLMStructuredOutputError('Invalid topic count',
+                        response=LLMResponse(text=json.dumps(raw))) from exc
+            assert messages[1] == self.calls[0][1]
+            assert 'schema_errors' in messages[2]['content']
+            return good
+    gateway, audit = Gateway(), {}
+    revised, decisions = _review_batch(batch_context(compact_context(payload), current, [interim, adverse]),
+        current, [interim, adverse], lookup, set(), gateway, PresentationTopicSelector._validate, audit)
+    assert len(gateway.calls) == 2 and len(revised.topics) == 3
+    assert set(decisions) == {interim, adverse}
+    assert json.loads(audit['attempts'][0]['invalid_response']) == raw
+
+
 def test_future_period_view_fields_remain_literal():
     view = {'scope_note': 'Keep different source durations separate.',
             'same_source_row': [{'series_id': 'source', 'periods': ['FY2023'],
@@ -116,6 +172,44 @@ def test_compaction_retains_every_numeric_point_and_scope():
         originals = next(row for row in payload['all_extracted_series'] if row[0] == entry['id'])
         raw = originals[payload['series_columns'].index('reported_points')]
         assert points == [dict(zip(payload['reported_point_columns'][1:], point[1:])) for point in raw]
+
+
+def test_batch_qualifications_follow_full_series_without_repeating_deferred_notes():
+    _, _, annual, interim, adverse, payload = context_fixture()
+    selection = PresentationTopicSelection(topics=[_topic(annual)])
+    payload['source_row_qualifications'] = [
+        {'series_id': sid, 'notes': ['Complete source qualification ' + sid]}
+        for sid in (annual, interim, adverse)]
+    compact = compact_context(payload)
+    first = batch_context(compact, selection, [interim])
+    second = batch_context(compact, selection, [adverse])
+    assert first['source_row_qualifications'] == payload['source_row_qualifications'][:2]
+    assert second['source_row_qualifications'] == [payload['source_row_qualifications'][i] for i in (0, 2)]
+    assert len(compact['source_row_qualifications']) == 3
+
+
+@pytest.mark.parametrize('changed_field', [None, 'value', 'unit_scale', 'audited_status', 'period'])
+def test_duplicate_view_omission_is_reconciled_only_when_every_source_fact_matches(changed_field):
+    from adaptive_document_agent.agent.topic_coverage_review import _validate_batch
+    _, lookup, annual, _, _, _ = context_fixture()
+    duplicates = [o.model_copy(deep=True, update={'id': 'duplicate-' + o.id}) for o in lookup[annual]]
+    if changed_field:
+        setattr(duplicates[-1], changed_field, {
+            'value': 999, 'unit_scale': 1000, 'audited_status': 'UNAUDITED', 'period': 'FY2025'
+        }[changed_field])
+    lookup['duplicate'] = duplicates
+    current = PresentationTopicSelection(topics=[_topic(annual)])
+    reviewed = TopicCoverageReview(**current.model_dump(), coverage_decisions=[
+        dict(series_id='duplicate', decision='omit', reason='No need for another view of the selected evidence.')])
+    before = reviewed.model_dump()
+    _, decisions, links = _validate_batch(reviewed, current, ['duplicate'], lookup, set(), PresentationTopicSelector._validate)
+    assert decisions['duplicate'].decision == ('omit' if changed_field else 'include')
+    assert ('duplicate' in links) == (changed_field is None)
+    assert reviewed.model_dump() == before  # Keep the original semantic audit.
+    if changed_field:
+        reviewed.coverage_decisions[0].decision = 'include'
+        with pytest.raises(ValueError, match='actually selected'):
+            _validate_batch(reviewed, current, ['duplicate'], lookup, set(), PresentationTopicSelector._validate)
 
 
 @pytest.mark.parametrize('fail_second', [False, True])
@@ -223,4 +317,30 @@ def test_short_input_still_batches_decisions_to_fit_bounded_output(monkeypatch):
     gateway = Gateway()
     review_topic_coverage(selection, result, lookup, set(), payload, gateway, PresentationTopicSelector._validate)
     assert set(gateway.requested) == candidates and len(gateway.requested) == len(candidates)
+    assert result.validation_warnings[-1].code == 'presentation_topic_coverage_review'
+
+
+def test_large_catalog_reviews_more_than_eight_batches_without_sampling(monkeypatch):
+    from adaptive_document_agent.agent import topic_coverage_review as module
+    monkeypatch.setattr(module, 'MAX_REVIEW_DECISIONS', 16)
+    result, lookup, annual, _, _, payload = context_fixture(extra=300)
+    selection = PresentationTopicSelection(topics=[_topic(annual)])
+    candidates = {sid for sid in lookup if sid != annual}
+    class Gateway:
+        def __init__(self):
+            self.requested = []
+            self.calls = 0
+        def generate_structured(self, messages, model, **kwargs):
+            data = json.loads(messages[-1]['content'].split('\n', 1)[1].rsplit('\n', 1)[0])
+            ids = data['series_requiring_coverage_decision']
+            self.calls += 1
+            self.requested.extend(ids)
+            return TopicCoverageReview(**data['current_selection'], coverage_decisions=[
+                dict(series_id=sid, decision='omit', reason='Outside the requested historical comparison scope.')
+                for sid in ids])
+    gateway = Gateway()
+    review_topic_coverage(selection, result, lookup, set(), payload, gateway, PresentationTopicSelector._validate)
+    assert gateway.calls > 8
+    assert set(gateway.requested) == candidates
+    assert len(gateway.requested) == len(candidates)
     assert result.validation_warnings[-1].code == 'presentation_topic_coverage_review'

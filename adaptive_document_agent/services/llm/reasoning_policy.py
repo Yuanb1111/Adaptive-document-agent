@@ -18,6 +18,7 @@ REASONING_POLICY_VERSION = "operation-reasoning-v8"
 _DEEPSEEK_THINKING_MODELS = frozenset({"deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro"})
 _SIMPLE_OPERATIONS = frozenset({("presentation", "IntroductionPages"), ("report", "BriefSourcePages"),
                               ("presentation", "TopicCoverageReview"),
+                              ("presentation", "TakeawayCorrection"),
                               ("report", "ExecutiveBriefPatch"),
                               # Editorial operations consume already validated analysis.
                               # Preserve deep reasoning in scoring, insights and topic selection.
@@ -38,6 +39,7 @@ _SIMPLE_OPERATIONS = frozenset({("presentation", "IntroductionPages"), ("report"
 
 # Bound structured responses without changing evidence or numerical validation.
 _OUTPUT_LIMITS = {('planner', 'SemanticCandidateScores'): 12000,
+                  ('presentation', 'TakeawayCorrection'): 2000,
                   ('presentation', 'SummaryThemePlan'): 12000,
                   ('presentation', 'SummaryReadBatch'): 12000,
                   ('presentation', 'CompactSummaryDraft'): 8000,

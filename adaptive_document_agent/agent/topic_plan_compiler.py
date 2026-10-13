@@ -51,6 +51,12 @@ def compile_topic_plan(result: PipelineResult) -> PresentationPlan:
             continue  # The concise editorial finding links to the full audit.
         if issue.code in {"presentation_topics_unavailable", "presentation_topic_claims_withheld",
                           "presentation_closing_claim_withheld"}:
+            if issue.code == "presentation_topic_claims_withheld":
+                from .presentation_topic_scope_recovery import withheld_topic_ids
+                active = withheld_topic_ids(plan) | {t.id for t in result.presentation_topics.topics
+                                                     if not t.takeaway.strip()}
+                if not set(issue.related_ids) & active:
+                    continue  # Historical rejection remains in the audit.
             plan.editorial_status = "needs_review"
             plan.editorial_notes.append(f"{', '.join(issue.related_ids)}: {issue.message}")
     return plan

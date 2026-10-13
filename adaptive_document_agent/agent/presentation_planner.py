@@ -25,6 +25,8 @@ class PresentationPlanner:
             from .topic_plan_compiler import compile_topic_plan
             from .presentation_visual_enrichment import enrich_selected_plan
             compiled = compile_topic_plan(result)
+            from .topic_takeaway_repair import repair_withheld_takeaways
+            compiled = repair_withheld_takeaways(self.gateway, result, compiled)
             return enrich_selected_plan(self.gateway, result, compiled)
         if any(issue.code == "presentation_topic_selection_failed" for issue in result.validation_warnings):
             # The semantic selection already exhausted its bounded correction.

@@ -50,7 +50,13 @@ def review_presentation(plan: PresentationPlan | None, result: PipelineResult) -
         findings.append(EditorialFinding("presentation_topic_coverage_unresolved",
             "The selected topics retain valid evidence, but the review of omitted evidence is incomplete. Review analytical coverage before using this deck as a final report."))
     from adaptive_document_agent.agent.presentation_topic_scope_recovery import withheld_topic_ids
-    if withheld_topic_ids(plan) & {theme.id for theme in plan.themes}:
+    withheld = withheld_topic_ids(plan)
+    empty_topics = {t.id for t in (result.presentation_topics.topics if result.presentation_topics else [])
+                    if not t.takeaway.strip()}
+    withheld.update(tid for issue in result.validation_warnings
+                    if issue.code == 'presentation_topic_claims_withheld'
+                    for tid in issue.related_ids if tid in empty_topics)
+    if withheld & {theme.id for theme in plan.themes}:
         findings.append(EditorialFinding("presentation_topic_claims_withheld",
             "Ambiguously bound takeaways were withheld; the selected questions and source evidence remain. Review the presentation audit before using it as a final report."))
     from .presentation_period_scope import review_presentation_period_scope

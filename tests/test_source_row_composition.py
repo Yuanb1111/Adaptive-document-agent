@@ -51,6 +51,20 @@ def test_source_row_matrix_and_snapshot_keep_raw_facts_and_editable_data():
     assert [o.model_dump() for o in obs] == before
 
 
+@pytest.mark.parametrize('incomplete', [False, True])
+def test_parallel_panels_accept_only_complete_validated_source_row_compositions(incomplete):
+    from adaptive_document_agent.validation.presentation_parallel_series import validate_parallel_series
+    items = source_matrix()
+    if incomplete:
+        items.pop()
+        with pytest.raises(ValueError, match='conflicting values'):
+            validate_parallel_series([items])
+    else:
+        before = [o.model_dump() for o in items]
+        validate_parallel_series([items])
+        assert [o.model_dump() for o in items] == before
+
+
 @pytest.mark.parametrize('mutation', ['missing', 'table', 'labels', 'negative', 'dimension', 'column'])
 def test_source_row_composition_rejects_unproved_matrices(mutation):
     obs = source_matrix()
