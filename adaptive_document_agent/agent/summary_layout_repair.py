@@ -57,7 +57,8 @@ def paginate_draft(
                 {'role':'user','content':instruction}]
             if over_budget and any(getattr(p, 'placement', 'body') == 'appendix' for p in draft.pages):
                 from .summary_body_allocation import reallocate_body
-                revised = reallocate_body(gateway, draft, repair, schema, record, cancelled=cancelled)
+                revised = reallocate_body(gateway, draft, repair, schema, record,
+                                          limit=review.max_intro_slides, cancelled=cancelled)
             else:
                 revised = author_draft(gateway, repair, schema, record, cancelled=cancelled)
             if revised == draft:

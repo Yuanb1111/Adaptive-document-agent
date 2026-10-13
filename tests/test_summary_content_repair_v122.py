@@ -43,3 +43,32 @@ def test_omitted_source_part_can_be_added_without_changing_existing_evidence():
     revised = apply_content_revision(original, patch, SummarySynthesisDraft)
     assert revised.pages[1].items[0] == original.pages[1].items[0]
     assert revised.pages[1].items[1].fact_ids == ['f3']
+
+
+def test_model_repairs_use_explicit_addresses_and_exclude_rendered_page_context():
+    import json
+    from pydantic import ValidationError
+    from adaptive_document_agent.agent.summary_content_repair import revise_content
+    original = draft()
+    class Client:
+        def generate_structured(self, messages, schema, **kwargs):
+            payload = json.loads(messages[-1]['content'].split('\n', 1)[1].rsplit('\n', 1)[0])
+            assert 'rendered_pages' not in payload and 'previous_draft' not in payload
+            assert payload['editable_groups'][1]['items'][0]['item_id'] == 'g1_i0'
+            assert payload['source_facts'] == [dict(id='f3', part_id='part3', label='Conditions',
+                source_quote='Delivery requires customer acceptance.\nReported 7.1%.', source_pages=[12])]
+            for target in ['g19_i0', 'g1_i9', 'compact_summary_1']:
+                with pytest.raises(ValidationError):
+                    schema(replacements=[dict(item_id=target, replacement=original.pages[0].items[0])])
+            with pytest.raises(ValidationError):
+                schema(additions=[dict(group_id='g0', item=original.pages[0].items[0])])
+            return schema(additions=[dict(group_id='g1', item=dict(label='Conditions',
+                text='Delivery requires customer acceptance.', fact_ids=['f3']))])
+    source = dict(parts=[dict(id='part3', facts=[dict(id='f3', label='Conditions', quote_ref='q3')])],
+                  source_quotes=[dict(id='q3', pages=[12],
+                      text='Delivery requires customer acceptance.\nReported 7.1%.')])
+    revised = revise_content(Client(), original, [], SummarySynthesisDraft, {}, source=source,
+                             errors=['Include delivery conditions.'])
+    assert revised.pages[0] == original.pages[0]
+    assert revised.pages[1].items[0] == original.pages[1].items[0]
+    assert revised.pages[1].items[1].fact_ids == ['f3']

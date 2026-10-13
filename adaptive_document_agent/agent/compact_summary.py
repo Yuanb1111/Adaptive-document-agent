@@ -271,10 +271,13 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
     rejected_errors = []
     repairs = {'source': 0, 'meaning': 0}
     revision_base = None
-    # A deterministic source correction must not consume the only chance to
-    # correct a later independent meaning review. Each phase has one revision;
-    # the whole editorial operation still has at most three candidate drafts.
-    for attempt in range(3):
+    previous_meaning_rejections = None
+    # Each phase gets its own correction. A meaning patch can introduce a new
+    # citation error after source preflight already passed; permit one final
+    # source correction for that patch, then independently review it again.
+    # A second meaning correction is allowed only when rejection count strictly
+    # decreases. Five candidates bound the whole operation; no editor restart.
+    for attempt in range(5):
         if cancelled is not None and cancelled.is_set():
             raise CancelledError('Compact summary cancelled')
         audit = {'compact_attempt':attempt+1}
@@ -286,7 +289,8 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
             with record_timing(review.timings_ms,'compact_editorial_attempt_'+str(attempt+1)):
                 if revision_base is not None:
                     from .summary_content_repair import revise_content
-                    draft = revise_content(gateway,revision_base,messages,draft_schema,audit,cancelled=cancelled)
+                    draft = revise_content(gateway,revision_base,messages,draft_schema,audit,
+                        source=payload, errors=rejected_errors, cancelled=cancelled)
                 else:
                     draft = author_draft(gateway,messages,draft_schema,audit,cancelled=cancelled)
                 audit['draft'] = draft.model_dump(mode='json')
@@ -402,9 +406,17 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
             if isinstance(exc, LLMStructuredOutputError):
                 audit['raw_response'] = exc.response.text
                 audit['validation_detail'] = str(exc.__cause__ or exc)
-            if repairs[phase] or attempt == 2 or audit.get('repeated_draft'):
+            repair_limit = 2 if phase == 'source' and repairs['meaning'] else 1
+            meaning_rejections = {p['part_id'] for p in audit.get('compact_semantic_review', {}).get('parts', [])
+                                  if not p['accepted']}
+            if (phase == 'meaning' and previous_meaning_rejections and meaning_rejections
+                    and len(meaning_rejections) < len(previous_meaning_rejections)):
+                repair_limit = 2
+            if repairs[phase] >= repair_limit or attempt == 4 or audit.get('repeated_draft'):
                 raise ValueError('Complete introduction theme unavailable: '+str(exc)) from exc
             repairs[phase] += 1
+            if phase == 'meaning':
+                previous_meaning_rejections = meaning_rejections
             rejected_draft = audit.get('draft')
             revision_base = draft if can_patch else None
             rejected_errors = audit['errors']

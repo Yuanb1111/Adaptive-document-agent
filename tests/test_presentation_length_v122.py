@@ -157,9 +157,8 @@ def test_physical_budget_repair_does_not_spend_semantic_content_repair():
         authored = 0
         reviews = 0
         def generate_structured(self, messages, schema, **kwargs):
-            from adaptive_document_agent.agent.summary_content_repair import SummarySynthesisRevision
-            if schema is SummarySynthesisRevision:
-                return schema(replacements=[dict(page_index=2, item_index=0,
+            if schema.__name__ == 'SummarySynthesisRevision':
+                return schema(replacements=[dict(item_id='g2_i0',
                     replacement=corrected['pages'][2]['items'][0])])
             if schema is SummarySynthesisDraft:
                 self.draft = self.drafts[self.authored]
@@ -203,3 +202,65 @@ def test_source_correction_leaves_one_revision_for_independent_meaning_review():
     assert len(company.summary_pages) == 5
     assert client.authored == 3 and client.reviewed == 2
     assert [a.get('content_failure_phase') for a in review.plan_audits] == ['source', 'meaning', None]
+
+
+def test_meaning_patch_can_correct_new_evidence_binding_after_prior_source_repair():
+    import copy
+    from adaptive_document_agent.agent.compact_summary import generate_compact_summary, CompactSummaryDraft
+    from adaptive_document_agent.models.presentation import CompanyProfile
+    result, review, complete = fixture()
+    missing = copy.deepcopy(complete)
+    missing['pages'][-1]['items'][0]['fact_ids'].pop()
+    unsupported = copy.deepcopy(complete)
+    unsupported['pages'][-1]['items'][0]['text'] += ' Revenue was RMB999 million.'
+    final = copy.deepcopy(complete)
+    final['pages'][-1]['items'][0]['text'] += ' Delivery depends on staff training.'
+    class Repair(Reviewer):
+        authored = 0
+        reviewed = 0
+        def generate_structured(self, messages, schema, **kwargs):
+            if schema is CompactSummaryDraft:
+                self.draft = [missing, complete, unsupported, final][self.authored]
+                self.authored += 1
+            else:
+                self.reject = 'part-69' if self.reviewed == 0 else None
+                self.reviewed += 1
+            return super().generate_structured(messages, schema, **kwargs)
+    client = Repair(missing)
+    company = generate_compact_summary(client, result, review, CompanyProfile(summary_review=review))
+    assert len(company.summary_pages) == 5
+    assert client.authored == 4 and client.reviewed == 2
+    assert [a.get('content_failure_phase') for a in review.plan_audits] == ['source', 'meaning', 'source', None]
+
+
+def test_second_meaning_correction_requires_strictly_fewer_rejected_parts():
+    import copy
+    import pytest
+    from adaptive_document_agent.agent.compact_summary import generate_compact_summary, CompactSummaryDraft
+    from adaptive_document_agent.models.presentation import CompanyProfile
+    for improves in [True, False]:
+        result, review, initial = fixture()
+        class Repair(Reviewer):
+            authored = 0
+            reviewed = 0
+            def generate_structured(self, messages, schema, **kwargs):
+                if schema is CompactSummaryDraft:
+                    self.draft = copy.deepcopy(initial)
+                    self.draft['pages'][0]['items'][0]['text'] += ' Training is required.' * self.authored
+                    self.authored += 1
+                    return super().generate_structured(messages, schema, **kwargs)
+                response = super().generate_structured(messages, schema, **kwargs)
+                failed = ({'part-0', 'part-1'} if self.reviewed == 0 or not improves else
+                          {'part-2'} if self.reviewed == 1 else set())
+                for part in response.parts:
+                    part.accepted = part.part_id not in failed
+                self.reviewed += 1
+                return response
+        client = Repair(initial)
+        if improves:
+            generate_compact_summary(client, result, review, CompanyProfile(summary_review=review))
+            assert client.authored == client.reviewed == 3
+        else:
+            with pytest.raises(ValueError, match='unavailable'):
+                generate_compact_summary(client, result, review, CompanyProfile(summary_review=review))
+            assert client.authored == client.reviewed == 2
