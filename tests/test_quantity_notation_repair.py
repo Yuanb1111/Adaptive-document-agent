@@ -94,7 +94,7 @@ def test_unchanged_source_repair_gets_one_targeted_protocol_retry_then_stops(cha
             self.calls += 1
             replacement = original.pages[0].items[0].model_dump()
             if self.calls == 2:
-                assert 'changes neither text nor fact IDs' in messages[-1]['content']
+                assert 'failed source checks unresolved' in messages[-1]['content']
                 if change_on_retry:
                     replacement['text'] = 'There were two devices.'
             return schema(replacements=[dict(item_id='g0_i0', replacement=replacement)])

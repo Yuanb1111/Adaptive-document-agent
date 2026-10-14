@@ -443,9 +443,15 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
             except (ValueError, TypeError, ValidationError):
                 pass
     if had_source_failures and semantic_validator and audit.get('patch'):
+        from .brief_source_repair import correct_residual_source_errors
         from .brief_semantic_repair import correct_new_meaning_errors
         try:
             candidate = ExecutiveBrief(title=title, items=merged)
+            source_corrected = correct_residual_source_errors(gateway, candidate, result=result,
+                excerpts=excerpts, initial_errors=audit['initial_errors'], audit=audit, cancelled=cancelled)
+            if source_corrected is not None:
+                candidate = source_corrected
+                merged = [item.model_dump(mode='json') for item in candidate.items]
             corrected = correct_new_meaning_errors(gateway, candidate, result=result, excerpts=excerpts,
                 topics=topics, source_context=source_context, evidence_catalog=evidence_catalog,
                 semantic_validator=semantic_validator, audit=audit, cancelled=cancelled)

@@ -33,6 +33,13 @@ class ReportRequirement(BaseModel):
     slide_section: Literal['report', 'introduction'] = 'report'
 
 
+class PresentationBudget(BaseModel):
+    """Explicit controls supplied by the caller, independent of semantic intent parsing."""
+    model_config = ConfigDict(extra='forbid')
+    body_slides: int = Field(ge=1, le=200)
+    introduction_slides: int = Field(ge=1, le=200)
+
+
 class ReportRequirements(BaseModel):
     model_config = ConfigDict(extra='forbid')
     original_request: str = ''

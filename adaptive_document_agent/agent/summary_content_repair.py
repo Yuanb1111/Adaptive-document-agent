@@ -69,7 +69,7 @@ def apply_content_revision(draft, revision, schema):
 
 
 def revise_content(gateway, draft, messages, schema, audit, *, source=None, errors=None, cancelled=None,
-                   retry_unchanged=False, add_only=False):
+                   retry_unchanged=False, add_only=False, validate_progress=None):
     from .summary_revision_addresses import revision_addresses
     response_schema, editable, groups, items = revision_addresses(draft)
     if add_only:
@@ -106,6 +106,11 @@ def revise_content(gateway, draft, messages, schema, audit, *, source=None, erro
         'Use the full supplied source catalog for exact fact IDs; never invent them. '
         'For unsupported numerical claims, locate the exact quantity, unit, period or ordinal '
         'in source_facts.source_quote. '
+        'The numerical checks also read spelled-out numbers. A rejected coefficient may come from '
+        'a word such as two or three, rather than a digit. Do not introduce a computed count of '
+        'periods, products or categories into a source-only summary. Where the source lists those '
+        'items without stating their count, name the source-listed items or periods explicitly, '
+        'or use accurate qualitative wording without that inferred count. '
         'Preserve accounting signs: parentheses around a source table cell mean a negative value. '
         'Use an explicit minus sign in that quoted currency and magnitude; a loss label alone '
         'does not authorize changing a negative reported value into a positive number. '
@@ -145,16 +150,25 @@ def revise_content(gateway, draft, messages, schema, audit, *, source=None, erro
         audit['content_revision'] = revision.model_dump(mode='json')
         try:
             corrected = apply_content_revision(draft, revision, schema)
+            if validate_progress is not None:
+                remaining = validate_progress(corrected)
+                if remaining:
+                    record['remaining_errors'] = remaining
+                    raise ValueError('Content repair did not reduce the failed source checks: '
+                                     + '; '.join(remaining))
             record['status'] = 'changed'
             return corrected
         except ValueError as exc:
             record.update(status='rejected', error=str(exc))
-            if attempt or not retry_unchanged or 'repeated the rejected draft' not in str(exc):
+            nonprogress = ('repeated the rejected draft' in str(exc)
+                           or 'did not reduce the failed source checks' in str(exc))
+            if attempt or not retry_unchanged or not nonprogress:
                 raise ValueError(str(exc) + '; unresolved checks: ' + '; '.join(errors or [])) from exc
             repair_messages = initial_repair_messages + [untrusted_document_message(json.dumps(record, ensure_ascii=False)),
                 {'role': 'user', 'content':
-                 'Your proposed edit changes neither text nor fact IDs, so it cannot correct the source '
-                 'failure. This is the final targeted correction, not a new draft. Recheck each rejected '
+                 'Your proposed edit leaves the failed source checks unresolved. Cosmetic edits and '
+                 'unchanged rejected copy are not progress. This is the final targeted correction, '
+                 'not a new draft. Recheck each rejected '
                  'paragraph against source_facts.source_quote, including singular/count wording, signs, '
                  'shared range units and the full rate denominator. Use exact source-native notation '
                  'when a paraphrase cannot be verified. Correct the affected text or supporting fact IDs; '

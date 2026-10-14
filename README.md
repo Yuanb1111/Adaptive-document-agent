@@ -28,6 +28,8 @@ The responsibility split is:
 
 PDF contents are untrusted source material. Instructions embedded in a document are treated as data, never as commands.
 
+The v129 follow-up detects source repairs that change wording without reducing failed checks, explains spelled-out unsupported counts to the repair model, and carries visible numeric page controls directly into the Agent. The upload page defaults to 20 body slides and 5 introduction slides, with appendices counted separately; both controls are editable. Changes invalidate the analysis request, and retries reject checkpoints with different explicit budgets. See [the v129 validation notes](docs/SOURCE_REPAIR_ENTRY_V129.md).
+
 The v128 follow-up handles literal singular counts and shared monetary range units, gives unchanged source repairs one bounded correction, refreshes invalidated Brief snapshots, and keeps introduction limits distinct from report limits through actual exported-slide verification. See [the v128 validation notes](docs/QUANTITY_REPAIR_BUDGET_V128.md).
 
 The v127 follow-up recognizes literal English cardinal numbers in numeric and quantity checks, including translated counts, while retaining currency, scale, signs and date-bound table durations. See [the v127 replay notes](docs/CARDINAL_EVIDENCE_V127.md).

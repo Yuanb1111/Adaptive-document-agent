@@ -193,7 +193,8 @@ def test_partial_result_has_retry_state_and_is_never_cached_as_complete(flow):
 
 def test_reanalyse_does_not_take_another_scope_keys_preview(flow):
     from adaptive_document_agent.ui import app
-    key = app._analysis_scope_key(b'first-pdf', '', flow.settings)
+    from adaptive_document_agent.ui.presentation_requirements import with_slide_limits
+    key = app._analysis_scope_key(b'first-pdf', with_slide_limits('', 20, 5), flow.settings)
     flow.st.session_state.update(analysis_result=flow.result, analysis_result_key=key,
         analysis_scope=flow.preview, analysis_scope_key='another-document-or-focus')
     flow.st.toggle.return_value = True

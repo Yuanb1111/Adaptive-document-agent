@@ -119,6 +119,12 @@ def test_public_homepage_sessions_and_widget_reruns(watching):
                 app = AppTest.from_file("app.py", default_timeout=30).run()
                 assert not app.exception, app.exception
                 assert [item.label for item in app.selectbox][:2] == ["Provider", "Model"]
+                limits = {{item.label: item for item in app.number_input}}
+                assert limits["Maximum body slides"].value == 20
+                assert limits["Maximum introduction slides"].value == 5
+                limits["Maximum body slides"].set_value(18).run()
+                assert not app.exception, app.exception
+                assert app.session_state["body_slide_limit"] == 18
                 expanders = {{item.label: item for item in app.expander}}
                 assert not expanders["Analysis options (optional)"].proto.expanded
                 assert not expanders["Advanced model settings"].proto.expanded

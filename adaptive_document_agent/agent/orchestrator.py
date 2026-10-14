@@ -13,6 +13,7 @@ from adaptive_document_agent.extraction.table_reconstructor import TableReconstr
 from adaptive_document_agent.extraction.vision_adapter import VisionAdapter
 from adaptive_document_agent.models import AnalysisResult, AnalysisScopePreview, AnalysisTask, DocumentProfile, Observation, ParsedDocument, PipelineResult, ValidationIssue
 from adaptive_document_agent.services.llm import LLMGateway
+from adaptive_document_agent.models.customization import PresentationBudget
 from adaptive_document_agent.services.llm.exceptions import LLMResponseError
 from adaptive_document_agent.utils.caching import DiskCache
 from adaptive_document_agent.utils.hashing import sha256_bytes
@@ -55,13 +56,14 @@ class DocumentOrchestrator:
         analysis_focus: str | None = None,
         scope: AnalysisScopePreview | None = None,
         resume: PipelineResult | None = None,
+        presentation_budget: PresentationBudget | None = None,
     ) -> PipelineResult:
         # All background work belongs to this invocation, never to the reusable
         # orchestrator/session. ExitStack also drains it on any primary failure.
         with ExitStack() as resources:
             return self._analyse_pdf(
                 file, settings, progress=progress, analysis_focus=analysis_focus,
-                scope=scope, resume=resume, resources=resources,
+                scope=scope, resume=resume, presentation_budget=presentation_budget, resources=resources,
             )
 
     def _analyse_pdf(
@@ -73,6 +75,7 @@ class DocumentOrchestrator:
         analysis_focus: str | None = None,
         scope: AnalysisScopePreview | None = None,
         resume: PipelineResult | None = None,
+        presentation_budget: PresentationBudget | None = None,
         resources: ExitStack,
     ) -> PipelineResult:
         del settings  # Configuration is enforced when constructing the gateway.
@@ -96,6 +99,13 @@ class DocumentOrchestrator:
             if scope and (scope.document_sha256 != digest or scope.page_count != document.page_count):
                 raise ValueError('The confirmed analysis scope does not belong to this PDF.')
             profile = resume.profile.model_copy(deep=True)
+            if presentation_budget is not None:
+                from adaptive_document_agent.services.slide_budgets import resolved_limits
+                if (presentation_budget.body_slides not in resolved_limits(profile.report_requirements,
+                        section='report', scope='body') or
+                    min(presentation_budget.body_slides, presentation_budget.introduction_slides)
+                        not in resolved_limits(profile.report_requirements, section='introduction', scope='body')):
+                    raise ValueError('Retry presentation budget differs from the saved request; start a new analysis.')
             requirements = profile.report_requirements
             analysis_focus = profile.analysis_focus
             observations = [o.model_copy(deep=True) for o in resume.observations]
@@ -113,6 +123,7 @@ class DocumentOrchestrator:
                 raise ValueError("The confirmed analysis scope does not belong to this PDF.")
 
             from .report_requirements import interpret_requirements, appendix_pages
+            original_instructions = analysis_focus or ''
             requirements = None
             if analysis_focus and analysis_focus.strip():
                 notify('Interpreting analysis and presentation requirements')
@@ -121,6 +132,9 @@ class DocumentOrchestrator:
                 if not requirements.interpretation_error:
                     analysis_focus = '; '.join(r.request_quote for r in requirements.items
                         if r.resolution == 'resolved' and r.kind == 'analysis_focus') or None
+            if presentation_budget is not None:
+                from adaptive_document_agent.services.presentation_requirements import apply_presentation_budget
+                requirements = apply_presentation_budget(requirements, original_instructions, presentation_budget)
 
             notify("Understanding document")
             with record_timing(timings, "document_discovery"):
@@ -808,6 +822,8 @@ def analyse_pdf(
     progress: ProgressCallback | None = None,
     analysis_focus: str | None = None,
     scope: AnalysisScopePreview | None = None,
+    presentation_budget: PresentationBudget | None = None,
 ) -> PipelineResult:
     """Stable orchestration API used by the Streamlit shell and future adapters."""
-    return DocumentOrchestrator(gateway).analyse_pdf(file, settings, progress=progress, analysis_focus=analysis_focus, scope=scope)
+    return DocumentOrchestrator(gateway).analyse_pdf(file, settings, progress=progress,
+        analysis_focus=analysis_focus, scope=scope, presentation_budget=presentation_budget)

@@ -78,7 +78,8 @@ def _render_active_attempt(st, attempt, progress):
     st.info("This analysis is still running. Wait for it to finish before retrying.")
 
 
-def _analyse_upload(st, raw_pdf, *, scope_key, analysis_focus, settings, cache, scope=None, force=False, retry=False, progress=None):
+def _analyse_upload(st, raw_pdf, *, scope_key, analysis_focus, settings, cache, scope=None, force=False, retry=False,
+                    progress=None, presentation_budget=None):
     """Run one upload through discovery and analysis, reusing it on widget reruns."""
     with _ATTEMPT_LOCK:
         attempts = st.session_state.setdefault("analysis_attempts", {})
@@ -174,6 +175,7 @@ def _analyse_upload(st, raw_pdf, *, scope_key, analysis_focus, settings, cache, 
             analysis_focus=analysis_focus,
             scope=scope,
             **({'resume': resume} if resume is not None else {}),
+            **({'presentation_budget': presentation_budget} if presentation_budget is not None else {}),
         )
         st.session_state["analysis_result"] = result
         st.session_state["analysis_result_reused"] = False
@@ -266,6 +268,12 @@ def run_app() -> None:
     cache = cache_for_session(st.session_state, public_deployment=public_deployment)
     with st.container(border=True):
         branding.section_label(st, "01", "Upload your document")
+        body_slide_limit = st.number_input('Maximum body slides', min_value=1, max_value=200,
+            value=20, step=1, key='body_slide_limit',
+            help='Includes cover, contents, introduction and closing. Appendices are counted separately.')
+        introduction_slide_limit = st.number_input('Maximum introduction slides', min_value=1,
+            max_value=200, value=5, step=1, key='introduction_slide_limit',
+            help='Introduction slides are included in the body limit. Supporting appendices are counted separately.')
         with st.expander("Analysis options (optional)", expanded=False):
             analysis_focus = st.text_area(
                 "Analysis and PPT requirements (optional)",
@@ -280,10 +288,15 @@ def run_app() -> None:
             )
         uploaded = st.file_uploader("Upload one PDF", type=["pdf"], accept_multiple_files=False)
         st.caption("Analysis starts automatically after upload unless page-scope review is enabled.")
+    from .presentation_requirements import with_slide_limits
+    from adaptive_document_agent.models.customization import PresentationBudget
+    presentation_budget = PresentationBudget(body_slides=body_slide_limit,
+        introduction_slides=introduction_slide_limit)
+    scope_instructions = with_slide_limits(analysis_focus, body_slide_limit, introduction_slide_limit)
     if not uploaded:
         return
     raw_pdf = uploaded.getvalue()
-    scope_key = _analysis_scope_key(raw_pdf, analysis_focus, settings)
+    scope_key = _analysis_scope_key(raw_pdf, scope_instructions, settings)
     result = st.session_state.get("analysis_result") if st.session_state.get("analysis_result_key") == scope_key else None
     from .processing_progress import ProcessingProgress
     progress = ProcessingProgress(st.empty())
@@ -298,7 +311,7 @@ def run_app() -> None:
         result = _analyse_upload(
             st, raw_pdf, scope_key=scope_key, analysis_focus=analysis_focus,
             settings=settings, cache=cache, scope=failure["scope"], retry=True,
-            progress=progress,
+            progress=progress, presentation_budget=presentation_budget,
         )
     elif review_scope:
         if st.button("Review analysis scope"):
@@ -359,7 +372,7 @@ def run_app() -> None:
                 result = _analyse_upload(
                     st, raw_pdf, scope_key=scope_key, analysis_focus=analysis_focus,
                     settings=settings, cache=cache, scope=preview, force=True,
-                    progress=progress,
+                    progress=progress, presentation_budget=presentation_budget,
                 )
         elif result is None:
             st.info("Review and confirm the page scope before starting deep analysis, or turn off this optional review to run automatically.")
@@ -368,7 +381,7 @@ def run_app() -> None:
         result = _analyse_upload(
             st, raw_pdf, scope_key=scope_key, analysis_focus=analysis_focus,
             settings=settings, cache=cache,
-            progress=progress,
+            progress=progress, presentation_budget=presentation_budget,
         )
     if not analysis_attempted and failure:
         _render_analysis_failure(st, failure, progress)
@@ -387,6 +400,7 @@ def run_app() -> None:
                 settings=settings, cache=cache, force=True, progress=progress,
                 scope=(st.session_state.get("analysis_scope") if review_scope
                        and st.session_state.get("analysis_scope_key") == scope_key else None),
+                presentation_budget=presentation_budget,
             )
             if result is None:
                 if not retry_button_shown:

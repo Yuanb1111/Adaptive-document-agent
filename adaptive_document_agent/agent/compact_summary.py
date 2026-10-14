@@ -299,10 +299,15 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
             with record_timing(review.timings_ms,'compact_editorial_attempt_'+str(attempt+1)):
                 if revision_base is not None:
                     from .summary_content_repair import revise_content
+                    from functools import partial
+                    from .summary_repair_progress import nonprogress_source_errors
+                    validate_progress = partial(nonprogress_source_errors, catalog=catalog,
+                        review=review, result=result, errors=rejected_errors)
                     try:
                         draft = revise_content(gateway,revision_base,messages,draft_schema,audit,
                             source=payload, errors=rejected_errors, cancelled=cancelled,
-                            retry_unchanged=rejected_phase == 'source', add_only=additive_meaning_repair)
+                            retry_unchanged=rejected_phase == 'source', add_only=additive_meaning_repair,
+                            validate_progress=validate_progress if rejected_phase == 'source' else None)
                     except ValueError:
                         audit['revision_failed'] = True
                         raise

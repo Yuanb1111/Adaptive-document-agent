@@ -152,7 +152,7 @@ def test_source_repair_gets_one_extra_attempt_only_for_strictly_fewer_failures(p
         assert client.repairs==2
     else:
         with pytest.raises(ValueError): generate_compact_summary(client,result,review,company)
-        assert client.repairs==1
+        assert client.repairs==2  # One bounded correction for a non-progress proposal.
 
 
 def test_numeric_repair_has_exact_previous_copy_errors_and_succeeds_after_correction():
