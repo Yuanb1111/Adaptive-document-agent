@@ -34,7 +34,8 @@ def fact_errors(fact, result: PipelineResult, source_text: str, page: int, *, li
     # A literal internal reading extract makes no new numerical assertion.
     # The editorial stage still validates its independently authored slide copy.
     if literal_reading and fact.text == fact.source_quote:
-        if PresentationPlanValidator._numbers(fact.label) - PresentationPlanValidator._numbers(source_text):
+        from .number_words import cardinal_numbers
+        if cardinal_numbers(fact.label) - cardinal_numbers(source_text):
             errors.append('Extract label contains unsupported numbers')
         return errors
     from .source_quotes import split_literal_quote

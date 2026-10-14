@@ -21,6 +21,9 @@ _DATE_HEADER = re.compile(
     r"(?:(?:as of|for the|the|year|years|months?|ended|ending|quarter|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+)*"
     r"(" + _MONTH + r")\s+(\d{1,2})(?:,?\s+((?:19|20)\d{2}))?[,]?", re.I)
 _YEAR_HEADER = re.compile(r"(?:19|20)\d{2}(?:[\s,/–-]+(?:19|20)\d{2})*")
+_DURATION_DATE = re.compile(
+    r'(?<![\w])(?P<months>\d{1,3})\s+months?\s+(?:ended|ending)\s+'
+    r'(?P<month>' + _MONTH + r')\s+(?P<day>\d{1,2}),?\s+(?P<year>(?:19|20)\d{2})\b', re.I)
 _BASIS_START = re.compile(r"(?:/|\bper\s+)\s*", re.I)
 _BASIS_WORDS = re.compile(r"[A-Za-z][\w²³-]*(?:(?:\s+|\s*/\s*)[A-Za-z][\w²³-]*)*")
 _UNIT_NUMERATOR = re.compile(
@@ -75,12 +78,18 @@ class TableQuoteContext:
     signed_numbers: set[str] = field(default_factory=set)
     misparsed_positive_numbers: set[str] = field(default_factory=set)
     dates: set[tuple[str, str, str]] = field(default_factory=set)
+    duration_dates: set[tuple[int, str, str, str]] = field(default_factory=set)
     month_years: set[tuple[str, str]] = field(default_factory=set)
     bases: dict[tuple[str, str, str], set[str]] = field(default_factory=dict)
     percentages: set[str] = field(default_factory=set)
 
     def numeric_claim_text(self, text):
         """Exempt complete supported dates, never authorize their digits elsewhere."""
+        from .number_words import cardinal_claim_text
+        text = cardinal_claim_text(text)
+        text = _DURATION_DATE.sub(lambda m: ' ' if (
+            int(m['months']), m['month'].casefold(), str(int(m['day'])), m['year'])
+            in self.duration_dates else m[0], text)
         text = _DATE.sub(lambda m: " " if (m[1].casefold(), str(int(m[2])), m[3]) in self.dates
                         else m[0], text)
         text = _CHINESE_DATE.sub(lambda m: " " if 1 <= int(m[2]) <= 12 and (
@@ -101,6 +110,8 @@ class TableQuoteContext:
 
     def basis_errors(self, text):
         from .executive_brief import _MONEY_QUANTITY, _QUANTITY, _quantities
+        from .number_words import cardinal_claim_text
+        text = cardinal_claim_text(text)
         money = list(_MONEY_QUANTITY.finditer(text))
         matches = money + [m for m in _QUANTITY.finditer(text)
                            if not any(a.start() <= m.start() and m.end() <= a.end() for a in money)
@@ -140,7 +151,7 @@ def _located_header(value, source):
     return text[positions[start]:positions[start + len(needle) - 1] + 1]
 
 
-def _header_dates(table, source, locate=_located_header):
+def _header_dates(table, source, locate=_located_header, *, duration_bindings=None):
     month_days, years, explicit = set(), set(), set()
     duration_dates = {}
     for raw in table.raw_header_lines:
@@ -192,6 +203,10 @@ def _header_dates(table, source, locate=_located_header):
         except ValueError:
             continue
         valid.add((month, day, year))
+        if duration_bindings is not None:
+            for duration, pairs in duration_dates.items():
+                if duration.endswith('M') and (month, day) in pairs:
+                    duration_bindings.add((int(duration[:-1]), month, day, year))
     return valid
 
 
@@ -389,7 +404,7 @@ def quoted_table_context(item, result, *, excerpts=None):
                     continue
             complete.extend(rows)
         for table, row in complete:
-            context.dates.update(_header_dates(table, source, locate))
+            context.dates.update(_header_dates(table, source, locate, duration_bindings=context.duration_dates))
             for column, cell in enumerate(row.cells):
                 parsed = parse_number(str(cell).replace("−", "-")) if cell else None
                 if parsed is None:
