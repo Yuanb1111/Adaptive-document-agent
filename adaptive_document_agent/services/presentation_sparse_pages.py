@@ -19,6 +19,8 @@ def _title(slide):
 
 
 def _sparse(slide, page_height=7.5):
+    if slide.element.cSld.get('name') == 'ada:conclusion':
+        return False
     if any(properties.get('descr', '').startswith('ADA_SUMMARY_ITEM_V2:')
            for shape in slide.shapes for properties in shape.element.xpath('.//p:cNvPr')):
         # Complete introductory coverage cannot be folded into generic notes.

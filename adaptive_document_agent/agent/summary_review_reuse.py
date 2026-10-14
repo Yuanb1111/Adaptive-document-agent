@@ -5,8 +5,10 @@ from hashlib import sha256
 
 def part_review_signatures(review, pages):
     signatures = {}
+    from adaptive_document_agent.services.introduction_audience import audience_part_ids
+    required = audience_part_ids(review)
     for part in review.parts:
-        if part.role != 'content':
+        if part.id not in required:
             continue
         assigned = [dict(title=page.title, placement=page.placement,
                          item=item.model_dump(mode='json'))

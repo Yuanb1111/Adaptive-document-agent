@@ -28,6 +28,10 @@ def exported_slide_numbers(presentation, result, requirement):
             ids = {s.id for s in result.presentation_plan.slides if s.slide_type == 'company_overview'}
             numbers = {n for record in result.presentation_export_trace
                        if record.get('planned_slide_id') in ids for n in record['slide_numbers']}
+    elif requirement.slide_section == 'analysis' and result.presentation_plan:
+        ids = {s.id for s in result.presentation_plan.slides if s.slide_type == 'analysis'}
+        numbers = {n for record in result.presentation_export_trace
+                   if record.get('planned_slide_id') in ids for n in record['slide_numbers']}
     if requirement.slide_scope == 'body':
         numbers = {n for n in numbers if presentation.slides[n - 1].element.cSld.get('name') != 'ada:appendix'}
     return sorted(numbers)
@@ -45,3 +49,8 @@ def require_exported_budgets(presentation, result):
                           f'user maximum is {req.max_slides}')
     if errors:
         raise ValueError('PowerPoint exceeds the requested slide budget: ' + '; '.join(errors))
+
+
+def total_file_limit(result):
+    limits = resolved_limits(result.profile.report_requirements, scope='all')
+    return min(limits) if limits else None

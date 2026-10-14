@@ -30,7 +30,7 @@ class ReportRequirement(BaseModel):
     detail: Literal['concise', 'balanced', 'detailed'] = 'balanced'
     max_slides: int | None = Field(default=None, ge=1, le=500)
     slide_scope: Literal['all', 'body'] = 'all'
-    slide_section: Literal['report', 'introduction'] = 'report'
+    slide_section: Literal['report', 'introduction', 'analysis'] = 'report'
 
 
 class PresentationBudget(BaseModel):
@@ -38,6 +38,8 @@ class PresentationBudget(BaseModel):
     model_config = ConfigDict(extra='forbid')
     body_slides: int = Field(ge=1, le=200)
     introduction_slides: int = Field(ge=1, le=200)
+    slide_scope: Literal['all','body'] = 'all'
+    analysis_slides: int = Field(default=10, ge=1, le=200)
 
 
 class ReportRequirements(BaseModel):

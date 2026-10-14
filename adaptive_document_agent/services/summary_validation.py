@@ -257,13 +257,17 @@ def presentation_errors(review: SummaryReview, slide_pages, result: PipelineResu
     for pid, decision in decisions.items():
         if not decision.reason.strip() or (decision.decision == 'include') != (pid in used):
             errors.append('Summary include/omit decision does not match rendered evidence: ' + pid)
+    from .introduction_audience import audience_part_ids
+    required = audience_part_ids(review)
+    if review.audience_part_ids is not None and used - required:
+        errors.append('Introduction adds source parts outside its independently reviewed audience selection')
     for part in review.parts:
-        if part.role == 'content' and part.id not in used:
+        if part.id in required and part.id not in used:
             errors.append('Every substantive Summary part must appear in the introduction: ' + part.id)
     if any(p.compact for p in slide_pages) and verify_compact_review:
         from .compact_summary import compact_digest, compact_layout_errors
         digest = compact_digest(slide_pages)
-        required = {p.id for p in review.parts if p.role=='content'}
+        required = audience_part_ids(review)
         accepted = False
         for audit in review.plan_audits:
             verdicts = audit.get('compact_semantic_review',{}).get('parts',[])

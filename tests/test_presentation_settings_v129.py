@@ -27,13 +27,13 @@ def test_visible_slide_limits_are_part_of_the_actual_upload_request(monkeypatch)
     assert captured == [instruction]
     assert 'at most 20 physical slides' in instruction
     assert 'at most 5 physical slides' in instruction
-    assert 'excluded from both body limits' in instruction
+    assert 'count toward the total file limit' in instruction
     assert 'Keep scope and reporting periods separate.' in instruction
     assert instruction != with_slide_limits('', 19, 5)
 
 
 def test_introduction_limit_cannot_exceed_whole_body_limit():
-    assert 'introduction body must contain at most 3' in with_slide_limits('', 3, 5)
+    assert 'introduction must contain at most 3' in with_slide_limits('', 3, 5)
 
 
 def test_real_upload_widget_carries_limits_and_changes_analysis_cache_key():
@@ -54,13 +54,21 @@ def test_real_upload_widget_carries_limits_and_changes_analysis_cache_key():
             assert calls[-1][0] == b'%PDF-test'
             assert calls[-1][1].body_slides == 20
             assert calls[-1][1].introduction_slides == 5
+            assert calls[-1][1].slide_scope == 'all'
             assert calls[-1][3] == ''
             first = calls[-1][2]
             widgets = {item.label: item for item in app.number_input}
-            widgets['Maximum body slides'].set_value(18).run()
+            widgets['Maximum PPT slides'].set_value(18).run()
             assert not app.exception, app.exception
             assert calls[-1][1].body_slides == 18
             assert calls[-1][2] != first
+            second = calls[-1][2]
+            boxes = {item.label: item for item in app.checkbox}
+            assert not boxes['Count appendices separately'].value
+            boxes['Count appendices separately'].set_value(True).run()
+            assert not app.exception, app.exception
+            assert calls[-1][1].slide_scope == 'body'
+            assert calls[-1][2] != second
     ''')
 
 
@@ -75,8 +83,8 @@ def test_explicit_budget_survives_failed_free_text_interpretation():
         PresentationBudget(body_slides=20, introduction_slides=5))
     assert bound.interpretation_error == failed.interpretation_error
     assert not failed.items
-    assert resolved_limits(bound, section='report', scope='body') == [20]
-    assert resolved_limits(bound, section='introduction', scope='body') == [5]
+    assert resolved_limits(bound, section='report', scope='all') == [20]
+    assert resolved_limits(bound, section='introduction', scope='all') == [5]
     assert not validate_requirements(bound, ParsedDocument(document_id='d', sha256='h',
         safe_filename='d.pdf', page_count=1), bound.original_request)
 
@@ -93,8 +101,8 @@ def test_orchestrator_binds_explicit_limits_before_background_introduction(monke
     monkeypatch.setattr(runner, '_load_document', lambda *args: document)
     monkeypatch.setattr(orchestrator.DocumentDiscovery, 'discover', lambda *args, **kwargs: DocumentProfile())
     def prepared(gateway, result, **kwargs):
-        assert resolved_limits(result.profile.report_requirements, section='report', scope='body') == [20]
-        assert resolved_limits(result.profile.report_requirements, section='introduction', scope='body') == [5]
+        assert resolved_limits(result.profile.report_requirements, section='report', scope='all') == [20]
+        assert resolved_limits(result.profile.report_requirements, section='introduction', scope='all') == [5]
         raise RuntimeError('Reached introduction with explicit budgets')
     monkeypatch.setattr(company_introduction, 'prepare_company_introduction', prepared)
     with pytest.raises(RuntimeError, match='Reached introduction with explicit budgets'):

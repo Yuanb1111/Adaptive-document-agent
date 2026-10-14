@@ -359,7 +359,11 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
     index = DocumentIndex(result.observations)
     chart_by_id = {item.id: item for item in _usable_charts(result)}
     from .presentation_key_figures import select_key_figures
-    key_figures = select_key_figures(result, list(chart_by_id.values()))
+    from .slide_budgets import total_file_limit
+    compact_file = total_file_limit(result) is not None
+    # Audience selection and chart pages already carry these facts. A whole-file
+    # budget must not add automatic, duplicate opening sections.
+    key_figures = [] if compact_file else select_key_figures(result, list(chart_by_id.values()))
     from .presentation_ratio_definitions import ratio_definitions
     source_ratio_definitions = ratio_definitions(result)
     presentation._ada_ratio_definitions = source_ratio_definitions
@@ -370,13 +374,14 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
     from .presentation_export_trace import record_section, clear_trace
     clear_trace(result)
     from .presentation_value_chain import can_render_value_chain
-    value_chain = can_render_value_chain(plan.company, presentation.slide_width.inches)
+    value_chain = not compact_file and can_render_value_chain(plan.company, presentation.slide_width.inches)
     slides_by_type = {slide.slide_type: slide for slide in plan.slides}
     from .presentation_brief import omit_redundant_summary
     summary = slides_by_type["executive_summary"]
     use_editorial_brief = result.executive_brief is not None or any(
         issue.code == 'executive_brief_unavailable' for issue in result.validation_warnings)
-    omit_summary = not use_editorial_brief and omit_redundant_summary(plan, summary)
+    final_summary = compact_file and result.executive_brief is not None
+    omit_summary = final_summary or (not use_editorial_brief and omit_redundant_summary(plan, summary))
 
     # Standard order: 1. Cover, 2. Contents, 3. Company at a Glance, 4. Executive Summary
     cover = slides_by_type["cover"]
@@ -389,6 +394,8 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
         contents_slides = [s.model_copy(update={'section_title': 'Review status', 'title': 'Review status'})
                           if s.slide_type == 'risks' else s for s in contents_slides
                           if s.slide_type != 'risks' or has_review_status]
+    if final_summary:
+        contents_slides.append(summary.model_copy(update={'title': 'Conclusion', 'section_title': 'Conclusion'}))
     from .presentation_scope import scope_items
     if not scope_items(result):
         contents_slides = [s for s in contents_slides if s.slide_type != "data_quality"]
@@ -433,7 +440,8 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
         render_value_chain(presentation, plan.company)
     if omit_summary:
         presentation.slides[-1].notes_slide.notes_text_frame.text += (
-            "\n\nOmitted duplicate summary; original copy and evidence references:\n"
+            ("\n\nVerified brief scheduled as the final Conclusion; original plan:\n" if final_summary else
+             "\n\nOmitted duplicate summary; original copy and evidence references:\n")
             + summary.model_dump_json(indent=2)
         )
     else:
@@ -575,7 +583,10 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
                 continue
             elif slide_plan.slide_type == "appendix":
                 previous_slide_count = len(presentation.slides)
-                if rendered_charts or plan.themes:
+                if compact_file:
+                    from .presentation_data_index import render_data_index
+                    render_data_index(presentation, result, index)
+                elif rendered_charts or plan.themes:
                     appendix_charts = rendered_charts
                     _add_evidence_table_slides(presentation, result, appendix_charts, title="Data Index")
                 else:
@@ -600,6 +611,13 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
                 if quality_notes and len(presentation.slides) > previous_slide_count:
                     notes = presentation.slides[previous_slide_count].notes_slide.notes_text_frame
                     notes.text += "\n\nSource scope and data-quality notes:\n" + "\n".join(quality_notes)
+    if final_summary:
+        conclusion = summary.model_copy(update={'title': 'Conclusion', 'section_title': 'Conclusion'})
+        before_conclusion = len(presentation.slides)
+        with record_section(presentation, conclusion, result):
+            _add_planned_summary(presentation, result, conclusion, index)
+        for slide in list(presentation.slides)[before_conclusion:]:
+            slide.element.cSld.set('name', 'ada:conclusion')
 
 
 def _planned_chart_requests(slide_plan: PresentationSlide) -> list[tuple[str, str | None]]:
@@ -938,7 +956,7 @@ def _add_planned_summary(
             issue.code == 'executive_brief_unavailable' for issue in result.validation_warnings)):
         from .presentation_summary import render_complete_summary
         notes = result.executive_brief.model_dump_json(indent=2) if result.executive_brief else ''
-        render_complete_summary(presentation, brief_title, selected_brief,
+        render_complete_summary(presentation, slide_plan.title if slide_plan.title == 'Conclusion' else brief_title, selected_brief,
                                 notes=notes, single_column=True)
         return
     if _planned_chart_requests(slide_plan) or any(b.role in {"kpi", "table"} and b.observation_ids for b in slide_plan.visual_blocks):

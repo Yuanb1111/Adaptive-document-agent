@@ -97,7 +97,10 @@ def verify_summary_export(presentation, result):
             for pid in item.part_ids:
                 used.setdefault(pid, []).append(number)
     expected_items = {(page.id, i) for page in company.summary_pages for i in range(len(page.items))}
-    required = {p.id for p in company.summary_review.parts if p.role == 'content'}
+    from .introduction_audience import audience_part_ids
+    required = audience_part_ids(company.summary_review)
+    if company.summary_review.audience_part_ids is not None and used.keys() - required:
+        raise ValueError('Exported introduction adds parts outside its reviewed audience selection')
     if seen != expected_items or not required <= used.keys():
         raise ValueError('Exported introduction does not cover every substantive source part')
     for (page_id, index), values in segments.items():

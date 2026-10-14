@@ -92,3 +92,5 @@ class SummaryReview(BaseModel):
     plan_audits: list[dict] = Field(default_factory=list)
     timings_ms: dict[str, int] = Field(default_factory=dict)
     max_intro_slides: int | None = Field(default=None, ge=1, le=5)
+    audience_part_ids: list[str] | None = None
+    audience_selection: dict = Field(default_factory=dict)

@@ -37,12 +37,18 @@ def magnitude_claim_text(item, context, quantities):
 
     from adaptive_document_agent.models.executive_brief import brief_claim_text
     text = brief_claim_text(item, canonicalize_table_signs=True)
-    replacements, errors = {}, []
+    text = PresentationPlanValidator._canonicalize_money_signs(text)
+    replacements, errors, owned = [], [], set()
     for binding in item.quantity_representations:
         phrase = binding.quantity_text
         values = _quantities(phrase)
         percent = bool(_QUANTITY.fullmatch(phrase) and phrase.endswith(('%','％')))
-        if (phrase in replacements or text.count(phrase) != 1 or len(values) != 1
+        import re
+        compact = lambda value: re.sub(r'\s+', '', value)
+        matcher = _QUANTITY if percent else _MONEY_QUANTITY
+        spans = [match.span() for match in matcher.finditer(text)
+                 if compact(match[0]) == compact(phrase)]
+        if (len(spans) != 1 or spans[0] in owned or len(values) != 1
                 or not (_MONEY_QUANTITY.fullmatch(phrase) or percent)):
             errors.append('magnitude representation needs one unique displayed quantity')
             continue
@@ -61,7 +67,8 @@ def magnitude_claim_text(item, context, quantities):
             continue
         # Replace only this complete quantity, not equal digits in dates or
         # other metrics. Denominator/date checks still operate on the full copy.
-        replacements[phrase] = f'{signed}%' if percent else f'{currency} {signed} {unit}'
-    for phrase, replacement in replacements.items():
-        text = text.replace(phrase, replacement, 1)
+        owned.add(spans[0])
+        replacements.append((*spans[0], f'{signed}%' if percent else f'{currency} {signed} {unit}'))
+    for start, end, replacement in sorted(replacements, reverse=True):
+        text = text[:start] + replacement + text[end:]
     return text, errors

@@ -268,13 +268,15 @@ def run_app() -> None:
     cache = cache_for_session(st.session_state, public_deployment=public_deployment)
     with st.container(border=True):
         branding.section_label(st, "01", "Upload your document")
-        body_slide_limit = st.number_input('Maximum body slides', min_value=1, max_value=200,
+        body_slide_limit = st.number_input('Maximum PPT slides', min_value=1, max_value=200,
             value=20, step=1, key='body_slide_limit',
-            help='Includes cover, contents, introduction and closing. Appendices are counted separately.')
+            help='Limits the complete file, including cover, introduction, charts, Data Index, conclusion and closing.')
         introduction_slide_limit = st.number_input('Maximum introduction slides', min_value=1,
             max_value=200, value=5, step=1, key='introduction_slide_limit',
-            help='Introduction slides are included in the body limit. Supporting appendices are counted separately.')
+            help='A maximum, not a target. The introduction is included in the complete file limit.')
         with st.expander("Analysis options (optional)", expanded=False):
+            separate_appendices = st.checkbox('Count appendices separately', value=False,
+                help='Enable only when additional appendix pages may exceed the complete file limit.')
             analysis_focus = st.text_area(
                 "Analysis and PPT requirements (optional)",
                 placeholder="e.g. Focus on profitability, explain the business in detail, and append every table from a named chapter.",
@@ -291,8 +293,9 @@ def run_app() -> None:
     from .presentation_requirements import with_slide_limits
     from adaptive_document_agent.models.customization import PresentationBudget
     presentation_budget = PresentationBudget(body_slides=body_slide_limit,
-        introduction_slides=introduction_slide_limit)
-    scope_instructions = with_slide_limits(analysis_focus, body_slide_limit, introduction_slide_limit)
+        introduction_slides=introduction_slide_limit,slide_scope='body' if separate_appendices else 'all')
+    scope_instructions = with_slide_limits(analysis_focus, body_slide_limit, introduction_slide_limit,
+        scope=presentation_budget.slide_scope)
     if not uploaded:
         return
     raw_pdf = uploaded.getvalue()

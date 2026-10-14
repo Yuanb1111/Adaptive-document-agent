@@ -49,3 +49,20 @@ def test_magnitude_binding_still_requires_exact_rate_denominator():
     assert validate_executive_brief(brief, result)
     brief.items[0].text = 'Net loss was USD 100 thousand per employee/day.'
     assert not validate_executive_brief(brief, result)
+
+
+@pytest.mark.parametrize('amount',['USD100 thousand','USD  100 thousand','USD\u00a0100\u2009thousand'])
+def test_complete_magnitude_matching_tolerates_whitespace_only_without_changing_copy(amount):
+    result,brief=magnitude_fixture()
+    brief.items[0].text='Net loss was '+amount+'.'
+    before=result.model_dump(),brief.model_dump()
+    assert not validate_executive_brief(brief,result)
+    assert (result.model_dump(),brief.model_dump())==before
+
+
+def test_whitespace_matching_cannot_apply_a_positive_annotation_inside_a_signed_quantity():
+    result,brief=magnitude_fixture()
+    brief.items[0].text='Net loss was -USD100 thousand.'
+    assert validate_executive_brief(brief,result)
+    brief.items[0].quantity_representations=[]
+    assert not validate_executive_brief(brief,result)

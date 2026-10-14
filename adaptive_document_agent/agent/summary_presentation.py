@@ -48,6 +48,10 @@ def generate_summary_presentation(gateway, result, pages, response_model, *, sco
             # Allocate a bounded share to the introduction before writing local
             # themes. Actual total/body counts are checked against the export.
             review.max_intro_slides = limit
+            from adaptive_document_agent.services.slide_budgets import resolved_limits
+            if resolved_limits(requirements, scope='all'):
+                from .introduction_audience import select_introduction_audience
+                select_introduction_audience(gateway,result,review,cancelled=cancelled)
             from .compact_summary import generate_compact_summary, SummarySynthesisDraft
             with record_timing(review.timings_ms, 'editorial'):
                 generate_compact_summary(gateway, result, review, company, cancelled=cancelled,

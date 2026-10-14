@@ -127,8 +127,8 @@ def revise_content(gateway, draft, messages, schema, audit, *, source=None, erro
         dict(source_facts=source_facts, editable_groups=editable, errors=errors), ensure_ascii=False))]
     if add_only:
         repair_messages.insert(1, {'role': 'user', 'content':
-            'The prior rejected source parts are now accepted; this review found new omissions after '
-            'paragraph replacements. This final correction is ADDITIVE ONLY. Existing text, titles, '
+            'The earlier rejected issues have been independently verified as corrected; the current '
+            'review found additional omissions. This final correction is ADDITIVE ONLY. Existing text, titles, '
             'fact IDs and order are locked. Return additions with the missing source-bound qualifications '
             'in existing supporting appendix groups when available. Keep replacements and titles empty. '
             'Do not duplicate existing findings or rewrite accepted material. Added paragraphs must '

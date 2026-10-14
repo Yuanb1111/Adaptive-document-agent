@@ -202,6 +202,13 @@ class PresentationTopicSelector:
         if limits:
             introduction = introduction_limit(result.profile.report_requirements) or 0
             available = max(0, min(limits) - introduction - 5)
+            if resolved_limits(result.profile.report_requirements, scope='all'):
+                # Include Data Index, a complete conclusion and closing in the
+                # same file budget; source appendices have no outside allowance.
+                available = max(0,min(limits)-introduction-8)
+            analysis_limits = resolved_limits(result.profile.report_requirements,section='analysis')
+            if analysis_limits:
+                available = min(available,min(analysis_limits))
             messages.insert(1, {'role': 'user', 'content':
                 f'The report has at most {min(limits)} physical audience slides. Reserve up to '
                 f'{introduction} introduction slides and five for cover, contents, executive brief, '

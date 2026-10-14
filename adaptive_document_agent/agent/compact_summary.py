@@ -91,8 +91,10 @@ class SummarySynthesisReview(CompactSummaryReview):
 def compact_input(review):
     from .summary_literal_evidence import literal_facts
     catalog, rows, quotes, quote_ids = {}, [], [], {}
+    from adaptive_document_agent.services.introduction_audience import audience_part_ids
+    required = audience_part_ids(review)
     for part in review.parts:
-        if part.role != 'content':
+        if part.id not in required:
             continue
         # Reader facts are selective paraphrases, not the complete assigned
         # passage. Keep that literal passage available to author AND reviewer
@@ -155,9 +157,10 @@ def expand_compact(draft,catalog,review):
                 title_source_refs=list(title_refs.values())))
     pages.sort(key=lambda page: page.placement != 'body')
     used = {pid for page in pages for item in page.items for pid in item.part_ids}
+    audience_reasons = {d['part_id']: d['reason'] for d in review.audience_selection.get('decisions',[])}
     review.decisions = [SummaryPartDecision(part_id=p.id,decision='include' if p.id in used else 'omit',
         reason='Model includes this source part in its thematic summary.' if p.id in used else
-               'Reading classified this source part as standalone heading or layout.') for p in review.parts]
+               audience_reasons.get(p.id, 'Reading classified this source part as standalone heading or layout.')) for p in review.parts]
     return pages
 
 
@@ -231,7 +234,22 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
             'retaining the reporting scope, material conditions and caveats. Exact tables remain available '
             'in the evidence appendix. Financial or market numbers are optional; include only the few '
             'essential figures needed to explain the subject, with their full qualifications.'})
-    if draft_schema is SummarySynthesisDraft and appendix_allowed:
+    if review.audience_part_ids is not None:
+        messages[0]['content'] = messages[0]['content'].replace(
+            'Write a complete, concise introduction in THREE TO FIVE logical content groups (maximum five). '
+            'Use fewer only for very short sources.',
+            'Write the independently selected audience introduction in two or three concise logical groups, '
+            'using fewer when appropriate and never exceeding the stated introduction cap.')
+        messages[0]['content'] = messages[0]['content'].replace(
+            'source tables are independent appendices.', 'full source tables remain in the analysis and data exports.')
+        messages.append({'role': 'user', 'content':
+            'These supplied parts have already passed an independent importance/omission review against '
+            'the COMPLETE original reading. Cover every SUPPLIED part faithfully with concise synthesis; '
+            'do not reintroduce omitted parts or create introduction appendices. All groups must have '
+            'placement=body. Two or three readable slides are normally sufficient; maximum five is a '
+            'cap, not a target. Full raw values stay in the analysis and data exports, rather than extra '
+            'slides. Do not claim there is a full evidence appendix inside this PPT.'})
+    if draft_schema is SummarySynthesisDraft and appendix_allowed and review.audience_part_ids is None:
         messages[0]['content'] = messages[0]['content'].replace(
             'Write a complete, concise introduction in THREE TO FIVE logical content groups (maximum five).',
             'Write a concise core introduction and source-bound supporting appendix (at most twelve logical groups total).')
@@ -277,6 +295,7 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
     repairs = {'source': 0, 'meaning': 0}
     revision_base = None
     previous_meaning_rejections = None
+    previous_meaning_verdicts = []
     previous_source_failures = None
     from .summary_review_reuse import AcceptedPartReviews, part_review_signatures
     accepted_parts = AcceptedPartReviews()
@@ -391,7 +410,8 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
                 accepted_parts.remember(response, signatures, attempt + 1)
                 combined = {**retained, **{v.part_id: v for v in response.parts}}
                 response = response.model_copy(update={'parts': [combined[pid] for pid in signatures]})
-                ids = {p.id for p in review.parts if p.role=='content'}
+                from adaptive_document_agent.services.introduction_audience import audience_part_ids
+                ids = audience_part_ids(review)
                 audit['compact_semantic_review'] = response.model_dump(mode='json')
                 if require_opening and response.opening_accepted is not True:
                     raise ValueError('The first introductory page does not explain the source subject and actual '
@@ -456,6 +476,14 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
             additive_meaning_repair = bool(phase == 'meaning' and previous_meaning_rejections
                 and meaning_rejections and not meaning_rejections & previous_meaning_rejections
                 and len(meaning_rejections) >= len(previous_meaning_rejections))
+            if (phase == 'meaning' and repairs['meaning'] == 1 and previous_meaning_rejections
+                    and meaning_rejections & previous_meaning_rejections
+                    and len(meaning_rejections) >= len(previous_meaning_rejections)):
+                from .summary_meaning_progress import verified_same_part_progress
+                additive_meaning_repair = verified_same_part_progress(gateway, payload, rejected_draft,
+                    audit.get('draft'), previous_meaning_verdicts,
+                    audit.get('compact_semantic_review', {}).get('parts', []),
+                    audit=audit, cancelled=cancelled)
             if additive_meaning_repair:
                 repair_limit = 2
             if (repairs[phase] >= repair_limit or attempt == 4 or audit.get('repeated_draft')
@@ -464,6 +492,7 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
             repairs[phase] += 1
             if phase == 'meaning':
                 previous_meaning_rejections = meaning_rejections
+                previous_meaning_verdicts = audit.get('compact_semantic_review', {}).get('parts', [])
             elif source_failures:
                 previous_source_failures = source_failures
             rejected_draft = audit.get('draft')

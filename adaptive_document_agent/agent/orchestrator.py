@@ -102,9 +102,11 @@ class DocumentOrchestrator:
             if presentation_budget is not None:
                 from adaptive_document_agent.services.slide_budgets import resolved_limits
                 if (presentation_budget.body_slides not in resolved_limits(profile.report_requirements,
-                        section='report', scope='body') or
+                        section='report', scope=presentation_budget.slide_scope) or
                     min(presentation_budget.body_slides, presentation_budget.introduction_slides)
-                        not in resolved_limits(profile.report_requirements, section='introduction', scope='body')):
+                        not in resolved_limits(profile.report_requirements, section='introduction', scope=presentation_budget.slide_scope) or
+                    presentation_budget.analysis_slides not in resolved_limits(profile.report_requirements,
+                        section='analysis', scope=presentation_budget.slide_scope)):
                     raise ValueError('Retry presentation budget differs from the saved request; start a new analysis.')
             requirements = profile.report_requirements
             analysis_focus = profile.analysis_focus
@@ -580,6 +582,16 @@ class DocumentOrchestrator:
             pipeline_total_ms=int((perf_counter() - pipeline_started) * 1000),
         )
         from adaptive_document_agent.services.pipeline_completion import is_complete
+        if self.gateway and is_complete(final_result):
+            from .presentation_budget_refinement import refine_presentation_budget, FinalBudgetBriefError
+            try:
+                with record_timing(final_result.stage_details_ms, 'physical_presentation_budget'):
+                    refine_presentation_budget(self.gateway,final_result,progress=notify)
+            except (ValueError, LLMResponseError, FinalBudgetBriefError) as exc:
+                final_result.pipeline_state = 'partial'
+                final_result.retry_from = 'reporting'
+                final_result.validation_warnings.append(ValidationIssue(code='presentation_physical_budget_failed',
+                    severity='warning',stage='presentation',message=str(exc)))
         if not is_complete(final_result):
             final_result.pipeline_state = 'partial'
             final_result.retry_from = 'reporting'

@@ -40,7 +40,7 @@ def flow(monkeypatch):
     st.number_input.side_effect = lambda *args, **kwargs: kwargs['value']
     st.toggle.return_value = False
     st.file_uploader.return_value = SimpleNamespace(getvalue=lambda: b"first-pdf")
-    st.checkbox.return_value = True
+    st.checkbox.side_effect = lambda label, **kwargs: label != 'Count appendices separately'
     pressed = set()
     st.button.side_effect = lambda label, **kwargs: label in pressed
     settings = LLMSettings(provider=ProviderName.MOCK, model="offline-test", privacy_mode=PrivacyMode.LOCAL_ONLY)
