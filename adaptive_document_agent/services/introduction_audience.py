@@ -15,7 +15,7 @@ def validate_required_meanings(review, decisions):
             meaning = value.get('meaning', '').strip()
             quote = normalize_quote(value.get('source_quote', ''))
             if (not meaning or meaning in seen or not quote
-                    or quote not in normalize_quote(parts[decision['part_id']].source_text)):
+                    or quote != normalize_quote(parts[decision['part_id']].source_text)):
                 raise ValueError('Introduction required meaning lacks its exact owned source quotation')
             seen.add(meaning)
 

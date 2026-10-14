@@ -124,7 +124,7 @@ def compact_input(review):
         from .summary_coverage import required_meanings
         meanings = required_meanings(review).get(part.id)
         if meanings:
-            row['required_meanings'] = meanings
+            row['required_meanings'] = [{k: value[k] for k in ('meaning', 'source_quote')} for value in meanings]
         # Offer complete owned passages as the reference choices. The original
         # selective reader facts remain in the audit, but cannot lure the editor
         # into citing a short quote for a qualification elsewhere in that part.
@@ -184,6 +184,10 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
                              draft_schema=CompactSummaryDraft):
     payload,catalog = compact_input(review)
     payload['purpose'] = result.profile.document_purpose
+    if review.audience_part_ids is not None:
+        payload['audience_purpose'] = ('Introduce the actual subject/business and essential scope and '
+            'limitations needed for the later analysis. Independently selected meanings define this '
+            'section; detailed source transactions and analytical figures need not all be repeated here.')
     payload['identity_pages'] = [{'page':p.page_number,'text':p.text[:5000]}
                                   for p in result.document.pages[:4]] if require_opening else []
     requirements = result.profile.report_requirements

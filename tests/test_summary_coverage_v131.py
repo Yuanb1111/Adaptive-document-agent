@@ -70,7 +70,9 @@ def test_author_and_independent_reviewer_receive_identical_stable_meanings():
     result, review, _ = fixture(1)
     choose(result, review)
     source, _ = compact_input(review)
-    assert source['parts'][0]['required_meanings'] == review.audience_selection['decisions'][0]['required_meanings']
+    expected = [{k: value[k] for k in ('meaning', 'source_quote')}
+                for value in review.audience_selection['decisions'][0]['required_meanings']]
+    assert source['parts'][0]['required_meanings'] == expected
     draft = dict(pages=[dict(title='Scheduling service', items=[dict(label='Service scope',
         text=review.parts[0].source_text.strip(), fact_ids=['f0'])])])
     company = generate_compact_summary(Reviewer(draft), result, review, CompanyProfile(summary_review=review))
