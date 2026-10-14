@@ -42,12 +42,12 @@ def generate_summary_presentation(gateway, result, pages, response_model, *, sco
         with record_timing(review.timings_ms, 'reading'):
             read_summary(gateway, result, review, cancelled=cancelled)
         requirements = result.profile.report_requirements
-        limits = [r.max_slides for r in requirements.items
-                  if r.kind == 'slide_limit' and r.resolution == 'resolved' and r.max_slides] if requirements else []
-        if limits:
+        from adaptive_document_agent.services.slide_budgets import introduction_limit
+        limit = introduction_limit(requirements)
+        if limit is not None:
             # Allocate a bounded share to the introduction before writing local
             # themes. Actual total/body counts are checked against the export.
-            review.max_intro_slides = min(5, max(1, min(limits) // 3))
+            review.max_intro_slides = limit
             from .compact_summary import generate_compact_summary, SummarySynthesisDraft
             with record_timing(review.timings_ms, 'editorial'):
                 generate_compact_summary(gateway, result, review, company, cancelled=cancelled,

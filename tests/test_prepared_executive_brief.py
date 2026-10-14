@@ -137,3 +137,38 @@ def test_actual_orchestrator_overlaps_only_stable_cloud_editorial_work(monkeypat
     assert set(callbacks) == {caller}
     assert ('executive_brief_duration' in result.stage_details_ms) == (mode == 'cloud')
     assert not any(issue.code == 'executive_brief_unavailable' for issue in result.validation_warnings)
+
+
+def test_final_topic_corrections_refresh_only_the_brief_once(monkeypatch):
+    from adaptive_document_agent.agent import prepared_executive_brief as module
+    from adaptive_document_agent.models import PresentationTopicSelection
+    current = result_for(['Revenue was USD 12 million.'])
+    current.presentation_topics = PresentationTopicSelection()
+    brief = ExecutiveBrief.model_validate(payload('Revenue was USD 12 million.'))
+    calls = []
+    def generate(self, snapshot):
+        calls.append(snapshot)
+        assert snapshot.presentation_topics == current.presentation_topics
+        return brief
+    monkeypatch.setattr(module.ExecutiveBriefWriter, 'generate', generate)
+    class Prepared:
+        def result(self, snapshot):
+            raise module.PreparedBriefInputsChanged(['presentation_topics'])
+    assert module.current_executive_brief(None, current, Prepared()) == brief
+    assert calls == [current]
+    assert current.validation_warnings[-1].code == 'executive_brief_snapshot_refreshed'
+
+
+@pytest.mark.parametrize('failure', ['source_change', 'invalid_copy'])
+def test_refresh_does_not_retry_source_changes_or_genuine_failed_claims(monkeypatch, failure):
+    from adaptive_document_agent.agent import prepared_executive_brief as module
+    def generate(*args, **kwargs):
+        pytest.fail('This failure must not start a new paid request')
+    monkeypatch.setattr(module.ExecutiveBriefWriter, 'generate', generate)
+    class Prepared:
+        def result(self, snapshot):
+            if failure == 'source_change':
+                raise module.PreparedBriefInputsChanged(['document', 'presentation_topics'])
+            raise ValueError('Invalid copy')
+    with pytest.raises(ValueError):
+        module.current_executive_brief(None, result_for(['Source']), Prepared())

@@ -34,8 +34,8 @@ def fact_errors(fact, result: PipelineResult, source_text: str, page: int, *, li
     # A literal internal reading extract makes no new numerical assertion.
     # The editorial stage still validates its independently authored slide copy.
     if literal_reading and fact.text == fact.source_quote:
-        from .number_words import cardinal_numbers
-        if cardinal_numbers(fact.label) - cardinal_numbers(source_text):
+        from .quantity_notation import literal_quantity_numbers
+        if literal_quantity_numbers(fact.label) - literal_quantity_numbers(source_text, source=True):
             errors.append('Extract label contains unsupported numbers')
         return errors
     from .source_quotes import split_literal_quote
@@ -149,6 +149,10 @@ def presentation_errors(review: SummaryReview, slide_pages, result: PipelineResu
     if slide_pages and not body_pages:
         errors.append('The introduction needs a verified opening in the presentation body')
     requirements = result.profile.report_requirements
+    from .slide_budgets import resolved_limits
+    limits = resolved_limits(requirements, section='introduction', scope='all')
+    if limits and len(slide_pages) > min(limits):
+        errors.append(f'Complete introduction including its appendix exceeds the {min(limits)}-page limit')
     if len(body_pages) != len(slide_pages) and not (requirements and any(
             r.kind == 'slide_limit' and r.resolution == 'resolved' and r.slide_scope == 'body'
             for r in requirements.items)):

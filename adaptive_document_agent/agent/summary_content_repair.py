@@ -2,7 +2,7 @@
 from copy import deepcopy
 import json
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from .compact_summary import CompactSummaryItem
 from .summary_draft_protocol import author_draft
@@ -68,9 +68,16 @@ def apply_content_revision(draft, revision, schema):
     return corrected
 
 
-def revise_content(gateway, draft, messages, schema, audit, *, source=None, errors=None, cancelled=None):
+def revise_content(gateway, draft, messages, schema, audit, *, source=None, errors=None, cancelled=None,
+                   retry_unchanged=False, add_only=False):
     from .summary_revision_addresses import revision_addresses
     response_schema, editable, groups, items = revision_addresses(draft)
+    if add_only:
+        response_schema = create_model(response_schema.__name__, __base__=response_schema,
+            replacements=(response_schema.model_fields['replacements'].annotation,
+                          Field(default_factory=list, max_length=0)),
+            titles=(response_schema.model_fields['titles'].annotation,
+                    Field(default_factory=list, max_length=0)))
     # Repairs need direct fact-to-quote lookup. Repeating the compact author's
     # two-hop fact -> quote_ref -> text representation invited unchanged IDs
     # even when an uncited source fact contained the exact rejected quantity.
@@ -111,17 +118,45 @@ def revise_content(gateway, draft, messages, schema, audit, *, source=None, erro
         'If no quote supports a claim, remove only that unsupported claim. Never return the '
         'unchanged rejected text and fact_ids as a correction. '
         'All revised copy will undergo full source, numeric, pagination and independent meaning checks.'}
-    response = author_draft(gateway, [instruction, untrusted_document_message(json.dumps(
-        dict(source_facts=source_facts, editable_groups=editable, errors=errors), ensure_ascii=False))],
-        response_schema, audit, cancelled=cancelled)
-    audit['addressed_content_revision'] = response.model_dump(mode='json')
-    revision = SummarySynthesisRevision(
-        replacements=[dict(page_index=items[e.item_id][0], item_index=items[e.item_id][1],
-                           replacement=e.replacement) for e in response.replacements],
-        additions=[dict(page_index=groups[e.group_id], item=e.item) for e in response.additions],
-        titles=[dict(page_index=groups[e.group_id], title=e.title) for e in response.titles])
-    audit['content_revision'] = revision.model_dump(mode='json')
-    try:
-        return apply_content_revision(draft, revision, schema)
-    except ValueError as exc:
-        raise ValueError(str(exc) + '; unresolved checks: ' + '; '.join(errors or [])) from exc
+    repair_messages = [instruction, untrusted_document_message(json.dumps(
+        dict(source_facts=source_facts, editable_groups=editable, errors=errors), ensure_ascii=False))]
+    if add_only:
+        repair_messages.insert(1, {'role': 'user', 'content':
+            'The prior rejected source parts are now accepted; this review found new omissions after '
+            'paragraph replacements. This final correction is ADDITIVE ONLY. Existing text, titles, '
+            'fact IDs and order are locked. Return additions with the missing source-bound qualifications '
+            'in existing supporting appendix groups when available. Keep replacements and titles empty. '
+            'Do not duplicate existing findings or rewrite accepted material. Added paragraphs must '
+            'state the missing meaning with their exact supporting fact IDs. Full independent source '
+            'and meaning review still applies; an incorrect existing claim cannot be cured by a contrary addendum.'})
+        audit['content_revision_policy'] = 'additive_meaning_regression'
+    initial_repair_messages = list(repair_messages)
+    for attempt in range(2 if retry_unchanged else 1):
+        response = author_draft(gateway, repair_messages, response_schema, audit, cancelled=cancelled)
+        proposal = response.model_dump(mode='json')
+        audit['addressed_content_revision'] = proposal
+        record = {'attempt': attempt + 1, 'proposal': proposal}
+        audit.setdefault('content_revision_attempts', []).append(record)
+        revision = SummarySynthesisRevision(
+            replacements=[dict(page_index=items[e.item_id][0], item_index=items[e.item_id][1],
+                               replacement=e.replacement) for e in response.replacements],
+            additions=[dict(page_index=groups[e.group_id], item=e.item) for e in response.additions],
+            titles=[dict(page_index=groups[e.group_id], title=e.title) for e in response.titles])
+        audit['content_revision'] = revision.model_dump(mode='json')
+        try:
+            corrected = apply_content_revision(draft, revision, schema)
+            record['status'] = 'changed'
+            return corrected
+        except ValueError as exc:
+            record.update(status='rejected', error=str(exc))
+            if attempt or not retry_unchanged or 'repeated the rejected draft' not in str(exc):
+                raise ValueError(str(exc) + '; unresolved checks: ' + '; '.join(errors or [])) from exc
+            repair_messages = initial_repair_messages + [untrusted_document_message(json.dumps(record, ensure_ascii=False)),
+                {'role': 'user', 'content':
+                 'Your proposed edit changes neither text nor fact IDs, so it cannot correct the source '
+                 'failure. This is the final targeted correction, not a new draft. Recheck each rejected '
+                 'paragraph against source_facts.source_quote, including singular/count wording, signs, '
+                 'shared range units and the full rate denominator. Use exact source-native notation '
+                 'when a paraphrase cannot be verified. Correct the affected text or supporting fact IDs; '
+                 'remove only an unsupported assertion. Preserve other supported details. Do not return '
+                 'the same paragraph, empty edits, unrelated title edits or an explanation instead of corrections.'}]

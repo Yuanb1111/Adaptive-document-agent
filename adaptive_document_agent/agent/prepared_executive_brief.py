@@ -11,6 +11,32 @@ from adaptive_document_agent.services.llm import LLMGateway
 from .executive_brief import ExecutiveBriefWriter
 
 
+class PreparedBriefInputsChanged(ValueError):
+    def __init__(self, fields):
+        self.fields = tuple(fields)
+        super().__init__('Prepared executive brief inputs changed: ' + ', '.join(self.fields))
+
+
+def current_executive_brief(gateway, current, prepared=None):
+    """Refresh once after final topic corrections; never accept stale copy."""
+    if prepared is None:
+        return ExecutiveBriefWriter(gateway).generate(current)
+    try:
+        return prepared.result(current)
+    except PreparedBriefInputsChanged as exc:
+        # Planning may correct topic copy while this independent worker runs.
+        # A changed document, data, purpose or analysis is a different boundary:
+        # those must still fail closed rather than reuse an inconsistent plan.
+        if exc.fields != ('presentation_topics',):
+            raise
+        from adaptive_document_agent.models import ValidationIssue
+        current.validation_warnings.append(ValidationIssue(code='executive_brief_snapshot_refreshed',
+            stage='report', severity='info', message=
+            'Presentation topics changed during parallel planning. Discarded the stale briefing '
+            'and regenerated it once against the final topics with fresh source and meaning checks.'))
+        return ExecutiveBriefWriter(gateway).generate(current)
+
+
 class PreparedExecutiveBrief:
     """Generate on an isolated snapshot; only the caller attaches results/audits."""
 
@@ -41,9 +67,11 @@ class PreparedExecutiveBrief:
                     current.validation_warnings.append(issue.model_copy(deep=True))
         # Recovery must finish before this work starts. Fail closed if any input
         # used for editorial selection changed while the slide layout was built.
-        for field in ('document', 'profile', 'observations', 'insights', 'analysis_results', 'presentation_topics'):
-            if getattr(current, field) != getattr(self._source, field):
-                raise ValueError('Prepared executive brief inputs changed: ' + field)
+        changed = [field for field in ('document', 'profile', 'observations', 'insights',
+                                      'analysis_results', 'presentation_topics')
+                   if getattr(current, field) != getattr(self._source, field)]
+        if changed:
+            raise PreparedBriefInputsChanged(changed)
         from adaptive_document_agent.services.executive_brief import validate_executive_brief
         errors = validate_executive_brief(brief, current)
         if errors:

@@ -84,7 +84,8 @@ def _validate_batch(reviewed, current, requested, lookup, primary_pages, validat
     return revised, local, {sid: link for sid, link in links.items() if link is not None}
 
 
-def _review_batch(context, current, requested, lookup, primary_pages, gateway, validate, audit, budget=None):
+def _review_batch(context, current, requested, lookup, primary_pages, gateway, validate, audit, budget=None,
+                  instructions=()):
     """Bound targeted repairs; stop repeated errors and retain every attempt."""
     from .coverage_review_context import encode
     budget = budget if budget is not None else {'calls': 0}
@@ -97,6 +98,7 @@ def _review_batch(context, current, requested, lookup, primary_pages, gateway, v
          'Read catalog_encoding and period_view_encoding when present; dictionary cells are exact source metadata. '
          'An include decision needs all facts actually represented, with matching values, periods, units, '
          'definitions, categories and audit status; matching page numbers or measure names is insufficient.'},
+        *instructions,
         untrusted_document_message(encoded),
     ]
     topic_limit = PresentationTopicSelection.model_json_schema()['properties']['topics']['maxItems']
@@ -107,6 +109,7 @@ def _review_batch(context, current, requested, lookup, primary_pages, gateway, v
             'Regroup complementary evidence under a supported shared question when needed. '
             'Do not return one topic for every requested series or drop accepted observations to meet the limit.')
     rejected_errors = set()
+    initial_messages = list(messages)
     for attempt in range(3):
         if budget['calls'] >= MAX_REVIEW_CALLS:
             raise ValueError('Coverage model-call budget exhausted; remaining evidence requires review.')
@@ -130,7 +133,7 @@ def _review_batch(context, current, requested, lookup, primary_pages, gateway, v
             feedback = {'schema_errors': errors, 'rejected_output': response.text}
             if len(encoded) + len(encode(feedback)) > MAX_REVIEW_CHARACTERS:
                 raise ValueError('Schema correction context exceeds the bounded review budget.') from exc
-            messages = messages[:2] + [untrusted_document_message(encode(feedback)),
+            messages = initial_messages + [untrusted_document_message(encode(feedback)),
                 {'role': 'user', 'content': f'Correct the listed schema paths. Return at most {topic_limit} topics '
                  'and all requested coverage decisions. Preserve every accepted source observation. '
                  'For topic-count overflow, regroup evidence only when it answers a shared question; '
@@ -158,7 +161,7 @@ def _review_batch(context, current, requested, lookup, primary_pages, gateway, v
                 feedback.pop('rejected_topics')
             if len(encoded) + len(encode(feedback)) > MAX_REVIEW_CHARACTERS:
                 raise ValueError('Repair context exceeds the bounded review budget.') from exc
-            messages = messages[:2] + [untrusted_document_message(encode(feedback)),
+            messages = initial_messages + [untrusted_document_message(encode(feedback)),
                 {'role': 'user', 'content': 'Repair this rejected review using the original full evidence context. '
                  'Return the complete topics and exactly one decision for each requested series. '
                  'If a material series is absent, select it; do not label it included without its facts. '
@@ -252,6 +255,14 @@ def review_topic_coverage(
         "review_scope": "All available series with evidence not represented in the current selected topics."}
     encoded = json.dumps(review_payload, ensure_ascii=False, separators=(",", ":"))
     audit = {"original_selection": selection.model_dump(mode="json"), "candidate_series_ids": candidates}
+    from .report_requirements import instruction_messages
+    instructions = instruction_messages(result.profile, purpose='presentation coverage review')
+    if instructions:
+        instructions.append({'role': 'user', 'content':
+            'Review every supplied evidence series, while preserving the requested audience page limits. '
+            'A coverage decision is not a requirement for an additional slide. Combine complementary '
+            'evidence under coherent questions, or give a specific source-supported omission reason. '
+            'Do not expand the story into an exhaustive series catalogue or discard material caveats.'})
 
     def record(code, severity, details):
         result.validation_warnings.append(ValidationIssue(code=code, severity=severity,
@@ -260,12 +271,13 @@ def review_topic_coverage(
 
     if len(encoded) > MAX_REVIEW_CHARACTERS or len(candidates) > MAX_REVIEW_DECISIONS:
         return _review_bounded(selection, candidates, lookup, primary_pages,
-                               review_payload, gateway, validate, record)
+                               review_payload, gateway, validate, record, instructions=instructions)
     reviewed = None
     try:
         reviewed = gateway.generate_structured([
             {"role": "system", "content": load_prompt("presentation_topic_selection.txt") + "\n\n"
              + load_prompt("presentation_topic_coverage_review.txt")},
+            *instructions,
             untrusted_document_message(encoded),
         ], TopicCoverageReview, stage="presentation", allow_repair=False,max_tokens=MAX_REVIEW_OUTPUT_TOKENS)
         from .topic_reference_binding import bind_topic_references
@@ -312,7 +324,8 @@ def review_topic_coverage(
     return revised
 
 
-def _review_bounded(selection, candidates, lookup, primary_pages, payload, gateway, validate, record):
+def _review_bounded(selection, candidates, lookup, primary_pages, payload, gateway, validate, record,
+                    *, instructions=()):
     """Review all facts in bounded batches and commit only a complete valid merge."""
     from .coverage_review_context import compact_context, batch_context, encode
     compact = compact_context(payload)
@@ -363,7 +376,8 @@ def _review_bounded(selection, candidates, lookup, primary_pages, payload, gatew
             batch_audit = {'series_ids': requested, 'context_characters': len(encoded)}
             batches.append(batch_audit)
             revised, local = _review_batch(context, current, requested, lookup,
-                                           primary_pages, gateway, validate, batch_audit, budget)
+                                           primary_pages, gateway, validate, batch_audit, budget,
+                                           instructions=instructions)
             final_ids = {sid for topic in revised.topics for sid in topic.series_ids}
             decisions.update(local)
             # Carry model-authored reasons forward, including earlier batches.

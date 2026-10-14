@@ -59,13 +59,15 @@ def check_requirements(result, presentation=None, *, export_verified=False):
                 verification=('independent_source_layout_and_export_cells' if export_verified and not uncertain
                               else 'source_fragment_cells' if export_verified else 'extraction_inventory')))
         elif req.kind == 'slide_limit':
-            count = (sum(req.slide_scope == 'all' or s.element.cSld.get('name') != 'ada:appendix'
-                         for s in presentation.slides) if presentation is not None else None)
+            from .slide_budgets import exported_slide_numbers
+            exported = exported_slide_numbers(presentation, result, req) if presentation is not None else []
+            count = len(exported) if presentation is not None else None
             checks.append(RequirementCheck(requirement_id=req.id,
                 status='planned' if count is None else 'satisfied' if count <= req.max_slides else 'not_met',
-                message=f'Requested maximum {req.max_slides} {req.slide_scope} slides. ' +
+                message=f'Requested maximum {req.max_slides} {req.slide_section} {req.slide_scope} slides. ' +
                 ('Actual physical slide count is not yet available.' if count is None else f'Actual count: {count}. '
-                 'Required evidence was retained rather than removed to conceal a budget conflict.')))
+                 'Required evidence was retained rather than removed to conceal a budget conflict.'),
+                slide_numbers=exported))
         elif req.kind in {'table_presentation','source_citations'}:
             errors, numbers = [], []
             if presentation is not None:
@@ -133,4 +135,7 @@ def mark_customization_export_verified(result, payload):
     if result.profile.report_requirements:
         from io import BytesIO
         from pptx import Presentation
-        check_requirements(result, Presentation(BytesIO(payload)), export_verified=True)
+        presentation = Presentation(BytesIO(payload))
+        check_requirements(result, presentation, export_verified=True)
+        from .slide_budgets import require_exported_budgets
+        require_exported_budgets(presentation, result)

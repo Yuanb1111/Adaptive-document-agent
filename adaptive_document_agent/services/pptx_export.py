@@ -157,6 +157,8 @@ def build_presentation(result: PipelineResult, template_path: str | Path | None 
         raise PreflightQAError(report)
     verify_summary_export(presentation, result)
     verify_requested_tables(presentation, result)
+    from .slide_budgets import require_exported_budgets
+    require_exported_budgets(presentation, result)
     from .slide_compositor import validate_composed_geometry
     validate_composed_geometry(presentation)
     from .presentation_brand_qa import validate_generated_brand

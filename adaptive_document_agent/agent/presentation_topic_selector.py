@@ -197,6 +197,21 @@ class PresentationTopicSelector:
         ]
         from .report_requirements import instruction_messages
         messages[1:1] = instruction_messages(result.profile, purpose='topic selection and narrative detail')
+        from adaptive_document_agent.services.slide_budgets import resolved_limits, introduction_limit
+        limits = resolved_limits(result.profile.report_requirements)
+        if limits:
+            introduction = introduction_limit(result.profile.report_requirements) or 0
+            available = max(0, min(limits) - introduction - 5)
+            messages.insert(1, {'role': 'user', 'content':
+                f'The report has at most {min(limits)} physical audience slides. Reserve up to '
+                f'{introduction} introduction slides and five for cover, contents, executive brief, '
+                f'source limitations and closing. At most {available} slides remain for analytical '
+                'topics and their continuations. Choose a coherent set of the most valuable supported '
+                'questions within this space; combine related questions rather than enumerating every '
+                'series. State honest evidence-bound omission reasons. Full extracted evidence remains '
+                'in diagnostics. Detailed continuations may move to an appendix only when the user '
+                'explicitly excludes appendices from the report budget. Never drop important caveats, '
+                'change claims or add topics merely to fill this budget.'})
         selection = self.gateway.generate_structured(
             messages,
             PresentationTopicSelection,

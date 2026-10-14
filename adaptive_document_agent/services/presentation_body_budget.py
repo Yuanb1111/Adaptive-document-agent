@@ -14,8 +14,8 @@ def place_continuations_in_appendix(presentation, result):
     plan = result.presentation_plan
     if not requirements or not plan:
         return
-    limits = [r.max_slides for r in requirements.items if r.kind == 'slide_limit'
-              and r.resolution == 'resolved' and r.slide_scope == 'body' and r.max_slides]
+    from .slide_budgets import resolved_limits
+    limits = resolved_limits(requirements, scope='body')
     if not limits:
         return
     slides = list(presentation.slides)

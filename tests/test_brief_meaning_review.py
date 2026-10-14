@@ -33,6 +33,26 @@ def test_reviewer_acceptance_cannot_override_arithmetic_or_source_period_duratio
     assert any('outside' in e for e in comparison_errors(comparison(start_context='Other share was 2% in 2023.'), item()))
 
 
+def test_reported_percentage_basis_keeps_source_units_and_arithmetic_without_flow_total_duration_rule():
+    value = item('Share rose from 2% in 2023 to 3% in the six months of 2024.')
+    proposed = comparison(value.text, direction='increase', end_duration_months=6,
+                          measure_basis='source_percentage')
+    assert not comparison_errors(proposed, value)
+    assert any('direction' in e for e in comparison_errors(proposed.model_copy(update={'direction': 'decrease'}), value))
+    value.evidence[0].text = 'Reported amounts were 2 and 3 in 2023 and 2024.'
+    proposed = proposed.model_copy(update={'start_context': value.evidence[0].text,
+                                          'end_context': value.evidence[0].text})
+    assert any('percentage units' in e for e in comparison_errors(proposed, value))
+
+
+def test_percentage_basis_cannot_disguise_money_or_lend_a_missing_percentage_unit():
+    value = item('Amounts rose from USD2 million to USD3 million.')
+    proposed = comparison(value.text, start_value='2', end_value='3', direction='increase',
+                          end_duration_months=6, measure_basis='source_percentage')
+    assert any('explicit claim percentages' in e for e in comparison_errors(proposed, value,
+                                                                           source_percentages={'2', '3'}))
+
+
 @pytest.mark.parametrize('valid_patch', [True, False])
 def test_writer_repairs_only_the_false_comparison_and_rechecks_the_patch(valid_patch):
     original = {'title': 'Shares', 'items': [item().model_dump(mode='json')]}

@@ -29,6 +29,25 @@ def test_complete_literal_row_inherits_only_its_explicit_table_headers():
     assert not validate_executive_brief(brief, result)
 
 
+def test_single_leader_mixed_row_retains_negative_money_and_percentage_columns():
+    result, brief = table_result()
+    row = 'Provision (charge)/credit . (12) (9.4) 3 0.1'
+    result.document.pages[0].text = '(USD in thousands, except percentages)\n' + row
+    table = result.document.pages[0].tables[0]
+    table.headers = ['label', 'Amount', '%', 'Amount', '%']
+    table.column_types = ['label', 'amount', 'percentage', 'amount', 'percentage']
+    table.column_currencies = [None, 'USD', None, 'USD', None]
+    table.column_scales = [None, 1000, 1, 1000, 1]
+    table.raw_header_lines = ['(USD in thousands, except percentages)']
+    table.rows = [TableRow(cells=['Provision (charge)/credit', '(12)', '(9.4)', '3', '0.1'],
+                           page=1, alignment_status='resolved')]
+    brief.items[0].evidence[0].text = row
+    brief.items[0].text = 'Provision was USD -12 thousand and USD 3 thousand, with -9.4% and 0.1%.'
+    assert not validate_executive_brief(brief, result)
+    brief.items[0].text = brief.items[0].text.replace('-12', '12')
+    assert validate_executive_brief(brief, result)
+
+
 def test_unit_heading_inside_body_can_support_only_its_following_source_row():
     result, brief = table_result()
     table = result.document.pages[0].tables[0]

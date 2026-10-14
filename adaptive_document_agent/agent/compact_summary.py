@@ -171,6 +171,9 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
     requirements = result.profile.report_requirements
     appendix_allowed = bool(requirements and any(r.kind == 'slide_limit' and r.resolution == 'resolved'
         and r.slide_scope == 'body' for r in requirements.items))
+    from adaptive_document_agent.services.slide_budgets import resolved_limits
+    if resolved_limits(requirements, section='introduction', scope='all'):
+        appendix_allowed = False
     languages = {r.language for r in requirements.items if r.kind=='output_language'
                  and r.resolution=='resolved' and r.language_scope in {'body','all'}} if requirements else set()
     messages = [{'role':'system','content':
@@ -269,6 +272,8 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
     original = list(messages)
     rejected_draft = None
     rejected_errors = []
+    rejected_phase = None
+    additive_meaning_repair = False
     repairs = {'source': 0, 'meaning': 0}
     revision_base = None
     previous_meaning_rejections = None
@@ -296,7 +301,8 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
                     from .summary_content_repair import revise_content
                     try:
                         draft = revise_content(gateway,revision_base,messages,draft_schema,audit,
-                            source=payload, errors=rejected_errors, cancelled=cancelled)
+                            source=payload, errors=rejected_errors, cancelled=cancelled,
+                            retry_unchanged=rejected_phase == 'source', add_only=additive_meaning_repair)
                     except ValueError:
                         audit['revision_failed'] = True
                         raise
@@ -439,6 +445,14 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
             if (phase == 'meaning' and previous_meaning_rejections and meaning_rejections
                     and len(meaning_rejections) < len(previous_meaning_rejections)):
                 repair_limit = 2
+            # The prior failures can all be resolved while a replacement loses
+            # other previously accepted qualifications. Permit one additive
+            # correction, never another rewrite or an unlimited review loop.
+            additive_meaning_repair = bool(phase == 'meaning' and previous_meaning_rejections
+                and meaning_rejections and not meaning_rejections & previous_meaning_rejections
+                and len(meaning_rejections) >= len(previous_meaning_rejections))
+            if additive_meaning_repair:
+                repair_limit = 2
             if (repairs[phase] >= repair_limit or attempt == 4 or audit.get('repeated_draft')
                     or audit.get('revision_failed')):
                 raise ValueError('Complete introduction theme unavailable: '+str(exc)) from exc
@@ -450,6 +464,7 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
             rejected_draft = audit.get('draft')
             revision_base = draft if can_patch else None
             rejected_errors = audit['errors']
+            rejected_phase = phase
             used = {pid for page in pages for item in page.items for pid in item.part_ids}
             missing = [row for row in payload['parts'] if row['id'] not in used]
             messages = original + [untrusted_document_message(json.dumps({

@@ -18,6 +18,7 @@ class MeaningComparison(BaseModel):
     end_value: str
     direction: Literal['increase', 'decrease', 'equal']
     absolute_magnitude: bool = False
+    measure_basis: Literal['flow_total', 'source_percentage'] = 'flow_total'
     # IDs carry continuous source passages over transport; Python fills their
     # original copy. Legacy literal contexts remain accepted and checked.
     start_ref: str = Field(default='', max_length=80)
@@ -42,7 +43,7 @@ class BriefMeaningReview(BaseModel):
     items: list[MeaningVerdict]
 
 
-def comparison_errors(comparison, item, *, pages=None):
+def comparison_errors(comparison, item, *, pages=None, source_percentages=None):
     errors = []
     if comparison.claim not in item.text:
         errors.append('Comparison does not bind an exact audience claim')
@@ -98,7 +99,22 @@ def comparison_errors(comparison, item, *, pages=None):
             errors.append('Comparison direction contradicts its source-bound endpoints')
     except (InvalidOperation, ValueError):
         errors.append('Comparison endpoints must be exact finite numeric coefficients')
-    if comparison.start_duration_months != comparison.end_duration_months:
+    percentage_supported = False
+    if comparison.measure_basis == 'source_percentage':
+        from adaptive_document_agent.services.executive_brief import _quantities
+        def coefficient(value):
+            from adaptive_document_agent.extraction.numeric_parser import parse_number
+            parsed = parse_number(value)
+            return Decimal(str(parsed.value / parsed.scale)) if parsed is not None else None
+        endpoints = {coefficient(comparison.start_value), coefficient(comparison.end_value)}
+        claimed = {Decimal(v) for c, v, u in _quantities(comparison.claim) if not c and u in {'%', 'percent'}}
+        quoted = ({Decimal(v) for v in source_percentages} if source_percentages is not None else
+                  {Decimal(v) for q in passages for c, v, u in _quantities(q.text)
+                   if not c and u in {'%', 'percent'}})
+        percentage_supported = None not in endpoints and endpoints <= claimed and endpoints <= quoted
+        if not percentage_supported:
+            errors.append('Percentage comparison requires both explicit claim percentages and literal source percentage units')
+    if not percentage_supported and comparison.start_duration_months != comparison.end_duration_months:
         errors.append('Trend comparison mixes different reporting durations')
     return errors
 
@@ -145,6 +161,13 @@ def meaning_validator(gateway, *, cancelled=None, result=None):
              'the claim compares absolute magnitudes (e.g. loss narrowing). Python calculates direction. '
              'Same numbers appearing somewhere in a table do not support a claimed association. '
              'A decline from 2% to 3% is false; annual and six-month losses do not establish a trend. '
+             'Set measure_basis=flow_total for period aggregate amounts/counts: compared durations must match. '
+             'Use source_percentage only for percentages actually reported in the quotations, with both '
+             'endpoints expressed as percentages in the claim. A reported composition share or percentage '
+             'rate can be contrasted across differently sized periods when each period, the same definition '
+             'and reporting scope are explicit and all material qualifications are preserved; this does '
+             'not establish growth in the underlying flow total. Still reject unrelated populations, '
+             'definitions, false associations, omitted audit status and misleading trend interpretations. '
              'If a claim has no numeric comparison, comparisons may be empty, but still review its '
              'full meaning and conditions. Accept only a faithful, completely evidenced claim; '
              'uncertainty is a rejection. Do not rewrite or calculate.'},
@@ -204,8 +227,17 @@ def meaning_validator(gateway, *, cancelled=None, result=None):
                                 failed.append('Comparison reference contradicts its supplied context')
                             updates[field + '_context'] = context
                 comparison = comparison.model_copy(update=updates)
+                source_percentages = None
+                if comparison.measure_basis == 'source_percentage' and result is not None:
+                    from adaptive_document_agent.services.executive_brief import _quoted_table_percentages, _quantities
+                    from adaptive_document_agent.services.brief_table_evidence import quoted_table_context
+                    source_percentages = (_quoted_table_percentages(item, result)
+                        | quoted_table_context(item, result).percentages
+                        | {v for q in item.evidence for c, v, u in _quantities(q.text)
+                           if not c and u in {'%', 'percent'}})
                 failed.extend(comparison_errors(comparison, item, pages=(
-                    {p.page_number:p.text for p in result.document.pages} if result is not None else None)))
+                    {p.page_number:p.text for p in result.document.pages} if result is not None else None),
+                    source_percentages=source_percentages))
             checked[item.model_dump_json()] = failed
             if failed:
                 errors[verdict.index] = failed

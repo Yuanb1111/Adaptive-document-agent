@@ -52,7 +52,12 @@ def _claim_keeps_basis(tail, basis):
     # A slash, hyphen, or another denominator word is not a boundary. Unknown
     # prose boundaries fail closed rather than accepting a shortened unit.
     comparison = re.match(r"^\s+(?:from|to)\s+(?:(?:[A-Z]{3}|US\$|HK\$|[$€£¥])\s*)?[+−(\-]?\d", suffix, re.I)
-    return bool(comparison or not suffix or re.match(r"^[.,;:)]|^\s+(?:in|during|as\s+of|for\s+the|"
+    # An explicitly quantified coordinated item starts a new claim; it is not
+    # another word in this denominator. Each following amount is checked on
+    # its own, so this never supplies a missing basis to the next item.
+    coordination = re.match(r"^\s+(?:and|or)\s+(?:(?:[A-Z]{3}|US\$|HK\$|[$€£¥])\s*)?[+−(\-]?\d",
+                            suffix, re.I)
+    return bool(comparison or coordination or not suffix or re.match(r"^[.,;:)]|^\s+(?:in|during|as\s+of|for\s+the|"
                                       r"compared\s+with|versus|respectively)\b", suffix, re.I))
 
 
@@ -85,8 +90,8 @@ class TableQuoteContext:
 
     def numeric_claim_text(self, text):
         """Exempt complete supported dates, never authorize their digits elsewhere."""
-        from .number_words import cardinal_claim_text
-        text = cardinal_claim_text(text)
+        from .quantity_notation import literal_quantity_text
+        text = literal_quantity_text(text)
         text = _DURATION_DATE.sub(lambda m: ' ' if (
             int(m['months']), m['month'].casefold(), str(int(m['day'])), m['year'])
             in self.duration_dates else m[0], text)
@@ -110,8 +115,8 @@ class TableQuoteContext:
 
     def basis_errors(self, text):
         from .executive_brief import _MONEY_QUANTITY, _QUANTITY, _quantities
-        from .number_words import cardinal_claim_text
-        text = cardinal_claim_text(text)
+        from .quantity_notation import literal_quantity_text
+        text = literal_quantity_text(text)
         money = list(_MONEY_QUANTITY.finditer(text))
         matches = money + [m for m in _QUANTITY.finditer(text)
                            if not any(a.start() <= m.start() and m.end() <= a.end() for a in money)
@@ -295,7 +300,11 @@ def _quoted_complete_row(cells: list[str], quoted: str) -> bool:
         return False
     label = re.escape(normalize_quote(cells[0]))
     values = re.escape(normalize_quote(" ".join(cells[1:])))
-    return bool(re.search(r"(?<!\w)" + label + r"(?:\(\d+\))+ " + values + r"(?![\w.])", quoted))
+    # A single table-leader dot survives general quote normalization, which
+    # deliberately keeps ordinary punctuation. Accept it only between this
+    # exact label and the complete ordered cells, never across prose or cells.
+    return bool(re.search(r"(?<!\w)" + label + r"(?:\(\d+\))*\s+(?:\.\s+)*"
+                          + values + r"(?![\w.])", quoted))
 
 
 def quoted_table_context(item, result, *, excerpts=None):

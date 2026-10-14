@@ -4,7 +4,7 @@ from adaptive_document_agent.models import PipelineResult
 from adaptive_document_agent.models.executive_brief import ExecutiveBrief
 from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
 from .source_quotes import normalize_quote, continuous_quote_passages
-from .number_words import cardinal_numbers
+from .quantity_notation import literal_quantity_text, literal_quantity_numbers
 
 
 def normalized(text: str) -> str:
@@ -42,8 +42,7 @@ def _quantities(text: str) -> set[tuple[str, str, str]]:
     from .calendar_claims import split_calendar_dates
     text, _ = split_calendar_dates(text)
     text = PresentationPlanValidator._without_period_durations(text)
-    from .number_words import cardinal_claim_text
-    text = cardinal_claim_text(text)
+    text = literal_quantity_text(text)
     text = PresentationPlanValidator._canonicalize_money_signs(text)
     money_matches = list(_MONEY_QUANTITY.finditer(text))
     money_spans = [match.span() for match in money_matches]
@@ -64,8 +63,7 @@ def _explicit_nonparenthesized_quantities(text):
     """Literal typed narrative quantities cannot be erased by another signed cell."""
     from .calendar_claims import split_calendar_dates
     text, _ = split_calendar_dates(text)
-    from .number_words import cardinal_claim_text
-    text = cardinal_claim_text(text)
+    text = literal_quantity_text(text)
     text = PresentationPlanValidator._canonicalize_money_signs(text)
     output = set()
     for match in _QUANTITY.finditer(text):
@@ -292,12 +290,12 @@ def validate_executive_brief(brief: ExecutiveBrief, result: PipelineResult, *,
                     or normalized(quote.text) not in normalized(original_pages.get(quote.page, ''))):
                 errors.append(f'{item.label}: quote not found on cited page {quote.page}.')
         for passage in passages:
-            allowed.update(cardinal_numbers(passage.text))
+            allowed.update(literal_quantity_numbers(passage.text, source=True))
             # A following percentage-header line must not turn the final year
             # in an explicitly quoted year row into a percentage token.
             for line in passage.text.splitlines():
                 if re.fullmatch(r'\s*(?:(?:19|20)\d{2}\s+)+(?:19|20)\d{2}\s*', line):
-                    allowed.update(cardinal_numbers(line))
+                    allowed.update(literal_quantity_numbers(line, source=True))
             quantities.update(_quantities(passage.text))
             explicit_quantities.update(_explicit_nonparenthesized_quantities(passage.text))
         source_percentages = _quoted_table_percentages(item, result, quotations=passages)
@@ -316,13 +314,14 @@ def validate_executive_brief(brief: ExecutiveBrief, result: PipelineResult, *,
         quantities = {canonical_quantity(*quantity) for quantity in quantities}
         from .brief_quantity_representation import magnitude_claim_text
         claim_text, representation_errors = magnitude_claim_text(item, table_context, quantities)
+        claim_text = literal_quantity_text(claim_text)
         errors.extend(f'{item.label}: {error}.' for error in representation_errors)
         errors.extend(f'{item.label}: {error}.' for error in table_context.basis_errors(claim_text))
         # The deterministic table model supplies a unit that a body-cell quote
         # cannot repeat.  Add only the exact resolved values, not every number
         # from a percentage-bearing page.
         allowed.update(value + '%' for value in source_percentages)
-        claimed = cardinal_numbers(table_context.numeric_claim_text(claim_text))
+        claimed = literal_quantity_numbers(table_context.numeric_claim_text(claim_text))
         if claimed - allowed:
             errors.append(f'{item.label}: unsupported numeric claims {sorted(claimed - allowed)}.')
         for currency, value, unit in sorted(_quantities(claim_text)):

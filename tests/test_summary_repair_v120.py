@@ -91,8 +91,40 @@ def test_unchanged_numeric_repair_is_detected_before_another_review():
     client = Reviewer(draft)
     with pytest.raises(ValueError, match='repeated the rejected draft'):
         generate_compact_summary(client, result, review, CompanyProfile(summary_review=review))
-    assert client.calls == ['CompactSummaryDraft', 'SummarySynthesisRevision']
+    assert client.calls == ['CompactSummaryDraft', 'SummarySynthesisRevision', 'SummarySynthesisRevision']
     assert review.plan_audits[-1]['revision_failed']
+
+
+def test_new_semantic_omissions_get_one_additive_correction_after_prior_failures_clear():
+    result, review, draft = fixture(10)
+    class Client(Reviewer):
+        reviews = 0
+        repairs = 0
+        def generate_structured(self, messages, schema, **kwargs):
+            if schema.__name__ == 'SummarySynthesisRevision':
+                self.calls.append(schema.__name__)
+                self.repairs += 1
+                if self.repairs == 1:
+                    item = dict(draft['pages'][0]['items'][0])
+                    item['text'] += ' Delivery depends on staff training.'
+                    return schema(replacements=[dict(item_id='g0_i0', replacement=item)])
+                assert schema.model_json_schema()['properties']['replacements']['maxItems'] == 0
+                return schema(additions=[dict(group_id='g0', item=dict(label='Training conditions',
+                    text='Scheduling and service delivery require completed staff training for the affected teams.',
+                    fact_ids=['f1', 'f2']))])
+            response = super().generate_structured(messages, schema, **kwargs)
+            if schema is CompactSummaryReview:
+                self.reviews += 1
+                rejected = {'part-0'} if self.reviews == 1 else {'part-1', 'part-2'} if self.reviews == 2 else set()
+                response.parts = [p.model_copy(update={'accepted': p.part_id not in rejected,
+                    'reason': 'Material condition missing.' if p.part_id in rejected else 'Supported.'})
+                    for p in response.parts]
+            return response
+    client = Client(draft)
+    company = generate_compact_summary(client, result, review, CompanyProfile(summary_review=review))
+    assert company.summary_pages
+    assert client.repairs == 2 and client.reviews == 3
+    assert review.plan_audits[-1]['content_revision_policy'] == 'additive_meaning_regression'
 
 
 @pytest.mark.parametrize('progress', [True, False])

@@ -38,8 +38,8 @@ def compact_item_errors(item, review, result):
     if (not refs or item.part_ids != expected_parts or item.source_pages != sorted(pages)
             or item.source_quote != '\n\n'.join(quotes)):
         errors.append('Compact summary changed its exact source-fact bindings')
-    from .number_words import cardinal_numbers
-    if not cardinal_numbers(item.label+' '+item.text):
+    from .quantity_notation import literal_quantity_numbers
+    if not literal_quantity_numbers(item.label+' '+item.text):
         # There is no numerical claim to resolve against every table cell.
         # Exact source ownership above and the mandatory independent meaning
         # review still apply to every part, including qualitative conditions.

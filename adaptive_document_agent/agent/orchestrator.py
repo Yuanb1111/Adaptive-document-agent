@@ -516,14 +516,13 @@ class DocumentOrchestrator:
         executive_brief = None
         if self.gateway:
             notify("Writing the evidence-bound executive briefing")
-            from .executive_brief import ExecutiveBriefWriter
+            from .prepared_executive_brief import current_executive_brief
             with record_timing(timings, "executive_brief"):
                 snapshot = PipelineResult(document=document, profile=profile,
                     observations=index.observations, insights=insights, analysis_results=results,
                     presentation_plan=presentation_plan, presentation_topics=topic_selection)
                 try:
-                    executive_brief = (prepared_brief.result(snapshot) if prepared_brief is not None
-                                       else ExecutiveBriefWriter(self.gateway).generate(snapshot))
+                    executive_brief = current_executive_brief(self.gateway, snapshot, prepared_brief)
                 except (LLMResponseError, ValueError) as exc:
                     issues.append(ValidationIssue(code="executive_brief_unavailable", stage="report",
                         severity="warning", message="The final briefing could not be source-checked: " + str(exc)[:500]))

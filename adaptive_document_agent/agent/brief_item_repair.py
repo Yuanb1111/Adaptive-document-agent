@@ -200,7 +200,7 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
                              topics: list[tuple[str, list[int]]], source_context: dict[str, Any],
                              evidence_catalog: dict | None = None, cancelled=None,
                              semantic_validator=None) -> ExecutiveBrief:
-    """Generate once, then permit only one targeted, strictly typed patch call."""
+    """One source patch and, when newly needed, one independent meaning patch."""
     audit: dict[str, Any] = {'original': None, 'original_response': None, 'locked_indices': [],
                              'initial_errors': {}, 'patch': None, 'patch_response': None,
                              'repair_errors': [], 'discarded_indices': []}
@@ -268,6 +268,8 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
         _audit(result, audit, 'rejected')
         raise
     audit['locked_indices'] = list(locked)
+    had_source_failures = any(any(not error.startswith('Meaning review:') for error in errors)
+                              for errors in invalid.values())
     audit['initial_errors'].update({f'item_{index}': errors for index, errors in invalid.items()})
     if title_errors:
         audit['initial_errors']['title'] = title_errors
@@ -440,6 +442,20 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
                     return brief
             except (ValueError, TypeError, ValidationError):
                 pass
+    if had_source_failures and semantic_validator and audit.get('patch'):
+        from .brief_semantic_repair import correct_new_meaning_errors
+        try:
+            candidate = ExecutiveBrief(title=title, items=merged)
+            corrected = correct_new_meaning_errors(gateway, candidate, result=result, excerpts=excerpts,
+                topics=topics, source_context=source_context, evidence_catalog=evidence_catalog,
+                semantic_validator=semantic_validator, audit=audit, cancelled=cancelled)
+            if corrected is not None:
+                _audit(result, audit, 'repaired')
+                return corrected
+        except LLMTransportError:
+            raise
+        except (LLMResponseError, ValueError) as exc:
+            audit['post_source_meaning_correction_error'] = str(exc)
     salvaged, discarded = _salvage(merged, locked, title, result, excerpts, topics, semantic_validator)
     if salvaged is not None:
         audit['discarded_indices'] = discarded
