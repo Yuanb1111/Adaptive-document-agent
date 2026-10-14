@@ -94,6 +94,15 @@ def revise_content(gateway, draft, messages, schema, audit, *, source=None, erro
         'errors. Replace only affected paragraphs and their exact fact_ids. Keep all other paragraphs '
         'unchanged; do not repeat the whole draft. Preserve each corrected paragraph\'s already '
         'supported information while adding missing attribution, material qualifications or evidence. '
+        'First locate each rejected meaning across ALL editable paragraphs, including paragraphs '
+        'currently bound only to other parts. If that meaning is already written faithfully elsewhere, '
+        'repair those paragraphs\' fact_ids to add the rejected part\'s exact owned source fact, '
+        'preserving their text and all existing supporting fact IDs. These paragraphs have affected '
+        'citation bindings, even if their copy passed review for another part. Do not merely change '
+        'the wording of the already-bound paragraph or repeat existing copy there. A source part '
+        'with several meanings may require corrected bindings on several different paragraphs. '
+        'Bind only paragraphs that actually state the corresponding source meaning; arbitrary ID '
+        'attachment remains a failure. The reviewer checks the complete bound paragraph union. '
         'Add a paragraph to an existing logical group only when an omitted source part needs it. '
         'When supporting appendix groups exist, use additions to those groups for missing definitions, '
         'qualifications, categories, figures and reporting periods. Keep the concise body unchanged '
@@ -124,7 +133,9 @@ def revise_content(gateway, draft, messages, schema, audit, *, source=None, erro
         'unchanged rejected text and fact_ids as a correction. '
         'All revised copy will undergo full source, numeric, pagination and independent meaning checks.'}
     repair_messages = [instruction, untrusted_document_message(json.dumps(
-        dict(source_facts=source_facts, editable_groups=editable, errors=errors), ensure_ascii=False))]
+        dict(source_facts=source_facts, editable_groups=editable, errors=errors,
+             required_meanings={p['id']: p['required_meanings'] for p in (source or {}).get('parts', [])
+                                if p.get('required_meanings')}), ensure_ascii=False))]
     if add_only:
         repair_messages.insert(1, {'role': 'user', 'content':
             'The earlier rejected issues have been independently verified as corrected; the current '

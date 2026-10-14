@@ -1,6 +1,63 @@
 """Separate complete source reading from independently reviewed audience selection."""
 import json
 from hashlib import sha256
+from .source_quotes import normalize_quote
+
+
+def validate_required_meanings(review, decisions):
+    parts = {p.id: p for p in review.parts}
+    for decision in decisions:
+        meanings = decision.get('required_meanings', [])
+        if bool(meanings) != decision.get('include') or len(meanings) > 12:
+            raise ValueError('Introduction selection requires source-bound central meanings for every included part')
+        seen = set()
+        for value in meanings:
+            meaning = value.get('meaning', '').strip()
+            quote = normalize_quote(value.get('source_quote', ''))
+            if (not meaning or meaning in seen or not quote
+                    or quote not in normalize_quote(parts[decision['part_id']].source_text)):
+                raise ValueError('Introduction required meaning lacks its exact owned source quotation')
+            seen.add(meaning)
+
+
+def required_meanings(review):
+    return {d['part_id']: d['required_meanings'] for d in review.audience_selection.get('decisions', [])
+            if d['include']}
+
+
+def meanings_digest(review):
+    return sha256(json.dumps(required_meanings(review), sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
+def coverage_errors(verdict, meanings, pages):
+    checks = verdict.get('coverage', [])
+    indices = [c.get('meaning_index') for c in checks]
+    if len(indices) != len(meanings) or set(indices) != set(range(len(meanings))):
+        return ['Central-meaning review must check every exact meaning index once']
+    bound, groups = [], {}
+    for page in pages:
+        for item in page.items:
+            if verdict['part_id'] not in item.part_ids:
+                continue
+            group = getattr(item, 'continuation_group', '')
+            if group:
+                if group not in groups:
+                    groups[group] = []
+                    bound.append(groups[group])
+                groups[group].append(item)
+            else:
+                bound.append(item.text)
+    actual = normalize_quote(' '.join(value if isinstance(value, str) else
+        ''.join(item.text for item in sorted(value, key=lambda item: item.continuation_index)) for value in bound))
+    errors = []
+    for check in checks:
+        meaning = meanings[check['meaning_index']]['meaning']
+        quote = normalize_quote(check.get('summary_quote', ''))
+        if check.get('covered') is not True:
+            errors.append('Missing central meaning: ' + meaning + '. ' + check.get('reason', ''))
+        elif not quote or quote not in actual:
+            errors.append('Central meaning has no quoted visible paragraph bound to this part: ' + meaning)
+    return errors
 
 
 def reading_fingerprint(review):
@@ -23,4 +80,5 @@ def audience_part_ids(review):
             or {d['part_id'] for d in decisions if d.get('include') is True} != selected
             or any(type(d.get('include')) is not bool or not d.get('reason','').strip() for d in decisions)):
         raise ValueError('Introduction audience selection lacks complete current source decisions and independent review')
+    validate_required_meanings(review, decisions)
     return selected

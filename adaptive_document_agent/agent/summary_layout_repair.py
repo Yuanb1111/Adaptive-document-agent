@@ -36,6 +36,9 @@ def paginate_draft(
         try:
             pages = pack_theme_pages(pages)
             body_count = sum(page.placement == 'body' for page in pages)
+            record['physical_groups'] = [dict(title=page.title, placement=page.placement,
+                item_labels=[item.label for item in page.items], copy_characters=sum(len(item.text) for item in page.items))
+                for page in pages]
             if review.max_intro_slides is not None and body_count > review.max_intro_slides:
                 over_budget = True
                 raise SummaryLayoutError(f'Body budget is {review.max_intro_slides} physical slides; '
@@ -55,6 +58,15 @@ def paginate_draft(
                  'shorter items, preserving every claim, qualification, number, period, unit and fact ID. '
                  'Keep other content intact. Do not omit a source part. Python handles slide pagination; '
                  'do not compress a whole theme to fit one slide.')
+            if over_budget and review.audience_part_ids is not None:
+                instruction += (' Preserve every independently selected required_meanings entry. '
+                    'Use the measured physical_groups to resolve both overlong copy and stranded '
+                    'logical-group continuations. Combine related claims into fewer concise paragraphs '
+                    'and coherent groups; do not copy the full quoted evidence or repeat the same scope '
+                    'in multiple items. A logical group is not a physical slide. There is no supporting '
+                    'appendix for this whole-file budget. Aim for about 160-220 Latin-equivalent '
+                    'characters per paragraph and the original stated total prose target. '
+                    'Missing meaning will still fail the independent per-meaning review.')
             repair = list(messages) + [untrusted_document_message(json.dumps(record,ensure_ascii=False)),
                 {'role':'user','content':instruction}]
             if over_budget and any(getattr(p, 'placement', 'body') == 'appendix' for p in draft.pages):

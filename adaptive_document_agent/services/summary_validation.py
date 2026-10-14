@@ -274,6 +274,12 @@ def presentation_errors(review: SummaryReview, slide_pages, result: PipelineResu
             if (audit.get('compact_digest')==digest and len(verdicts)==len(required)
                     and audit.get('compact_semantic_review',{}).get('opening_accepted') is True
                     and {v['part_id'] for v in verdicts}==required and all(v['accepted'] for v in verdicts)):
+                if review.audience_part_ids is not None:
+                    from .introduction_audience import required_meanings, meanings_digest, coverage_errors
+                    meanings = required_meanings(review)
+                    if (audit.get('required_meanings_digest') != meanings_digest(review)
+                            or any(coverage_errors(v, meanings[v['part_id']], slide_pages) for v in verdicts)):
+                        continue
                 accepted = True
         if not accepted:
             errors.append('Compact Summary lacks an independent complete part-meaning review')

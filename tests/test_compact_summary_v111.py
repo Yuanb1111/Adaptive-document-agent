@@ -53,9 +53,18 @@ class Reviewer:
                         replacements.append(dict(item_id=f'g{p}_i{i}', replacement=item))
             return schema(replacements=replacements, additions=additions)
         payload=json.loads(messages[-1]['content'].split('\n',1)[1].rsplit('\n',1)[0])
-        return CompactSummaryReview(opening_slide_id=(payload.get('opening_target') or {}).get('slide_id'), opening_item_texts=(payload.get('opening_target') or {}).get('item_texts'), opening_accepted=True,opening_reason='The opening explains the scheduling service and training prerequisite.',identity_accepted=self.identity,parts=[dict(part_id=p['id'],accepted=p['id']!=self.reject,
+        verdicts = [dict(part_id=p['id'],accepted=p['id']!=self.reject,
             reason='Training dependency is retained.' if p['id']!=self.reject else 'Source meaning is absent.')
-            for p in payload['source']['parts']])
+            for p in payload['source']['parts']]
+        for verdict, part in zip(verdicts, payload['source']['parts']):
+            if 'required_meanings' in part:
+                text = ' '.join(it['text'] for pg in payload['pages'] for it in pg['items'] if part['id'] in it['part_ids'])
+                verdict['coverage'] = [dict(meaning_index=i, covered=True, summary_quote=text,
+                    reason='The source condition is present in assigned copy.') for i in range(len(part['required_meanings']))]
+        return schema(opening_slide_id=(payload.get('opening_target') or {}).get('slide_id'),
+            opening_item_texts=(payload.get('opening_target') or {}).get('item_texts'), opening_accepted=True,
+            opening_reason='The opening explains the scheduling service and training prerequisite.',
+            identity_accepted=self.identity, parts=verdicts)
 
 
 def test_seventy_source_parts_fit_five_visible_slides_with_exact_bindings():

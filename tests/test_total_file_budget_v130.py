@@ -30,7 +30,9 @@ def choose(result, review, selected=('part-0',), *, reject_first=False):
             if schema.__name__ == 'IntroductionAudienceSelection':
                 return schema(decisions=[dict(part_id=p.id, include=p.id in selected,
                     reason='Shared service and training condition are represented by the selected source.'
-                    if p.id not in selected else 'Core service and required training belong in the introduction.')
+                    if p.id not in selected else 'Core service and required training belong in the introduction.',
+                    required_meanings=[dict(meaning=p.reading_note, source_quote=p.source_text.strip())]
+                    if p.id in selected else [])
                     for p in review.parts if p.role == 'content'])
             return schema(accepted=not reject_first or self.calls.count(schema.__name__) > 1,
                           reason='The selected union retains service scope and training dependency.')
@@ -54,7 +56,9 @@ def test_reviewer_rejection_of_missing_material_condition_cannot_be_bypassed():
     class Client:
         def generate_structured(self, messages, schema, **kwargs):
             if schema.__name__ == 'IntroductionAudienceSelection':
-                return schema(decisions=[dict(part_id=p.id, include=p.id == 'part-0', reason='Proposed relevance decision.')
+                return schema(decisions=[dict(part_id=p.id, include=p.id == 'part-0', reason='Proposed relevance decision.',
+                    required_meanings=[dict(meaning=p.reading_note, source_quote=p.source_text.strip())]
+                    if p.id == 'part-0' else [])
                     for p in review.parts])
             return schema(accepted=False, reason='A material delivery condition is missing from the selected union.')
     with pytest.raises(ValueError, match='material delivery condition'):

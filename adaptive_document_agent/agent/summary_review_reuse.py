@@ -13,7 +13,9 @@ def part_review_signatures(review, pages):
         assigned = [dict(title=page.title, placement=page.placement,
                          item=item.model_dump(mode='json'))
                     for page in pages for item in page.items if part.id in item.part_ids]
-        value = dict(source=part.model_dump(mode='json'), assigned=assigned)
+        from .summary_coverage import required_meanings
+        value = dict(source=part.model_dump(mode='json'), assigned=assigned,
+                     required_meanings=required_meanings(review).get(part.id))
         signatures[part.id] = sha256(json.dumps(value, sort_keys=True,
             ensure_ascii=False).encode('utf-8')).hexdigest()
     return signatures
