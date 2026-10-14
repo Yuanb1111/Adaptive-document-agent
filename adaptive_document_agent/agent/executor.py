@@ -36,6 +36,7 @@ class AnalysisExecutor:
                 raise ValueError("Calculation blocked because same-context source values conflict.")
             self._validate_units(valid, task.analysis_type)
             self._validate_periods(valid, task.analysis_type)
+            self._validate_reporting_scope(valid, task)
             if task.formula:
                 variables = {self._variable_name(item): float(item.value) for item in valid}
                 value = evaluate_formula(task.formula, variables)
@@ -138,6 +139,21 @@ class AnalysisExecutor:
                 comparable, reason = are_periods_comparable(left, right)
                 if not comparable:
                     raise ValueError(f"Analysis inputs have incompatible periods: {reason}")
+
+    @staticmethod
+    def _validate_reporting_scope(observations: list[Observation], task: AnalysisTask) -> None:
+        from adaptive_document_agent.document_model.series import metric_key
+        basis = {(item.entity or '', item.dimensions.get('reporting_basis', item.dimensions.get('basis', '')))
+                 for item in observations}
+        category_tools = {'compare_categories', 'rank_values', 'top_n', 'bottom_n'}
+        explicit_scope_comparison = ((task.tool_name or task.analysis_type) in category_tools
+                                     and bool(set(task.required_dimensions) & {'entity', 'reporting_basis', 'basis'}))
+        if len(basis) > 1 and not explicit_scope_comparison:
+            raise ValueError('Analysis inputs have incompatible entities or reporting scopes.')
+        trend_tools = {'absolute_change', 'percentage_change', 'growth_rate', 'cagr',
+                       'linear_trend', 'moving_average', 'compare_periods'}
+        if (task.tool_name or task.analysis_type) in trend_tools and len({metric_key(o) for o in observations}) > 1:
+            raise ValueError('Analysis inputs describe different source metrics.')
 
     @staticmethod
     def _variable_name(observation: Observation) -> str:

@@ -390,6 +390,10 @@ class ObservationExtractor:
                 compact=False,
             )
 
+        from .reporting_scope import table_reporting_scope
+        reporting_scope = table_reporting_scope(table, row_index, column, current_section)
+        if reporting_scope:
+            dimensions = {**(dimensions or {}), 'reporting_basis': reporting_scope}
         return Observation(
             id=stable_id("observation", table.table_id, row_index, column, column_label, period, raw),
             metric_original=metric,
@@ -400,6 +404,7 @@ class ObservationExtractor:
             unit_scale=scale,
             currency=currency,
             period=period,
+            entity=reporting_scope,
             dimensions=dimensions or {},
             evidence=[evidence],
             confidence=confidence,
@@ -448,6 +453,9 @@ class ObservationExtractor:
 
     @staticmethod
     def _meaningful_header(value: str) -> bool:
+        from .reporting_scope import literal_reporting_scope
+        if literal_reporting_scope(value):
+            return False
         clean = value.strip()
         if re.fullmatch(r"(?i)(?:RMB|CNY|USD|HKD|EUR|GBP|HK\$|US\$)(?:\s*(?:in\s*)?(?:['’]000|thousands?|millions?|billions?))?",clean):
             return False

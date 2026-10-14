@@ -13,6 +13,7 @@ from .column_roles import percentage_column
 
 class TableExtractor:
     def extract(self, pdf_bytes: bytes, *, page_numbers: set[int] | None = None) -> dict[int, list[ExtractedTable]]:
+        self.page_errors = {}
         self.raw_tables_by_page = {}
         self.source_inventory_by_page = {}
         try:
@@ -33,93 +34,107 @@ class TableExtractor:
                 for page_number, page in enumerate(pdf.pages, start=1):
                     if page_numbers is not None and page_number not in page_numbers:
                         continue
-                    literal=[]
-                    crop=getattr(page,'cropbox',None) or getattr(page,'bbox',(0,0,0,0))
-                    media=getattr(page,'bbox',(0,0,0,0))
-                    offset=(crop[0]-media[0],crop[1]-media[1])
-                    if geometry is not None:
-                        from .ruled_source_tables import extract_ruled_source_tables
-                        native_page=geometry[1][page_number-1]
-                        textpage=native_page.get_textpage()
-                        try:
-                            literal,audit=extract_ruled_source_tables(textpage,geometry[0][page_number-1],page_number)
-                        finally:
-                            textpage.close()
-                            native_page.close()
-                        self.source_inventory_by_page[page_number]=audit
-                        if literal and not audit.get('outside_aligned_rows'):
-                            self.raw_tables_by_page[page_number]=literal
-                            result[page_number]=[self._analytical_copy(t) for t in literal]
-                            page.close()
-                            continue
-                    page_tables: list[ExtractedTable] = [self._analytical_copy(t) for t in literal]
-                    found_tables = page.find_tables()
-                    # Word geometry is identical for all table-header lookups
-                    # on this page; avoid rebuilding it several times per table.
-                    words = page.extract_words(x_tolerance=2, y_tolerance=2) if found_tables else []
-                    for index, found in enumerate(found_tables):
-                        if self._inside_literal(found.bbox,literal,offset):
-                            continue
-                        raw = [[self._clean(cell) for cell in row] for row in found.extract()]
-                        if not raw:
-                            continue
-                        width = max(len(row) for row in raw)
-                        bbox = tuple(float(value) for value in found.bbox)
-                        context = self._context_above(page, found, distance=90, words=words)
-                        default_unit, default_scale, default_currency, default_raw_unit = self._infer_defaults(raw, context)
-                        table_title, unit_header = self._extract_title_and_unit(context)
-                        headers, column_periods, data_rows, col_types, col_currs, col_scales = self._infer_schema_and_roles(
-                            page, found, raw, default_unit, default_currency, default_scale, words=words
-                        )
-                        rows = self._build_table_rows(data_rows, page_number)
-                        non_empty = sum(cell is not None for row in raw for cell in row)
-                        density = non_empty / max(width * len(raw), 1)
-                        page_tables.append(
-                            ExtractedTable(
-                                table_id=stable_id("table", page_number, index, bbox),
-                                page=page_number,
-                                headers=headers,
-                                column_periods=column_periods,
-                                column_types=col_types,
-                                column_currencies=col_currs,
-                                column_scales=col_scales,
-                                table_title=table_title,
-                                unit_header=unit_header,
-                                rows=rows,
-                                raw_cells=raw,
-                                bbox=bbox,
-                                confidence=max(0.35, min(0.95, density)),
-                                default_unit=default_unit,
-                                default_raw_unit=default_raw_unit,
-                                default_unit_scale=default_scale,
-                                default_currency=default_currency,
-                                context_label=table_title or self._context_label(context),
+                    try:
+                        literal=[]
+                        crop=getattr(page,'cropbox',None) or getattr(page,'bbox',(0,0,0,0))
+                        media=getattr(page,'bbox',(0,0,0,0))
+                        offset=(crop[0]-media[0],crop[1]-media[1])
+                        if geometry is not None:
+                            from .ruled_source_tables import extract_ruled_source_tables
+                            native_page=geometry[1][page_number-1]
+                            textpage=native_page.get_textpage()
+                            try:
+                                literal,audit=extract_ruled_source_tables(textpage,geometry[0][page_number-1],page_number)
+                            finally:
+                                textpage.close()
+                                native_page.close()
+                            self.source_inventory_by_page[page_number]=audit
+                            if literal and not audit.get('outside_aligned_rows'):
+                                self.raw_tables_by_page[page_number]=literal
+                                result[page_number]=[self._analytical_copy(t) for t in literal]
+                                continue
+                        page_tables: list[ExtractedTable] = [self._analytical_copy(t) for t in literal]
+                        found_tables = page.find_tables()
+                        # Word geometry is identical for all table-header lookups
+                        # on this page; avoid rebuilding it several times per table.
+                        words = page.extract_words(x_tolerance=2, y_tolerance=2) if found_tables else []
+                        for index, found in enumerate(found_tables):
+                            if self._inside_literal(found.bbox,literal,offset):
+                                continue
+                            raw = [[self._clean(cell) for cell in row] for row in found.extract()]
+                            if not raw:
+                                continue
+                            width = max(len(row) for row in raw)
+                            bbox = tuple(float(value) for value in found.bbox)
+                            context = self._context_above(page, found, distance=90, words=words)
+                            default_unit, default_scale, default_currency, default_raw_unit = self._infer_defaults(raw, context)
+                            table_title, unit_header = self._extract_title_and_unit(context)
+                            headers, column_periods, data_rows, col_types, col_currs, col_scales = self._infer_schema_and_roles(
+                                page, found, raw, default_unit, default_currency, default_scale, words=words
                             )
-                        )
-                    borderless_tables = [t for t in BorderlessTableExtractor().extract(page, page_number)
-                                         if not self._inside_literal(t.bbox,literal,offset)]
-                    from .raw_table_inventory import retain_source_tables
-                    from .source_grid_recovery import recover_source_grids
-                    source_tables = [*literal,*[t for t in page_tables if t.table_id not in {s.table_id for s in literal}],
-                                     *borderless_tables]
-                    source_tables.extend(recover_source_grids(page, page_number, source_tables,
-                                                             words=words if found_tables else None))
-                    source_tables=[t for t in source_tables if t in literal or not self._inside_literal(t.bbox,literal,offset)]
-                    self.raw_tables_by_page[page_number] = retain_source_tables(source_tables)
-                    if any(t.table_id not in {s.table_id for s in literal} for t in source_tables):
-                        self.source_inventory_by_page[page_number]={'method':'legacy_layout_fallback',
-                            'status':'unchecked','table_ids':[t.table_id for t in self.raw_tables_by_page[page_number]],
-                            'unresolved_regions':len(source_tables)}
-                    from .table_footnotes import retain_table_footnotes
-                    retain_table_footnotes(page, [t for t in self.raw_tables_by_page[page_number] if t not in literal])
-                    if borderless_tables:
-                        from .table_candidate_selector import TableCandidateSelector
-                        page_tables = TableCandidateSelector.merge_or_replace_tables(page_tables, borderless_tables)
-                    result[page_number] = page_tables
-                    # Parsed tables own their raw cells and evidence. Keeping
-                    # pdfplumber's layout cache for all prior pages is unnecessary.
-                    page.close()
-        except Exception:
+                            rows = self._build_table_rows(data_rows, page_number)
+                            non_empty = sum(cell is not None for row in raw for cell in row)
+                            density = non_empty / max(width * len(raw), 1)
+                            page_tables.append(
+                                ExtractedTable(
+                                    table_id=stable_id("table", page_number, index, bbox),
+                                    page=page_number,
+                                    headers=headers,
+                                    column_periods=column_periods,
+                                    column_types=col_types,
+                                    column_currencies=col_currs,
+                                    column_scales=col_scales,
+                                    table_title=table_title,
+                                    unit_header=unit_header,
+                                    rows=rows,
+                                    raw_cells=raw,
+                                    bbox=bbox,
+                                    confidence=max(0.35, min(0.95, density)),
+                                    default_unit=default_unit,
+                                    default_raw_unit=default_raw_unit,
+                                    default_unit_scale=default_scale,
+                                    default_currency=default_currency,
+                                    context_label=table_title or self._context_label(context),
+                                )
+                            )
+                        borderless_tables = [t for t in BorderlessTableExtractor().extract(page, page_number)
+                                             if not self._inside_literal(t.bbox,literal,offset)]
+                        from .raw_table_inventory import retain_source_tables
+                        from .source_grid_recovery import recover_source_grids
+                        source_tables = [*literal,*[t for t in page_tables if t.table_id not in {s.table_id for s in literal}],
+                                         *borderless_tables]
+                        source_tables.extend(recover_source_grids(page, page_number, source_tables,
+                                                                 words=words if found_tables else None))
+                        source_tables=[t for t in source_tables if t in literal or not self._inside_literal(t.bbox,literal,offset)]
+                        self.raw_tables_by_page[page_number] = retain_source_tables(source_tables)
+                        if any(t.table_id not in {s.table_id for s in literal} for t in source_tables):
+                            self.source_inventory_by_page[page_number]={'method':'legacy_layout_fallback',
+                                'status':'unchecked','table_ids':[t.table_id for t in self.raw_tables_by_page[page_number]],
+                                'unresolved_regions':len(source_tables)}
+                        from .table_footnotes import retain_table_footnotes
+                        retain_table_footnotes(page, [t for t in self.raw_tables_by_page[page_number] if t not in literal])
+                        if borderless_tables:
+                            from .table_candidate_selector import TableCandidateSelector
+                            page_tables = TableCandidateSelector.merge_or_replace_tables(page_tables, borderless_tables)
+                        result[page_number] = page_tables
+                        # Parsed tables own their raw cells and evidence. Keeping
+                        # pdfplumber's layout cache for all prior pages is unnecessary.
+                    except Exception as exc:
+                        # A broken page cannot suppress later source pages.
+                        self.page_errors[page_number] = type(exc).__name__
+                        self.source_inventory_by_page[page_number] = {
+                            'status': 'failed', 'error_type': type(exc).__name__}
+                        result.pop(page_number, None)
+                    finally:
+                        try:
+                            page.close()
+                        except Exception as exc:
+                            self.page_errors[page_number] = type(exc).__name__
+                            self.source_inventory_by_page[page_number] = {
+                                'status': 'failed', 'error_type': type(exc).__name__}
+                            result.pop(page_number, None)
+        except Exception as exc:
+            self.page_errors[0] = type(exc).__name__
             return result
         finally:
             if geometry is not None:

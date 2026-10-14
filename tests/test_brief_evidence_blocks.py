@@ -13,8 +13,8 @@ def test_reference_transport_restores_exact_quotes_and_rejects_unknown_ids():
     g, client = gateway([draft])
     brief = ExecutiveBriefWriter(g).generate(result_for([text]))
     assert brief.items[0].evidence[0].model_dump() == {'page': 1, 'text': text}
-    assert len(client.calls) == 1
-    assert 'evidence_blocks' in client.calls[0][1]['content']
+    assert len(client.editorial_calls) == 1
+    assert 'evidence_blocks' in client.editorial_calls[0][1]['content']
     draft['items'][0]['evidence'][0]['ref'] = 'not-supplied'
     g, _ = gateway([draft, {'item_0': draft['items'][0]}])
     with pytest.raises(ValueError):
@@ -39,7 +39,7 @@ def test_reference_patch_restores_exact_evidence_and_uses_one_bounded_repair():
     g, client = gateway([draft, {'item_0': corrected}])
     result = result_for([source])
     brief = ExecutiveBriefWriter(g).generate(result)
-    assert len(client.calls) == 2
+    assert len(client.editorial_calls) == 2
     assert brief.items[0].text == source
     assert brief.items[0].evidence[0].model_dump() == {'page': 1, 'text': source}
     audit = json.loads(next(i.message for i in result.validation_warnings if i.code == 'executive_brief_repair_audit'))

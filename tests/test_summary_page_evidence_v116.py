@@ -42,15 +42,17 @@ def test_alignment_spaces_do_not_make_header_substantive_or_hide_body(substantiv
             ' ' * 250 + '(RMB in thousands)')
     result.document.pages[0].text = 'SUMMARY\n' + body
     blocks = source_blocks(result,[1])
-    row = make(1,len(result.document.pages[0].text.splitlines()),'layout')
+    row = make(1 if substantive else 2,len(result.document.pages[0].text.splitlines()),'layout')
     row['block_id'] = blocks[0].id
-    outcome = _read_batch(Responses([[row],[row],[row]]),result,blocks,Event())
+    heading = make(1,1,'heading'); heading['block_id'] = blocks[0].id
+    rows = [row] if substantive else [heading,row]
+    outcome = _read_batch(Responses([rows,rows,rows]),result,blocks,Event())
     if substantive:
         assert outcome.error and 'substantive source passage' in str(outcome.error)
     else:
         assert_complete(result,blocks,outcome)
         assert len(outcome.audit['attempts']) == 1
-        assert outcome.parts[0].source_text == result.document.pages[0].text
+        assert ''.join(p.source_text for p in outcome.parts) == result.document.pages[0].text
 
 
 def test_model_assigned_unparaphrased_content_retains_evidence_and_requires_editor():

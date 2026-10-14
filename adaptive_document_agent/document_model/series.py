@@ -60,6 +60,8 @@ def metric_label(observation: Observation) -> str:
     qualifier_terms = (
         "%", "percent", "percentage", "margin", "rate", "ratio", "share", " per ", " of ",
         "adjusted", "adj.", "non-ifrs", "non ifrs", "non-gaap", "经调整", "非国际",
+        "capacity", "production", "output", "产能", "产量",
+        "consolidated", "standalone", "合并", "母公司",
     )
     if canonical_folded in original_folded or any(term in original_folded for term in qualifier_terms):
         return original
@@ -80,6 +82,7 @@ def metric_identity_key(observation: Observation) -> tuple[object, ...]:
     u_family = getattr(observation, "unit_family", None) or observation.unit or "generic"
     core_dims = tuple(sorted(observation.category_dimensions.items())) if observation.category_dimensions else tuple(sorted((k, v) for k, v in observation.dimensions.items() if k not in {"table_context", "section", "period_basis"}))
     section = source_context_key(observation)
+    core_dims = (*core_dims, ('reporting_basis', observation.dimensions.get('reporting_basis', observation.dimensions.get('basis', ''))))
 
     # If the metric label is generic (like "Others", "Corporate", "Miscellaneous"),
     # it is strictly contextual to its source table and parent section!
@@ -233,7 +236,7 @@ def canonical_series_partition_key(obs: Observation) -> tuple[object, ...]:
     if is_generic_metric_label(obs.metric_original) or (obs.metric_canonical and is_generic_metric_label(obs.metric_canonical)):
         m_name = metric_key(obs)
     else:
-        m_name = (obs.metric_canonical or metric_label(obs)).strip().casefold()
+        m_name = metric_label(obs).strip().casefold()
 
     u_fam = (getattr(obs, "unit_family", None) or obs.unit or "generic").strip().casefold()
     unit = (obs.unit or obs.raw_unit or "").strip().casefold()

@@ -143,6 +143,8 @@ def build_presentation(result: PipelineResult, template_path: str | Path | None 
     """Return an editable, presentation-ready PowerPoint based on the FOURIER Light Version Template."""
     from .company_summary import require_verified_introduction
     require_verified_introduction(result)
+    if result.pipeline_state == 'partial':
+        raise ValueError('PowerPoint requires a completed analysis. Retain diagnostics and retry the incomplete stage.')
     presentation = _compose_presentation(result, template_path, artwork=artwork, source_pdf=source_pdf)
     from .requested_tables import verify_requested_tables
     from .summary_export import verify_summary_export
@@ -1851,11 +1853,13 @@ def _add_native_chart(
 
     num_fmt = _chart_number_format(scaled_vals)
     label_fmt = num_fmt
+    count_precision = None
     if (scale > 1 and values and all(item.unit == "count" or item.unit_family == "count" for item in values)
             and all(float(item.value).is_integer() for item in values if item.value is not None)):
         # Scaling whole counts must retain every unit in the data labels.
         # The axis may remain compact; its unit label declares the same scale.
         digits = len(str(int(scale))) - 1
+        count_precision = digits
         label_fmt = "#,##0." + "0" * digits + ";-#,##0." + "0" * digits + ";0"
 
     try:
@@ -1945,7 +1949,7 @@ def _add_native_chart(
         if not is_valid_scatter and date_categories:
             from .presentation_axes import style_date_axis, label_source_dates
             style_date_axis(chart, date_categories, bounds[2])
-            label_source_dates(chart, date_categories, width=bounds[2])
+            label_source_dates(chart, date_categories, width=bounds[2], precision=count_precision)
     except (AttributeError, ValueError):
         pass
     return scale, scale_label

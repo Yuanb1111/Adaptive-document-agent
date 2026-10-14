@@ -65,8 +65,8 @@ def test_writer_supplies_literal_identity_without_displacing_selected_evidence()
         name='Independent Research Centre', field_source_pages={'name': [13, 999]}))
     g, client = gateway([{'pages': [12]}, payload(source, page=12)])
     ExecutiveBriefWriter(g).generate(result)
-    request = client.calls[1][1]['content']
+    request = client.editorial_calls[1][1]['content']
     assert source in request and 'Independent Research Centre.' in request
     assert '"identity_source_pages": [13]' in request
     assert 'General background.' not in request
-    assert len(client.calls) == 2
+    assert len(client.editorial_calls) == 2

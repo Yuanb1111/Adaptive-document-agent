@@ -29,7 +29,8 @@ def capture_schemas(gateway):
     generate = gateway.generate_structured
 
     def recording(messages, response_model, **kwargs):
-        captured.append((response_model.model_json_schema(), kwargs))
+        if response_model.__name__ != 'BriefMeaningReview':
+            captured.append((response_model.model_json_schema(), kwargs))
         return generate(messages, response_model, **kwargs)
 
     gateway.generate_structured = recording
@@ -71,7 +72,7 @@ def test_only_invalid_position_is_writable_and_all_locked_copy_is_exact(failure)
     assert brief.items[1].model_dump() == patch['item_1']
     assert brief.title == before['title']
     assert not validate_executive_brief(brief, result)
-    assert len(client.calls) == 2
+    assert len(client.editorial_calls) == 2
     assert all(not args['allow_repair'] for _, args in schemas)
     schema = schemas[1][0]
     assert schema['title'] == 'ExecutiveBriefPatch'
@@ -110,7 +111,7 @@ def test_patch_cannot_edit_locks_or_bypass_checks_and_never_gets_a_second_repair
     g, client = gateway([original, patches[patch_kind], {'item_1': corrected}])
     with pytest.raises(ValueError, match='evidence checks'):
         ExecutiveBriefWriter(g).generate(result)
-    assert len(client.calls) == 2
+    assert len(client.editorial_calls) == 2
     assert audited(result)['outcome'] == 'rejected'
     assert audited(result)['original']['items'][0] == original['items'][0]
 
@@ -125,7 +126,7 @@ def test_invalid_title_gets_only_a_title_patch(title):
     assert brief.title == 'Verified findings'
     assert brief.items[0].model_dump() == original['items'][0]
     assert set(schemas[1][0]['properties']) == {'title'}
-    assert len(client.calls) == 2
+    assert len(client.editorial_calls) == 2
 
 
 def test_patch_preserves_every_supplied_excerpt_including_correct_page_and_adjacent_definition():
@@ -139,11 +140,11 @@ def test_patch_preserves_every_supplied_excerpt_including_correct_page_and_adjac
     g, client = gateway([{'pages': [2]}, bad, {'item_0': corrected}])
     brief = ExecutiveBriefWriter(g).generate(result)
     original_request, repair_request = [next(m['content'] for m in call if m['role'] == 'user')
-                                        for call in client.calls[1:3]]
+                                        for call in client.editorial_calls[1:3]]
     assert definition in original_request and definition in repair_request
     assert late in original_request and late in repair_request  # Past the old 4,000-char retry cut.
     assert not validate_executive_brief(brief, result)
-    assert len(client.calls) == 3
+    assert len(client.editorial_calls) == 3
 
 
 def topics(result):
@@ -161,7 +162,7 @@ def test_missing_topic_additions_keep_locks_and_uncovered_source_anchors():
     assert brief.items[0].model_dump() == original['items'][0]
     assert set(schemas[1][0]['properties']) == {'additions'}
     assert schemas[1][0]['properties']['additions']['maxItems'] == 6
-    repair_request = next(m['content'] for m in client.calls[1] if m['role'] == 'user')
+    repair_request = next(m['content'] for m in client.editorial_calls[1] if m['role'] == 'user')
     assert all(text in repair_request for text in texts)
 
 
@@ -172,7 +173,7 @@ def test_seven_locked_items_missing_topic_coverage_fail_without_replacing_one():
     g, client = gateway([original])
     with pytest.raises(ValueError, match='seven verified items'):
         ExecutiveBriefWriter(g).generate(result)
-    assert len(client.calls) == 1
+    assert len(client.editorial_calls) == 1
     assert audited(result)['locked_indices'] == list(range(7))
     assert audited(result)['original'] == original
 
@@ -193,7 +194,7 @@ def test_unrecoverable_envelopes_fail_safely_without_fresh_synthesis(raw):
     g, client = gateway([raw, payload('Revenue was 12.')])
     with pytest.raises(ValueError, match='safe recovery'):
         ExecutiveBriefWriter(g).generate(result)
-    assert len(client.calls) == 1
+    assert len(client.editorial_calls) == 1
     audit = audited(result)
     assert audit['original_response'] == raw and audit['outcome'] == 'rejected'
 
@@ -227,7 +228,7 @@ def test_failed_patch_salvage_keeps_all_original_locks_even_when_patch_precedes_
     assert audit['outcome'] == 'salvaged' and audit['discarded_indices'] == [0]
     warning = next(issue for issue in result.validation_warnings if issue.code == 'executive_brief_items_rejected')
     assert warning.severity == 'warning' and '[0]' in warning.message
-    assert len(client.calls) == 2
+    assert len(client.editorial_calls) == 2
     assert result.model_validate_json(result.model_dump_json()).validation_warnings == result.validation_warnings
 
 
@@ -238,7 +239,7 @@ def test_three_verified_items_cannot_salvage_failed_topic_coverage():
     g, client = gateway([original, {'additions': []}])
     with pytest.raises(ValueError, match='selected analytical topics'):
         ExecutiveBriefWriter(g).generate(result)
-    assert len(client.calls) == 2 and audited(result)['outcome'] == 'rejected'
+    assert len(client.editorial_calls) == 2 and audited(result)['outcome'] == 'rejected'
 
 
 def test_two_verified_findings_survive_bad_patch_instead_of_a_metric_dump():
@@ -251,7 +252,7 @@ def test_two_verified_findings_survive_bad_patch_instead_of_a_metric_dump():
     assert [value.model_dump() for value in brief.items] == original['items'][:2]
     assert audited(result)['outcome'] == 'salvaged'
     assert audited(result)['discarded_indices'] == [2]
-    assert len(client.calls) == 2
+    assert len(client.editorial_calls) == 2
 
 
 def test_transport_failure_is_audited_and_never_retried_as_content_repair():
@@ -269,7 +270,7 @@ def test_transport_failure_is_audited_and_never_retried_as_content_repair():
     g.generate_structured = failure
     with pytest.raises(LLMTransportError, match='offline'):
         ExecutiveBriefWriter(g).generate(result)
-    assert len(client.calls) == 1 and audited(result)['repair_errors'] == ['offline']
+    assert len(client.editorial_calls) == 1 and audited(result)['repair_errors'] == ['offline']
 
 
 def test_salvage_cannot_accept_whitespace_title_from_failed_title_patch():
@@ -281,7 +282,7 @@ def test_salvage_cannot_accept_whitespace_title_from_failed_title_patch():
     assert brief.title == 'Executive Summary'
     assert [value.model_dump() for value in brief.items] == original['items']
     assert audited(result)['outcome'] == 'salvaged'
-    assert len(client.calls) == 2
+    assert len(client.editorial_calls) == 2
 
 def test_shortening_repair_retains_qualifying_source_context():
     from adaptive_document_agent.agent.brief_item_repair import _retain_cited_context

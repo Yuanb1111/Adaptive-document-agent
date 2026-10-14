@@ -186,6 +186,8 @@ def test_snapshot_is_independent_of_table_and_profile_mutations(monkeypatch):
 def test_final_rebound_planning_source_is_used_in_actual_orchestrator(monkeypatch):
     harness = configure_pipeline(monkeypatch)
     replaced = harness.source.document.model_copy(deep=True)
+    for page in replaced.pages:
+        page.table_extraction_status = 'processed'
     replaced.pages[1].text = "Rebound source with no supporting quote"
     class TableCache:
         def get_model(self, key, model):

@@ -38,6 +38,8 @@ _MONEY_QUANTITY = re.compile(
 
 
 def _quantities(text: str) -> set[tuple[str, str, str]]:
+    from .calendar_claims import split_calendar_dates
+    text, _ = split_calendar_dates(text)
     text = PresentationPlanValidator._without_period_durations(text)
     text = PresentationPlanValidator._canonicalize_money_signs(text)
     money_matches = list(_MONEY_QUANTITY.finditer(text))
@@ -57,6 +59,8 @@ def _quantities(text: str) -> set[tuple[str, str, str]]:
 
 def _explicit_nonparenthesized_quantities(text):
     """Literal typed narrative quantities cannot be erased by another signed cell."""
+    from .calendar_claims import split_calendar_dates
+    text, _ = split_calendar_dates(text)
     text = PresentationPlanValidator._canonicalize_money_signs(text)
     output = set()
     for match in _QUANTITY.finditer(text):

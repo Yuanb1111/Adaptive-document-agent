@@ -47,14 +47,7 @@ class PDFParser:
 
         try:
             if pdf.needs_pass:
-                return ParsedDocument(
-                    document_id=document_id,
-                    sha256=digest,
-                    safe_filename=safe_name,
-                    page_count=pdf.page_count,
-                    encrypted=True,
-                    warnings=["The PDF is encrypted and requires a password."],
-                )
+                raise PDFValidationError("The PDF is encrypted and requires a password. Upload an unlocked PDF.")
             if pdf.page_count == 0:
                 raise PDFValidationError("The PDF contains no pages.")
             pages = [self._parse_page(page, number) for number, page in enumerate(pdf, start=1)]
@@ -79,6 +72,8 @@ class PDFParser:
                 page.source_table_inventory=self.table_extractor.source_inventory_by_page.get(page.page_number,{})
                 if table_pages is None or page.page_number in table_pages:
                     page.table_extraction_status='processed' if page.page_number in tables_by_page else 'failed'
+                    if page.table_extraction_status == 'failed':
+                        page.warnings.append(f'Table extraction failed on page {page.page_number}; later pages were still processed.')
         warnings = [warning for page in pages for warning in page.warnings]
         return ParsedDocument(
             document_id=document_id,

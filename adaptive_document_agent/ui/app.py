@@ -13,6 +13,7 @@ from adaptive_document_agent.utils.pipeline_version import PIPELINE_VERSION, ANA
 from . import analysis, branding, data, deliverables, overview, quality, sources, technical
 from .deployment import cache_for_session, is_public_deployment
 from .sidebar import render_sidebar
+from adaptive_document_agent.services.pipeline_completion import is_complete
 
 _LOGGER = logging.getLogger("adaptive_document_agent.timing.analysis_attempt")
 _ATTEMPT_LOCK = Lock()
@@ -46,7 +47,7 @@ def _analysis_scope_key(raw_pdf: bytes, analysis_focus: str, settings) -> str:
 
 def _analysis_failure(st, scope_key):
     attempt = st.session_state.get("analysis_attempts", {}).get(scope_key)
-    if attempt and attempt["state"] in {"failed", "interrupted"}:
+    if attempt and attempt["state"] in {"failed", "interrupted", "partial"}:
         return attempt["failure"]
     failure = st.session_state.get("analysis_failure")
     return failure if failure and failure["scope_key"] == scope_key else None
@@ -89,12 +90,12 @@ def _analyse_upload(st, raw_pdf, *, scope_key, analysis_focus, settings, cache, 
     failure = _analysis_failure(st, scope_key)
     if failure and not (force or retry):
         _render_analysis_failure(st, failure, progress)
-        return None
+        return st.session_state.get('analysis_partial') if st.session_state.get('analysis_partial_key') == scope_key else None
     # An explicit retry starts a new attempt, retaining successful model caches
     # rather than returning an older complete result from before the failure.
     if not (force or retry) and st.session_state.get("analysis_result_key") == scope_key:
         cached = st.session_state.get("analysis_result")
-        if cached is not None:
+        if cached is not None and is_complete(cached):
             st.session_state["analysis_result_reused"] = True
             if progress:
                 progress.update("Complete")
@@ -102,7 +103,7 @@ def _analyse_upload(st, raw_pdf, *, scope_key, analysis_focus, settings, cache, 
     if not (force or retry) and cache is not None:
         from adaptive_document_agent.models import PipelineResult
         cached = cache.get_model(f"analysis-result-{scope_key}", PipelineResult)
-        if cached is not None:
+        if cached is not None and is_complete(cached):
             st.session_state["analysis_result_reused"] = True
             st.session_state["analysis_result"] = cached
             st.session_state["analysis_result_key"] = scope_key
@@ -125,6 +126,8 @@ def _analyse_upload(st, raw_pdf, *, scope_key, analysis_focus, settings, cache, 
         completed = (st.session_state.get("analysis_result")
                      if not (force or retry) and st.session_state.get("analysis_result_key") == scope_key
                      else None)
+        if completed is not None and not is_complete(completed):
+            completed = None
         if active is None and failure is None and completed is None:
             attempt = {"id": uuid4().hex, "state": "running", "stage": "Starting analysis"}
             attempts[scope_key] = attempt
@@ -159,20 +162,40 @@ def _analyse_upload(st, raw_pdf, *, scope_key, analysis_focus, settings, cache, 
             if progress:
                 progress.update(stage)
 
+        resume = (st.session_state.get('analysis_partial')
+                  if retry and not force and st.session_state.get('analysis_partial_key') == scope_key else None)
+        if resume is not None and resume.pipeline_version != PIPELINE_VERSION:
+            resume = None
+        if resume is not None and any(p.table_extraction_status == 'failed' for p in resume.document.pages):
+            resume = None
         result = DocumentOrchestrator(gateway, cache=cache).analyse_pdf(
             raw_pdf,
             progress=update,
             analysis_focus=analysis_focus,
             scope=scope,
+            **({'resume': resume} if resume is not None else {}),
         )
         st.session_state["analysis_result"] = result
         st.session_state["analysis_result_reused"] = False
         st.session_state["analysis_result_key"] = scope_key
+        if not is_complete(result):
+            failure = {'scope_key': scope_key, 'scope': scope,
+                       'message': 'Analysis is incomplete. Retry to continue from retained evidence; see the source and stage diagnostics.',
+                       'usage': list(gateway.usage)}
+            attempt.update(state='partial', failure=failure)
+            st.session_state['analysis_failure'] = failure
+            st.session_state['analysis_partial'] = result
+            st.session_state['analysis_partial_key'] = scope_key
+            status.update(label='Analysis incomplete', state='error', expanded=True)
+            _render_analysis_failure(st, failure, progress)
+            return result
         if cache is not None:
             cache.set_model(f"analysis-result-{scope_key}", result)
         if _analysis_failure(st, scope_key):
             del st.session_state["analysis_failure"]
         attempt["state"] = "complete"
+        st.session_state.pop('analysis_partial', None)
+        st.session_state.pop('analysis_partial_key', None)
         _LOGGER.info("Analysis attempt %s completed", attempt["id"])
         status.update(label="Analysis complete", state="complete", expanded=False)
         return result
@@ -349,7 +372,8 @@ def run_app() -> None:
         )
     if not analysis_attempted and failure:
         _render_analysis_failure(st, failure, progress)
-        result = None
+        result = (st.session_state.get('analysis_partial')
+                  if st.session_state.get('analysis_partial_key') == scope_key else None)
     if result is None:
         if _analysis_failure(st, scope_key) and not retry_button_shown:
             _retry_analysis_button(st, scope_key)
@@ -361,7 +385,8 @@ def run_app() -> None:
             result = _analyse_upload(
                 st, raw_pdf, scope_key=scope_key, analysis_focus=analysis_focus,
                 settings=settings, cache=cache, force=True, progress=progress,
-                scope=st.session_state.get("analysis_scope") if review_scope else None,
+                scope=(st.session_state.get("analysis_scope") if review_scope
+                       and st.session_state.get("analysis_scope_key") == scope_key else None),
             )
             if result is None:
                 if not retry_button_shown:

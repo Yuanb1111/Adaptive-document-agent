@@ -36,6 +36,9 @@ class DiskCache:
             if os.path.exists(temporary_name):
                 os.unlink(temporary_name)
 
+    def remove_model(self, key: str) -> None:
+        self._path(key).unlink(missing_ok=True)
+
     def _path(self, key: str) -> Path:
         safe = "".join(character for character in key if character.isalnum() or character in "-_")
         return self.root / f"{safe}.json"

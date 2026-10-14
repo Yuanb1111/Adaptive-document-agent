@@ -54,13 +54,14 @@ class DocumentOrchestrator:
         progress: ProgressCallback | None = None,
         analysis_focus: str | None = None,
         scope: AnalysisScopePreview | None = None,
+        resume: PipelineResult | None = None,
     ) -> PipelineResult:
         # All background work belongs to this invocation, never to the reusable
         # orchestrator/session. ExitStack also drains it on any primary failure.
         with ExitStack() as resources:
             return self._analyse_pdf(
                 file, settings, progress=progress, analysis_focus=analysis_focus,
-                scope=scope, resources=resources,
+                scope=scope, resume=resume, resources=resources,
             )
 
     def _analyse_pdf(
@@ -71,6 +72,7 @@ class DocumentOrchestrator:
         progress: ProgressCallback | None = None,
         analysis_focus: str | None = None,
         scope: AnalysisScopePreview | None = None,
+        resume: PipelineResult | None = None,
         resources: ExitStack,
     ) -> PipelineResult:
         del settings  # Configuration is enforced when constructing the gateway.
@@ -82,132 +84,169 @@ class DocumentOrchestrator:
         raw = bytes(file) if isinstance(file, (bytes, bytearray)) else file.read()
         digest = sha256_bytes(raw)
 
-        notify("Reading PDF")
-        with record_timing(timings, "pdf_ingestion"):
-            document = self._load_document(raw, digest)
-        if scope and (scope.document_sha256 != digest or scope.page_count != document.page_count):
-            raise ValueError("The confirmed analysis scope does not belong to this PDF.")
-
-        from .report_requirements import interpret_requirements, appendix_pages
-        requirements = None
-        if analysis_focus and analysis_focus.strip():
-            notify('Interpreting analysis and presentation requirements')
-            with record_timing(timings, 'report_requirements'):
-                requirements = interpret_requirements(self.gateway, document, analysis_focus)
-            if not requirements.interpretation_error:
-                analysis_focus = '; '.join(r.request_quote for r in requirements.items
-                    if r.resolution == 'resolved' and r.kind == 'analysis_focus') or None
-
-        notify("Understanding document")
-        with record_timing(timings, "document_discovery"):
-            profile = DocumentDiscovery(self.gateway, cache=self.cache).discover(
-                document,
-                analysis_focus=analysis_focus,
-                progress=notify,
-                routed_ranges=scope.page_ranges if scope else None,
-                enable_source_checks=True,
-                confirmed_scope=scope is not None,
-            )
-
-        from .company_introduction import prepare_company_introduction
-        if requirements is not None:
-            profile.report_requirements = requirements
-            profile.analysis_focus = analysis_focus
-            for requirement in requirements.items:
-                notify('Report requirement: ' + requirement.description)
-        attach_introduction = None
-        if self.gateway and self.gateway.discovery_workers > 1:
-            # Discovery is the earliest stable source/profile boundary. Copy it
-            # before table extraction/recovery can mutate or replace document.
-            attach_introduction = resources.enter_context(prepare_company_introduction(
-                self.gateway, PipelineResult(document=document, profile=profile), timings=details,
-            ))
-
-        notify("Extracting tables from selected sections")
-        with record_timing(timings, "table_extraction"):
-            page_numbers = (
-                {page for start, end in profile.analysis_page_ranges for page in range(start, end + 1)}
-                if profile.analysis_page_ranges
-                else None
-            )
-            if page_numbers is not None:
-                page_numbers |= appendix_pages(profile.report_requirements)
-            scope = sha256_bytes(str(sorted(page_numbers) if page_numbers is not None else 'all').encode('utf-8'))[:16]
-            from adaptive_document_agent.utils.pipeline_version import EXTRACTION_VERSION
-            cached_tables = self.cache.get_model(f"tables-{EXTRACTION_VERSION}-{digest}-{scope}", ParsedDocument) if self.cache else None
-            if cached_tables is not None:
-                document = cached_tables
-            else:
-                table_extractor = TableExtractor()
-                tables_by_page = table_extractor.extract(raw, page_numbers=page_numbers)
-                raw_tables_by_page = getattr(table_extractor, 'raw_tables_by_page', tables_by_page)
-                for page in document.pages:
-                    page.tables = tables_by_page.get(page.page_number, [])
-                    page.raw_tables = [t.model_copy(deep=True) for t in raw_tables_by_page.get(page.page_number, [])]
-                    page.source_table_inventory = getattr(table_extractor,'source_inventory_by_page',{}).get(page.page_number,{})
-                    if page_numbers is None or page.page_number in page_numbers:
-                        page.table_extraction_status = ('processed' if page.page_number in tables_by_page else 'failed')
-                self._reconstruct_tables(document)
-                if self.cache:
-                    self.cache.set_model(f"tables-{EXTRACTION_VERSION}-{digest}-{scope}", document)
-
-        notify("Extracting structured observations")
-        with record_timing(timings, "observation_extraction"):
+        if resume is not None:
+            from adaptive_document_agent.utils.pipeline_version import PIPELINE_VERSION
+            if (resume.pipeline_version != PIPELINE_VERSION or resume.document.sha256 != digest
+                    or resume.pipeline_state != 'partial' or resume.retry_from is None
+                    or any(p.table_extraction_status == 'failed' for p in resume.document.pages)):
+                raise ValueError('Retry checkpoint does not match this analysis or has incomplete extraction.')
+            # Validate the uploaded bytes before reusing any derived content.
+            self._load_document(raw, digest)
+            document = resume.document.model_copy(deep=True)
+            if scope and (scope.document_sha256 != digest or scope.page_count != document.page_count):
+                raise ValueError('The confirmed analysis scope does not belong to this PDF.')
+            profile = resume.profile.model_copy(deep=True)
+            requirements = profile.report_requirements
+            analysis_focus = profile.analysis_focus
+            observations = [o.model_copy(deep=True) for o in resume.observations]
             extractor = ObservationExtractor()
-            observations = extractor.extract(document, page_ranges=profile.analysis_page_ranges)
-            mappings = SemanticResolver(self.gateway).resolve_metrics(
-                [item.metric_original for item in observations],
-                context="\n".join(page.text[:2_000] for page in document.pages)[:12_000],
-            )
-            mapping_by_name = {item.original_name: item for item in mappings}
-            for observation in observations:
-                mapping = mapping_by_name.get(observation.metric_original)
-                if mapping and mapping.confidence >= 0.7:
-                    observation.metric_canonical = mapping.canonical_name
-
-        notify("Normalizing financial data layer")
-        with record_timing(timings, "financial_normalization"):
-            from adaptive_document_agent.services.financial_normalizer import FinancialNormalizer
-
-            observations = FinancialNormalizer.normalize_observations(observations)
-
-        notify("Building document model")
-        with record_timing(timings, "document_model"):
             index = DocumentModelBuilder().build(observations)
+            from .company_introduction import prepare_company_introduction
+            attach_introduction = resources.enter_context(prepare_company_introduction(
+                self.gateway, PipelineResult(document=document, profile=profile), timings=details))
+            notify('Retrying introduction with retained extraction and calculations')
+        else:
+            notify("Reading PDF")
+            with record_timing(timings, "pdf_ingestion"):
+                document = self._load_document(raw, digest)
+            if scope and (scope.document_sha256 != digest or scope.page_count != document.page_count):
+                raise ValueError("The confirmed analysis scope does not belong to this PDF.")
 
-        notify("Generating analysis candidates")
-        if attach_introduction is not None and attach_introduction.failed():
-            from .introduction_checkpoint import failed_introduction_result
-            return failed_introduction_result(attach_introduction,
-                PipelineResult(document=document, profile=profile, observations=index.observations,
-                    validation_warnings=self._validate_analysis(profile, observations, [])),
-                self.gateway, resources, timings, details, pipeline_started, notify,
-                before_scoring=True)
-        with record_timing(timings, "candidate_generation"):
-            candidates = AnalysisCandidateGenerator().generate(index, profile)
-            scores = AnalysisValueScorer(self.gateway).score(candidates, index, profile, progress=notify)
+            from .report_requirements import interpret_requirements, appendix_pages
+            requirements = None
+            if analysis_focus and analysis_focus.strip():
+                notify('Interpreting analysis and presentation requirements')
+                with record_timing(timings, 'report_requirements'):
+                    requirements = interpret_requirements(self.gateway, document, analysis_focus)
+                if not requirements.interpretation_error:
+                    analysis_focus = '; '.join(r.request_quote for r in requirements.items
+                        if r.resolution == 'resolved' and r.kind == 'analysis_focus') or None
 
-        notify("Selecting useful analyses")
-        with record_timing(timings, "analysis_planning"):
-            plan = AnalysisPlanner().plan(scores, index)
+            notify("Understanding document")
+            with record_timing(timings, "document_discovery"):
+                profile = DocumentDiscovery(self.gateway, cache=self.cache).discover(
+                    document,
+                    analysis_focus=analysis_focus,
+                    progress=notify,
+                    routed_ranges=scope.page_ranges if scope else None,
+                    enable_source_checks=True,
+                    confirmed_scope=scope is not None,
+                )
 
-        notify("Reusing extracted evidence for selected analyses")
-        with record_timing(timings, "targeted_extraction"):
-            # The broad extraction above already visits every table/text row in
-            # the confirmed scope. extract(required_metrics=...) only filters
-            # that same output, then _merge_observations discards its duplicate
-            # IDs. Reuse the enriched index; missing inputs remain validator errors.
-            # A genuine sparse-evidence recovery below still re-extracts after
-            # reconstructing new tables, so no new source evidence is skipped.
-            pass
+            from .company_introduction import prepare_company_introduction
+            if requirements is not None:
+                profile.report_requirements = requirements
+                profile.analysis_focus = analysis_focus
+                for requirement in requirements.items:
+                    notify('Report requirement: ' + requirement.description)
+            attach_introduction = None
+            if self.gateway and self.gateway.discovery_workers > 1:
+                # Discovery is the earliest stable source/profile boundary. Copy it
+                # before table extraction/recovery can mutate or replace document.
+                attach_introduction = resources.enter_context(prepare_company_introduction(
+                    self.gateway, PipelineResult(document=document, profile=profile), timings=details,
+                ))
 
-        notify("Running deterministic calculations")
-        with record_timing(timings, "execution"):
-            results = AnalysisExecutor().execute(plan, index)
+            notify("Extracting tables from selected sections")
+            with record_timing(timings, "table_extraction"):
+                page_numbers = (
+                    {page for start, end in profile.analysis_page_ranges for page in range(start, end + 1)}
+                    if profile.analysis_page_ranges
+                    else None
+                )
+                if page_numbers is not None:
+                    page_numbers |= appendix_pages(profile.report_requirements)
+                scope = sha256_bytes(str(sorted(page_numbers) if page_numbers is not None else 'all').encode('utf-8'))[:16]
+                from adaptive_document_agent.utils.pipeline_version import EXTRACTION_VERSION
+                cached_tables = self.cache.get_model(f"tables-{EXTRACTION_VERSION}-{digest}-{scope}", ParsedDocument) if self.cache else None
+                if cached_tables is not None and any(page.table_extraction_status != 'processed'
+                        for page in cached_tables.pages if page_numbers is None or page.page_number in page_numbers):
+                    cached_tables = None
+                if cached_tables is not None:
+                    document = cached_tables
+                else:
+                    table_extractor = TableExtractor()
+                    tables_by_page = table_extractor.extract(raw, page_numbers=page_numbers)
+                    raw_tables_by_page = getattr(table_extractor, 'raw_tables_by_page', tables_by_page)
+                    for page in document.pages:
+                        page.tables = tables_by_page.get(page.page_number, [])
+                        page.raw_tables = [t.model_copy(deep=True) for t in raw_tables_by_page.get(page.page_number, [])]
+                        page.source_table_inventory = getattr(table_extractor,'source_inventory_by_page',{}).get(page.page_number,{})
+                        if page_numbers is None or page.page_number in page_numbers:
+                            page.table_extraction_status = ('processed' if page.page_number in tables_by_page else 'failed')
+                            if page.table_extraction_status == 'failed':
+                                warning = f'Table extraction failed on page {page.page_number}; later pages were still processed.'
+                                if warning not in page.warnings:
+                                    page.warnings.append(warning)
+                                if warning not in document.warnings:
+                                    document.warnings.append(warning)
+                    self._reconstruct_tables(document)
+                    if self.cache and all(page.table_extraction_status == 'processed' for page in document.pages
+                                          if page_numbers is None or page.page_number in page_numbers):
+                        self.cache.set_model(f"tables-{EXTRACTION_VERSION}-{digest}-{scope}", document)
 
-        notify("Checking consistency and validating results")
-        with record_timing(timings, "validation"):
+            notify("Extracting structured observations")
+            with record_timing(timings, "observation_extraction"):
+                extractor = ObservationExtractor()
+                observations = extractor.extract(document, page_ranges=profile.analysis_page_ranges)
+                mappings = SemanticResolver(self.gateway).resolve_metrics(
+                    [item.metric_original for item in observations],
+                    context="\n".join(page.text[:2_000] for page in document.pages)[:12_000],
+                )
+                mapping_by_name = {item.original_name: item for item in mappings}
+                for observation in observations:
+                    mapping = mapping_by_name.get(observation.metric_original)
+                    if mapping and mapping.confidence >= 0.7:
+                        observation.metric_canonical = mapping.canonical_name
+
+            notify("Normalizing financial data layer")
+            with record_timing(timings, "financial_normalization"):
+                from adaptive_document_agent.services.financial_normalizer import FinancialNormalizer
+
+                observations = FinancialNormalizer.normalize_observations(observations)
+
+            notify("Building document model")
+            with record_timing(timings, "document_model"):
+                index = DocumentModelBuilder().build(observations)
+
+        if resume is not None and resume.retry_from == 'reporting':
+            candidates, scores = resume.candidates, resume.candidate_scores
+            plan, results = resume.analysis_plan, resume.analysis_results
             issues = self._validate_analysis(profile, observations, results)
+        else:
+            notify("Generating analysis candidates")
+            if attach_introduction is not None and attach_introduction.failed():
+                from .introduction_checkpoint import failed_introduction_result
+                return failed_introduction_result(attach_introduction,
+                    PipelineResult(document=document, profile=profile, observations=index.observations,
+                        validation_warnings=self._validate_analysis(profile, observations, [])),
+                    self.gateway, resources, timings, details, pipeline_started, notify,
+                    before_scoring=True)
+            with record_timing(timings, "candidate_generation"):
+                candidates = AnalysisCandidateGenerator().generate(index, profile)
+                scores = AnalysisValueScorer(self.gateway).score(candidates, index, profile, progress=notify)
+
+            notify("Selecting useful analyses")
+            with record_timing(timings, "analysis_planning"):
+                plan = AnalysisPlanner().plan(scores, index)
+
+            notify("Reusing extracted evidence for selected analyses")
+            with record_timing(timings, "targeted_extraction"):
+                # The broad extraction above already visits every table/text row in
+                # the confirmed scope. extract(required_metrics=...) only filters
+                # that same output, then _merge_observations discards its duplicate
+                # IDs. Reuse the enriched index; missing inputs remain validator errors.
+                # A genuine sparse-evidence recovery below still re-extracts after
+                # reconstructing new tables, so no new source evidence is skipped.
+                pass
+
+            notify("Running deterministic calculations")
+            with record_timing(timings, "execution"):
+                results = AnalysisExecutor().execute(plan, index)
+
+            notify("Checking consistency and validating results")
+            with record_timing(timings, "validation"):
+                issues = self._validate_analysis(profile, observations, results)
 
         selected_pages = [
             page
@@ -502,7 +541,6 @@ class DocumentOrchestrator:
         # In particular, a missing/valid final plan may never have awaited it.
         with record_timing(timings, 'background_drain'):
             resources.close()
-        notify("Complete")
         from .source_coverage import link_coverage
         link_coverage(profile.source_coverage, index.observations, presentation_plan)
         from adaptive_document_agent.utils.pipeline_version import PIPELINE_VERSION
@@ -528,6 +566,15 @@ class DocumentOrchestrator:
             stage_details_ms=details,
             pipeline_total_ms=int((perf_counter() - pipeline_started) * 1000),
         )
+        from adaptive_document_agent.services.pipeline_completion import is_complete
+        if not is_complete(final_result):
+            final_result.pipeline_state = 'partial'
+            final_result.retry_from = 'reporting'
+            resources.close()
+            final_result.llm_usage = list(self.gateway.usage) if self.gateway else []
+            notify('Analysis incomplete; diagnostics and retry checkpoint retained')
+            return final_result
+        notify("Complete")
         if profile.report_requirements:
             from .requirements_review import review_content_requirements
             from .report_localization import prepare_report_language
@@ -662,8 +709,14 @@ class DocumentOrchestrator:
         document = self.cache.get_model(f"document-v4-{digest}", ParsedDocument) if self.cache else None
         if document is None:
             document = PDFParser().parse(raw, extract_tables=False)
+            if document.encrypted:
+                from adaptive_document_agent.extraction.pdf_parser import PDFValidationError
+                raise PDFValidationError("The PDF is encrypted. Upload an unlocked PDF.")
             if self.cache:
                 self.cache.set_model(f"document-v4-{digest}", document)
+        if document.encrypted:
+            from adaptive_document_agent.extraction.pdf_parser import PDFValidationError
+            raise PDFValidationError("The PDF is encrypted. Upload an unlocked PDF.")
         return document
 
     @staticmethod

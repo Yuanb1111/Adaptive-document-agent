@@ -106,6 +106,16 @@ _RULES = (
 
 
 def _read_batch(gateway, result, blocks, cancelled: Event) -> ReadOutcome:
+    from contextlib import nullcontext
+    transaction = gateway.validated_cache_scope() if hasattr(gateway, 'validated_cache_scope') else nullcontext()
+    with transaction:
+        outcome = _read_batch_impl(gateway, result, blocks, cancelled)
+        if outcome.error is not None and hasattr(gateway, 'discard_validation_cache'):
+            gateway.discard_validation_cache()
+        return outcome
+
+
+def _read_batch_impl(gateway, result, blocks, cancelled: Event) -> ReadOutcome:
     started = perf_counter()
     audit = {'block_ids': [b.id for b in blocks], 'attempts': []}
     messages = [{'role': 'system', 'content': _RULES}, untrusted_document_message(json.dumps([

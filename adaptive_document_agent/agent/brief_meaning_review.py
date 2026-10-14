@@ -42,13 +42,6 @@ class BriefMeaningReview(BaseModel):
     items: list[MeaningVerdict]
 
 
-# Routing hints only. The model decides meaning, metric/period equivalence and
-# whether a phrase actually asserts a comparison. Python verifies its numbers.
-_RELATION = re.compile(r'(?i)\b(?:increas\w*|decreas\w*|declin\w*|grew|grown|growth|fell|fall\w*|'
-    r'rise|rises|rising|risen|rose|narrow\w*|widen\w*|improv\w*|deteriorat\w*|compared|versus|higher|lower)\b|'
-    r'增长|下降|上升|升至|降至|增至|减至|收窄|扩大|回落|同比|环比|改善|恶化|高于|低于')
-
-
 def comparison_errors(comparison, item, *, pages=None):
     errors = []
     if comparison.claim not in item.text:
@@ -117,8 +110,6 @@ def meaning_validator(gateway, *, cancelled=None, result=None):
     def validate(brief):
         pending, errors = [], {}
         for index, item in enumerate(brief.items):
-            if not _RELATION.search(item.text):
-                continue
             key = item.model_dump_json()
             if key in checked:
                 if checked[key]:

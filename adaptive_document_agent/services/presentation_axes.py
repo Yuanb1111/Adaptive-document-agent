@@ -53,7 +53,7 @@ def style_date_axis(chart, dates, width):
             axis._element.append(element)
 
 
-def label_source_dates(chart, dates, *, width=6):
+def label_source_dates(chart, dates, *, width=6, precision=None):
     """Display exact point dates as well as the continuous calendar axis."""
     from pptx.util import Pt
     from pptx.enum.chart import XL_DATA_LABEL_POSITION
@@ -65,7 +65,8 @@ def label_source_dates(chart, dates, *, width=6):
         label = point.data_label
         label.position = XL_DATA_LABEL_POSITION.ABOVE if i % 2 == 0 else XL_DATA_LABEL_POSITION.BELOW
         # The plotted values are already scaled; labels use that same unit.
-        amount = f'{value:,.2f}'.rstrip('0').rstrip('.')
+        amount = (f'{value:,.{precision}f}' if precision is not None
+                  else f'{value:,.2f}'.rstrip('0').rstrip('.'))
         # A single paragraph is interoperable with renderers that ignore extra
         # paragraphs or breaks in native chart labels. Alternate above/below.
         # On a three-panel slide full dates beside every marker collide with

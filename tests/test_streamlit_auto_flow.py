@@ -34,7 +34,8 @@ class _Streamlit:
 def test_upload_auto_analysis_reuses_result_and_manual_scope_can_override(monkeypatch) -> None:
     st = _Streamlit()
     calls = []
-    result = object()
+    from adaptive_document_agent.models import PipelineResult, ParsedDocument, DocumentProfile
+    result = PipelineResult(document=ParsedDocument(document_id='test', sha256='hash', safe_filename='test.pdf', page_count=1), profile=DocumentProfile())
     settings = SimpleNamespace(model="configured-model")
     cache = SimpleNamespace(get_model=lambda *args: None, set_model=lambda *args: None)
 

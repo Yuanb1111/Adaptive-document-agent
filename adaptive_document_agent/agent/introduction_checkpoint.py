@@ -27,6 +27,8 @@ def failed_introduction_result(prepared, result, gateway, resources, timings, de
                  'calculations; skipped ' + ('candidate scoring, ' if before_scoring else '') +
                  'insight writing, topic selection, briefing and localization.')))
     result.pipeline_version = PIPELINE_VERSION
+    result.pipeline_state = 'partial'
+    result.retry_from = 'candidate_scoring' if before_scoring else 'reporting'
     result.llm_usage = list(gateway.usage)
     result.timings_ms = dict(timings)
     result.stage_details_ms = dict(details)

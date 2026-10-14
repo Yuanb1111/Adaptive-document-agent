@@ -1,5 +1,7 @@
 .env
 .venv/
+.test-deps/
+.test-llm-deps/
 __pycache__/
 *.py[cod]
 .pytest_cache/

@@ -138,7 +138,9 @@ def test_scope_preview_costs_enter_confirmed_analysis_once(monkeypatch):
             self.gateway = gateway
         def analyse_pdf(self, *args, **kwargs):
             ledgers.append(list(self.gateway.usage))
-            return object()
+            from adaptive_document_agent.models import PipelineResult, ParsedDocument, DocumentProfile
+            return PipelineResult(document=ParsedDocument(document_id='test', sha256='hash',
+                safe_filename='test.pdf', page_count=1), profile=DocumentProfile())
     monkeypatch.setattr(app, "DocumentOrchestrator", Orchestrator)
     monkeypatch.setattr(app, "create_llm_client", lambda settings: MockLLMClient())
     settings = LLMSettings(provider=ProviderName.MOCK)

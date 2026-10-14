@@ -30,7 +30,7 @@ def test_complete_overlong_quote_recovers_without_model_retry_and_retains_raw_au
     assert len(quotes) == 2 and all(len(q.text) <= 1800 for q in quotes)
     assert ' '.join(q.text for q in quotes).strip() == source.strip()
     assert not validate_executive_brief(brief, result)
-    assert len(client.calls) == 1 and original == before
+    assert len(client.editorial_calls) == 1 and original == before
     assert audited(result)['original'] == original
     assert audited(result)['outcome'] == 'quote_reformatted'
 
@@ -60,7 +60,7 @@ def test_overlong_patch_recovers_two_item_brief_without_displacing_lock():
     result = result_for([source + cash])
     g, client = gateway([original, {'item_1': corrected}])
     brief = ExecutiveBriefWriter(g).generate(result)
-    assert len(brief.items) == 2 and len(client.calls) == 2
+    assert len(brief.items) == 2 and len(client.editorial_calls) == 2
     assert brief.items[0].model_dump() == original['items'][0]
     assert brief.items[1].text == corrected['text']
     assert audited(result)['patch_response'] == json.dumps({'item_1': corrected}, ensure_ascii=False)
@@ -79,7 +79,7 @@ def test_reformatted_verified_lock_survives_successful_two_item_patch():
     assert len(brief.items) == 2 and len(brief.items[0].evidence) == 2
     assert brief.items[1].text == 'Cash was 4.'
     assert audited(result)['locked_indices'] == [0] and audited(result)['outcome'] == 'repaired'
-    assert len(client.calls) == 2 and not validate_executive_brief(brief, result)
+    assert len(client.editorial_calls) == 2 and not validate_executive_brief(brief, result)
 
 
 @pytest.mark.parametrize('period', ['1H2025', 'H12025', '2H2025', 'H22025'])
@@ -124,7 +124,7 @@ def test_one_malformed_patch_item_cannot_discard_other_verified_replacements():
     assert [i.model_dump() for i in brief.items[:3]] == original['items'][:3]
     assert audited(result)['outcome'] == 'salvaged' and audited(result)['partial_patch_items'] == [4]
     assert audited(result)['discarded_indices'] == [3]
-    assert len(client.calls) == 2 and not validate_executive_brief(brief, result)
+    assert len(client.editorial_calls) == 2 and not validate_executive_brief(brief, result)
 
 
 def test_split_quote_keeps_full_conditional_completeness_gate():

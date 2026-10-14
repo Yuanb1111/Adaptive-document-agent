@@ -23,7 +23,7 @@ def test_complete_summary_accepts_supported_year_annotation_and_quarantines_inve
         'SUMMARY\n', 'SUMMARY\n2021 2022 2023 2023 2024\n% of Total\n')
 
     def edit(response, payload, messages):
-        next(p for p in response.parts if p.role == 'layout').reading_note = 'Periods include 2024.'
+        next(p for p in response.parts if p.role == 'heading').reading_note = 'Periods include 2024.'
 
     assert generate(result, SummaryClient(edit_read=edit)).presentation_plan.company.summary_review.status == 'complete'
     bad = distinct_source(1)

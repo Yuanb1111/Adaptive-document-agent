@@ -32,7 +32,8 @@ def payload(text, page=1, label='Performance'):
 
 
 def gateway(responses):
-    client=MockLLMClient(responses)
+    from tests.brief_review_client import BriefReviewClient
+    client=BriefReviewClient(responses)
     return LLMGateway(client, LLMSettings(provider=ProviderName.MOCK,model='mock')),client
 
 
@@ -46,9 +47,9 @@ def test_writer_keeps_material_numbers_and_qualifiers_for_unknown_documents(sour
     r.executive_brief=ExecutiveBriefWriter(g).generate(r)
     assert brief_items(r)[0].text==source
     assert not validate_executive_brief(r.executive_brief,r)
-    assert len(client.calls)==1
-    assert 'untrusted' in client.calls[0][0]['content']
-    assert 'non-cash' in client.calls[0][0]['content']
+    assert len(client.editorial_calls)==1
+    assert 'untrusted' in client.editorial_calls[0][0]['content']
+    assert 'non-cash' in client.editorial_calls[0][0]['content']
 
 
 @pytest.mark.parametrize('change', ['page','quote','value','currency','scale'])
@@ -74,11 +75,11 @@ def test_writer_repairs_only_once_without_silently_accepting_invalid_copy():
     bad=payload(source);bad['items'][0]['text']='Revenue was USD 99 billion in 2025.'
     g,client=gateway([bad,{'item_0': payload(source)['items'][0]}])
     assert ExecutiveBriefWriter(g).generate(result_for([source])).items[0].text==source
-    assert len(client.calls)==2
+    assert len(client.editorial_calls)==2
     g,client=gateway([bad,{'item_0': bad['items'][0]}])
     with pytest.raises(ValueError,match='evidence checks'):
         ExecutiveBriefWriter(g).generate(result_for([source]))
-    assert len(client.calls)==2
+    assert len(client.editorial_calls)==2
 
 
 def test_schema_invalid_brief_without_identifiable_items_fails_without_regeneration():
@@ -87,7 +88,7 @@ def test_schema_invalid_brief_without_identifiable_items_fails_without_regenerat
     g, client = gateway([{}, payload(source)])
     with pytest.raises(ValueError, match='nonempty original items'):
         ExecutiveBriefWriter(g).generate(result)
-    assert len(client.calls) == 1
+    assert len(client.editorial_calls) == 1
     audit = json.loads(result.validation_warnings[-1].message)
     assert audit['outcome'] == 'rejected'
     assert audit['original_response'] == '{}'
@@ -99,9 +100,9 @@ def test_page_selection_can_find_a_late_narrative_constraint_without_a_chart():
     g,client=gateway([{'pages':[12]},payload(source,page=12,label='Contracts')])
     brief=ExecutiveBriefWriter(g).generate(r)
     assert brief.items[0].evidence[0].page==12
-    assert len(client.calls)==2
-    assert '12' in client.calls[0][1]['content']
-    assert 'Background context.' not in client.calls[1][1]['content']
+    assert len(client.editorial_calls)==2
+    assert '12' in client.editorial_calls[0][1]['content']
+    assert 'Background context.' not in client.editorial_calls[1][1]['content']
 
 
 def test_brief_retrieves_leading_selected_topic_pages_and_repairs_missing_coverage():
@@ -122,8 +123,8 @@ def test_brief_retrieves_leading_selected_topic_pages_and_repairs_missing_covera
     g, client = gateway([{'pages': [1]}, first, {'additions': [second['items'][1]]}])
     brief = ExecutiveBriefWriter(g).generate(result)
     assert len(brief.items) == 2
-    assert len(client.calls) == 3
-    request = client.calls[1][1]['content']
+    assert len(client.editorial_calls) == 3
+    request = client.editorial_calls[1][1]['content']
     assert all(f'"page": {page}' in request for page in (10, 11, 12))
 
 
@@ -184,7 +185,7 @@ def test_invalid_item_does_not_discard_three_independently_verified_brief_items(
     brief = ExecutiveBriefWriter(g).generate(r)
     assert [item.label for item in brief.items] == ['Revenue', 'Costs', 'Cash']
     assert not validate_executive_brief(brief, r)
-    assert len(client.calls) == 2
+    assert len(client.editorial_calls) == 2
 
 
 def test_missing_editorial_brief_uses_selected_sourced_charts_in_web_and_ppt():

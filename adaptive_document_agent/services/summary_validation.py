@@ -115,6 +115,10 @@ def reading_errors(review: SummaryReview, result: PipelineResult, *, complete_sc
         # Reject long body text, not a legitimate year/unit/header group.
         if part.role == 'layout' and visible_length > 180:
             errors.append('Layout-only classification cannot hide a substantive source passage')
+        if part.role == 'layout':
+            from .summary_layout_evidence import mechanical_layout
+            if not mechanical_layout(source, block.page, result):
+                errors.append('Nonblank layout needs source header/footer evidence; re-read this range for substantive content')
         for fact in part.facts:
             errors.extend(fact_errors(fact, result, source, block.page, literal_reading=True))
     for block in review.source_blocks:

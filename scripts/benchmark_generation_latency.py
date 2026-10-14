@@ -117,6 +117,12 @@ def run(args):
         schema = json.loads(messages[0]["content"].split("schema: ", 1)[1])
         if schema["title"] == "ExecutiveBrief":
             return good
+        if schema['title'] == 'BriefMeaningReview':
+            text = messages[-1]['content']
+            rows = json.loads(text.split('\n', 1)[1].rsplit('\n', 1)[0])
+            return {'items': [dict(index=row['index'], accepted=True,
+                reason='Independent fixture review retains the exact source claim.',
+                numeric_comparison=False, comparisons=[]) for row in rows]}
         answer = {}
         for name in schema["properties"]:
             if name.startswith("item_"):
@@ -129,7 +135,8 @@ def run(args):
                 raise AssertionError("Unexpected repair schema " + name)
         return answer
 
-    output["brief"] = measured(lambda gateway: ExecutiveBriefWriter(gateway).generate(result), [bad, repair_response])
+    output["brief"] = measured(lambda gateway: ExecutiveBriefWriter(gateway).generate(result),
+                               [bad, repair_response, repair_response, repair_response])
     # Compare the complete model output using the measured revision's defaults.
     # Keep replay responses unchanged so old/new request-volume comparisons use
     # identical fixtures; no returned facts or evidence are excluded from checks.

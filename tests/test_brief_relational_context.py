@@ -183,10 +183,10 @@ def test_writer_receives_adjacent_literal_rate_definition_without_a_new_model_ca
     result = _result(source, source, definition, extra_pages={p: 'Background context.' for p in range(3, 13)})
     g, client = gateway([{'pages': [2]}, payload(source, page=2)])
     ExecutiveBriefWriter(g).generate(result)
-    assert len(client.calls) == 2
-    assert definition in client.calls[1][1]['content']
-    assert 'rate denominator' in client.calls[1][0]['content']
-    assert 'intermediate' in client.calls[1][0]['content']
+    assert len(client.editorial_calls) == 2
+    assert definition in client.editorial_calls[1][1]['content']
+    assert 'rate denominator' in client.editorial_calls[1][0]['content']
+    assert 'intermediate' in client.editorial_calls[1][0]['content']
 
 
 def test_alternative_denominators_in_a_single_definition_remain_ambiguous():

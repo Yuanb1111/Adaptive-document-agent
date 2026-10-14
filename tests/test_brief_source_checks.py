@@ -24,10 +24,10 @@ def test_narrative_without_numeric_observations_is_available_despite_other_selec
     result, constraint = sample()
     g, client = gateway([{'pages': [1]}, payload(constraint, 12, 'Constraints')])
     result.executive_brief = ExecutiveBriefWriter(g).generate(result)
-    assert constraint in client.calls[0][1]['content'] and constraint in client.calls[1][1]['content']
+    assert constraint in client.editorial_calls[0][1]['content'] and constraint in client.editorial_calls[1][1]['content']
     assert not uncited_source_checks(result, result.executive_brief)
     assert not any(i.code == 'source_check_not_referenced' for i in result.validation_warnings)
-    assert len(client.calls) == 2 and not result.observations
+    assert len(client.editorial_calls) == 2 and not result.observations
 
 
 def test_uncited_found_check_names_question_impact_and_source_in_warning_and_closing():
@@ -70,4 +70,4 @@ def test_many_topic_anchors_cannot_discard_model_selected_narrative_page():
                                        payload(constraint, 12)['items'][0]])
     g, client = gateway([{'pages': [12]}, brief])
     assert ExecutiveBriefWriter(g).generate(result).items[-1].evidence[0].page == 12
-    assert constraint in client.calls[1][1]['content'] and len(client.calls) == 2
+    assert constraint in client.editorial_calls[1][1]['content'] and len(client.editorial_calls) == 2

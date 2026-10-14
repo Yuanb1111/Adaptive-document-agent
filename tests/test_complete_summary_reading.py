@@ -70,13 +70,16 @@ class SummaryClient(MockLLMClient):
                     is_fact = line.startswith(('Cedar provides', 'Delivery depends'))
                     end = cursor + 1
                     if not is_fact:
-                        while end < len(lines) and not lines[end][1].startswith(('Cedar provides', 'Delivery depends')):
+                        nonblank = int(bool(line.strip()))
+                        while (end < len(lines) and (not lines[end][1].strip() or nonblank < 2)
+                               and not lines[end][1].startswith(('Cedar provides', 'Delivery depends'))):
+                            nonblank += int(bool(lines[end][1].strip()))
                             end += 1
                     facts = [ReadFact(label='Operations' if line.startswith('Cedar') else 'Delivery',
                         text=line.strip(), quote_start_line=index, quote_end_line=index)] if is_fact else []
                     parts.append(ReadPart(block_id=block['block_id'], start_line=index, end_line=lines[end-1][0],
                         title='Operations' if line.startswith('Cedar') else 'Delivery' if is_fact else 'Source headings',
-                        role='content' if is_fact else 'layout', reading_note='Read the complete assigned source lines.', facts=facts))
+                        role='content' if is_fact else 'heading', reading_note='Read the complete assigned source lines.', facts=facts))
                     cursor = end
             value = SummaryReadBatch(parts=parts)
             if self.edit_read:

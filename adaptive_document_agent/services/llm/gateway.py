@@ -3,6 +3,7 @@
 import json
 from concurrent.futures import CancelledError
 from contextlib import contextmanager
+from contextvars import ContextVar
 from copy import deepcopy
 from threading import BoundedSemaphore, Event, Lock
 from typing import Any, TypeVar
@@ -34,6 +35,7 @@ class LLMGateway:
         self.settings = settings
         self.cache = cache
         self.cache_enabled = cache_enabled
+        self._validation_cache_keys = ContextVar('validated_cache_keys', default=None)
         self.usage: list[dict[str, object]] = []
         self._usage_lock = Lock()
         # Shared by every independent pipeline stage on this gateway, not by
@@ -48,6 +50,25 @@ class LLMGateway:
         if self.settings.is_local or not self.client.supports_concurrent_requests:
             return 1
         return self.settings.discovery_workers
+
+    @contextmanager
+    def validated_cache_scope(self):
+        """Retain request caches only when their enclosing semantic stage passes."""
+        keys = set()
+        token = self._validation_cache_keys.set(keys)
+        try:
+            yield
+        except BaseException:
+            self.discard_validation_cache()
+            raise
+        finally:
+            self._validation_cache_keys.reset(token)
+
+    def discard_validation_cache(self) -> None:
+        """Revoke a failed semantic scope even when its caller retains diagnostics."""
+        if self.cache and hasattr(self.cache, 'remove_model'):
+            for key in self._validation_cache_keys.get() or ():
+                self.cache.remove_model(key)
 
     @contextmanager
     def _request_admission(self, cancelled: Event | None = None):
@@ -107,6 +128,9 @@ class LLMGateway:
             "discovery_thinking": self.settings.discovery_thinking if stage == "discovery" else None,
         }, sort_keys=True, ensure_ascii=False).encode("utf-8"))
         if self.cache and self.cache_enabled:
+            scoped_keys = self._validation_cache_keys.get()
+            if scoped_keys is not None:
+                scoped_keys.add(f"llm-{key}")
             cached = self.cache.get_model(f"llm-{key}", response_model)
             if cached is not None:
                 self.record_cache_hit(stage=stage, operation=response_model.__name__, request_metadata=metadata)

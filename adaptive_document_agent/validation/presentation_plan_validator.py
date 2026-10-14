@@ -435,6 +435,8 @@ class PresentationPlanValidator:
 
     @staticmethod
     def _numbers(value: str) -> set[str]:
+        from adaptive_document_agent.services.calendar_claims import split_calendar_dates
+        value, calendar_dates = split_calendar_dates(value)
         value = PresentationPlanValidator._without_period_durations(value)
         value = PresentationPlanValidator._canonicalize_money_signs(value)
         # A range separator is not the sign of its second endpoint. Keep real
@@ -463,7 +465,7 @@ class PresentationPlanValidator:
             # Only horizontal spacing can attach a percent unit to a number.
             r")(?:[^\S\r\n]*%)?"
         )
-        return {
+        return calendar_dates | {
             PresentationPlanValidator._normalize_number(match)
             for match in grouped_or_decimal.findall(value)
         }

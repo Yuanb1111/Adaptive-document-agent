@@ -1,5 +1,6 @@
 """Plan source-selected themes, then write and review bounded groups of parts."""
 import json
+from contextlib import nullcontext
 from concurrent.futures import CancelledError, ThreadPoolExecutor
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -27,6 +28,12 @@ class SummaryThemePlan(BaseModel):
 
 
 def plan_themes(gateway, result, review, *, cancelled=None):
+    transaction = gateway.validated_cache_scope() if hasattr(gateway, 'validated_cache_scope') else nullcontext()
+    with transaction:
+        return _plan_themes(gateway, result, review, cancelled=cancelled)
+
+
+def _plan_themes(gateway, result, review, *, cancelled=None):
     payload, _ = compact_input(review)
     source = {**payload, 'purpose': result.profile.document_purpose}
     if len(json.dumps(source, ensure_ascii=False)) > 350000:
@@ -82,9 +89,23 @@ def generate_thematic_summary(gateway, result, review, company, *, cancelled=Non
 
     def write(index):
         probe = probes[index]
+        from .summary_theme_cache import theme_cache_key
+        cache = getattr(gateway, 'cache', None) if getattr(gateway, 'cache_enabled', False) else None
+        key = theme_cache_key(gateway, result, probe, plan.themes[index].title, index == 0) if cache else None
+        cached = cache.get_model(key, CompanyProfile) if cache else None
+        if cached is not None and cached.summary_review is not None:
+            cached_probe = cached.summary_review
+            if (cached_probe.parts == probe.parts and cached_probe.source_blocks == probe.source_blocks
+                    and not presentation_errors(cached_probe, cached.summary_pages, result, validate_reading=False)):
+                probes[index] = cached_probe
+                return cached
         draft = CompanyProfile(summary_review=probe)
-        generate_compact_summary(gateway, result, probe, draft, cancelled=cancelled,
-                                 group_title=plan.themes[index].title, require_opening=index == 0)
+        transaction = gateway.validated_cache_scope() if hasattr(gateway, 'validated_cache_scope') else nullcontext()
+        with transaction:
+            generate_compact_summary(gateway, result, probe, draft, cancelled=cancelled,
+                                     group_title=plan.themes[index].title, require_opening=index == 0)
+        if cache:
+            cache.set_model(key, draft)
         return draft
 
     workers = min(2, getattr(gateway, 'discovery_workers', 1), len(probes))

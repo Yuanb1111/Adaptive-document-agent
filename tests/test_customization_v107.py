@@ -110,7 +110,7 @@ def test_model_selects_oversized_brief_then_all_selected_claims_are_validated():
     assert [i.text for i in brief.items] == [findings[i] for i in [6,1,4]]
     audit = json.loads(next(w.message for w in result.validation_warnings if w.code=='executive_brief_repair_audit'))
     assert audit['original'] == original and audit['selection']['indices']==[6,1,4]
-    assert len(client.calls)==2
+    assert len(client.editorial_calls)==2
 
 
 def test_numeric_labels_recovered_from_mistaken_header_context_extend_existing_fragment():

@@ -85,6 +85,19 @@ class SemanticResolver:
             stage="semantic",
         )
         by_original = {mapping.original_name: mapping for mapping in response.mappings}
+        # A shared unit cannot erase an explicit source measure qualifier.
+        # Retain uncertainty rather than deciding a replacement semantic name.
+        for name, mapping in list(by_original.items()):
+            source = name.casefold()
+            canonical = (mapping.canonical_name or '').casefold()
+            capacity = ('capacity', '产能', '產能')
+            actual = ('actual production', 'production volume', 'production output', '产量', '產量')
+            if canonical and (
+                    any(term in source for term in capacity) and not any(term in canonical for term in capacity)
+                    or any(term.replace(' ', '') in source.replace(' ', '') for term in actual)
+                    and any(term in canonical for term in capacity)):
+                by_original[name] = mapping.model_copy(update={'canonical_name': None,
+                    'reason': 'Canonical mapping loses or changes an explicit source measure qualifier; original retained.'})
         return [by_original.get(name, SemanticMapping(original_name=name, confidence=0.0, reason="Model omitted this term.")) for name in unique]
 
     @staticmethod
