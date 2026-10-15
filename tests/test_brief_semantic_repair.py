@@ -64,6 +64,38 @@ def test_source_repair_then_new_meaning_failure_receives_one_separate_correction
     assert 'unaudited' in corrected.items[0].text
 
 
+def test_terminal_error_reports_latest_meaning_failure_and_retains_earlier_feedback():
+    import json
+    from adaptive_document_agent.agent.brief_item_repair import generate_with_item_repair
+    source = 'Revenue was USD 12 million in 2024, unaudited.'
+    result = result_for([source])
+    original = ExecutiveBrief.model_validate(payload('Revenue was USD 99 million in 2024.'))
+    original.items[0].evidence[0].text = source
+
+    class Client:
+        calls = 0
+
+        def generate_structured(self, messages, schema, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return original
+            replacement = original.items[0].model_dump()
+            replacement['text'] = 'Revenue was USD 12 million in 2024' + (', unaudited.' if self.calls == 3 else '.')
+            return schema(item_0={'text': replacement['text']} if self.calls == 3 else replacement)
+
+    def meaning(value):
+        return {0: ['Comparison does not bind an exact audience claim' if 'unaudited' in value.items[0].text
+                    else 'Missing source audit status.']}
+
+    with pytest.raises(ValueError, match='exact audience claim') as exc:
+        generate_with_item_repair(Client(), [{'role': 'system', 'content': 'Use source evidence.'}],
+            result=result, excerpts={1: source}, topics=[], source_context={}, semantic_validator=meaning)
+    assert 'Missing source audit status' not in str(exc.value)
+    audit = json.loads(next(w.message for w in result.validation_warnings if w.code == 'executive_brief_repair_audit'))
+    assert audit['pre_meaning_correction_errors'] == ['Missing source audit status.']
+    assert audit['repair_errors'] == ['Comparison does not bind an exact audience claim']
+
+
 @pytest.mark.parametrize('persistent', [True, False])
 def test_meaning_patch_format_retry_keeps_source_and_stops_after_one_retry(persistent):
     from adaptive_document_agent.services.llm.base import LLMResponse

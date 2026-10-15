@@ -124,6 +124,10 @@ def select_introduction_audience(gateway, result, review, *, cancelled=None):
              'checklist that keeps names/categories but loses their defining characteristics, material '
              'contrasts or qualifications, or bundles unrelated assertions that cannot be checked '
              'individually. This checklist will bind the author and subsequent reviewer. '
+             'Inspect every included meaning before returning a verdict; report all detected '
+             'defects and affected part_ids, not only the first issue. A sentence or shared source '
+             'may contain multiple independent assertions; do not treat their common subject, '
+             'period or attribution as grounds for bundling them. '
              'Verify EVERY meaning as actual audience copy against its OWN complete source part. '
              'Reject unsupported values, scope, causal claims, units, periods, attribution and uncertainty. '
              'The source_quote is the original owning passage copied by Python, not evidence authored '
@@ -140,7 +144,9 @@ def select_introduction_audience(gateway, result, review, *, cancelled=None):
              'decisions themselves must change. '
              'If meaning_revision_base is supplied, also compare its chosen assertions against '
              'the revised union: a meaning-only correction must preserve every previously '
-             'selected central assertion and its necessary qualifiers. Reject dropping or '
+             'selected intended central assertion and its necessary qualifiers, with unsupported '
+             'wording corrected to the scope established by its own source. Do not demand '
+             'preservation of an unsupported stronger statement. Reject dropping or '
              'substituting a selected assertion merely to avoid the earlier review failure. '
              'Return a verdict only; do not author slide copy.'},
             untrusted_document_message(json.dumps({'source':source,'decisions':values,

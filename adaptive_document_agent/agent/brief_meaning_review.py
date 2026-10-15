@@ -218,10 +218,13 @@ def meaning_validator(gateway, *, cancelled=None, result=None):
         ids = {row['index'] for row in pending}
         if len(response.items) != len(ids) or {v.index for v in response.items} != ids:
             raise ValueError('Brief meaning review must cover every exact supplied index')
+        from .brief_review_bindings import correct_review_bindings
+        response, binding_errors = correct_review_bindings(gateway, response, brief=brief,
+            pending=pending, messages=messages, result=result, cancelled=cancelled)
         audit = {'response': response.model_dump(mode='json'), 'source_catalogs': catalogs, 'errors': {}}
         for verdict in response.items:
             item = brief.items[verdict.index]
-            failed = [] if verdict.accepted else [verdict.reason]
+            failed = [*binding_errors.get(verdict.index, []), *([] if verdict.accepted else [verdict.reason])]
             if verdict.numeric_comparison and not verdict.comparisons:
                 failed.append('Every asserted numeric change needs source-bound comparison endpoints')
             for comparison in verdict.comparisons:

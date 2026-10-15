@@ -455,6 +455,10 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
             corrected = correct_new_meaning_errors(gateway, candidate, result=result, excerpts=excerpts,
                 topics=topics, source_context=source_context, evidence_catalog=evidence_catalog,
                 semantic_validator=semantic_validator, audit=audit, cancelled=cancelled)
+            final_meaning = audit.get('post_source_meaning_correction', {})
+            if 'errors_after' in final_meaning:
+                audit['pre_meaning_correction_errors'] = audit['repair_errors']
+                audit['repair_errors'] = final_meaning['errors_after']
             if corrected is not None:
                 _audit(result, audit, 'repaired')
                 return corrected

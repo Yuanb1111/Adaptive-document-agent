@@ -24,7 +24,9 @@ class MeaningClient:
             context = json.loads(messages[-1]['content'].split('\n', 1)[1].rsplit('\n', 1)[0])
             assert len(context['source']['parts']) == 3
             assert 'untrusted DATA' in messages[0]['content']
-            return schema(edits=self.edits if self.edits is not None else [dict(part_id='part-0',
+            assert context['original_meanings'] == [dict(meaning_id='meaning-0', part_id='part-0',
+                meaning_index=0, meaning='Team AA supports scheduling and requires training before delivery.')]
+            return schema(edits=self.edits if self.edits is not None else [dict(meaning_id='meaning-0',
                 required_meanings=[dict(meaning='Team AA supports scheduling.', source_quote='Model-retyped evidence.'),
                                    dict(meaning='Staff training is required before delivery.')])])
         context = json.loads(messages[-1]['content'].split('\n', 1)[1].rsplit('\n', 1)[0])
@@ -70,13 +72,13 @@ def test_meaning_patch_never_overrides_a_second_rejection_and_keeps_failed_attem
 @pytest.mark.parametrize('target', ['part-1', 'unknown', 'duplicate', 'unchanged'])
 def test_patch_cannot_change_omissions_unknown_parts_or_repeat_rejected_copy(target):
     result, reading, _ = fixture(3)
-    value = dict(part_id='part-0', required_meanings=[dict(meaning='Team AA supports scheduling.')])
+    value = dict(meaning_id='meaning-0', required_meanings=[dict(meaning='Team AA supports scheduling.')])
     if target == 'unchanged':
         value['required_meanings'][0]['meaning'] = 'Team AA supports scheduling and requires training before delivery.'
     elif target != 'duplicate':
-        value['part_id'] = target
+        value['meaning_id'] = target
     client = MeaningClient(reading, edits=[value, deepcopy(value)] if target == 'duplicate' else [value])
-    with pytest.raises(ValueError, match='included source parts|repeated the rejected selection'):
+    with pytest.raises(ValueError, match='every exact original meaning_id|repeated the rejected selection'):
         select_introduction_audience(client, result, reading)
     assert len(client.reviews) == 1
     assert reading.audience_part_ids is None
