@@ -3,8 +3,10 @@
 from html import escape
 import re
 from time import monotonic
+from uuid import uuid4
 
 from .branding import PURPLE
+from .processing_stages import stage_identity
 
 
 # These are workflow weights, not a prediction of remaining time. A model
@@ -51,11 +53,14 @@ class ProcessingProgress:
         self.percent = 0
         self.label = "Waiting to start"
         self.state = "running"
+        self.run_id = uuid4().hex
+        self.stage_id = 'startup'
+        self.stage_sequence = 0
         self.started_at = self.stage_started_at = self.clock()
         self.stopped_at = None
         self.render()
 
-    def update(self, stage: str) -> None:
+    def update(self, stage: str, *, stage_id: str | None = None) -> None:
         target = MILESTONES.get(stage, self.percent)
         chunk = re.search(r"^(Understood|Understanding) selected pages .*\((\d+)/(\d+)\)$", stage)
         if chunk:
@@ -71,8 +76,11 @@ class ProcessingProgress:
             target = 66 + int(3 * min(int(scoring[1]), int(scoring[2])) / int(scoring[2]))
         self.percent = min(99, max(self.percent, target))
         label = "Analysis complete; preparing PowerPoint" if stage == "Complete" else stage
-        if label != self.label:
+        identity = stage_id if stage_id is not None else stage_identity(stage, self.stage_id)
+        if identity != self.stage_id:
             self.stage_started_at = self.clock()
+            self.stage_sequence += 1
+        self.stage_id = identity
         self.label = label
         self.state = "running"
         self.stopped_at = None
@@ -95,7 +103,8 @@ class ProcessingProgress:
     def snapshot(self) -> dict:
         """Plain metadata only; safe to transfer from a worker to the UI."""
         return {key: getattr(self, key) for key in (
-            'percent', 'label', 'state', 'started_at', 'stage_started_at', 'stopped_at')}
+            'percent', 'label', 'state', 'run_id', 'stage_id', 'stage_sequence',
+            'started_at', 'stage_started_at', 'stopped_at')}
 
     def restore(self, snapshot: dict) -> None:
         for key, value in snapshot.items():
@@ -155,4 +164,8 @@ class ProcessingProgress:
                 'stage_elapsed': max(0, now - self.stage_started_at),
                 'running': self.state == 'running',
                 'label': self.label,
+                'run_id': self.run_id,
+                'run_started_at': self.started_at,
+                'stage_id': self.stage_id,
+                'stage_sequence': self.stage_sequence,
             }, key=self.live_timer_key or f'analysis_elapsed_timer_{self.timer_sequence}')

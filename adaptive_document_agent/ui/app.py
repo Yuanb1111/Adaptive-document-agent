@@ -393,6 +393,12 @@ def run_app() -> None:
             _retry_analysis_button(st, scope_key)
         return
     branding.result_heading(st, result)
+    if not is_complete(result):
+        # Diagnostics are useful even when mandatory editorial work failed.
+        # Never route this download through finalization, PPT QA or rendering.
+        from .analysis_download import render_incomplete
+        render_incomplete(st, result, scope_key=scope_key)
+        return
     with st.expander("Rerun analysis or rebuild presentation", expanded=False):
         st.caption("Reanalysis makes new model requests. Rebuilding PowerPoint reuses the existing analysis.")
         if st.button("Reanalyse PDF (ignore model cache)"):

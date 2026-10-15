@@ -252,6 +252,7 @@ def test_pdf_is_lazy_cached_and_invalidated_by_report_content(monkeypatch):
     pdf = Mock(return_value=b"%PDF valid")
     monkeypatch.setattr(exports, "export_pdf", pdf)
     st, cache, result = Mock(), {}, report("# Report")
+    st.fragment.side_effect = lambda function: function
     columns = tuple(nullcontext() for _ in range(3))
     st.button.return_value = False
     exports.render_report_downloads(st, result, columns, pdf_cache=cache)

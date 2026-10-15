@@ -1,5 +1,6 @@
 """Choose a concise introduction after reading the entire introductory source."""
 import json
+from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 from adaptive_document_agent.services.introduction_audience import reading_fingerprint, audience_part_ids
 from .prompting import untrusted_document_message, with_presentation_limits
@@ -31,6 +32,9 @@ class IntroductionAudienceReview(BaseModel):
     model_config = ConfigDict(extra='forbid')
     accepted: bool
     reason: str = Field(min_length=1,max_length=2000)
+    repair_scope: Literal['selection', 'meanings'] = Field(default='selection', description=
+        'Use meanings only when include/omit decisions are defensible and only the selected '
+        'assertions need correction or splitting. Otherwise use selection.')
 
 
 def select_introduction_audience(gateway, result, review, *, cancelled=None):
@@ -83,8 +87,11 @@ def select_introduction_audience(gateway, result, review, *, cancelled=None):
         'part just because it exists. An independent reviewer will assess the complete source and selection.')
     messages = [{'role':'system','content':rules},untrusted_document_message(json.dumps(source,ensure_ascii=False))]
     attempts = []
+    selection = None
+    meaning_revision_base = None
     for attempt in range(2):
-        selection = complete_response(gateway, messages, IntroductionAudienceSelection, cancelled=cancelled)
+        if selection is None:
+            selection = complete_response(gateway, messages, IntroductionAudienceSelection, cancelled=cancelled)
         values = [d.model_dump() for d in selection.decisions]
         if len(values)!=len(required) or {d['part_id'] for d in values} != required or not any(d['include'] for d in values):
             raise ValueError('Introduction audience decisions must cover every exact substantive source part once')
@@ -117,16 +124,38 @@ def select_introduction_audience(gateway, result, review, *, cancelled=None):
              'by a model. proposed_source_quote, if present, is an untrusted diagnostic proposal and '
              'cannot establish evidence or replace the actual source. Copying an owned passage does '
              'not prove the assertion: reject a meaning not grounded in that exact part. '
+             'When rejecting, set repair_scope=meanings if the include/omit selection is defensible '
+             'and only the included required_meanings need correction or splitting. Keep each '
+             'independent assertion separate while keeping its necessary period, basis, attribution '
+             'and conditions together. Use repair_scope=selection when importance/omission '
+             'decisions themselves must change. '
+             'If meaning_revision_base is supplied, also compare its chosen assertions against '
+             'the revised union: a meaning-only correction must preserve every previously '
+             'selected central assertion and its necessary qualifiers. Reject dropping or '
+             'substituting a selected assertion merely to avoid the earlier review failure. '
              'Return a verdict only; do not author slide copy.'},
-            untrusted_document_message(json.dumps({'source':source,'decisions':values},ensure_ascii=False))],
+            untrusted_document_message(json.dumps({'source':source,'decisions':values,
+                'meaning_revision_base':meaning_revision_base},ensure_ascii=False))],
             IntroductionAudienceReview,cancelled=cancelled)
         attempts.append({'decisions':values,'review':verdict.model_dump()})
+        # Retain rejected proposals too: a failed selection must be diagnosable
+        # without assigning it the independently accepted audience state.
+        if not verdict.accepted:
+            review.plan_audits.append({'introduction_audience_attempt': attempt + 1,
+                                       **attempts[-1]})
         if verdict.accepted:
             review.audience_part_ids = [d['part_id'] for d in values if d['include']]
             review.audience_selection = {'reading_fingerprint':reading_fingerprint(review), 'decisions':values,
                 'independent_review':verdict.model_dump(),'attempts':attempts}
             audience_part_ids(review)
             return
+        if attempt == 0 and verdict.repair_scope == 'meanings':
+            from .introduction_meaning_repair import repair_meanings
+            meaning_revision_base = values
+            selection = repair_meanings(gateway, source, selection, verdict.reason, review,
+                                        cancelled=cancelled)
+            continue
+        selection = None
         messages += [untrusted_document_message(json.dumps(attempts[-1],ensure_ascii=False)),
             {'role':'user','content':'Correct the rejected selection with all supplied source parts retained in context.'}]
     raise ValueError('Introduction importance selection was not independently accepted: '+verdict.reason)

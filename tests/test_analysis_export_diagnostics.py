@@ -62,6 +62,9 @@ class DownloadUI:
     def spinner(self, *args, **kwargs):
         return nullcontext()
 
+    def fragment(self, function):
+        return function
+
     def __getattr__(self, name):
         return lambda *args, **kwargs: None
 

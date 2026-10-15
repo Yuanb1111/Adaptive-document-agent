@@ -19,7 +19,9 @@ def render_report_downloads(st: Any, result: PipelineResult, columns: tuple[Any,
     for column, (kind, label, exporter, filename, mime) in zip((*columns, columns[-1]), formats):
         with column:
             if kind == "JSON":
-                st.caption("Complete analysis and source evidence; may contain document content.")
+                from .analysis_download import render
+                render(st, result, diagnostics=pptx_export_diagnostics, exporter=exporter)
+                continue
             pdf_key = None
             if kind == "PDF" and pdf_cache is not None:
                 # PDF uses only Markdown and report title. One session-owned
@@ -31,10 +33,7 @@ def render_report_downloads(st: Any, result: PipelineResult, columns: tuple[Any,
                         st.caption("Optional: generated only when requested, so PPT need not wait for PDF.")
                         continue
             try:
-                if kind == "JSON" and pptx_export_diagnostics is not None:
-                    payload = exporter(result, pptx_export_diagnostics=pptx_export_diagnostics)
-                else:
-                    payload = pdf_cache[pdf_key] if pdf_key is not None and pdf_key in pdf_cache else exporter(result)
+                payload = pdf_cache[pdf_key] if pdf_key is not None and pdf_key in pdf_cache else exporter(result)
                 if pdf_key is not None:
                     pdf_cache[pdf_key] = payload
             except Exception as exc:

@@ -109,6 +109,7 @@ def test_mixed_chinese_report_survives_rejected_fonts(monkeypatch, font_registry
 @pytest.mark.parametrize("failed_format", ["pdf", "markdown", "csv", "json"])
 def test_download_failure_is_isolated_and_redacted(monkeypatch, caplog, failed_format):
     st = Mock()
+    st.fragment.side_effect = lambda function: function
     for kind in ("markdown", "pdf", "csv", "json"):
         exporter = Mock(return_value=b"verified content")
         if kind == failed_format:
@@ -116,7 +117,7 @@ def test_download_failure_is_isolated_and_redacted(monkeypatch, caplog, failed_f
         monkeypatch.setattr(exports, "export_" + kind, exporter)
     exports.render_report_downloads(st, report("# Report"), tuple(nullcontext() for _ in range(3)))
     assert st.download_button.call_count == 3
-    assert st.button.call_args.kwargs["disabled"] is True
+    assert any(call.kwargs.get('disabled') is True for call in st.button.call_args_list)
     assert "TTFError" in st.warning.call_args.args[0]
     assert "private document" not in str(st.mock_calls) + caplog.text
 

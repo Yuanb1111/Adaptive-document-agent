@@ -37,6 +37,23 @@ the product. Presentation content continues to be selected from the actual PDF.
 - CSS uses semantic roles and Streamlit `data-testid` selectors rather than
   generated class names. Recheck styling when upgrading Streamlit.
 
+## Elapsed time
+
+`Current stage` measures the current major workflow phase, using identities in
+`ui/processing_stages.py`. Page batches, parallel completions, scoring counters,
+translation retries and informational status copy update the visible message
+without restarting that phase clock. A genuine phase change starts a new phase
+timer; an explicit new analysis attempt resets both clocks. Unknown status text
+inherits the current phase; new workflow callers may supply an explicit
+`stage_id` to `ProcessingProgress.update`.
+
+The browser retains one monotonic clock anchor per mounted attempt instead of
+rebasing it on each server poll. Superseded timer callbacks and stale phase or
+attempt snapshots cannot overwrite the current timer. Completion and failure
+freeze the values, preserving the last displayed second across delivery jitter.
+Component keys and reserved height remain stable to avoid scroll flicker.
+These timers do not advance the progress percentage or issue model requests.
+
 ## Deployment
 
 Merge the reviewed change into the branch configured in Streamlit Community
