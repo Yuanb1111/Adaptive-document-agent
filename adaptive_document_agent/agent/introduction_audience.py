@@ -1,9 +1,9 @@
 """Choose a concise introduction after reading the entire introductory source."""
 import json
-from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 from adaptive_document_agent.services.introduction_audience import reading_fingerprint, audience_part_ids
 from .prompting import untrusted_document_message, with_presentation_limits
+from .introduction_audience_review import IntroductionAudienceReview, review_current_selection
 from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
 
 _AUTHOR_EVIDENCE_RULE = (
@@ -31,15 +31,6 @@ class AudienceDecision(BaseModel):
 class IntroductionAudienceSelection(BaseModel):
     model_config = ConfigDict(extra='forbid')
     decisions: list[AudienceDecision]
-
-
-class IntroductionAudienceReview(BaseModel):
-    model_config = ConfigDict(extra='forbid')
-    accepted: bool
-    reason: str = Field(min_length=1,max_length=2000)
-    repair_scope: Literal['selection', 'meanings'] = Field(default='selection', description=
-        'Use meanings only when include/omit decisions are defensible and only the selected '
-        'assertions need correction or splitting. Otherwise use selection.')
 
 
 def select_introduction_audience(gateway, result, review, *, cancelled=None):
@@ -96,7 +87,10 @@ def select_introduction_audience(gateway, result, review, *, cancelled=None):
     meaning_revision_base = None
     inventory_revision_base = None
     inventory_correction_used = False
-    for attempt in range(2):
+    binding_budget = {'used': False}
+    # Two original semantic rounds, one optional additive correction, and at most
+    # one binding re-review across them: no more than four independent reviews.
+    for attempt in range(3):
         if selection is None:
             selection = complete_response(gateway, messages, IntroductionAudienceSelection, cancelled=cancelled)
         from .introduction_selection_inventory import inventory_diagnostics, invalid_inventory, repair_selection_inventory
@@ -119,8 +113,7 @@ def select_introduction_audience(gateway, result, review, *, cancelled=None):
                     meaning['proposed_source_quote'] = proposed
         from adaptive_document_agent.services.introduction_audience import validate_required_meanings
         validate_required_meanings(review, values)
-        verdict = complete_response(gateway, [
-            {'role':'system','content':rules + ' Independently review this proposed selection. Accept only '
+        review_rules = rules + (' Independently review this proposed selection. Accept only '
              'if the included union explains the actual source subject and essential context accurately '
              'and the omitted parts have defensible relevance/redundancy reasons. Review all source parts, '
              'including short important paragraphs and material qualifications. Do not demand every '
@@ -160,11 +153,11 @@ def select_introduction_audience(gateway, result, review, *, cancelled=None):
              'Judge resolved duplicate or unknown identifiers against the complete actual source; '
              'reject unsupported reassignment or loss of selected meaning. An all-omitted original '
              'requires a defensible source-based new selection, not automatic inclusion. '
-             'Return a verdict only; do not author slide copy.'},
-            untrusted_document_message(json.dumps({'source':source,'decisions':values,
-                'meaning_revision_base':meaning_revision_base,
-                'inventory_revision_base':inventory_revision_base},ensure_ascii=False))],
-            IntroductionAudienceReview,cancelled=cancelled)
+             'Return a verdict only; do not author slide copy.')
+        verdict = review_current_selection(gateway, source, values, review_rules, review,
+            attempt=attempt, meaning_revision_base=meaning_revision_base,
+            inventory_revision_base=inventory_revision_base, binding_budget=binding_budget,
+            cancelled=cancelled)
         attempts.append({'decisions':values,'review':verdict.model_dump()})
         # Retain rejected proposals too: a failed selection must be diagnosable
         # without assigning it the independently accepted audience state.
@@ -180,9 +173,18 @@ def select_introduction_audience(gateway, result, review, *, cancelled=None):
         if attempt == 0 and verdict.repair_scope == 'meanings':
             from .introduction_meaning_repair import repair_meanings
             meaning_revision_base = values
-            selection = repair_meanings(gateway, source, selection, verdict.reason, review,
+            feedback = json.dumps(verdict.model_dump(mode='json'), ensure_ascii=False)
+            selection = repair_meanings(gateway, source, selection, feedback, review,
                                         cancelled=cancelled)
             continue
+        if (attempt == 1 and meaning_revision_base is not None
+                and any(f.kind == 'omitted_part' for f in verdict.findings)):
+            from .introduction_selection_addition import add_newly_required_parts
+            selection = add_newly_required_parts(gateway, source, selection, values, verdict,
+                                                 rules, review, cancelled=cancelled)
+            continue
+        if attempt != 0:
+            break
         selection = None
         messages += [untrusted_document_message(json.dumps(attempts[-1],ensure_ascii=False)),
             {'role':'user','content':'Correct the rejected selection with all supplied source parts retained in context.'}]

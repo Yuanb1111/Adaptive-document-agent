@@ -1,4 +1,5 @@
 """Incomplete model inventories are audited and corrected once before review."""
+from tests.introduction_review_helpers import review_response
 from copy import deepcopy
 from concurrent.futures import CancelledError
 
@@ -88,12 +89,12 @@ class SelectionClient:
         if self.review_mode == 'exception':
             raise LLMResponseError('Synthetic independent reviewer failure')
         if self.review_mode in {'reject', 'second_inventory_failure'}:
-            return schema(accepted=False, repair_scope='selection', reason='A source condition is not preserved.')
+            return review_response(schema, messages, accepted=False, repair_scope='selection', reason='A source condition is not preserved.')
         if self.review_mode in {'semantic_repair', 'reject_after_meaning'} and len(self.reviews) == 1:
-            return schema(accepted=False, repair_scope='meanings', reason='Separate the service and prerequisite assertions.')
+            return review_response(schema, messages, accepted=False, repair_scope='meanings', reason='Separate the service and prerequisite assertions.')
         if self.review_mode == 'reject_after_meaning':
-            return schema(accepted=False, repair_scope='meanings', reason='An asserted source condition remains unsupported.')
-        return schema(accepted=True, reason='The complete source and selected meaning union are preserved.')
+            return review_response(schema, messages, accepted=False, repair_scope='meanings', reason='An asserted source condition remains unsupported.')
+        return review_response(schema, messages, accepted=True, reason='The complete source and selected meaning union are preserved.')
 
 
 @pytest.mark.parametrize('fault', ['missing', 'duplicate', 'unknown', 'combined', 'all_omitted'])
@@ -141,7 +142,9 @@ def test_invalid_inventory_audit_survives_correction_or_reviewer_exception(phase
     with pytest.raises(CancelledError if phase == 'cancelled' else LLMResponseError, match='Synthetic'):
         select_introduction_audience(client, result, reading)
     assert reading.plan_audits[0]['invalid_selection'] == client.initial
-    assert len(reading.plan_audits) == (2 if phase == 'review' else 1)
+    assert len(reading.plan_audits) == (3 if phase == 'review' else 1)
+    if phase == 'review':
+        assert reading.plan_audits[-1]['introduction_audience_review']['status'] == 'failed'
     assert reading.plan_audits[0]['correction_status'] == {
         'correction': 'failed', 'cancelled': 'cancelled', 'review': 'inventory_validated'}[phase]
     assert reading.audience_part_ids is None and not reading.audience_selection

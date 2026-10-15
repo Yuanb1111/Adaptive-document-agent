@@ -1,4 +1,5 @@
 """A rejected atomicity checklist gets a bounded source-bound patch and review."""
+from tests.introduction_review_helpers import review_response
 from copy import deepcopy
 import json
 import pytest
@@ -31,7 +32,7 @@ class MeaningClient:
                                    dict(meaning='Staff training is required before delivery.')])])
         context = json.loads(messages[-1]['content'].split('\n', 1)[1].rsplit('\n', 1)[0])
         self.reviews.append(deepcopy(context))
-        return schema(accepted=self.accept and len(self.reviews) == 2,
+        return review_response(schema, messages, accepted=self.accept and len(self.reviews) == 2,
             repair_scope='meanings', reason='Split service scope and training prerequisite into independent assertions.')
 
 
@@ -54,7 +55,8 @@ def test_meaning_split_preserves_selection_and_requires_complete_independent_rev
     assert reading.parts == original and reading.audience_part_ids == ['part-0']
     assert reading.audience_selection['independent_review']['accepted']
     assert len(reading.audience_selection['attempts']) == 2
-    assert reading.plan_audits[0]['review']['accepted'] is False
+    rejected = [a for a in reading.plan_audits if 'introduction_audience_attempt' in a]
+    assert rejected[0]['review']['accepted'] is False
 
 
 def test_meaning_patch_never_overrides_a_second_rejection_and_keeps_failed_attempts():

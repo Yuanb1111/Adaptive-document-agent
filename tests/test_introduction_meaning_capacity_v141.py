@@ -1,4 +1,5 @@
 """Semantic coverage follows the source; slide limits apply to audience synthesis."""
+from tests.introduction_review_helpers import review_response
 from copy import deepcopy
 from types import SimpleNamespace
 
@@ -47,7 +48,9 @@ class CapacityClient:
                 required_meanings=[dict(meaning=value) for value in originals])])
         payload = context(messages)
         if schema.__name__ == 'IntroductionMeaningRevision':
-            assert kwargs['max_tokens'] == 16000
+            # The transport allowance includes model reasoning and full JSON.
+            from adaptive_document_agent.agent.introduction_meaning_repair import MEANING_REVISION_TOKEN_LIMITS
+            assert kwargs['max_tokens'] == MEANING_REVISION_TOKEN_LIMITS[0]
             assert 'invented item limit' in messages[0]['content']
             edits = []
             for item in payload['original_meanings']:
@@ -59,10 +62,10 @@ class CapacityClient:
             return schema(edits=edits)
         self.reviews.append(deepcopy(payload))
         if len(self.reviews) == 1 and self.groups < len(self.claims):
-            return schema(accepted=False, repair_scope='meanings',
+            return review_response(schema, messages, accepted=False, repair_scope='meanings',
                           reason='Keep each station prerequisite independently checkable.')
         assert len(payload['decisions'][0]['required_meanings']) == len(self.claims)
-        return schema(accepted=self.accept_final and not self.unsupported, repair_scope='meanings',
+        return review_response(schema, messages, accepted=self.accept_final and not self.unsupported, repair_scope='meanings',
             reason='Every station prerequisite is preserved.' if self.accept_final and not self.unsupported
             else 'The proposed union has not preserved every source prerequisite.')
 
@@ -149,4 +152,5 @@ def test_mutating_thirteenth_meaning_invalidates_existing_export_review():
     original_digest = meanings_digest(reading)
     reading.audience_selection['decisions'][0]['required_meanings'][12]['meaning'] += ' An additional certificate is required.'
     assert meanings_digest(reading) != original_digest
-    assert any('independent' in error for error in presentation_errors(reading, company.summary_pages, result))
+    errors = presentation_errors(reading, company.summary_pages, result)
+    assert isinstance(errors, list) and any('independent review' in error for error in errors)

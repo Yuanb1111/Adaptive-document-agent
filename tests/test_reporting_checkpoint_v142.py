@@ -70,6 +70,7 @@ class SchemaReplayClient(MockLLMClient):
             IntroductionAudienceSelection, IntroductionAudienceReview,
         )
         from adaptive_document_agent.agent.introduction_selection_inventory import IntroductionAudienceInventoryCorrection
+        from adaptive_document_agent.agent.introduction_meaning_repair import IntroductionMeaningRevision
         from adaptive_document_agent.agent.topic_coverage_review import TopicCoverageReview
         prefix = 'Return only JSON matching this schema: '
         assert messages[0]['content'].startswith(prefix)
@@ -77,10 +78,13 @@ class SchemaReplayClient(MockLLMClient):
         title = json.loads(messages[0]['content'][len(prefix):])['title']
         schemas = {schema.__name__: schema for schema in (
             IntroductionAudienceSelection, IntroductionAudienceReview,
-            IntroductionAudienceInventoryCorrection, TopicCoverageReview,
+            IntroductionAudienceInventoryCorrection, IntroductionMeaningRevision, TopicCoverageReview,
         )}
+        # Subclasses can add a newly introduced protocol without bypassing the
+        # real gateway's schema-text parser or changing the v142 replay contract.
+        schemas.update(getattr(self, 'additional_schemas', {}))
         _, response = self.generate_structured(messages[1:], schemas[title],
-            temperature=temperature, model=model)
+            temperature=temperature, max_tokens=max_tokens, model=model)
         return response
 
 
@@ -246,9 +250,10 @@ class SyntheticReportingClient(SchemaReplayClient):
         elif name == 'IntroductionAudienceInventoryCorrection':
             value = dict(decisions=self.decisions)
         elif name == 'IntroductionAudienceReview':
-            value = dict(accepted=self.accept_introduction, repair_scope='selection',
+            from tests.introduction_review_helpers import review_response
+            value = review_response(schema, messages, accepted=self.accept_introduction, repair_scope='selection',
                 reason='The synthetic business and prerequisite are supported.' if self.accept_introduction
-                else 'The independent fixture rejects this proposed source selection.')
+                else 'The independent fixture rejects this proposed source selection.').model_dump(mode='json')
         elif name == 'SummarySynthesisDraft':
             parts = values[0]['parts']
             value = dict(pages=[dict(title='Software and delivery', items=[dict(label='Business and delivery',

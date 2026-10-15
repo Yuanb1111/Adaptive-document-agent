@@ -62,7 +62,7 @@ def test_stale_missing_or_unowned_meaning_contract_fails_before_generation(mutat
     if mutation == 'empty': points.clear()
     elif mutation == 'unowned': points[0]['source_quote'] = 'A claim from a different page.'
     else: points.append(deepcopy(points[0]))
-    with pytest.raises(ValueError, match='meaning'):
+    with pytest.raises(ValueError, match='complete current source'):
         audience_part_ids(review)
 
 
@@ -120,8 +120,9 @@ def test_false_overall_acceptance_triggers_targeted_repair_and_fresh_independent
             return response
     client = Client(draft)
     company = generate_compact_summary(client, result, review, CompanyProfile(summary_review=review))
-    assert client.reviews == 2 and len(review.plan_audits) == 2
-    assert review.plan_audits[0]['compact_semantic_review']['parts'][0]['accepted'] is False
+    compact_audits = [a for a in review.plan_audits if 'compact_semantic_review' in a]
+    assert client.reviews == 2 and len(compact_audits) == 2
+    assert compact_audits[0]['compact_semantic_review']['parts'][0]['accepted'] is False
     assert 'training' in company.summary_pages[0].items[0].text
     assert review.plan_audits[-1]['compact_semantic_review']['parts'][0]['coverage'][0]['covered']
 
@@ -182,7 +183,8 @@ def test_binding_repair_reuses_existing_copy_and_rechecks_both_affected_parts():
     company = generate_compact_summary(Client(draft), result, review, CompanyProfile(summary_review=review))
     assert [it.text for pg in company.summary_pages for it in pg.items] == [scope, training]
     assert company.summary_pages[0].items[1].part_ids == ['part-1', 'part-0']
-    assert len(review.plan_audits) == 2 and not review.plan_audits[-1]['retained_part_reviews']
+    compact_audits = [a for a in review.plan_audits if 'compact_semantic_review' in a]
+    assert len(compact_audits) == 2 and not compact_audits[-1]['retained_part_reviews']
     assert all(v['accepted'] for v in review.plan_audits[-1]['compact_semantic_review']['parts'])
 
 
@@ -214,4 +216,24 @@ def test_inexact_review_quote_repairs_verdict_without_rewriting_valid_copy():
     company = generate_compact_summary(client, result, review, CompanyProfile(summary_review=review))
     assert client.authors == 1 and client.reviews == 2 and company.summary_pages[0].items[0].text == text
     assert [a['status'] for a in review.plan_audits[-1]['compact_review_attempts']] == ['invalid_target', 'success']
-    assert len(review.plan_audits) == 1
+    assert len([a for a in review.plan_audits if 'compact_semantic_review' in a]) == 1
+
+
+@pytest.mark.parametrize('verify_compact_review', [False, True])
+def test_stale_audience_approval_returns_blocking_errors_and_preserves_other_findings(verify_compact_review):
+    from adaptive_document_agent.services.summary_validation import presentation_errors
+    result, review, _ = fixture(1)
+    choose(result, review)
+    draft = dict(pages=[dict(title='Scheduling service', items=[dict(label='Service scope',
+        text=review.parts[0].source_text.strip(), fact_ids=['f0'])])])
+    company = generate_compact_summary(Reviewer(draft), result, review, CompanyProfile(summary_review=review))
+    review.status = 'complete'
+    review.audience_selection['decisions'][0]['reason'] = 'Changed selection reasoning after approval.'
+    company.summary_pages[0].title = ''
+    before = review.model_dump()
+    errors = presentation_errors(review, company.summary_pages, result,
+        validate_reading=False, verify_compact_review=verify_compact_review)
+    assert isinstance(errors, list)
+    assert any('complete current source decisions and independent review' in error for error in errors)
+    assert 'Summary slide needs a title and source section' in errors
+    assert review.model_dump() == before

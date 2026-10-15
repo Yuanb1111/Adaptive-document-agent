@@ -1,4 +1,5 @@
 """Body-only caps retain complete reading and independently select visible meanings."""
+from tests.introduction_review_helpers import review_response
 from copy import deepcopy
 import json
 from unittest.mock import Mock
@@ -31,7 +32,7 @@ class AudienceClient(Reviewer):
                 for p in self.reading.parts])
         if schema.__name__ == 'IntroductionAudienceReview':
             self.calls.append(schema.__name__)
-            return schema(accepted=self.accepted, reason='Reviewed actual service scope and training prerequisite.')
+            return review_response(schema, messages, accepted=self.accepted, reason='Reviewed actual service scope and training prerequisite.')
         return super().generate_structured(messages, schema, **kwargs)
 
 

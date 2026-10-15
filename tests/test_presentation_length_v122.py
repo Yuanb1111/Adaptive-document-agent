@@ -1,4 +1,5 @@
 """Budget whole introductions before thematic expansion and count actual pages."""
+from tests.introduction_review_helpers import review_response
 from io import BytesIO
 import pytest
 
@@ -54,7 +55,7 @@ def test_requested_budget_synthesizes_all_parts_in_one_context(monkeypatch):
                     required_meanings=[dict(meaning=p.reading_note)]) for p in reading.parts])
             if schema.__name__ == 'IntroductionAudienceReview':
                 self.calls.append(schema.__name__)
-                return schema(accepted=True, reason='The selected meanings preserve each service prerequisite.')
+                return review_response(schema, messages, accepted=True, reason='The selected meanings preserve each service prerequisite.')
             return super().generate_structured(messages, schema, **kwargs)
     client = Client(draft)
     company = module.generate_summary_presentation(client, result, [1], object,

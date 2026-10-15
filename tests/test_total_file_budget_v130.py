@@ -1,4 +1,5 @@
 """Complete reading is retained while a reviewed audience deck remains bounded."""
+from tests.introduction_review_helpers import review_response
 from io import BytesIO
 from copy import deepcopy
 from types import SimpleNamespace
@@ -34,7 +35,7 @@ def choose(result, review, selected=('part-0',), *, reject_first=False):
                     required_meanings=[dict(meaning=p.reading_note, source_quote=p.source_text.strip())]
                     if p.id in selected else [])
                     for p in review.parts if p.role == 'content'])
-            return schema(accepted=not reject_first or self.calls.count(schema.__name__) > 1,
+            return review_response(schema, messages, accepted=not reject_first or self.calls.count(schema.__name__) > 1,
                           reason='The selected union retains service scope and training dependency.')
     client = Client()
     select_introduction_audience(client, result, review)
@@ -60,7 +61,7 @@ def test_reviewer_rejection_of_missing_material_condition_cannot_be_bypassed():
                     required_meanings=[dict(meaning=p.reading_note, source_quote=p.source_text.strip())]
                     if p.id == 'part-0' else [])
                     for p in review.parts])
-            return schema(accepted=False, reason='A material delivery condition is missing from the selected union.')
+            return review_response(schema, messages, accepted=False, reason='A material delivery condition is missing from the selected union.')
     with pytest.raises(ValueError, match='material delivery condition'):
         select_introduction_audience(Client(), result, review)
     assert review.audience_part_ids is None and not review.audience_selection

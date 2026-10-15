@@ -1,4 +1,5 @@
 """A partial reviewer diagnosis cannot leave other selected assertions unexamined."""
+from tests.introduction_review_helpers import review_response
 from copy import deepcopy
 import json
 
@@ -40,7 +41,10 @@ class InventoryClient:
             assert 'EVERY supplied original meaning' in messages[0]['content']
             assert 'including meanings not mentioned in review_feedback' in messages[0]['content']
             assert len(payload['source']['parts']) == 4
-            assert payload['review_feedback'] == 'Team AA training cannot be described as optional.'
+            feedback = json.loads(payload['review_feedback'])
+            assert feedback['reason'] == 'Team AA training cannot be described as optional.'
+            assert feedback['findings'][0]['meaning_id'] == 'part-0:meaning-2'
+            assert feedback['selection_digest'] == self.reviews[0]['current_selection_digest']
             edits = []
             for item in self.inventory:
                 team = {'part-0': 'AA', 'part-1': 'AB', 'part-2': 'AC'}[item['part_id']]
@@ -68,11 +72,22 @@ class InventoryClient:
         self.reviews.append(deepcopy(payload))
         if len(self.reviews) == 1:
             # Simulate a real reviewer naming one defect but missing other bundles.
-            return schema(accepted=False, repair_scope='meanings',
-                          reason='Team AA training cannot be described as optional.')
+            target = payload['current_meanings'][1]
+            return review_response(schema, messages, accepted=False, repair_scope='meanings',
+                reason='Team AA training cannot be described as optional.', findings=[dict(kind='meaning',
+                    part_id=target['part_id'], meaning_id=target['meaning_id'], current_meaning=target['meaning'],
+                    source_quote=target['source_quote'], reason='Training is required, not optional.')])
         accepted = not self.drop_requirement and not self.unsupported
-        return schema(accepted=accepted, repair_scope='meanings', reason='Every source-bound assertion is preserved.'
-            if accepted else 'A previously selected training prerequisite is absent or contradicted.')
+        findings = []
+        if self.drop_requirement:
+            findings.append(dict(kind='included_part', part_id='part-1',
+                source_quote=payload['source']['parts'][1]['source_text'], reason='The selected training requirement was lost.'))
+        if self.unsupported:
+            target = payload['current_meanings'][-1]
+            findings.append(dict(kind='meaning', part_id=target['part_id'], meaning_id=target['meaning_id'],
+                current_meaning=target['meaning'], source_quote=target['source_quote'], reason='The source requires training.'))
+        return review_response(schema, messages, accepted=accepted, repair_scope='meanings', reason='Every source-bound assertion is preserved.'
+            if accepted else 'A previously selected training prerequisite is absent or contradicted.', findings=findings)
 
 
 def test_one_correction_covers_unreported_bundles_and_preserves_each_original_owner():

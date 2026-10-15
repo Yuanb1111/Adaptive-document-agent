@@ -1,4 +1,5 @@
 """Canonical evidence is copied from the owner; unsupported assertions still fail review."""
+from tests.introduction_review_helpers import review_response
 import json
 import pytest
 from adaptive_document_agent.agent.introduction_audience import select_introduction_audience
@@ -20,7 +21,7 @@ class Client:
                     source_quote='A model reconstruction that is not actual source text.')])])
         payload = json.loads(messages[-1]['content'].split('\n', 1)[1].rsplit('\n', 1)[0])
         self.reviews.append(payload)
-        return schema(accepted=self.accept, reason='The source requires staff training before service delivery.')
+        return review_response(schema, messages, accepted=self.accept, reason='The source requires staff training before service delivery.')
 
 
 def test_exact_owner_source_replaces_model_retyping_before_independent_review():
@@ -71,5 +72,5 @@ def test_post_review_quote_changes_fail_even_if_they_are_owned_substrings():
     result, review, _ = fixture(1)
     select_introduction_audience(Client(), result, review)
     review.audience_selection['decisions'][0]['required_meanings'][0]['source_quote'] = 'requires staff training before service delivery.'
-    with pytest.raises(ValueError, match='exact owned source'):
+    with pytest.raises(ValueError, match='complete current source'):
         audience_part_ids(review)

@@ -66,16 +66,25 @@ def reading_fingerprint(review):
     return sha256(json.dumps(value,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
 
 
+def selection_digest(review, decisions):
+    """Bind approval to the full source, page budget and exact current decisions."""
+    value = {'reading_fingerprint': reading_fingerprint(review),
+             'maximum_intro_slides': review.max_intro_slides, 'decisions': decisions}
+    return sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
 def audience_part_ids(review):
     content = {p.id for p in review.parts if p.role == 'content'}
-    if review.audience_part_ids is None:
+    if review.audience_part_ids is None and not review.audience_selection:
         return content
-    selected = set(review.audience_part_ids)
+    selected = set(review.audience_part_ids or [])
     audit = review.audience_selection
     decisions = audit.get('decisions', [])
     if (not selected or len(selected) != len(review.audience_part_ids) or not selected <= content
             or audit.get('reading_fingerprint') != reading_fingerprint(review)
             or audit.get('independent_review', {}).get('accepted') is not True
+            or audit.get('independent_review', {}).get('selection_digest') != selection_digest(review, decisions)
+            or audit.get('independent_review', {}).get('findings') != []
             or len(decisions) != len(content) or {d.get('part_id') for d in decisions} != content
             or {d['part_id'] for d in decisions if d.get('include') is True} != selected
             or any(type(d.get('include')) is not bool or not d.get('reason','').strip() for d in decisions)):

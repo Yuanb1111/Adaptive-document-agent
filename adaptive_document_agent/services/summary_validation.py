@@ -258,7 +258,13 @@ def presentation_errors(review: SummaryReview, slide_pages, result: PipelineResu
         if not decision.reason.strip() or (decision.decision == 'include') != (pid in used):
             errors.append('Summary include/omit decision does not match rendered evidence: ' + pid)
     from .introduction_audience import audience_part_ids
-    required = audience_part_ids(review)
+    try:
+        required = audience_part_ids(review)
+    except ValueError as exc:
+        # A stale audience approval is a blocking validation error, not an
+        # exception escaping this list-returning report/export boundary.
+        errors.append(str(exc))
+        return list(dict.fromkeys(errors))
     if review.audience_part_ids is not None and used - required:
         errors.append('Introduction adds source parts outside its independently reviewed audience selection')
     for part in review.parts:
@@ -267,7 +273,6 @@ def presentation_errors(review: SummaryReview, slide_pages, result: PipelineResu
     if any(p.compact for p in slide_pages) and verify_compact_review:
         from .compact_summary import compact_digest, compact_layout_errors
         digest = compact_digest(slide_pages)
-        required = audience_part_ids(review)
         accepted = False
         for audit in review.plan_audits:
             verdicts = audit.get('compact_semantic_review',{}).get('parts',[])
