@@ -60,6 +60,56 @@ def validate_selected_topic_claims(plan: PresentationPlan, result: PipelineResul
     return plan
 
 
+def _summary_topic_bindings(plan: PresentationPlan, result: PipelineResult) -> dict[str, list[str | None]]:
+    """Bind repaired summary copy through complete, uniquely owned evidence.
+
+    Prose may already have a validated deterministic correction. A partial or
+    mixed evidence set cannot identify its topic merely by position or wording.
+    Exact corroborating records may stand for one another, as in normal source
+    alignment; both directions must preserve the entire selected fact scope.
+    """
+    from .coverage_representation import representation_links
+
+    topics = {topic.id: topic for topic in result.presentation_topics.topics}
+    observations = {item.id: item for item in result.observations}
+    charts = {chart.id: chart for chart in result.charts}
+    scopes = {}
+    for theme in plan.themes:
+        if theme.id not in topics:
+            continue
+        ids = set(theme.observation_ids)
+        ids.update(oid for cid in theme.chart_ids if cid in charts
+                   for oid in [*charts[cid].observation_ids, *charts[cid].total_observation_ids])
+        ids = {oid for oid in ids if oid in observations and observations[oid].evidence
+               and observations[oid].validation_status in {"valid", "partially_valid"}}
+        if ids:
+            scopes[theme.id] = ids
+
+    def same_scope(left, right):
+        if not left or not right or not left <= observations.keys():
+            return False
+        if left == right:
+            return True
+        a, b = [observations[oid] for oid in left], [observations[oid] for oid in right]
+        return representation_links(a, b) is not None and representation_links(b, a) is not None
+
+    bindings = {}
+    for summary in plan.slides:
+        if summary.slide_type not in {"summary", "executive_summary"}:
+            continue
+        owners = [None] * len(summary.bullets)
+        if len(summary.bullet_observation_ids) == len(summary.bullets):
+            for index, (text, ids) in enumerate(zip(summary.bullets, summary.bullet_observation_ids)):
+                matches = [topic_id for topic_id, scope in scopes.items() if same_scope(set(ids), scope)]
+                if len(matches) > 1:
+                    matches = [topic_id for topic_id in matches if text in {
+                        topics[topic_id].takeaway, topics[topic_id].title, topics[topic_id].question}]
+                if len(matches) == 1:
+                    owners[index] = matches[0]
+        bindings[summary.id] = owners
+    return bindings
+
+
 def recover_unscoped_topic_claims(plan: PresentationPlan, result: PipelineResult,
                                  issues: list[ValidationIssue]) -> list[str]:
     """Withdraw unresolved metric, category or period assertions to the same question.
@@ -70,11 +120,12 @@ def recover_unscoped_topic_claims(plan: PresentationPlan, result: PipelineResult
     """
     if not result.presentation_topics:
         return []
-    from .presentation_summary_selection import rebuild_selected_topic_summary
     from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
 
     topics = {topic.id: topic for topic in result.presentation_topics.topics}
     summaries = {slide.id: slide for slide in plan.slides if slide.slide_type in {"summary", "executive_summary"}}
+    summary_owners = _summary_topic_bindings(plan, result)
+    by_id = {item.id: item for item in result.observations}
     affected = set()
     errors_by_topic: dict[str, list[str]] = {}
     for issue in issues:
@@ -85,14 +136,22 @@ def recover_unscoped_topic_claims(plan: PresentationPlan, result: PipelineResult
         matched = []
         if summary:
             index = getattr(issue, "bullet_index", None)
-            if index is not None and index < len(summary.bullets):
-                matches = [topic.id for topic in topics.values()
-                           if summary.bullets[index] in {topic.takeaway, topic.title}]
-                if len(matches) == 1:
-                    matched = matches
+            if index is not None and 0 <= index < len(summary.bullets):
+                owner = summary_owners[summary.id][index]
+                if owner is not None:
+                    if issue.related_ids:
+                        from .coverage_representation import representation_links
+                        ids = summary.bullet_observation_ids[index]
+                        if (any(oid not in by_id for oid in [*issue.related_ids, *ids])
+                                or representation_links([by_id[oid] for oid in issue.related_ids],
+                                                        [by_id[oid] for oid in ids]) is None):
+                            continue
+                    matched = [owner]
         else:
             matched = [slide.theme_id for slide in plan.slides if slide.id == slide_id]
         for topic_id in matched:
+            if topic_id not in topics:
+                continue
             affected.add(topic_id)
             errors_by_topic.setdefault(topic_id, []).append(issue.message)
     # A separate scoped-value gate may find an endpoint attributed to a
@@ -101,19 +160,17 @@ def recover_unscoped_topic_claims(plan: PresentationPlan, result: PipelineResult
     from adaptive_document_agent.validation.scoped_narrative_values import scoped_value_errors
     from adaptive_document_agent.models import PresentationSlide
     from adaptive_document_agent.validation.narrative_plan_validator import expanded_observation_ids
-    by_id = {item.id: item for item in result.observations}
     charts = {item.id: item for item in result.charts}
     for slide in plan.slides:
         if slide.slide_type == "analysis" and slide.theme_id in topics:
-            copies = [(slide.theme_id, slide.title)]
+            copies = [(slide.theme_id, slide.title, expanded_observation_ids(slide, charts))]
         elif slide.id in summaries:
-            copies = [(topic.id, text) for text in slide.bullets for topic in topics.values()
-                      if text in {topic.takeaway, topic.title}]
+            copies = [(topic_id, slide.bullets[index], slide.bullet_observation_ids[index])
+                      for index, topic_id in enumerate(summary_owners[slide.id]) if topic_id is not None]
         else:
             continue
-        ids = expanded_observation_ids(slide, charts)
-        records = [by_id[oid] for oid in ids if oid in by_id]
-        for topic_id, text in copies:
+        for topic_id, text, ids in copies:
+            records = [by_id[oid] for oid in ids if oid in by_id]
             view = PresentationSlide(id=slide.id, slide_type=slide.slide_type, title=text)
             errors = scoped_value_errors(view, records, result.observations)
             if errors:
@@ -135,6 +192,12 @@ def recover_unscoped_topic_claims(plan: PresentationPlan, result: PipelineResult
             "topic_id": slide.theme_id,
             "takeaway": topics[slide.theme_id].takeaway,
             "errors": list(dict.fromkeys(errors_by_topic[slide.theme_id])),
+            "withdrawn_summary_copy": [
+                {"slide_id": summary.id, "bullet_index": index, "text": summary.bullets[index],
+                 "observation_ids": list(summary.bullet_observation_ids[index])}
+                for summary in summaries.values() for index, owner in enumerate(summary_owners[summary.id])
+                if owner == slide.theme_id
+            ],
         }, ensure_ascii=False, sort_keys=True))
         slide.title = question
         # These headings are also rendered by the contents, narrow-layout
@@ -144,26 +207,20 @@ def recover_unscoped_topic_claims(plan: PresentationPlan, result: PipelineResult
         theme = next((t for t in candidate.themes if t.id == slide.theme_id), None)
         if theme:
             theme.title = question
-    rebuild_selected_topic_summary(result, candidate)
-    # A local withdrawal must not rebuild unrelated, already repaired summary
-    # claims from the raw takeaways. That can revive another rejected scope
-    # and make the no-new-errors gate reject every otherwise valid topic.
-    ordered_topics = [topic for topic in result.presentation_topics.topics
-                      if topic.id in {theme.id for theme in candidate.themes}]
+    # Change only bullets proved to belong to an affected topic. Rebuilding a
+    # whole summary could reorder bullets, widen their evidence, or revive an
+    # unrelated claim that already received its own validated correction.
+    questions = {slide.theme_id: slide.analytical_question for slide in candidate.slides
+                 if slide.slide_type == "analysis" and slide.theme_id in affected
+                 and slide.analytical_question.strip()}
     for summary in candidate.slides:
-        original = summaries.get(summary.id)
-        if (original is None or len(summary.bullets) != len(original.bullets)
-                or len(summary.bullets) != len(ordered_topics)):
+        if summary.id not in summary_owners:
             continue
-        for index, topic in enumerate(ordered_topics):
-            if topic.id not in affected:
-                summary.bullets[index] = original.bullets[index]
-                if (len(original.bullet_observation_ids) == len(original.bullets)
-                        and len(summary.bullet_observation_ids) == len(summary.bullets)):
-                    summary.bullet_observation_ids[index] = list(original.bullet_observation_ids[index])
-    # Summary reconstruction can reintroduce exact repeated-source records
-    # from the retained topic catalog. Reapply the same provenance alignment
-    # used by final claim preparation before comparing the candidate's errors;
+        for index, owner in enumerate(summary_owners[summary.id]):
+            if owner in questions:
+                summary.bullets[index] = questions[owner]
+    # Cached summaries can still carry exact repeated-source records. Reapply
+    # normal provenance alignment before comparing the candidate's errors;
     # this never merges conflicting values or relaxes the no-new-errors gate.
     from adaptive_document_agent.validation.presentation_evidence_alignment import align_redundant_slide_evidence
     notes.extend(align_redundant_slide_evidence(candidate, result.observations, result.charts))

@@ -45,7 +45,6 @@ class IntroductionAudienceReview(BaseModel):
 def select_introduction_audience(gateway, result, review, *, cancelled=None):
     """Keep all read parts; allow omission only through explicit reviewed importance decisions."""
     parts = [p for p in review.parts if p.role=='content']
-    required = {p.id for p in parts}
     source = {'purpose':'Introduce the actual subject/business, products or scope and essential limitations '
               'needed to understand the later analysis within this audience section.',
               'document_purpose':result.profile.document_purpose, 'maximum_slides':review.max_intro_slides,
@@ -95,12 +94,19 @@ def select_introduction_audience(gateway, result, review, *, cancelled=None):
     attempts = []
     selection = None
     meaning_revision_base = None
+    inventory_revision_base = None
+    inventory_correction_used = False
     for attempt in range(2):
         if selection is None:
             selection = complete_response(gateway, messages, IntroductionAudienceSelection, cancelled=cancelled)
+        from .introduction_selection_inventory import inventory_diagnostics, invalid_inventory, repair_selection_inventory
+        diagnostics = inventory_diagnostics(selection, source)
+        if invalid_inventory(diagnostics):
+            inventory_revision_base = selection.model_dump(mode='json')
+            selection = repair_selection_inventory(gateway, source, selection, rules, review,
+                available=not inventory_correction_used, cancelled=cancelled)
+            inventory_correction_used = True
         values = [d.model_dump() for d in selection.decisions]
-        if len(values)!=len(required) or {d['part_id'] for d in values} != required or not any(d['include'] for d in values):
-            raise ValueError('Introduction audience decisions must cover every exact substantive source part once')
         # Models choose claims and their owning parts, never reconstruct the
         # source evidence string. A full owned passage is literal evidence;
         # independent semantic review must still prove the claim from it.
@@ -148,9 +154,16 @@ def select_introduction_audience(gateway, result, review, *, cancelled=None):
              'wording corrected to the scope established by its own source. Do not demand '
              'preservation of an unsupported stronger statement. Reject dropping or '
              'substituting a selected assertion merely to avoid the earlier review failure. '
+             'If inventory_revision_base is supplied, also review the original malformed inventory '
+             'against the corrected selection. Identifier correction does not justify dropping '
+             'supported included assertions, inventing claims or changing their source ownership. '
+             'Judge resolved duplicate or unknown identifiers against the complete actual source; '
+             'reject unsupported reassignment or loss of selected meaning. An all-omitted original '
+             'requires a defensible source-based new selection, not automatic inclusion. '
              'Return a verdict only; do not author slide copy.'},
             untrusted_document_message(json.dumps({'source':source,'decisions':values,
-                'meaning_revision_base':meaning_revision_base},ensure_ascii=False))],
+                'meaning_revision_base':meaning_revision_base,
+                'inventory_revision_base':inventory_revision_base},ensure_ascii=False))],
             IntroductionAudienceReview,cancelled=cancelled)
         attempts.append({'decisions':values,'review':verdict.model_dump()})
         # Retain rejected proposals too: a failed selection must be diagnosable
@@ -182,7 +195,7 @@ def complete_response(gateway, messages, schema, *, cancelled=None):
     Semantic operations retain provider reasoning defaults. Their output budget
     accommodates both reasoning and the exact per-part decision inventory.
     """
-    limits = (32000, 40000) if schema is IntroductionAudienceSelection else (24000, 32000)
+    limits = (32000, 40000) if issubclass(schema, IntroductionAudienceSelection) else (24000, 32000)
     for limit in limits:
         try:
             return gateway.generate_structured(messages, schema, stage='presentation',
