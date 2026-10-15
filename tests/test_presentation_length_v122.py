@@ -1,5 +1,6 @@
 """Budget whole introductions before thematic expansion and count actual pages."""
 from io import BytesIO
+import pytest
 
 from pptx import Presentation
 
@@ -54,7 +55,8 @@ def test_requested_budget_synthesizes_all_parts_in_one_context(monkeypatch):
         p.id for p in reading.parts}
 
 
-def test_body_budget_excludes_only_marked_appendices_after_ppt_roundtrip():
+@pytest.mark.parametrize('tag,expected,count', [('ada:data-index','satisfied',2), ('ada:appendix','not_met',5)])
+def test_body_budget_excludes_only_source_index_after_ppt_roundtrip(tag, expected, count):
     result, _, _ = fixture(1)
     result.profile.report_requirements = ReportRequirements(items=[
         ReportRequirement(id='body', kind='slide_limit', request_quote='Body 2',
@@ -65,13 +67,13 @@ def test_body_budget_excludes_only_marked_appendices_after_ppt_roundtrip():
     for index in range(5):
         slide = deck.slides.add_slide(deck.slide_layouts[6])
         if index > 1:
-            slide.element.cSld.set('name', 'ada:appendix')
+            slide.element.cSld.set('name', tag)
     stream = BytesIO()
     deck.save(stream)
     check_requirements(result, Presentation(stream), export_verified=True)
     checks = {c.requirement_id:c for c in result.customization_report}
-    assert checks['body'].status == 'satisfied'
-    assert 'Actual count: 2' in checks['body'].message
+    assert checks['body'].status == expected
+    assert f'Actual count: {count}' in checks['body'].message
     assert checks['all'].status == 'not_met'
     assert 'Actual count: 5' in checks['all'].message
 

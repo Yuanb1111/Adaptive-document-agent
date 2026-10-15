@@ -200,7 +200,12 @@ def test_standard_deck_order_and_thank_you_slide() -> None:
     assert "Thank You" not in contents_text
     assert "THANK YOU" not in contents_text
 
-    thank_you_slide = deck.slides[-1]
+    from adaptive_document_agent.services.presentation_roles import is_closing_slide
+    body_slides = [s for s in deck.slides if s.element.cSld.get('name') != 'ada:data-index']
+    thank_you_slide = body_slides[-1]
+    assert is_closing_slide(thank_you_slide)
+    index_start = next(i for i, s in enumerate(deck.slides) if s.element.cSld.get('name') == 'ada:data-index')
+    assert all(s.element.cSld.get('name') == 'ada:data-index' for s in list(deck.slides)[index_start:])
     ty_text = " ".join(s.text for s in thank_you_slide.shapes if s.has_text_frame)
     assert "THANK YOU" in ty_text
 
@@ -271,8 +276,8 @@ def test_tesla_style_wide_appendix_financial_table() -> None:
     deck = Presentation(io.BytesIO(export_pptx(result)))
 
     # Flow and balance-sheet periods are deliberately split into compatible
-    # appendix tables. Inspect every appendix table before the Thank You slide.
-    appendix_slides = list(deck.slides)[:-1]
+    # Data Index tables follow the complete body, including the Thank You slide.
+    appendix_slides = [s for s in deck.slides if s.element.cSld.get('name') == 'ada:data-index']
     tables = [shape.table for slide in appendix_slides for shape in slide.shapes if shape.has_table]
     assert tables
     table = tables[0]

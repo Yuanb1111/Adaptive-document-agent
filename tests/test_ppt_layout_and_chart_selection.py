@@ -489,16 +489,22 @@ def test_source_page_labels_no_overlap():
 
     pptx_bytes = build_presentation(result)
     prs = Presentation(io.BytesIO(pptx_bytes))
-    target_slide = prs.slides[4]  # slide 0: cover, 1: contents, 2: co, 3: exec, 4: analysis
+    # Introduction length and optional sections change physical offsets. Check
+    # the actual analytical page(s), rather than accidentally testing Data Index.
+    target_numbers = {n for record in result.presentation_export_trace
+                      if record['planned_slide_id'] == slide.id for n in record['slide_numbers']}
+    assert target_numbers
 
     # Verify source text is present and placed in lower safe zone (top > 5.0in)
-    source_boxes = [
-        s for s in target_slide.shapes
-        if s.has_text_frame and any("p. " in p.text or "Source" in p.text for p in s.text_frame.paragraphs)
-    ]
-    assert len(source_boxes) >= 1
-    for s_box in source_boxes:
-        assert s_box.top.inches > 5.0, f"Source box top ({s_box.top.inches}in) was placed too high!"
+    for number in target_numbers:
+        target_slide = prs.slides[number - 1]
+        source_boxes = [
+            s for s in target_slide.shapes
+            if s.has_text_frame and any("p. " in p.text or "Source" in p.text for p in s.text_frame.paragraphs)
+        ]
+        assert len(source_boxes) >= 1
+        for s_box in source_boxes:
+            assert s_box.top.inches > 5.0, f"Source box top ({s_box.top.inches}in) was placed too high!"
 
 
 # ==============================================================================

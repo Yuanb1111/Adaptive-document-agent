@@ -162,8 +162,8 @@ def test_pptx_export_structure_ordering_and_gridlines() -> None:
         assert ch.category_axis.has_major_gridlines is False
         assert ch.category_axis.has_minor_gridlines is False
 
-    # Appendix slide is before the final official Thank You slide
-    appendix_slide = deck.slides[-2]
+    # Source tables follow the body and its official Thank You slide.
+    appendix_slide = next(s for s in deck.slides if s.element.cSld.get('name') == 'ada:data-index')
     tables = [s.table for s in appendix_slide.shapes if s.has_table]
     assert len(tables) >= 1
     table = tables[0]
@@ -175,8 +175,8 @@ def test_pptx_export_structure_ordering_and_gridlines() -> None:
     assert table.cell(0, 0).text == "Financial Metric"
     assert table.cell(0, 1).text == "Unit"
 
-    # Final slide is the official FOURIER Thank You slide
-    thank_you_slide = deck.slides[-1]
+    # The last BODY slide is the official FOURIER Thank You slide.
+    thank_you_slide = [s for s in deck.slides if s.element.cSld.get('name') != 'ada:data-index'][-1]
     assert any("thank you" in s.text.casefold() for s in thank_you_slide.shapes if s.has_text_frame)
 
 

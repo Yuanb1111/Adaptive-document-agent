@@ -3331,14 +3331,10 @@ def _add_thank_you_slide(presentation: Any) -> None:
 
 
 def _number_slides(presentation: Any) -> None:
-    total_count = len(presentation.slides)
+    from .presentation_roles import is_closing_slide
     for index, slide in enumerate(presentation.slides, start=1):
-        if index == 1:
+        if index == 1 or is_closing_slide(slide):
             continue
-        if index == total_count:
-            from .presentation_roles import is_closing_slide
-            if is_closing_slide(slide):
-                continue
         _text(slide, str(index), 11.60, 6.53, 0.60, 0.23, size=9, color=FOURIER_MUTED, align="right")
 
 

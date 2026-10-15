@@ -100,12 +100,15 @@ def test_signed_bars_and_line_markers_use_explicit_approved_colors(branded_outpu
 
 
 def test_brand_export_preserves_source_evidence_and_analytical_models(branded_output):
-    result, before, _, _, _ = branded_output
+    result, before, _, deck, _ = branded_output
     after = result.model_dump()
     # The existing presentation compiler fills company overview source pages.
     # Styling must leave the source, analysis and all raw evidence untouched.
-    for key in before.keys() - {"presentation_plan", "presentation_export_trace"}:
+    for key in before.keys() - {"presentation_plan", "presentation_export_trace", "presentation_slide_counts"}:
         assert after[key] == before[key], key
+    from adaptive_document_agent.services.presentation_body_budget import slide_counts
+    assert after['presentation_slide_counts'] == slide_counts(deck, result)
+    assert after['presentation_slide_counts']['total'] == len(deck.slides)
     assert after['presentation_export_trace']
     assert all(item['mapping_basis'].startswith('renderer_input_scope') for item in after['presentation_export_trace'])
     assert after["presentation_plan"]["slides"] == before["presentation_plan"]["slides"]
