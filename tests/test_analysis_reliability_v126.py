@@ -216,7 +216,7 @@ def test_reporting_retry_skips_discovery_semantics_scoring_and_calculation(monke
     runner = DocumentOrchestrator(gateway)
     monkeypatch.setattr(runner, '_load_document', lambda *a: result.document)
     monkeypatch.setattr(company_introduction, 'prepare_company_introduction',
-        lambda *a, **k: nullcontext(SimpleNamespace(failed=lambda: False)))
+        lambda *a, **k: nullcontext(SimpleNamespace(failed=lambda: False, raise_if_failed=lambda: None)))
     discover, score, execute = Mock(side_effect=AssertionError('Discovery must be reused')), Mock(), Mock()
     monkeypatch.setattr(module.DocumentDiscovery, 'discover', discover)
     monkeypatch.setattr(module.AnalysisValueScorer, 'score', score)

@@ -23,6 +23,8 @@ from adaptive_document_agent.validation.report_validator import ReportValidator
 
 from .analysis_planner import AnalysisPlanner
 from .candidate_generator import AnalysisCandidateGenerator
+from .introduction_checkpoint import (IntroductionGuardedGateway, IntroductionVerificationFailed,
+                                      failed_introduction_result)
 from .chart_planner import ChartPlanner
 from .document_discovery import DocumentDiscovery
 from .executor import AnalysisExecutor
@@ -234,7 +236,6 @@ class DocumentOrchestrator:
         else:
             notify("Generating analysis candidates")
             if attach_introduction is not None and attach_introduction.failed():
-                from .introduction_checkpoint import failed_introduction_result
                 return failed_introduction_result(attach_introduction,
                     PipelineResult(document=document, profile=profile, observations=index.observations,
                         validation_warnings=self._validate_analysis(profile, observations, [])),
@@ -281,284 +282,313 @@ class DocumentOrchestrator:
             profile.data_quality_notes.append("Chart candidates were detected; no vision model is configured.")
 
         if attach_introduction is not None and attach_introduction.failed():
-            from .introduction_checkpoint import failed_introduction_result
             return failed_introduction_result(attach_introduction,
                 PipelineResult(document=document, profile=profile, observations=index.observations,
                     candidates=candidates, candidate_scores=scores, analysis_plan=plan,
                     analysis_results=results, validation_warnings=issues),
                 self.gateway, resources, timings, details, pipeline_started, notify)
 
-        notify("Generating insights and dynamic report")
-        with record_timing(timings, "reporting"):
-            reporting = self._generate_report(document, profile, index, plan, results, issues, notify, analysis_focus)
-            details.update(reporting.stage_details_ms)
-            insights, report_plan = reporting.insights, reporting.report_plan
-            topic_selection, charts = reporting.presentation_topics, reporting.charts
-            markdown, issues = reporting.report_markdown, reporting.validation_warnings
+        checkpoint = PipelineResult(document=document, profile=profile, observations=index.observations,
+            candidates=candidates, candidate_scores=scores, analysis_plan=plan,
+            analysis_results=results, validation_warnings=issues)
+        editorial_gateway = (IntroductionGuardedGateway(self.gateway, attach_introduction)
+                             if attach_introduction is not None else self.gateway)
+        try:
+            if isinstance(editorial_gateway, IntroductionGuardedGateway):
+                editorial_gateway.check()
+            notify("Generating insights and dynamic report")
+            with record_timing(timings, "reporting"):
+                reporting = self._generate_report(document, profile, index, plan, results, issues, notify, analysis_focus,
+                    gateway=editorial_gateway, output=checkpoint)
+                details.update(reporting.stage_details_ms)
+                if isinstance(editorial_gateway, IntroductionGuardedGateway):
+                    editorial_gateway.check()
+                insights, report_plan = reporting.insights, reporting.report_plan
+                topic_selection, charts = reporting.presentation_topics, reporting.charts
+                markdown, issues = reporting.report_markdown, reporting.validation_warnings
 
-            # Structured diagnostic metadata logging
-            import logging
-            import re
-            logger = logging.getLogger("adaptive_document_agent.pipeline")
-            raw_obs_count = len(observations)
-            valid_obs_count = sum(1 for o in observations if getattr(o, "validation_status", "valid") == "valid")
-            partial_obs_count = sum(1 for o in observations if getattr(o, "validation_status", "") == "partially_valid")
-            retained_count = len(index.observations)
-            metric_series_count = len(index.metrics())
-            chartable_series_count = len(charts)
-            selected_insight_count = len(insights)
+                # Structured diagnostic metadata logging
+                import logging
+                import re
+                logger = logging.getLogger("adaptive_document_agent.pipeline")
+                raw_obs_count = len(observations)
+                valid_obs_count = sum(1 for o in observations if getattr(o, "validation_status", "valid") == "valid")
+                partial_obs_count = sum(1 for o in observations if getattr(o, "validation_status", "") == "partially_valid")
+                retained_count = len(index.observations)
+                metric_series_count = len(index.metrics())
+                chartable_series_count = len(charts)
+                selected_insight_count = len(insights)
             
-            logger.info(
-                "Extraction & Analysis Pipeline Diagnostics: "
-                "raw_observation_count=%d, valid_count=%d, partial_count=%d, "
-                "retained_count=%d, metric_series_count=%d, chartable_series_count=%d, selected_insight_count=%d",
-                raw_obs_count, valid_obs_count, partial_obs_count,
-                retained_count, metric_series_count, chartable_series_count, selected_insight_count,
-            )
-
-            # Minimum evidence sanity check & recovery pass:
-            # If narrative layer identifies quantitative trends but structured evidence is sparse or charts == 0
-            quantitative_claim_count = sum(
-                len(re.findall(r"\b\d+(?:\.\d+)?%?\b", f"{ins.title} {ins.narrative}"))
-                for ins in insights
-            )
-            if (not charts or len(index.observations) < 4) and (quantitative_claim_count >= 2 or len(insights) >= 2):
-                notify("Evidence unexpectedly sparse; triggering multi-strategy extraction recovery pass")
-                from adaptive_document_agent.extraction.borderless_table_extractor import BorderlessTableExtractor
-                from adaptive_document_agent.extraction.table_candidate_selector import TableCandidateSelector
-                from adaptive_document_agent.services.financial_normalizer import FinancialNormalizer
-
-                # 1. Run multiple extraction strategies across relevant pages and select/merge best candidates
-                reconstructor = TableReconstructor()
-                for p in selected_pages:
-                    reconstructed = [reconstructor.reconstruct(t) for t in p.tables] if p.tables else []
-                    borderless = BorderlessTableExtractor().extract(p, p.page_number)
-                    borderless_reconstructed = [reconstructor.reconstruct(t) for t in borderless] if borderless else []
-
-                    if reconstructed and borderless_reconstructed:
-                        p.tables = TableCandidateSelector.merge_or_replace_tables(reconstructed, borderless_reconstructed)
-                    elif borderless_reconstructed:
-                        p.tables = borderless_reconstructed
-                    elif reconstructed:
-                        p.tables = reconstructed
-                self._reconstruct_tables(document)
-
-                # 2. Re-extract the selected scope, including vertical text fallback.
-                recovered = extractor.extract(document, page_ranges=profile.analysis_page_ranges or None)
-                if recovered:
-                    recovered = FinancialNormalizer.normalize_observations(recovered)
-                    merged = self._merge_observations(observations, recovered)
-                    # No new evidence means no downstream state changed. Avoid
-                    # repeating paid semantic stages for identical recovery output.
-                    if len(merged) > len(observations):
-                        observations = merged
-                        index = DocumentModelBuilder().build(observations)
-                        notify("Recalculating and validating recovered evidence")
-                        candidates = AnalysisCandidateGenerator().generate(index, profile)
-                        scores = AnalysisValueScorer(self.gateway).score(candidates, index, profile)
-                        plan = AnalysisPlanner().plan(scores, index)
-                        results = AnalysisExecutor().execute(plan, index)
-                        # Replace stale validation and report artifacts together.
-                        # Fresh topic selection must bind to the rebuilt series.
-                        issues = self._validate_analysis(profile, observations, results)
-                        reporting = self._generate_report(
-                            document, profile, index, plan, results, issues, notify, analysis_focus,
-                        )
-                        details.update({f"recovery_{name}": value for name, value in reporting.stage_details_ms.items()})
-                        insights, report_plan = reporting.insights, reporting.report_plan
-                        topic_selection, charts = reporting.presentation_topics, reporting.charts
-                        markdown, issues = reporting.report_markdown, reporting.validation_warnings
-
-            # 4. Diagnostics when charts == 0
-            if not charts:
-                diag_summary, failure_reasons = self._diagnose_zero_charts(document, observations, index)
-                logger.warning("Zero charts planned diagnostics:\n%s", diag_summary)
-                issues.append(
-                    ValidationIssue(
-                        code="CHARTS_ZERO_DIAGNOSTIC",
-                        severity="warning",
-                        message=diag_summary,
-                        stage="chart_planning",
-                    )
+                logger.info(
+                    "Extraction & Analysis Pipeline Diagnostics: "
+                    "raw_observation_count=%d, valid_count=%d, partial_count=%d, "
+                    "retained_count=%d, metric_series_count=%d, chartable_series_count=%d, selected_insight_count=%d",
+                    raw_obs_count, valid_obs_count, partial_obs_count,
+                    retained_count, metric_series_count, chartable_series_count, selected_insight_count,
                 )
-                notify(f"Diagnostics: 0 charts retained. {len(index.metrics())} metrics found; {len(failure_reasons)} candidate series failed chartability.")
 
-        prepared_brief = None
-
-        presentation_plan = None
-        if self.gateway:
-            notify("Planning presentation narrative")
-            with record_timing(timings, "presentation_planning"):
-                planning_result = PipelineResult(
-                    document=document,
-                    profile=profile,
-                    observations=index.observations,
-                    candidates=candidates,
-                    candidate_scores=scores,
-                    analysis_plan=plan,
-                    analysis_results=results,
-                    insights=insights,
-                    report_plan=report_plan,
-                    report_markdown=markdown,
-                    charts=charts,
-                    presentation_topics=topic_selection,
-                    validation_warnings=issues,
+                # Minimum evidence sanity check & recovery pass:
+                # If narrative layer identifies quantitative trends but structured evidence is sparse or charts == 0
+                quantitative_claim_count = sum(
+                    len(re.findall(r"\b\d+(?:\.\d+)?%?\b", f"{ins.title} {ins.narrative}"))
+                    for ins in insights
                 )
-                # Serial/local clients retain their existing request order.
-                with (nullcontext(attach_introduction) if attach_introduction is not None
-                      else prepare_company_introduction(self.gateway, planning_result,
-                                                        timings=details)) as attach_introduction:
-                    def prepare_stable_topic_brief(current, compiled):
-                        nonlocal prepared_brief
-                        if prepared_brief is not None:
-                            raise RuntimeError('Executive briefing was already prepared for this run')
-                        from .prepared_executive_brief import prepare_executive_brief
-                        # The compiler and scoped wording repair have finished.
-                        # Identity is attached only on the caller, and its source
-                        # snapshot cannot be mutated by later visual planning.
-                        seed = current.model_copy(deep=True)
-                        seed.presentation_plan = compiled.model_copy(deep=True)
-                        try:
-                            with record_timing(timings, 'brief_identity_wait'):
-                                attach_introduction(seed.presentation_plan, seed)
-                        except (LLMResponseError, ValueError):
-                            # The ordinary introduction attachment below keeps
-                            # the failure and audit. Its memoized future makes
-                            # this neither another request nor a cloud fallback.
-                            seed.presentation_plan = None
-                        prepared_brief = resources.enter_context(
-                            prepare_executive_brief(self.gateway, seed, timings=details))
+                if (not charts or len(index.observations) < 4) and (quantitative_claim_count >= 2 or len(insights) >= 2):
+                    notify("Evidence unexpectedly sparse; triggering multi-strategy extraction recovery pass")
+                    from adaptive_document_agent.extraction.borderless_table_extractor import BorderlessTableExtractor
+                    from adaptive_document_agent.extraction.table_candidate_selector import TableCandidateSelector
+                    from adaptive_document_agent.services.financial_normalizer import FinancialNormalizer
 
-                    topics_ready = (prepare_stable_topic_brief
-                        if self.gateway.discovery_workers > 1 and topic_selection and topic_selection.topics
-                        else None)
-                    try:
-                        with record_timing(details, "slide_plan"):
-                            presentation_plan = PresentationPlanner(
-                                self.gateway, on_topics_ready=topics_ready).plan(planning_result)
-                    except (LLMResponseError, ValueError) as exc:
-                        detail = " ".join(str(exc).split())[:1_400]
-                        issues.append(
-                            ValidationIssue(
-                                code="presentation_plan_failed",
-                                message=(
-                                    "The AI presentation plan could not be retained. "
-                                    f"Reason: {detail or 'No additional validation detail was available.'}"
-                                ),
-                                severity="warning",
-                                stage="presentation",
+                    # 1. Run multiple extraction strategies across relevant pages and select/merge best candidates
+                    reconstructor = TableReconstructor()
+                    for p in selected_pages:
+                        reconstructed = [reconstructor.reconstruct(t) for t in p.tables] if p.tables else []
+                        borderless = BorderlessTableExtractor().extract(p, p.page_number)
+                        borderless_reconstructed = [reconstructor.reconstruct(t) for t in borderless] if borderless else []
+
+                        if reconstructed and borderless_reconstructed:
+                            p.tables = TableCandidateSelector.merge_or_replace_tables(reconstructed, borderless_reconstructed)
+                        elif borderless_reconstructed:
+                            p.tables = borderless_reconstructed
+                        elif reconstructed:
+                            p.tables = reconstructed
+                    self._reconstruct_tables(document)
+
+                    # 2. Re-extract the selected scope, including vertical text fallback.
+                    recovered = extractor.extract(document, page_ranges=profile.analysis_page_ranges or None)
+                    if recovered:
+                        recovered = FinancialNormalizer.normalize_observations(recovered)
+                        merged = self._merge_observations(observations, recovered)
+                        # No new evidence means no downstream state changed. Avoid
+                        # repeating paid semantic stages for identical recovery output.
+                        if len(merged) > len(observations):
+                            observations = merged
+                            index = DocumentModelBuilder().build(observations)
+                            notify("Recalculating and validating recovered evidence")
+                            candidates = AnalysisCandidateGenerator().generate(index, profile)
+                            scores = AnalysisValueScorer(editorial_gateway).score(candidates, index, profile)
+                            plan = AnalysisPlanner().plan(scores, index)
+                            results = AnalysisExecutor().execute(plan, index)
+                            # Replace stale validation and report artifacts together.
+                            # Fresh topic selection must bind to the rebuilt series.
+                            issues = self._validate_analysis(profile, observations, results)
+                            checkpoint.observations = index.observations
+                            checkpoint.candidates, checkpoint.candidate_scores = candidates, scores
+                            checkpoint.analysis_plan, checkpoint.analysis_results = plan, results
+                            reporting = self._generate_report(
+                                document, profile, index, plan, results, issues, notify, analysis_focus,
+                                gateway=editorial_gateway, output=checkpoint,
                             )
+                            details.update({f"recovery_{name}": value for name, value in reporting.stage_details_ms.items()})
+                            insights, report_plan = reporting.insights, reporting.report_plan
+                            topic_selection, charts = reporting.presentation_topics, reporting.charts
+                            markdown, issues = reporting.report_markdown, reporting.validation_warnings
+
+                # 4. Diagnostics when charts == 0
+                if not charts:
+                    diag_summary, failure_reasons = self._diagnose_zero_charts(document, observations, index)
+                    logger.warning("Zero charts planned diagnostics:\n%s", diag_summary)
+                    issues.append(
+                        ValidationIssue(
+                            code="CHARTS_ZERO_DIAGNOSTIC",
+                            severity="warning",
+                            message=diag_summary,
+                            stage="chart_planning",
                         )
+                    )
+                    notify(f"Diagnostics: 0 charts retained. {len(index.metrics())} metrics found; {len(failure_reasons)} candidate series failed chartability.")
+
+            prepared_brief = None
+
+            presentation_plan = None
+            if self.gateway:
+                notify("Planning presentation narrative")
+                with record_timing(timings, "presentation_planning"):
+                    planning_result = PipelineResult(
+                        document=document,
+                        profile=profile,
+                        observations=index.observations,
+                        candidates=candidates,
+                        candidate_scores=scores,
+                        analysis_plan=plan,
+                        analysis_results=results,
+                        insights=insights,
+                        report_plan=report_plan,
+                        report_markdown=markdown,
+                        charts=charts,
+                        presentation_topics=topic_selection,
+                        validation_warnings=issues,
+                    )
+                    checkpoint = planning_result
+                    if editorial_gateway is not None and isinstance(editorial_gateway, IntroductionGuardedGateway):
+                        editorial_gateway.check()
+                    # Serial/local clients retain their existing request order.
+                    with (nullcontext(attach_introduction) if attach_introduction is not None
+                          else prepare_company_introduction(self.gateway, planning_result,
+                                                            timings=details)) as attach_introduction:
+                        editorial_gateway = IntroductionGuardedGateway(self.gateway, attach_introduction)
+                        editorial_gateway.check()
+                        def prepare_stable_topic_brief(current, compiled):
+                            nonlocal prepared_brief
+                            if prepared_brief is not None:
+                                raise RuntimeError('Executive briefing was already prepared for this run')
+                            from .prepared_executive_brief import prepare_executive_brief
+                            # The compiler and scoped wording repair have finished.
+                            # Identity is attached only on the caller, and its source
+                            # snapshot cannot be mutated by later visual planning.
+                            checkpoint.presentation_plan = compiled.model_copy(deep=True)
+                            seed = current.model_copy(deep=True)
+                            seed.presentation_plan = compiled.model_copy(deep=True)
+                            try:
+                                with record_timing(timings, 'brief_identity_wait'):
+                                    attach_introduction(seed.presentation_plan, seed)
+                            except (LLMResponseError, ValueError) as exc:
+                                raise IntroductionVerificationFailed(str(exc)) from exc
+                            prepared_brief = resources.enter_context(
+                                prepare_executive_brief(editorial_gateway, seed, timings=details))
+
+                        topics_ready = (prepare_stable_topic_brief
+                            if self.gateway.discovery_workers > 1 and topic_selection and topic_selection.topics
+                            else None)
                         try:
-                            recovery = PresentationPlanRecovery()
-                            if topic_selection and topic_selection.topics:
-                                try:
-                                    presentation_plan = recovery.from_selected_topics(planning_result)
-                                except ValueError as topic_exc:
-                                    issues.append(ValidationIssue(
-                                        code="presentation_topic_recovery_failed",
-                                        message="Selected questions could not form a validated presentation: "
-                                                + " ".join(str(topic_exc).split())[:800],
-                                        severity="warning", stage="presentation",
-                                    ))
-                            if presentation_plan is None:
-                                presentation_plan = recovery.fallback(planning_result)
+                            with record_timing(details, "slide_plan"):
+                                presentation_plan = PresentationPlanner(
+                                    editorial_gateway, on_topics_ready=topics_ready).plan(planning_result)
+                        except (LLMResponseError, ValueError) as exc:
+                            detail = " ".join(str(exc).split())[:1_400]
                             issues.append(
                                 ValidationIssue(
-                                    code="presentation_plan_fallback",
-                                    message="A validated question-first or evidence-only presentation plan was generated in place of the invalid AI slide plan.",
+                                    code="presentation_plan_failed",
+                                    message=(
+                                        "The AI presentation plan could not be retained. "
+                                        f"Reason: {detail or 'No additional validation detail was available.'}"
+                                    ),
+                                    severity="warning",
+                                    stage="presentation",
+                                )
+                            )
+                            try:
+                                recovery = PresentationPlanRecovery()
+                                if topic_selection and topic_selection.topics:
+                                    try:
+                                        presentation_plan = recovery.from_selected_topics(planning_result)
+                                    except ValueError as topic_exc:
+                                        issues.append(ValidationIssue(
+                                            code="presentation_topic_recovery_failed",
+                                            message="Selected questions could not form a validated presentation: "
+                                                    + " ".join(str(topic_exc).split())[:800],
+                                            severity="warning", stage="presentation",
+                                        ))
+                                if presentation_plan is None:
+                                    presentation_plan = recovery.fallback(planning_result)
+                                issues.append(
+                                    ValidationIssue(
+                                        code="presentation_plan_fallback",
+                                        message="A validated question-first or evidence-only presentation plan was generated in place of the invalid AI slide plan.",
+                                        severity="info",
+                                        stage="presentation",
+                                    )
+                                )
+                            except Exception as fallback_exc:
+                                presentation_plan = None
+                                issues.append(
+                                    ValidationIssue(
+                                        code="presentation_plan_fallback_failed",
+                                        message=f"Fallback presentation plan could not be generated: {fallback_exc}",
+                                        severity="error",
+                                        stage="presentation",
+                                    )
+                                )
+
+                        if presentation_plan:
+                            checkpoint.presentation_plan = presentation_plan
+                            try:
+                                with record_timing(details, "company_introduction_wait"):
+                                    attach_introduction(presentation_plan, planning_result)
+                            except (LLMResponseError, ValueError) as exc:
+                                raise IntroductionVerificationFailed(str(exc)) from exc
+                    editorial_gateway.check()
+                    if presentation_plan is None:
+                        # No eventual consumer remains. Stop before another optional
+                        # introduction request while the executive brief is written.
+                        attach_introduction.close()
+                        # An optional plan failure intentionally cancels introduction
+                        # work; that cancellation is not a mandatory failure.
+                        editorial_gateway = self.gateway
+                    # Pydantic owns a separate warning list on this snapshot. Keep
+                    # local recovery's original drafts and evidence decisions in
+                    # the final JSON instead of losing them after planning.
+                    recorded_issues = {issue.model_dump_json() for issue in issues}
+                    for issue in planning_result.validation_warnings:
+                        if issue.model_dump_json() not in recorded_issues:
+                            issues.append(issue)
+                            recorded_issues.add(issue.model_dump_json())
+                    if presentation_plan:
+                        from adaptive_document_agent.validation.claim_validator import repair_presentation_plan
+                        from adaptive_document_agent.validation.cross_slide_validator import CrossSlideValidator
+
+                        from adaptive_document_agent.validation.presentation_provenance import insight_inputs
+                        insight_refs = insight_inputs(planning_result)
+                        presentation_plan, plan_repairs = repair_presentation_plan(presentation_plan, index.observations, charts,
+                            insight_observation_ids=insight_refs)
+                        for repair_msg in plan_repairs:
+                            issues.append(
+                                ValidationIssue(
+                                    code="claim_contradiction_repaired",
+                                    message=repair_msg,
                                     severity="info",
                                     stage="presentation",
                                 )
                             )
-                        except Exception as fallback_exc:
-                            presentation_plan = None
+                        cross_val = CrossSlideValidator(presentation_plan, index.observations, charts,
+                            insight_observation_ids=insight_refs)
+                        cross_issues = cross_val.validate_and_repair(auto_repair=True)
+                        for c_issue in cross_issues:
                             issues.append(
                                 ValidationIssue(
-                                    code="presentation_plan_fallback_failed",
-                                    message=f"Fallback presentation plan could not be generated: {fallback_exc}",
-                                    severity="error",
+                                    code=c_issue.code,
+                                    message=c_issue.message,
+                                    severity="info" if c_issue.severity == "INFO" else ("error" if c_issue.severity == "CRITICAL" else "warning"),
                                     stage="presentation",
                                 )
                             )
 
-                    if presentation_plan:
-                        try:
-                            with record_timing(details, "company_introduction_wait"):
-                                attach_introduction(presentation_plan, planning_result)
-                        except (LLMResponseError, ValueError) as exc:
-                            from adaptive_document_agent.models.presentation import CompanyProfile
-                            # Failure belongs in diagnostics, never unsourced
-                            # company copy that triggers a secondary claim error.
-                            presentation_plan.company = CompanyProfile()
-                            issues.append(ValidationIssue(
-                                code="company_introduction_unavailable", severity="warning", stage="presentation",
-                                message="The independent company introduction could not be verified: " + str(exc)[:500],
-                            ))
-                if presentation_plan is None:
-                    # No eventual consumer remains. Stop before another optional
-                    # introduction request while the executive brief is written.
-                    attach_introduction.close()
-                # Pydantic owns a separate warning list on this snapshot. Keep
-                # local recovery's original drafts and evidence decisions in
-                # the final JSON instead of losing them after planning.
-                recorded_issues = {issue.model_dump_json() for issue in issues}
-                for issue in planning_result.validation_warnings:
-                    if issue.model_dump_json() not in recorded_issues:
-                        issues.append(issue)
-                        recorded_issues.add(issue.model_dump_json())
-                if presentation_plan:
-                    from adaptive_document_agent.validation.claim_validator import repair_presentation_plan
-                    from adaptive_document_agent.validation.cross_slide_validator import CrossSlideValidator
+            checkpoint.presentation_plan = presentation_plan
+            executive_brief = None
+            if self.gateway:
+                notify("Writing the evidence-bound executive briefing")
+                from .prepared_executive_brief import current_executive_brief
+                with record_timing(timings, "executive_brief"):
+                    snapshot = PipelineResult(document=document, profile=profile,
+                        observations=index.observations, insights=insights, analysis_results=results,
+                        presentation_plan=presentation_plan, presentation_topics=topic_selection)
+                    try:
+                        executive_brief = current_executive_brief(editorial_gateway, snapshot, prepared_brief)
+                    except (LLMResponseError, ValueError) as exc:
+                        issues.append(ValidationIssue(code="executive_brief_unavailable", stage="report",
+                            severity="warning", message="The final briefing could not be source-checked: " + str(exc)[:500]))
+                    finally:
+                        details.update(snapshot.stage_details_ms)
+                        # Brief repairs keep their original/patch evidence audit on
+                        # this separate snapshot, including rejected recoveries.
+                        recorded_issues = {issue.model_dump_json() for issue in issues}
+                        for issue in snapshot.validation_warnings:
+                            if issue.model_dump_json() not in recorded_issues:
+                                issues.append(issue)
+                                recorded_issues.add(issue.model_dump_json())
 
-                    from adaptive_document_agent.validation.presentation_provenance import insight_inputs
-                    insight_refs = insight_inputs(planning_result)
-                    presentation_plan, plan_repairs = repair_presentation_plan(presentation_plan, index.observations, charts,
-                        insight_observation_ids=insight_refs)
-                    for repair_msg in plan_repairs:
-                        issues.append(
-                            ValidationIssue(
-                                code="claim_contradiction_repaired",
-                                message=repair_msg,
-                                severity="info",
-                                stage="presentation",
-                            )
-                        )
-                    cross_val = CrossSlideValidator(presentation_plan, index.observations, charts,
-                        insight_observation_ids=insight_refs)
-                    cross_issues = cross_val.validate_and_repair(auto_repair=True)
-                    for c_issue in cross_issues:
-                        issues.append(
-                            ValidationIssue(
-                                code=c_issue.code,
-                                message=c_issue.message,
-                                severity="info" if c_issue.severity == "INFO" else ("error" if c_issue.severity == "CRITICAL" else "warning"),
-                                stage="presentation",
-                            )
-                        )
-
-        executive_brief = None
-        if self.gateway:
-            notify("Writing the evidence-bound executive briefing")
-            from .prepared_executive_brief import current_executive_brief
-            with record_timing(timings, "executive_brief"):
-                snapshot = PipelineResult(document=document, profile=profile,
-                    observations=index.observations, insights=insights, analysis_results=results,
-                    presentation_plan=presentation_plan, presentation_topics=topic_selection)
-                try:
-                    executive_brief = current_executive_brief(self.gateway, snapshot, prepared_brief)
-                except (LLMResponseError, ValueError) as exc:
-                    issues.append(ValidationIssue(code="executive_brief_unavailable", stage="report",
-                        severity="warning", message="The final briefing could not be source-checked: " + str(exc)[:500]))
-                finally:
-                    details.update(snapshot.stage_details_ms)
-                    # Brief repairs keep their original/patch evidence audit on
-                    # this separate snapshot, including rejected recoveries.
-                    recorded_issues = {issue.model_dump_json() for issue in issues}
-                    for issue in snapshot.validation_warnings:
-                        if issue.model_dump_json() not in recorded_issues:
-                            issues.append(issue)
-                            recorded_issues.add(issue.model_dump_json())
+        except IntroductionVerificationFailed as exc:
+            # Pydantic may copy the planning warning list. Keep failures already
+            # recorded by local recovery alongside the snapshot's own audits.
+            recorded_issues = {issue.model_dump_json() for issue in checkpoint.validation_warnings}
+            for issue in issues:
+                if issue.model_dump_json() not in recorded_issues:
+                    checkpoint.validation_warnings.append(issue)
+                    recorded_issues.add(issue.model_dump_json())
+            details.update(checkpoint.stage_details_ms)
+            return failed_introduction_result(attach_introduction, checkpoint, self.gateway, resources,
+                timings, details, pipeline_started, notify, failure=exc,
+                skipped='remaining editorial requests, briefing and localization.')
 
         # Include cancellation/drain in wall time and capture all worker usage.
         # In particular, a missing/valid final plan may never have awaited it.
@@ -656,30 +686,35 @@ class DocumentOrchestrator:
     def _generate_report(
         self, document: ParsedDocument, profile: DocumentProfile, index: DocumentIndex,
         plan: list[AnalysisTask], results: list[AnalysisResult], issues: list[ValidationIssue],
-        notify: ProgressCallback, analysis_focus: str | None,
+        notify: ProgressCallback, analysis_focus: str | None, *,
+        gateway=None, output: PipelineResult | None = None,
     ) -> PipelineResult:
         """Build all reporting artifacts from one validated analysis snapshot."""
         from .output_planning import plan_outputs
         from adaptive_document_agent.extraction.source_header_scope import source_header_issues
 
+        gateway = self.gateway if gateway is None else gateway
+        output = output if output is not None else PipelineResult(document=document, profile=profile,
+            observations=index.observations, analysis_plan=plan, analysis_results=results)
         issues = list(issues)
+        output.validation_warnings = issues
         for issue in source_header_issues(document):
             if issue not in issues:
                 issues.append(issue)
-        details: dict[str, int] = {}
+        details = output.stage_details_ms
         with record_timing(details, "insights"):
-            insight_generator = InsightGenerator(self.gateway)
+            insight_generator = InsightGenerator(gateway)
             insights = insight_generator.generate(results, index.observations, document=document)
             issues.extend(insight_generator.validation_issues)
         notify("Selecting presentation questions before chart generation")
-        output = PipelineResult(
-            document=document, profile=profile, observations=index.observations,
-            analysis_plan=plan, analysis_results=results, insights=insights,
-        )
-        report_plan, topic_selection, topic_error = plan_outputs(self.gateway, output, timings=details, progress=notify)
+        output.insights = insights
+        report_plan, topic_selection, topic_error = plan_outputs(gateway, output, timings=details, progress=notify)
+        output.report_plan, output.presentation_topics = report_plan, topic_selection
+        if isinstance(gateway, IntroductionGuardedGateway):
+            gateway.check()
         # Scoped topic corrections retain their complete rejected drafts and
         # validation errors on the reporting snapshot, including partial success.
-        issues.extend(output.validation_warnings)
+        issues.extend(issue for issue in output.validation_warnings if issue not in issues)
         requested_series = []
         if topic_selection is not None:
             _, series_by_id = series_directory(output)

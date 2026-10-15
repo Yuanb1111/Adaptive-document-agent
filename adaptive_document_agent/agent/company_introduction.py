@@ -99,9 +99,7 @@ class PreparedCompanyIntroduction:
         try:
             self._future.result()
         finally:
-            for issue in self._source.validation_warnings:
-                if issue.code.startswith("company_introduction_") and issue not in current.validation_warnings:
-                    current.validation_warnings.append(issue.model_copy(deep=True))
+            self.copy_audit(current)
         _check_cancelled(self._cancelled)
         errors = _introduction_errors(self._draft.company, current)
         if (not self._draft.company.summary_overview and not self._draft.company.summary_business
@@ -118,6 +116,23 @@ class PreparedCompanyIntroduction:
         """Nonblocking checkpoint; inspection never starts deferred/local work."""
         return bool(self._future is not None and self._future.done()
                     and (self._future.cancelled() or self._future.exception() is not None))
+
+    def raise_if_failed(self) -> None:
+        """Inspect only completed work, including from another editorial worker.
+
+        This does not attach results, start deferred generation, or wait on a
+        healthy read. Privacy and cancellation keep their original exception.
+        """
+        if self.failed():
+            self._future.result()
+
+    def copy_audit(self, current: PipelineResult) -> None:
+        """Copy completed introduction diagnostics on the invocation owner."""
+        if get_ident() != self._caller:
+            raise RuntimeError("Only the pipeline caller may attach introduction diagnostics")
+        for issue in self._source.validation_warnings:
+            if issue.code.startswith("company_introduction_") and issue not in current.validation_warnings:
+                current.validation_warnings.append(issue.model_copy(deep=True))
 
     def close(self) -> None:
         """Stop subsequent requests and drain the bounded in-flight operation.

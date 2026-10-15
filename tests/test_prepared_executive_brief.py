@@ -125,7 +125,7 @@ def test_actual_orchestrator_overlaps_only_stable_cloud_editorial_work(monkeypat
     topics = PresentationTopicSelection(topics=[PresentationTopic(id='fixed', title='Activity',
         question='What activity is described?', rationale='Source narrative is available.',
         series_ids=['fixed-selected-series'])])
-    def report(self, document, profile, *args):
+    def report(self, document, profile, *args, **kwargs):
         return PipelineResult(document=document, profile=profile, presentation_topics=topics,
                               report_markdown='Evidence report')
     monkeypatch.setattr(orchestrator.DocumentOrchestrator, '_generate_report', report)

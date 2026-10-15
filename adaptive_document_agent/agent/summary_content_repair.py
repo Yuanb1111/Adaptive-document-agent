@@ -69,7 +69,7 @@ def apply_content_revision(draft, revision, schema):
 
 
 def revise_content(gateway, draft, messages, schema, audit, *, source=None, errors=None, cancelled=None,
-                   retry_unchanged=False, add_only=False, validate_progress=None):
+                   retry_unchanged=False, add_only=False, validate_progress=None, meaning_deficits=None):
     from .summary_revision_addresses import revision_addresses
     response_schema, editable, groups, items = revision_addresses(draft)
     if add_only:
@@ -132,8 +132,18 @@ def revise_content(gateway, draft, messages, schema, audit, *, source=None, erro
         'If no quote supports a claim, remove only that unsupported claim. Never return the '
         'unchanged rejected text and fact_ids as a correction. '
         'All revised copy will undergo full source, numeric, pagination and independent meaning checks.'}
+    instruction['content'] += (
+        ' meaning_deficits identifies exact failed (part_id, meaning_index) '
+        'targets; address EACH one against its full required_meanings entry, including separately '
+        'stated characteristics and qualifications. Never fix only the first issue or substitute '
+        'a broad label. Every corrected or added item must carry meaning_refs with each exact '
+        'part_id, meaning_index and a literal summary_quote in its current text. Preserve existing '
+        'supported meanings and their explicit references. All required meanings remain mandatory; '
+        'short prose targets cannot authorize their removal. Self-reported references never '
+        'replace the independent full meaning review.')
     repair_messages = [instruction, untrusted_document_message(json.dumps(
         dict(source_facts=source_facts, editable_groups=editable, errors=errors,
+             meaning_deficits=meaning_deficits or [],
              required_meanings={p['id']: p['required_meanings'] for p in (source or {}).get('parts', [])
                                 if p.get('required_meanings')}), ensure_ascii=False))]
     if add_only:

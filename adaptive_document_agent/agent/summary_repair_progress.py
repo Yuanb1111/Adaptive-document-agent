@@ -17,7 +17,7 @@ def source_failure_keys(errors):
     return failures
 
 
-def nonprogress_source_errors(candidate, *, catalog, review, result, errors):
+def nonprogress_source_errors(candidate, *, catalog, review, result, errors, source=None):
     """Check complete repaired claims without consuming the layout/review budgets."""
     from .compact_summary import expand_compact
     from adaptive_document_agent.services.compact_summary import (
@@ -32,4 +32,7 @@ def nonprogress_source_errors(candidate, *, catalog, review, result, errors):
             else:
                 remaining.extend(compact_item_errors(item, candidate_review, result))
     remaining.extend(compact_continuation_errors(continuations, candidate_review, result))
+    if source is not None:
+        from .summary_authored_coverage import authored_coverage_errors
+        remaining.extend(authored_coverage_errors(candidate, source, catalog, {}))
     return remaining if (remaining and not source_failure_keys(remaining) < source_failure_keys(errors)) else []

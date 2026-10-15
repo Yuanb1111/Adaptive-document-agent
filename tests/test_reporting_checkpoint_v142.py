@@ -62,6 +62,13 @@ def _decisions(parts):
         for part in parts]
 
 
+def _synthetic_meaning_refs(parts, text):
+    """Explicit author mappings for exact synthetic meaning text only."""
+    return [dict(part_id=part['id'], meaning_index=index, summary_quote=meaning['meaning'])
+            for part in parts for index, meaning in enumerate(part.get('required_meanings', []))
+            if meaning['meaning'] in text]
+
+
 class SchemaReplayClient(MockLLMClient):
     """Honor the gateway's bounded text protocol without skipping its parser."""
 
@@ -256,8 +263,9 @@ class SyntheticReportingClient(SchemaReplayClient):
                 else 'The independent fixture rejects this proposed source selection.').model_dump(mode='json')
         elif name == 'SummarySynthesisDraft':
             parts = values[0]['parts']
+            text = ' '.join(part['required_meanings'][0]['meaning'] for part in parts)
             value = dict(pages=[dict(title='Software and delivery', items=[dict(label='Business and delivery',
-                text=' '.join(part['required_meanings'][0]['meaning'] for part in parts),
+                text=text, meaning_refs=_synthetic_meaning_refs(parts, text),
                 fact_ids=[fact['id'] for part in parts for fact in part['facts']])])])
         elif name == 'SummaryCoverageReview':
             payload = values[-1]
@@ -327,12 +335,12 @@ def test_full_reporting_retry_keeps_inventory_and_independent_export_gates(monke
     assert result.observations == source.observations
     assert 'IntroductionAudienceInventoryCorrection' in client.calls
     assert 'IntroductionAudienceReview' in client.calls
-    assert result.executive_brief is not None
-    assert result.presentation_plan.planning_origin == 'topic_compilation'
     assert not any(issue.code == 'presentation_plan_fallback' for issue in result.validation_warnings)
     from adaptive_document_agent.services.company_summary import require_verified_introduction
     from adaptive_document_agent.services.pptx_export import build_presentation
     if accepted:
+        assert result.executive_brief is not None
+        assert result.presentation_plan.planning_origin == 'topic_compilation'
         assert is_complete(result)
         require_verified_introduction(result)
         assert 'SummaryCoverageReview' in client.calls
@@ -340,6 +348,8 @@ def test_full_reporting_retry_keeps_inventory_and_independent_export_gates(monke
         assert data.startswith(b'PK')
     else:
         assert not is_complete(result) and result.pipeline_state == 'partial'
+        assert result.executive_brief is None
+        assert not any(name in client.calls for name in ('BriefSourcePages', 'ExecutiveBrief', 'BriefMeaningReview'))
         assert 'SummarySynthesisDraft' not in client.calls
         with pytest.raises(ValueError, match='source-verified opening introduction'):
             build_presentation(result)
@@ -366,9 +376,10 @@ def test_external_v141_checkpoint_whole_reporting_retry_retains_unavailable_revi
     assert hashlib.sha256(checkpoint_path.read_bytes()).hexdigest() == before_hash
     assert result.observations == original.observations
     assert result.analysis_results == original.analysis_results
-    assert result.executive_brief == original.executive_brief
-    assert result.presentation_plan.planning_origin == 'topic_compilation'
-    assert len(result.presentation_plan.themes) == len(original.presentation_topics.topics)
+    assert result.executive_brief is None
+    if result.presentation_plan is not None:
+        assert result.presentation_plan.planning_origin == 'topic_compilation'
+        assert len(result.presentation_plan.themes) == len(original.presentation_topics.topics)
     assert not any(issue.code == 'presentation_plan_fallback' for issue in result.validation_warnings)
     assert result.pipeline_state == 'partial' and result.retry_from == 'reporting'
     assert client.review_inputs
@@ -378,7 +389,8 @@ def test_external_v141_checkpoint_whole_reporting_retry_retains_unavailable_revi
     kinds = {row['provenance'] for row in client.provenance}
     assert {'recorded_provider_response', 'saved_validated_artifact',
             'synthetic_missing_id_protocol_fault', 'synthetic_inventory_protocol_correction',
-            'unavailable_mandatory_review', 'recorded_verdict_transport_reindex'} <= kinds
+            'unavailable_mandatory_review'} <= kinds
+    assert not any(name in client.calls for name in ('BriefSourcePages', 'ExecutiveBrief', 'BriefMeaningReview'))
     assert 'SummarySynthesisDraft' not in client.calls
     from adaptive_document_agent.services.pptx_export import build_presentation
     with pytest.raises(ValueError, match='source-verified opening introduction'):

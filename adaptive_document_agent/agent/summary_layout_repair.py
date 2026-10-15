@@ -20,7 +20,7 @@ def paginate_draft(
     gateway: LLMGateway, draft: Draft, catalog: dict, review: SummaryReview,
     messages: list[dict[str, str]], audit: dict[str, Any],
     expand: Callable[[Draft, dict, SummaryReview], list[SummarySlidePage]],
-    schema: type[Draft], *, cancelled: Event | None = None,
+    schema: type[Draft], *, cancelled: Event | None = None, allow_rewrite: bool = True,
 ) -> tuple[Draft, list[SummarySlidePage]]:
     """Pack retained copy; repair the physical body allocation independently."""
     attempts = audit.setdefault('layout_attempts', [])
@@ -47,6 +47,8 @@ def paginate_draft(
             return draft, pages
         except SummaryLayoutError as exc:
             record.update(status='overflow', errors=[str(exc)], draft=draft.model_dump(mode='json'))
+            if not allow_rewrite:
+                raise SummaryDraftProtocolError('Additive omission correction exceeds verified physical layout: '+str(exc)) from exc
             if attempt:
                 raise SummaryDraftProtocolError('Summary layout repair exhausted: '+str(exc)) from exc
             instruction = (f'Repair the physical body allocation, aiming for at most {2 * review.max_intro_slides} '
@@ -64,8 +66,10 @@ def paginate_draft(
                     'logical-group continuations. Combine related claims into fewer concise paragraphs '
                     'and coherent groups; do not copy the full quoted evidence or repeat the same scope '
                     'in multiple items. A logical group is not a physical slide. There is no supporting '
-                    'appendix for this whole-file budget. Aim for about 160-220 Latin-equivalent '
-                    'characters per paragraph and the original stated total prose target. '
+                    'appendix for this whole-file budget. Short paragraphs are readability '
+                    'guidance only, never a word-count constraint overriding selected meanings. '
+                    'Update every item meaning_refs to its current literal text and exact owned '
+                    'source bindings after combining or splitting copy. '
                     'Missing meaning will still fail the independent per-meaning review.')
             repair = list(messages) + [untrusted_document_message(json.dumps(record,ensure_ascii=False)),
                 {'role':'user','content':instruction}]

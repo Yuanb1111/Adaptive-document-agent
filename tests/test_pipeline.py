@@ -117,21 +117,23 @@ def test_conflicting_same_context_values_block_calculation() -> None:
 
 
 @pytest.mark.parametrize('brief_outcome', ['normal', 'audit_success', 'audit_failure'])
-def test_complete_pipeline_with_mock_llm_controls_semantic_selection(monkeypatch, brief_outcome) -> None:
-    if brief_outcome != 'normal':
-        from adaptive_document_agent.agent.executive_brief import ExecutiveBriefWriter
-        generate = ExecutiveBriefWriter.generate
+def test_missing_introduction_stops_after_semantic_selection_without_purchasing_brief(monkeypatch, brief_outcome) -> None:
+    from adaptive_document_agent.agent.executive_brief import ExecutiveBriefWriter
+    generate = ExecutiveBriefWriter.generate
+    brief_calls = []
 
-        def audited_brief(self, snapshot):
-            brief = generate(self, snapshot)
+    def audited_brief(self, snapshot, **kwargs):
+        brief_calls.append(brief_outcome)
+        brief = generate(self, snapshot, **kwargs)
+        if brief_outcome != 'normal':
             issue = ValidationIssue(code='executive_brief_repair_audit', stage='report',
                 message='Original brief and item patch must survive the separate snapshot.')
             snapshot.validation_warnings.extend([issue, issue])
             if brief_outcome == 'audit_failure':
                 raise ValueError('Brief repair rejected after recording its audit.')
-            return brief
+        return brief
 
-        monkeypatch.setattr(ExecutiveBriefWriter, 'generate', audited_brief)
+    monkeypatch.setattr(ExecutiveBriefWriter, 'generate', audited_brief)
     pdf = synthetic_time_series_pdf()
     baseline = DocumentOrchestrator().analyse_pdf(pdf)
     candidate_ids = [item.id for item in baseline.candidates]
@@ -176,15 +178,18 @@ def test_complete_pipeline_with_mock_llm_controls_semantic_selection(monkeypatch
     assert result.presentation_plan is not None
     assert result.presentation_plan.slides[1].title == "Document at a Glance"
     assert "## Revenue overview" in result.report_markdown
-    assert len(client.calls) == 10  # Source-bound brief generation and independent comparison review.
-    if brief_outcome == 'audit_failure':
-        assert result.executive_brief is None
-        assert any(issue.code == 'executive_brief_unavailable' for issue in result.validation_warnings)
-    else:
-        assert result.executive_brief.items[0].label == "Revenue"
-    if brief_outcome != 'normal':
-        assert sum(issue.code == 'executive_brief_repair_audit' for issue in result.validation_warnings) == 1
-        assert result.model_validate_json(result.model_dump_json()).validation_warnings == result.validation_warnings
+    # No mandatory opening was sourced. Do not spend another generation/review
+    # pair regardless of what the optional briefing writer would have done.
+    assert len(client.calls) == 8 and len(client.responses) == 2
+    assert not brief_calls and result.executive_brief is None
+    assert result.pipeline_state == 'partial' and result.retry_from == 'reporting'
+    codes = {issue.code for issue in result.validation_warnings}
+    assert {'company_introduction_unavailable', 'editorial_stages_skipped'} <= codes
+    assert not {'executive_brief_repair_audit', 'executive_brief_unavailable'} & codes
+    assert result.model_validate_json(result.model_dump_json()).validation_warnings == result.validation_warnings
+    assert [(o.id, o.raw_value, o.value, o.period, o.evidence) for o in result.observations] == [
+        (o.id, o.raw_value, o.value, o.period, o.evidence) for o in baseline.observations]
+    assert result.analysis_results and all(item.result is not None for item in result.analysis_results)
     assert result.presentation_plan.planning_origin == "topic_compilation"
     assert result.pipeline_total_ms >= max(result.timings_ms.values())
     assert {"insights", "report_outline", "topic_selection", "slide_plan"} <= result.stage_details_ms.keys()
@@ -211,6 +216,13 @@ def test_presentation_plan_failure_does_not_discard_completed_analysis(monkeypat
     ]
     client = MockLLMClient(responses)
     gateway = LLMGateway(client, LLMSettings(provider=ProviderName.MOCK, model="mock"))
+    generate_report = DocumentOrchestrator._generate_report
+    def audited_report(self, *args, **kwargs):
+        output = generate_report(self, *args, **kwargs)
+        output.validation_warnings.append(ValidationIssue(code='retained_reporting_audit', stage='report',
+            message='Completed report diagnostics remain beside later planning failures.'))
+        return output
+    monkeypatch.setattr(DocumentOrchestrator, '_generate_report', audited_report)
 
     def fail_plan(self: PresentationPlanner, result: object) -> None:
         result.validation_warnings.append(ValidationIssue(
@@ -224,6 +236,13 @@ def test_presentation_plan_failure_does_not_discard_completed_analysis(monkeypat
 
     assert result.presentation_plan is not None
     assert result.report_markdown
+    assert result.pipeline_state == 'partial' and result.retry_from == 'reporting'
+    assert result.executive_brief is None
+    assert result.observations and result.analysis_results
+    assert result.model_validate_json(result.model_dump_json()).analysis_results == result.analysis_results
     assert any(issue.code == "presentation_plan_failed" for issue in result.validation_warnings)
     assert any(issue.code == "presentation_plan_fallback" for issue in result.validation_warnings)
     assert sum(issue.code == "presentation_insight_recovery_rejected" for issue in result.validation_warnings) == 1
+    assert sum(issue.code == 'retained_reporting_audit' for issue in result.validation_warnings) == 1
+    assert any(issue.code == 'company_introduction_unavailable' for issue in result.validation_warnings)
+    assert any(issue.code == 'editorial_stages_skipped' for issue in result.validation_warnings)

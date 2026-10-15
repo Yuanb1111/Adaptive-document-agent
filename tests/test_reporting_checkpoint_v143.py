@@ -27,7 +27,7 @@ from adaptive_document_agent.services.pipeline_completion import is_complete
 from adaptive_document_agent.utils.pipeline_version import PIPELINE_VERSION
 from tests.test_reporting_checkpoint_v142 import (
     RecordedResponseUnavailable, SchemaReplayClient, SyntheticReportingClient,
-    _gateway, _payloads, _synthetic_checkpoint, _warnings,
+    _gateway, _payloads, _synthetic_checkpoint, _synthetic_meaning_refs, _warnings,
 )
 
 
@@ -361,8 +361,9 @@ class SyntheticCapacityBindingClient(SyntheticReportingClient):
                     reason='Synthetic forbidden attempt to replace protected included claims.', required_meanings=[]))
             return self._typed(schema, dict(decisions=decisions))
         parts = values[0]['parts']
+        text = ' '.join(meaning['meaning'] for part in parts for meaning in part['required_meanings'])
         value = dict(pages=[dict(title='Software, delivery and scope', items=[dict(label='Business and service scope',
-            text=' '.join(meaning['meaning'] for part in parts for meaning in part['required_meanings']),
+            text=text, meaning_refs=_synthetic_meaning_refs(parts, text),
             fact_ids=[fact['id'] for part in parts for fact in part['facts']])])])
         return self._typed(schema, value)
 
@@ -389,7 +390,6 @@ def test_synthetic_whole_reporting_capacity_binding_and_addition_keep_export_gat
     result = runner.analyse_pdf(raw, resume=source)
     assert source == original
     assert result.observations == original.observations and result.analysis_results == original.analysis_results
-    assert result.executive_brief is not None and result.presentation_plan.planning_origin == 'topic_compilation'
     assert not any(issue.code == 'presentation_plan_fallback' for issue in result.validation_warnings)
     assert [limit for _, limit in client.repair_inputs] == [32000, 40000]
     assert client.repair_inputs[0][0] == client.repair_inputs[1][0]
@@ -398,6 +398,7 @@ def test_synthetic_whole_reporting_capacity_binding_and_addition_keep_export_gat
     assert client.calls.count('IntroductionMeaningRevision') == 2
     from adaptive_document_agent.services.pptx_export import build_presentation
     if failure_mode is None:
+        assert result.executive_brief is not None and result.presentation_plan.planning_origin == 'topic_compilation'
         assert is_complete(result)
         assert len(client.review_inputs) == 4 and len(client.addition_inputs) == 1
         assert client.review_inputs[1]['current_meanings'] == client.review_inputs[2]['current_meanings']
@@ -411,6 +412,8 @@ def test_synthetic_whole_reporting_capacity_binding_and_addition_keep_export_gat
         assert build_presentation(result).startswith(b'PK')
     else:
         assert not is_complete(result) and result.pipeline_state == 'partial'
+        assert result.executive_brief is None
+        assert not any(name in client.calls for name in ('BriefSourcePages', 'ExecutiveBrief', 'BriefMeaningReview'))
         assert not summary['audience_selection'] and summary['audience_part_ids'] is None
         assert 'SummarySynthesisDraft' not in client.calls
         if failure_mode == 'capacity_exhausted':

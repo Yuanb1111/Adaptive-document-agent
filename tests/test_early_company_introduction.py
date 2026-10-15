@@ -114,7 +114,7 @@ def configure_pipeline(monkeypatch, *, delays=None, local=False, concurrent=True
     monkeypatch.setattr(orchestrator.SemanticResolver, "resolve_metrics", lambda *args, **kwargs: [])
     monkeypatch.setattr(orchestrator.AnalysisValueScorer, "score", lambda *args,**kwargs: stage("candidate_scoring", []))
 
-    def report(self, document, profile, *args):
+    def report(self, document, profile, *args, **kwargs):
         return stage("reporting", PipelineResult(document=document, profile=profile,
             report_plan=ReportPlan(title="Synthetic source-bound report"), report_markdown="Evidence report"))
     monkeypatch.setattr(orchestrator.DocumentOrchestrator, "_generate_report", report)

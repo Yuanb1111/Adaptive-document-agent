@@ -4,6 +4,7 @@ import json
 
 import pytest
 from pptx import Presentation
+from tests.summary_author_helpers import authored_test_draft
 
 from adaptive_document_agent.agent.compact_summary import generate_compact_summary,CompactSummaryDraft,CompactSummaryReview
 from adaptive_document_agent.models import PipelineResult,ParsedDocument,DocumentPage,DocumentProfile,PresentationPlan,PresentationSlide
@@ -41,15 +42,16 @@ class Reviewer:
     def __init__(self,draft,*,reject=None,identity=None):self.draft=draft;self.reject=reject;self.identity=identity;self.calls=[]
     def generate_structured(self,messages,schema,**kwargs):
         self.calls.append(schema.__name__)
-        if issubclass(schema, CompactSummaryDraft):return schema.model_validate(self.draft)
+        if issubclass(schema, CompactSummaryDraft):return schema.model_validate(authored_test_draft(self.draft, messages))
         if schema.__name__ == 'SummarySynthesisRevision':
             payload=json.loads(messages[1]['content'].split('\n',1)[1].rsplit('\n',1)[0])
             replacements, additions = [], []
-            for p, page in enumerate(self.draft['pages']):
+            candidate = authored_test_draft(self.draft, messages)
+            for p, page in enumerate(candidate['pages']):
                 existing = payload['editable_groups'][p]['items']
                 for i, item in enumerate(page['items']):
                     if i >= len(existing): additions.append(dict(group_id=f'g{p}', item=item))
-                    elif any(existing[i][k] != item[k] for k in ('label','text','fact_ids')):
+                    elif any(existing[i][k] != item[k] for k in ('label','text','fact_ids','meaning_refs')):
                         replacements.append(dict(item_id=f'g{p}_i{i}', replacement=item))
             return schema(replacements=replacements, additions=additions)
         payload=json.loads(messages[-1]['content'].split('\n',1)[1].rsplit('\n',1)[0])

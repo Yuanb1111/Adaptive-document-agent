@@ -15,6 +15,9 @@ from adaptive_document_agent.utils.timing import record_timing
 from .prompting import untrusted_document_message, with_presentation_limits
 from .compact_summary_review import CompactReviewProtocolError, review_compact, validate_review_target
 from .summary_draft_protocol import SummaryDraftProtocolError, author_draft
+from .summary_authored_coverage import (
+    AuthoredMeaningRef, authored_coverage_errors, meaning_inventory,
+    coverage_deficits, covered_meanings, deficit_rows)
 
 
 class CompactSummaryItem(BaseModel):
@@ -24,6 +27,9 @@ class CompactSummaryItem(BaseModel):
     # continuations retain longer authored copy without rewriting its claims.
     text: str = Field(min_length=1,max_length=6000)
     fact_ids: list[str] = Field(min_length=1,max_length=160)
+    meaning_refs: list[AuthoredMeaningRef] = Field(default_factory=list, description=
+        'For each selected meaning expressed here, identify its exact source part/index and literal visible quote. '
+        'These author references do not establish independent semantic approval.')
 
 
 class CompactSummaryPage(BaseModel):
@@ -183,6 +189,8 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
                              group_title=None, require_opening=True,
                              draft_schema=CompactSummaryDraft):
     payload,catalog = compact_input(review)
+    if review.audience_part_ids is not None:
+        payload['meaning_inventory'] = meaning_inventory(payload)
     payload['purpose'] = result.profile.document_purpose
     if review.audience_part_ids is not None:
         payload['audience_purpose'] = ('Introduce the actual subject/business and essential scope and '
@@ -207,6 +215,13 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
         'supported summary; citing its fact ID without stating its subject or qualification is insufficient. '
         'Each item may combine multiple fact_ids, including facts from different source pages. '
         'Preserve EVERY supplied required_meanings entry in visible copy bound to that source part. '
+        'When meaning_inventory is supplied, every entry needs an explicit meaning_refs reference '
+        'on the paragraph or paragraphs expressing it: exact part_id, zero-based meaning_index, '
+        'and summary_quote copied literally from that paragraph. Bind its owning fact_id there. '
+        'A meaning spread across paragraphs needs references on all contributing paragraphs. '
+        'Do not claim names alone cover characteristics. Recheck the complete inventory before '
+        'returning; missing references, unrelated quotes or evidence-only references fail. '
+        'This is your traceable writing plan, never independent semantic approval. '
         'Names or categories do not substitute for their defining characteristics and qualifications. '
         'If a part combines meanings spread across multiple paragraphs, bind its fact ID to EVERY '
         'paragraph contributing those meanings, alongside the other supporting fact IDs. Content '
@@ -251,7 +266,7 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
     if review.max_intro_slides is not None:
         prose_words = (70 if review.audience_part_ids is not None else 170) * review.max_intro_slides
         prose_cjk = (160 if review.audience_part_ids is not None else 280) * review.max_intro_slides
-        messages.append({'role':'user','content':
+        budget_message = {'role':'user','content':
             f'The complete introduction has a budget of {review.max_intro_slides} physical slides. '
             'Synthesize ALL supplied parts together, not one page per passage or minor theme. '
             'Use at most this many logical groups, normally three or four concise paragraphs per group. '
@@ -266,7 +281,20 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
             'or repeated background. Combine related table fragments into one faithful qualitative statement, '
             'retaining the reporting scope, material conditions and caveats. Exact tables remain available '
             'in the evidence appendix. Financial or market numbers are optional; include only the few '
-            'essential figures needed to explain the subject, with their full qualifications.'})
+            'essential figures needed to explain the subject, with their full qualifications.'}
+        if review.audience_part_ids is not None:
+            budget_message['content'] = (
+                f'The complete introduction must fit {review.max_intro_slides} physical slides. '
+                'Every independently selected required_meanings entry is mandatory, including its '
+                'numbers, named activities, characteristics and necessary qualifiers. The importance '
+                'selection is already complete; do not discard selected meanings or turn a required '
+                'numeric assertion into an incomplete qualitative label. There is no fixed word '
+                'count that permits omissions. Concise prose and short paragraphs are readability '
+                'guidance only. Remove redundancy, combine compatible supported assertions and '
+                'use as many of the permitted slides as necessary. Python measures physical '
+                'pagination, and every meaning still requires independent verification. Retain '
+                'the opening subject/business explanation and exact owned fact bindings.')
+        messages.append(budget_message)
     if review.audience_part_ids is not None:
         messages[0]['content'] = messages[0]['content'].replace(
             'Write a complete, concise introduction in THREE TO FIVE logical content groups (maximum five). '
@@ -279,10 +307,11 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
             'These supplied parts have already passed an independent importance/omission review against '
             'the COMPLETE original reading. Cover every SUPPLIED part faithfully with concise synthesis; '
             'do not reintroduce omitted parts or create introduction appendices. All groups must have '
-            'placement=body. Two or three readable slides are normally sufficient; maximum five is a '
-            'cap, not a target. Full raw values stay in the analysis and data exports, rather than extra '
-            'slides. Aim for at most two concise paragraphs per physical slide, each about 160-220 '
-            'Latin-equivalent characters. Express essential meanings concisely rather than repeating '
+            'placement=body. Use fewer slides when complete, and up to the maximum five when needed '
+            'to preserve all selected meanings. Full raw values stay in the analysis and data exports; '
+            'selected numeric meanings and their qualifications must still appear in the introduction. '
+            'Short paragraphs are readability guidance, never a reason to omit required content. '
+            'Express essential meanings concisely rather than repeating '
             'source sentences or turning each requirement into a separate paragraph. Logical group '
             'boundaries consume physical space; combine related meanings in fewer coherent groups. '
             'Do not claim there is a full evidence appendix inside this PPT.'})
@@ -328,11 +357,15 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
     rejected_draft = None
     rejected_errors = []
     rejected_phase = None
+    rejected_meaning_deficits = []
     additive_meaning_repair = False
     repairs = {'source': 0, 'meaning': 0}
     revision_base = None
     previous_meaning_rejections = None
     previous_meaning_verdicts = []
+    previous_meaning_deficits = set()
+    seen_meaning_deficits = set()
+    late_omission_used = False
     previous_source_failures = None
     from .summary_review_reuse import AcceptedPartReviews, part_review_signatures
     accepted_parts = AcceptedPartReviews()
@@ -340,9 +373,10 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
     # citation error after source preflight already passed; permit one final
     # source correction for that patch, then independently review it again.
     # A second meaning correction requires fewer rejections; a second source
-    # correction requires a strict subset of failed checks. Five candidates
-    # bound the whole operation; no editor restart.
-    for attempt in range(5):
+    # correction requires a strict subset of failed checks. Selected-meaning
+    # contracts reserve one separately authorized late omission correction.
+    # Six candidates globally bound three meaning and two source corrections.
+    for attempt in range(6):
         if cancelled is not None and cancelled.is_set():
             raise CancelledError('Compact summary cancelled')
         audit = {'compact_attempt':attempt+1}
@@ -358,11 +392,12 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
                     from functools import partial
                     from .summary_repair_progress import nonprogress_source_errors
                     validate_progress = partial(nonprogress_source_errors, catalog=catalog,
-                        review=review, result=result, errors=rejected_errors)
+                        review=review, result=result, errors=rejected_errors, source=payload)
                     try:
                         draft = revise_content(gateway,revision_base,messages,draft_schema,audit,
                             source=payload, errors=rejected_errors, cancelled=cancelled,
                             retry_unchanged=rejected_phase == 'source', add_only=additive_meaning_repair,
+                            meaning_deficits=rejected_meaning_deficits,
                             validate_progress=validate_progress if rejected_phase == 'source' else None)
                     except ValueError:
                         audit['revision_failed'] = True
@@ -382,13 +417,18 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
                 if not require_opening and (draft.name or draft.stock_code):
                     raise ValueError('Continuation themes must leave identity to the opening theme')
                 from .summary_layout_repair import paginate_draft
+                strict_additive_candidate = late_omission_used and repairs['meaning'] == 3
+                if strict_additive_candidate:
+                    audit['strict_additive_candidate'] = True
                 draft,pages = paginate_draft(gateway,draft,catalog,review,messages,audit,
-                    expand_compact,draft_schema,cancelled=cancelled)
+                    expand_compact,draft_schema,cancelled=cancelled,
+                    allow_rewrite=not strict_additive_candidate)
                 audit['draft'] = draft.model_dump(mode='json')
                 audit['rendered_pages'] = [{'id': p.id, 'title': p.title, 'placement': p.placement,
                                            'item_labels': [i.label for i in p.items]} for p in pages]
                 can_patch = True
                 errors = presentation_errors(review,pages,result,validate_reading=False,verify_compact_review=False)
+                errors.extend(authored_coverage_errors(draft, payload, catalog, audit))
                 errors.extend(compact_layout_errors(pages))
                 if errors:
                     from .summary_repair_progress import source_failure_keys
@@ -398,7 +438,14 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
                 # rather than treating arbitrary metadata attachment as coverage.
                 phase = 'meaning'
                 signatures = part_review_signatures(review, pages)
-                retained = accepted_parts.retained(signatures, audit)
+                if review.audience_part_ids is not None:
+                    # A previous acceptance must not conceal an omission found
+                    # later. Review the complete selected meaning union afresh.
+                    retained = {}
+                    audit['retained_part_reviews'] = []
+                    audit['fresh_complete_meaning_review'] = True
+                else:
+                    retained = accepted_parts.retained(signatures, audit)
                 target_ids = set(signatures) - retained.keys()
                 review_source = {k: v for k, v in payload.items() if k != 'identity_pages'}
                 review_source['parts'] = [p for p in payload['parts'] if p['id'] in target_ids]
@@ -536,7 +583,8 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
             additive_meaning_repair = bool(phase == 'meaning' and previous_meaning_rejections
                 and meaning_rejections and not meaning_rejections & previous_meaning_rejections
                 and len(meaning_rejections) >= len(previous_meaning_rejections))
-            if (phase == 'meaning' and repairs['meaning'] == 1 and previous_meaning_rejections
+            if (phase == 'meaning' and review.audience_part_ids is None
+                    and repairs['meaning'] == 1 and previous_meaning_rejections
                     and meaning_rejections & previous_meaning_rejections
                     and len(meaning_rejections) >= len(previous_meaning_rejections)):
                 from .summary_meaning_progress import verified_same_part_progress
@@ -546,15 +594,54 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
                     audit=audit, cancelled=cancelled)
             if additive_meaning_repair:
                 repair_limit = 2
-            if (repairs[phase] >= repair_limit or attempt == 4 or audit.get('repeated_draft')
+            if phase == 'meaning' and review.audience_part_ids is not None:
+                verdicts = audit.get('compact_semantic_review', {}).get('parts', [])
+                current_deficits = coverage_deficits(verdicts)
+                covered = covered_meanings(verdicts)
+                resolved = previous_meaning_deficits & covered
+                audit['meaning_deficit_progress'] = dict(current=deficit_rows(current_deficits),
+                    previously_reported=deficit_rows(seen_meaning_deficits),
+                    previous_resolved=deficit_rows(resolved),
+                    new=deficit_rows(current_deficits - seen_meaning_deficits))
+                additive_meaning_repair = False
+                repair_limit = 1
+                if (repairs['meaning'] == 1 and resolved
+                        and not (current_deficits & (seen_meaning_deficits - previous_meaning_deficits))):
+                    repair_limit = 2
+                semantic = audit.get('compact_semantic_review', {})
+                pure_coverage_rejections = bool(current_deficits) and all(
+                    v['accepted'] or any(c['covered'] is False for c in v.get('coverage', [])) for v in verdicts)
+                if (repairs['meaning'] == 2 and not late_omission_used and attempt < 5
+                        and pure_coverage_rejections and seen_meaning_deficits <= covered
+                        and not current_deficits & seen_meaning_deficits
+                        and (not require_opening or semantic.get('opening_accepted') is True)
+                        and (not (draft.name or draft.stock_code) or semantic.get('identity_accepted') is True)):
+                    from .summary_late_omission import authorize_late_omission
+                    late_omission_used = True
+                    additive_meaning_repair = authorize_late_omission(gateway, payload, draft, pages,
+                        seen_meaning_deficits, current_deficits, verdicts, audit=audit, cancelled=cancelled)
+                    if additive_meaning_repair:
+                        repair_limit = 3
+                previous_meaning_deficits = current_deficits
+                seen_meaning_deficits |= current_deficits
+            if (repairs[phase] >= repair_limit or attempt == 5 or audit.get('repeated_draft')
+                    or (late_omission_used and repairs['meaning'] == 3)
                     or audit.get('revision_failed')):
                 raise ValueError('Complete introduction theme unavailable: '+str(exc)) from exc
             repairs[phase] += 1
             if phase == 'meaning':
                 previous_meaning_rejections = meaning_rejections
                 previous_meaning_verdicts = audit.get('compact_semantic_review', {}).get('parts', [])
+                inventory = {(row['part_id'], row['meaning_index']): row for row in meaning_inventory(payload)}
+                rejected_meaning_deficits = [dict(inventory[(v['part_id'], c['meaning_index'])],
+                    reason=c['reason']) for v in previous_meaning_verdicts for c in v.get('coverage', [])
+                    if c['covered'] is False]
             elif source_failures:
                 previous_source_failures = source_failures
+                missing_refs = audit.get('authored_meaning_coverage', {}).get('missing', [])
+                inventory = {(row['part_id'], row['meaning_index']): row for row in meaning_inventory(payload)}
+                rejected_meaning_deficits = [dict(inventory[(row['part_id'], row['meaning_index'])],
+                    reason='Missing explicit author-to-visible-copy reference.') for row in missing_refs]
             rejected_draft = audit.get('draft')
             revision_base = draft if can_patch else None
             rejected_errors = audit['errors']
