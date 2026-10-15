@@ -176,7 +176,22 @@ def test_continuation_reason_cannot_borrow_a_different_period_basis():
     items=[o for o in result.observations if o.metric_original=='West zone' and o.period.startswith('6M')]
     question,reason=continuation_copy('What was reported?', 'Compare FY2023 to FY2024 for each metric.',items)
     assert question=='What was reported?'
-    assert not reason
+    assert reason.startswith('Displayed evidence: ')
+    assert '6M2023' in reason and '6M2024' in reason
+    assert 'FY' not in reason
+
+
+def test_empty_reason_uses_only_literal_page_evidence_without_choosing_a_comparison():
+    from adaptive_document_agent.validation.topic_period_consistency import continuation_copy
+    result=sample()
+    items=[o for o in result.observations if o.metric_original=='West zone' and o.period.startswith('6M')]
+    original=[o.model_dump() for o in items]
+    question,reason=continuation_copy('How do the cited measures compare?', '', items)
+    assert question=='How do the cited measures compare?'
+    assert reason.startswith('Displayed evidence: ')
+    assert '6M2023' in reason and '6M2024' in reason
+    assert 'from' not in reason and 'increased' not in reason
+    assert [o.model_dump() for o in items]==original
 
 
 def test_bare_year_alias_cannot_hide_conflicting_typed_period_evidence():

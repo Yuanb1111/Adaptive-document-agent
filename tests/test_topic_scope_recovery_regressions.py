@@ -396,3 +396,20 @@ def test_local_withdrawal_keeps_unrelated_approved_summary_copy():
     assert next(s for s in plan.slides if s.id == summary.id).bullets == [topic.question, other.title]
     assert not ClaimValidator().validate_plan(plan, result.observations, result.charts)
     assert result.model_dump(include=_SOURCE_FIELDS) == original
+
+
+def test_filtered_continuation_reason_cannot_block_question_first_claim_recovery():
+    result = _synthetic_result('metric_alias')
+    topic = result.presentation_topics.topics[0]
+    topic.rationale = 'Review the loss measures alongside a separate 6M2023 to 6M2025 comparison.'
+    original = result.model_dump(include=_SOURCE_FIELDS)
+    plan = compile_topic_plan(result)
+    slide = _analysis(plan)
+    assert slide.title == topic.question
+    assert slide.selection_reason.startswith('Displayed evidence: ')
+    assert 'FY2023' in slide.selection_reason and 'FY2025' in slide.selection_reason
+    assert '6M' not in slide.selection_reason
+    assert any(theme.id == topic.id and theme.rationale == topic.rationale for theme in plan.themes)
+    assert not ClaimValidator().validate_plan(plan, result.observations, result.charts)
+    assert PresentationPlanValidator().validate(plan, result) is plan
+    assert result.model_dump(include=_SOURCE_FIELDS) == original

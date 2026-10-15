@@ -162,15 +162,24 @@ def continuation_copy(question, reason, observations):
             for match in re.finditer(rf'\b{_PERIOD}\b', text, re.I))
         return periods_supported and not (PresentationPlanValidator._numbers(text) - allowed)
 
-    if supported(question):
-        return question, reason if supported(reason) else ''
+    question_supported = supported(question)
+    if question_supported and reason.strip() and supported(reason):
+        return question, reason
     groups = defaultdict(set)
     for item in observations:
         if item.period:
             groups[qualified_metric_name(item)].add(item.period)
     detail = '; '.join(label+': '+', '.join(sorted(periods,key=period_sort_key)) for label,periods in groups.items())
+    evidence_reason = 'Displayed evidence: '+detail if detail else ''
+    if question_supported:
+        # Retain the model's question. A filtered rationale must not leave an
+        # invalid empty metadata field that blocks independent claim recovery.
+        # This is a literal page-local evidence inventory, not an invented
+        # analytical explanation or an inferred comparison. The authored
+        # rationale remains in the original topic and theme for inspection.
+        return question, evidence_reason
     labels = list(groups)
     heading = ' and '.join(labels)
     if len(heading) > 100:
         heading = labels[0] + (' and related measures' if len(labels) > 1 else '')
-    return heading or 'Reported measures', 'Displayed evidence: '+detail if detail else ''
+    return heading or 'Reported measures', evidence_reason

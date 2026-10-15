@@ -37,6 +37,25 @@ def test_exact_owner_source_replaces_model_retyping_before_independent_review():
     assert 'proposed_source_quote' not in payload['parts'][0]['required_meanings'][0]
 
 
+def test_review_does_not_apply_author_empty_quote_instruction_to_python_bound_evidence():
+    from adaptive_document_agent.agent.introduction_audience import _AUTHOR_EVIDENCE_RULE
+    result, review, _ = fixture(1)
+    class CheckRoles(Client):
+        def generate_structured(self, messages, schema, **kwargs):
+            system = messages[0]['content']
+            if schema.__name__ == 'IntroductionAudienceSelection':
+                assert _AUTHOR_EVIDENCE_RULE in system
+            else:
+                assert _AUTHOR_EVIDENCE_RULE not in system
+                assert 'leave source_quote empty' not in system
+                assert 'Populated canonical source_quote fields are expected' in system
+                assert 'reject a meaning not grounded in that exact part' in system
+            return super().generate_structured(messages, schema, **kwargs)
+    select_introduction_audience(CheckRoles(), result, review)
+    assert review.audience_selection['independent_review']['accepted']
+    assert review.audience_selection['decisions'][0]['required_meanings'][0]['source_quote'] == review.parts[0].source_text
+
+
 def test_copying_owned_evidence_cannot_certify_an_unsupported_assertion():
     result, review, _ = fixture(1)
     client = Client(accept=False)

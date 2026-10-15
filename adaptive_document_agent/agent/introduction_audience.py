@@ -6,6 +6,11 @@ from adaptive_document_agent.services.introduction_audience import reading_finge
 from .prompting import untrusted_document_message, with_presentation_limits
 from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
 
+_AUTHOR_EVIDENCE_RULE = (
+    'When authoring the selection response, do not retype evidence: leave source_quote empty. '
+    'Python fills this field from the exact owning source part before independent review.'
+)
+
 
 class RequiredMeaning(BaseModel):
     model_config = ConfigDict(extra='forbid')
@@ -66,7 +71,7 @@ def select_introduction_audience(gateway, result, review, *, cancelled=None):
         'Split different measures, platforms, activities or unrelated subjects into separate meanings; '
         'never bundle the whole paragraph into one long checklist sentence. Keep a measure together '
         'with its period, basis and attribution, rather than splitting those necessary qualifications. '
-        'Do not retype evidence: leave source_quote empty. Python binds each meaning to the complete '
+        'Python binds each meaning to the complete '
         'original text of its exact owning part_id. Every assertion must be supported by that OWN '
         'part, not another nearby passage. A category or product name alone '
         'does not cover the characteristics that distinguish the categories. Include all essential '
@@ -85,7 +90,8 @@ def select_introduction_audience(gateway, result, review, *, cancelled=None):
         'its source passage also supports a relevant qualitative statement. '
         'Do not rewrite sources, invent claims, change content roles or choose every '
         'part just because it exists. An independent reviewer will assess the complete source and selection.')
-    messages = [{'role':'system','content':rules},untrusted_document_message(json.dumps(source,ensure_ascii=False))]
+    messages = [{'role':'system','content':rules + ' ' + _AUTHOR_EVIDENCE_RULE},
+                untrusted_document_message(json.dumps(source,ensure_ascii=False))]
     attempts = []
     selection = None
     meaning_revision_base = None
@@ -121,7 +127,10 @@ def select_introduction_audience(gateway, result, review, *, cancelled=None):
              'Verify EVERY meaning as actual audience copy against its OWN complete source part. '
              'Reject unsupported values, scope, causal claims, units, periods, attribution and uncertainty. '
              'The source_quote is the original owning passage copied by Python, not evidence authored '
-             'by a model. proposed_source_quote, if present, is an untrusted diagnostic proposal and '
+             'by a model. Populated canonical source_quote fields are expected at this REVIEW step; '
+             'do not reject them for being nonempty. Empty-quote output requirements apply only to '
+             'the earlier authoring response, before Python binds the evidence. '
+             'proposed_source_quote, if present, is an untrusted diagnostic proposal and '
              'cannot establish evidence or replace the actual source. Copying an owned passage does '
              'not prove the assertion: reject a meaning not grounded in that exact part. '
              'When rejecting, set repair_scope=meanings if the include/omit selection is defensible '
