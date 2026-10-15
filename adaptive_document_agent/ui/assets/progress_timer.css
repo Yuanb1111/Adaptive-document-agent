@@ -1,0 +1,12 @@
+.progress-activity {
+  position: fixed; top: .75rem; right: 8rem; width: 32px; height: 36px;
+  display: grid; place-items: center; z-index: 1000001;
+  color: var(--st-primary-color, #7a24fd);
+  background: var(--st-background-color, #fff); border-radius: 8px;
+}
+.progress-activity[hidden] { display: none; }
+.progress-activity svg { width: 28px; height: 28px; }
+.runner-arm, .runner-leg { transform-origin: 16px 18px; animation: runner-stride .65s ease-in-out infinite alternate; }
+.runner-back { animation-delay: -.65s; }
+@keyframes runner-stride { from { transform: rotate(-12deg); } to { transform: rotate(12deg); } }
+@media (prefers-reduced-motion: reduce) { .runner-arm, .runner-leg { animation: none; } }

@@ -43,6 +43,7 @@ class ProcessingProgress:
         self.placeholder = placeholder
         self.timer = timer
         self.timer_sequence = 0
+        self.live_timer_key = None
         self.clock = clock
         self.reset()
 
@@ -110,6 +111,9 @@ class ProcessingProgress:
         """Fragment widgets must live in placeholders created in that fragment."""
         self.placeholder = st.empty()
         self.timer = st.empty()
+        # Polls update one mounted component. Changing its key every second
+        # remounts it at zero height and moves the viewport at the page bottom.
+        self.live_timer_key = 'analysis_elapsed_live'
 
     def render(self) -> None:
         if self.placeholder is None:
@@ -150,4 +154,5 @@ class ProcessingProgress:
                 'elapsed': max(0, now - self.started_at),
                 'stage_elapsed': max(0, now - self.stage_started_at),
                 'running': self.state == 'running',
-            }, key=f'analysis_elapsed_timer_{self.timer_sequence}')
+                'label': self.label,
+            }, key=self.live_timer_key or f'analysis_elapsed_timer_{self.timer_sequence}')

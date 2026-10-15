@@ -133,6 +133,10 @@ starting duplicate model requests. The animated running indicator reflects the a
 state independently of Streamlit's toolbar indicator. Percentages are stage estimates;
 elapsed time does not advance them. Workers and progress survive widget reruns within
 the active server session, but are not durable jobs across server restarts or new sessions.
+An application-owned running-person indicator stays visible at the top right while the
+background analysis or presentation preparation runs, and hides when it finishes or fails.
+The elapsed-time display keeps the same component identity and reserved height across
+polls to prevent repeated remounting and scroll jumps at the bottom of the page.
 
 A Python 3.11 development-container configuration is included in `.devcontainer/` and starts Streamlit on port 8501 after attachment.
 

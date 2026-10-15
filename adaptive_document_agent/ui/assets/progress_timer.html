@@ -1,3 +1,13 @@
-<div style="font:13px system-ui;color:inherit;opacity:.75;margin:0 0 16px;" aria-label="Elapsed time">
+<div style="font:13px/20px system-ui;color:inherit;opacity:.75;min-height:40px;" aria-label="Elapsed time">
   <span data-total></span><span aria-hidden="true"> · </span><span data-stage></span>
+</div>
+<div class="progress-activity" data-activity role="status" aria-live="polite" aria-label="Analysis running" hidden>
+  <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <circle cx="20" cy="5" r="2.4" fill="currentColor" stroke="none"/>
+    <path d="m18 10-4 9"/>
+    <path class="runner-arm" d="m17 12 6 4 4-3"/>
+    <path class="runner-arm runner-back" d="m17 12-5-2-4 5"/>
+    <path class="runner-leg" d="m14 19 7 3 2 6"/>
+    <path class="runner-leg runner-back" d="m14 19-4 7-6-1"/>
+  </svg>
 </div>

@@ -184,7 +184,14 @@ if result is not None:
         assert not page.exception, page.exception
         assert entered.wait(5)
         assert fragment_ids[0]
-        tick()
+        def timer_ids():
+            return [item.proto.id for item in page.get('bidi_component')
+                    if item.proto.id.endswith('-analysis_elapsed_live')]
+        mounted = timer_ids()
+        assert len(mounted) == 1
+        for _ in range(3):
+            tick()
+            assert timer_ids() == mounted  # No timer unmount/remount on polling.
         assert page.session_state['shell_runs'] == 1
         assert any('Selecting presentation questions' in item.value for item in page.markdown)
     finally:
