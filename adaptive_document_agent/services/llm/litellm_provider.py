@@ -196,6 +196,13 @@ class LiteLLMProvider(LLMClient):
         if type(exc).__name__ != "UnsupportedParamsError":
             return set()
         message = str(exc).casefold()
+        # SDK errors can name a supported control in their explanation, e.g.
+        # "doesn't support temperature=0 while reasoning is active ... unless
+        # reasoning_effort resolves to 'none'". Only the rejection clause names
+        # what may be removed; advice must not silently undo a valid low effort.
+        rejection = re.split(r"\b(?:while|when|unless)\b", message, maxsplit=1)[0]
+        if re.search(r"\b(?:doesn't support|does not support|only supports)\b", rejection):
+            message = rejection
         candidates = request_kwargs.keys() & cls._OPTIONAL_GENERATION_PARAMS
         if "thinking" in request_kwargs.get("extra_body", {}):
             candidates.add("thinking")

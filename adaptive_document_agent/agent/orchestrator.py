@@ -384,25 +384,6 @@ class DocumentOrchestrator:
                 notify(f"Diagnostics: 0 charts retained. {len(index.metrics())} metrics found; {len(failure_reasons)} candidate series failed chartability.")
 
         prepared_brief = None
-        if (self.gateway and self.gateway.discovery_workers > 1 and attach_introduction is not None
-                and topic_selection and topic_selection.topics):
-            from adaptive_document_agent.models import PresentationPlan
-            from .prepared_executive_brief import prepare_executive_brief
-            seed = PipelineResult(document=document, profile=profile, observations=index.observations,
-                insights=insights, analysis_results=results, presentation_topics=topic_selection,
-                presentation_plan=PresentationPlan(title='Verified editorial context'))
-            from .topic_plan_compiler import reconcile_topic_source_scope
-            reconcile_topic_source_scope(seed)
-            topic_selection = seed.presentation_topics
-            issues.extend(issue for issue in seed.validation_warnings if issue not in issues)
-            try:
-                with record_timing(timings, 'brief_identity_wait'):
-                    attach_introduction(seed.presentation_plan, seed)
-            except (LLMResponseError, ValueError):
-                # The ordinary introduction attachment below retains its error
-                # and audit. An unavailable identity must not block source copy.
-                seed.presentation_plan = None
-            prepared_brief = resources.enter_context(prepare_executive_brief(self.gateway, seed, timings=details))
 
         presentation_plan = None
         if self.gateway:
@@ -427,9 +408,34 @@ class DocumentOrchestrator:
                 with (nullcontext(attach_introduction) if attach_introduction is not None
                       else prepare_company_introduction(self.gateway, planning_result,
                                                         timings=details)) as attach_introduction:
+                    def prepare_stable_topic_brief(current, compiled):
+                        nonlocal prepared_brief
+                        if prepared_brief is not None:
+                            raise RuntimeError('Executive briefing was already prepared for this run')
+                        from .prepared_executive_brief import prepare_executive_brief
+                        # The compiler and scoped wording repair have finished.
+                        # Identity is attached only on the caller, and its source
+                        # snapshot cannot be mutated by later visual planning.
+                        seed = current.model_copy(deep=True)
+                        seed.presentation_plan = compiled.model_copy(deep=True)
+                        try:
+                            with record_timing(timings, 'brief_identity_wait'):
+                                attach_introduction(seed.presentation_plan, seed)
+                        except (LLMResponseError, ValueError):
+                            # The ordinary introduction attachment below keeps
+                            # the failure and audit. Its memoized future makes
+                            # this neither another request nor a cloud fallback.
+                            seed.presentation_plan = None
+                        prepared_brief = resources.enter_context(
+                            prepare_executive_brief(self.gateway, seed, timings=details))
+
+                    topics_ready = (prepare_stable_topic_brief
+                        if self.gateway.discovery_workers > 1 and topic_selection and topic_selection.topics
+                        else None)
                     try:
                         with record_timing(details, "slide_plan"):
-                            presentation_plan = PresentationPlanner(self.gateway).plan(planning_result)
+                            presentation_plan = PresentationPlanner(
+                                self.gateway, on_topics_ready=topics_ready).plan(planning_result)
                     except (LLMResponseError, ValueError) as exc:
                         detail = " ".join(str(exc).split())[:1_400]
                         issues.append(

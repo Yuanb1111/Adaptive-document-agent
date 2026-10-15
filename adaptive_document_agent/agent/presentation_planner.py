@@ -1,6 +1,7 @@
 """AI analyst that selects and organises an evidence-bound slide narrative."""
 
 import json
+from collections.abc import Callable
 
 from adaptive_document_agent.document_model import is_meaningful_metric
 from adaptive_document_agent.models import ChartPlan, DocumentProfile, Observation, ParsedDocument, PipelineResult, PresentationPlan
@@ -14,8 +15,10 @@ from .prompting import load_prompt, untrusted_document_message, with_presentatio
 class PresentationPlanner:
     """Use the configured model to write a story plan without changing facts."""
 
-    def __init__(self, gateway: LLMGateway) -> None:
+    def __init__(self, gateway: LLMGateway, *,
+                 on_topics_ready: Callable[[PipelineResult, PresentationPlan], None] | None = None) -> None:
         self.gateway = gateway
+        self._on_topics_ready = on_topics_ready
 
     def plan(self, result: PipelineResult) -> PresentationPlan:
         if result.presentation_topics and result.presentation_topics.topics:
@@ -27,6 +30,11 @@ class PresentationPlanner:
             compiled = compile_topic_plan(result)
             from .topic_takeaway_repair import repair_withheld_takeaways
             compiled = repair_withheld_takeaways(self.gateway, result, compiled)
+            # Source scope and any withheld finding corrections are final before
+            # independent editorial work starts. Optional visual choices below
+            # cannot authorize another source selection or change topic copy.
+            if self._on_topics_ready is not None:
+                self._on_topics_ready(result, compiled)
             return enrich_selected_plan(self.gateway, result, compiled)
         if any(issue.code == "presentation_topic_selection_failed" for issue in result.validation_warnings):
             # The semantic selection already exhausted its bounded correction.

@@ -46,17 +46,29 @@ userinfo, queries or fragments. This capability list is independent of prices.
 The configured alias `deepseek-flash` remains unchanged; this patch does not
 substitute a model or guess which future version an alias resolves to.
 
-OpenAI, Gemini and OpenRouter use `reasoning_effort=low` only when the exact model's
+For direct OpenAI, the exact documented model `gpt-6-luna` (optionally prefixed
+`openai/` for transport) supports low effort and defaults to medium. The verified
+declaration therefore requests `reasoning_effort=low` for the existing bounded
+simple operations even when LiteLLM is not loaded or its model catalog is stale
+or incomplete. The official declaration takes precedence over stale SDK flags;
+it never grants capabilities to another model, future snapshot, provider or
+custom endpoint. It is scoped to HTTPS `api.openai.com/v1` with no custom port,
+userinfo, query or fragment. The existing opt-out, analytical operations,
+independent meaning reviews, routing and strict validation remain unchanged.
+
+Other OpenAI models, Gemini and OpenRouter use `reasoning_effort=low` only when the exact model's
 already-loaded LiteLLM catalog entry positively declares low-effort support and
 lists `reasoning_effort` in `supported_openai_params`. The catalog must also declare
 a higher default (`medium`, `high`, `xhigh` or `max`). Disabled, minimal, low and
-unknown defaults are preserved. Missing/stale capabilities, unknown/new
+unknown defaults are preserved. Except for the verified exact Luna declaration,
+missing/stale capabilities, unknown/new
 model IDs, generic compatible endpoints, Ollama and local models receive no new
 options. Policy lookup reads only static declared metadata: it does not initialize
 LiteLLM or call SDK capability/model-info helpers, which can perform dynamic I/O.
-If the SDK is not yet loaded, this request conservatively keeps defaults. There is
-no cloud fallback. Updating a model name alone never grants new capabilities.
-Incomplete LiteLLM catalogs may therefore leave otherwise capable models unchanged.
+If the SDK is not yet loaded, requests without the verified exact Luna declaration
+conservatively keep defaults. There is no cloud fallback. Updating a model name
+alone never grants capabilities beyond the independently verified declaration.
+Incomplete LiteLLM catalogs may therefore leave other capable models unchanged.
 The bounded runtime compatibility retry remains the safety net for a specifically
 identified unsupported option; metadata alone is not a guarantee of acceptance.
 
@@ -67,6 +79,11 @@ applied options and an explicit compatibility-downgrade status when a specifical
 rejected option is removed for the single compatibility retry. “Applied” describes
 the successful LiteLLM request, not an assertion about server-internal behavior;
 provider-reported reasoning token counters remain the observed evidence.
+For conditional LiteLLM compatibility errors, only the explicit rejection clause
+identifies removable options. A temperature rejection's explanation can mention
+`reasoning_effort` as advice; that does not remove an otherwise supported low
+effort. The single compatibility retry and native structured-error checks remain
+bounded and unchanged.
 
 ## Sources and verification
 
@@ -77,6 +94,11 @@ Reviewed 2026-10-02:
 - [LiteLLM Gemini effort translation](https://docs.litellm.ai/docs/providers/gemini)
 - [LiteLLM OpenRouter adapter](https://docs.litellm.ai/docs/providers/openrouter)
 - [LiteLLM GPT-6.1 effort limits](https://docs.litellm.ai/blog/gpt_6_1_sol)
+
+Verified for the exact Luna declaration on 2026-10-15:
+
+- [GPT-6 Luna effort support and medium default](https://developers.openai.com/api/docs/models/gpt-6-luna)
+- [OpenAI deployment checklist: low effort for bounded extraction and routine rewriting](https://developers.openai.com/api/docs/guides/deployment-checklist)
 
 Regression tests use mocked provider responses and synthetic capabilities only.
 They cover exact routing, safe opt-outs, both selector operations, preserved

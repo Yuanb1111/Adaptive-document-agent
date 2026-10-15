@@ -16,6 +16,11 @@ REASONING_POLICY_VERSION = "operation-reasoning-v8"
 # Documented model IDs, independent of pricing data. New aliases/models do not
 # inherit transport capabilities by prefix. See docs/LLM_REASONING_POLICY.md.
 _DEEPSEEK_THINKING_MODELS = frozenset({"deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro"})
+# Official model documentation verified 2026-10-15: this exact model supports
+# low effort and defaults to medium. It need not wait for LiteLLM's catalog to
+# catch up. This declaration applies only after the official endpoint guard.
+# https://developers.openai.com/api/docs/models/gpt-6-luna
+_DOCUMENTED_OPENAI_LOW_EFFORT_MODELS = frozenset({"gpt-6-luna"})
 _SIMPLE_OPERATIONS = frozenset({("presentation", "IntroductionPages"), ("report", "BriefSourcePages"),
                               ("presentation", "TopicCoverageReview"),
                               ("presentation", "TakeawayCorrection"),
@@ -66,10 +71,10 @@ def reasoning_parameters(options: dict[str, Any]) -> dict[str, Any]:
 
 
 def _supports_low_effort(settings: LLMSettings, model: str) -> bool:
-    """Use only positively declared capabilities in an already-loaded exact entry.
+    """Use an exact documented route or an already-loaded positive SDK entry.
 
     Generic/local servers cannot borrow capabilities from a same-named cloud model.
-    Older LiteLLM versions or incomplete capability maps conservatively opt out.
+    Other missing or incomplete capability entries conservatively opt out.
     """
     provider = settings.provider
     if provider not in {ProviderName.OPENAI, ProviderName.GEMINI, ProviderName.OPENROUTER}:
@@ -81,6 +86,11 @@ def _supports_low_effort(settings: LLMSettings, model: str) -> bool:
         return False
     route = provider.value
     model_id = model.removeprefix(route + "/")
+    if provider == ProviderName.OPENAI and model_id in _DOCUMENTED_OPENAI_LOW_EFFORT_MODELS:
+        # The source-verified declaration takes precedence over an absent or
+        # stale SDK map, including its old negative/unknown capability flags.
+        # Exact IDs only: no family, future snapshot, proxy or provider inference.
+        return True
     try:
         # Even SDK capability helpers (or SDK initialization) can fetch catalogs
         # or consult ambient credentials. Never invoke them from policy lookup.

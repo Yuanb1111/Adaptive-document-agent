@@ -96,13 +96,29 @@ def test_local_and_stateful_gateways_cannot_start_parallel_copy():
             pytest.fail('Must remain serial')
 
 
-@pytest.mark.parametrize('mode', ['cloud', 'local', 'stateful'])
-def test_actual_orchestrator_overlaps_only_stable_cloud_editorial_work(monkeypatch, mode):
+@pytest.mark.parametrize('mode,visual_failure', [
+    ('cloud', False), ('local', False), ('stateful', False), ('cloud', True),
+])
+def test_actual_orchestrator_overlaps_only_stable_cloud_editorial_work(monkeypatch, mode, visual_failure):
     from adaptive_document_agent.agent import orchestrator
     from adaptive_document_agent.agent.executive_brief import ExecutiveBriefWriter
-    from adaptive_document_agent.models import PipelineResult, PresentationTopic, PresentationTopicSelection
+    from adaptive_document_agent.agent.presentation_planner import PresentationPlanner
+    from adaptive_document_agent.agent import topic_plan_compiler, topic_takeaway_repair, presentation_visual_enrichment
+    from adaptive_document_agent.models import (PipelineResult, PresentationPlan, PresentationSlide,
+                                               PresentationTopic, PresentationTopicSelection)
     from tests.test_early_company_introduction import configure_pipeline
+    actual_plan = PresentationPlanner.plan
     harness = configure_pipeline(monkeypatch, local=mode == 'local', concurrent=mode != 'stateful')
+    monkeypatch.setattr(PresentationPlanner, 'plan', actual_plan)
+    harness.source.document.pages[1].text += '\nExample Systems Inc.'
+    provider_generate = harness.client.generate_structured
+    def with_identity(messages, response_model, **kwargs):
+        value, response = provider_generate(messages, response_model, **kwargs)
+        if response_model.__name__ == 'IntroductionDraft':
+            value.name = value.name_quote = 'Example Systems Inc.'
+            value.name_page = 5
+        return value, response
+    monkeypatch.setattr(harness.client, 'generate_structured', with_identity)
     entered, layout = Event(), Event()
     # The harness replaces extraction/selection with a fixed scheduling fixture;
     # this test exercises the real resource-owning orchestrator, not semantics.
@@ -113,18 +129,31 @@ def test_actual_orchestrator_overlaps_only_stable_cloud_editorial_work(monkeypat
         return PipelineResult(document=document, profile=profile, presentation_topics=topics,
                               report_markdown='Evidence report')
     monkeypatch.setattr(orchestrator.DocumentOrchestrator, '_generate_report', report)
-    plan = orchestrator.PresentationPlanner.plan
-    def planning(self, snapshot):
+    monkeypatch.setattr(topic_plan_compiler, 'compile_topic_plan', lambda result:
+        PresentationPlan(title='Synthetic deck', slides=[
+            PresentationSlide(id='cover', slide_type='cover', title='Source overview')]))
+    monkeypatch.setattr(topic_takeaway_repair, 'repair_withheld_takeaways', lambda gateway, result, plan: plan)
+    if visual_failure:
+        monkeypatch.setattr(orchestrator.PresentationPlanRecovery, 'from_selected_topics',
+            lambda self, current: PresentationPlan(title='Recovered deck', slides=[
+                PresentationSlide(id='cover', slide_type='cover', title='Source overview')]))
+    def layout_plan(gateway, snapshot, plan):
         if mode == 'cloud':
             assert entered.wait(5), 'Brief must start before slide layout finishes'
         else:
             assert not entered.is_set(), 'Local and stateful requests must retain order'
         layout.set()
-        return plan(self, snapshot)
-    monkeypatch.setattr(orchestrator.PresentationPlanner, 'plan', planning)
+        if visual_failure:
+            raise ValueError('Rejected visual plan')
+        return plan
+    monkeypatch.setattr(presentation_visual_enrichment, 'enrich_selected_plan', layout_plan)
     text = 'We operate a business software platform.'
     brief = ExecutiveBrief.model_validate(payload(text, page=5))
     def generate(self, snapshot, **kwargs):
+        assert snapshot.presentation_plan.company.summary_overview
+        assert snapshot.presentation_plan.company.summary_business
+        assert snapshot.presentation_plan.company.name == 'Example Systems Inc.'
+        assert snapshot.presentation_plan.company.field_source_pages['name'] == [5]
         entered.set()
         assert layout.wait(5)
         return brief
@@ -137,6 +166,8 @@ def test_actual_orchestrator_overlaps_only_stable_cloud_editorial_work(monkeypat
     assert set(callbacks) == {caller}
     assert ('executive_brief_duration' in result.stage_details_ms) == (mode == 'cloud')
     assert not any(issue.code == 'executive_brief_unavailable' for issue in result.validation_warnings)
+    assert any(issue.code == 'presentation_plan_fallback' for issue in result.validation_warnings) == visual_failure
+    assert harness.client.operations == ['IntroductionPages', 'IntroductionDraft']
 
 
 def test_final_topic_corrections_refresh_only_the_brief_once(monkeypatch):
