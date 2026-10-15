@@ -197,6 +197,8 @@ def test_final_rebound_planning_source_is_used_in_actual_orchestrator(monkeypatc
     result = orchestrator.DocumentOrchestrator(harness.gateway, cache=TableCache()).analyse_pdf(b"synthetic")
     assert result.document is replaced
     assert result.presentation_plan.company.summary_overview is None
+    assert not result.presentation_plan.company.one_line_description
+    assert not result.presentation_plan.company.source_pages
     assert any(issue.code == "company_introduction_unavailable" for issue in result.validation_warnings)
     assert harness.client.operations == ["IntroductionPages", "IntroductionDraft"]
 

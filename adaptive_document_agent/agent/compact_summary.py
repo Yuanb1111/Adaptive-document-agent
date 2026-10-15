@@ -194,7 +194,8 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
     appendix_allowed = bool(requirements and any(r.kind == 'slide_limit' and r.resolution == 'resolved'
         and r.slide_scope == 'body' for r in requirements.items))
     from adaptive_document_agent.services.slide_budgets import resolved_limits
-    if resolved_limits(requirements, section='introduction', scope='all'):
+    if (review.audience_part_ids is not None
+            or resolved_limits(requirements, section='introduction')):
         appendix_allowed = False
     languages = {r.language for r in requirements.items if r.kind=='output_language'
                  and r.resolution=='resolved' and r.language_scope in {'body','all'}} if requirements else set()

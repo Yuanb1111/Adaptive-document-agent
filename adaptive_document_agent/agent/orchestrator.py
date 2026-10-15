@@ -482,9 +482,9 @@ class DocumentOrchestrator:
                                 attach_introduction(presentation_plan, planning_result)
                         except (LLMResponseError, ValueError) as exc:
                             from adaptive_document_agent.models.presentation import CompanyProfile
-                            presentation_plan.company = CompanyProfile(
-                                one_line_description="A source-verified company introduction is unavailable for this run."
-                            )
+                            # Failure belongs in diagnostics, never unsourced
+                            # company copy that triggers a secondary claim error.
+                            presentation_plan.company = CompanyProfile()
                             issues.append(ValidationIssue(
                                 code="company_introduction_unavailable", severity="warning", stage="presentation",
                                 message="The independent company introduction could not be verified: " + str(exc)[:500],

@@ -121,8 +121,12 @@ def require_verified_introduction(result) -> None:
                     for issue in result.validation_warnings)
     if attempted and (company is None or not (company.summary_overview or company.summary_business
                                                or company.summary_pages)):
+        failure = next((issue.message for issue in reversed(result.validation_warnings)
+                        if issue.code == 'company_introduction_unavailable'), '')
         raise ValueError('PowerPoint requires a source-verified opening introduction; '
-                         'the introductory stage failed. Retain diagnostics and retry the failed stage.')
+                         'the introductory stage failed. Retry analysis (reuse successful cache) '
+                         'to resume the incomplete reporting stage.'
+                         + (' Reason: ' + failure if failure else ''))
     if company and company.summary_review and (
             company.summary_review.status != 'complete' or not company.summary_pages):
         raise ValueError('PowerPoint requires complete, visible introductory Summary coverage')

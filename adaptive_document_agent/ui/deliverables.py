@@ -20,10 +20,12 @@ def render(st, result: PipelineResult, raw_pdf: bytes, progress) -> None:
     editorial = review_presentation(result.presentation_plan, result)
     degraded = any(item.code in {"presentation_degraded", "presentation_legacy"} for item in editorial)
     legacy = result.presentation_plan is None
-    stopped = any(item.code == 'editorial_stages_skipped' for item in result.validation_warnings)
+    stopped = any(item.code in {'editorial_stages_skipped', 'company_introduction_unavailable'}
+                  for item in result.validation_warnings)
     if stopped:
-        st.error('Company introduction verification failed. Report generation stopped early; '
-                 'download the analysis JSON below for source evidence and failure details.')
+        st.error('Company introduction verification failed; this analysis is incomplete. '
+                 'Use Retry analysis (reuse successful cache) to resume reporting. '
+                 'The analysis JSON below retains source evidence and failure details.')
     elif legacy:
         st.warning(
             "PowerPoint uses the legacy export because no validated presentation plan is available. "

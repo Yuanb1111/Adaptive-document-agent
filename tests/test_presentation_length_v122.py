@@ -45,10 +45,22 @@ def test_requested_budget_synthesizes_all_parts_in_one_context(monkeypatch):
         review.source_blocks = reading.source_blocks
         review.parts = reading.parts
     monkeypatch.setattr(module, 'read_summary', read)
-    client = Reviewer(draft)
+    class Client(Reviewer):
+        def generate_structured(self, messages, schema, **kwargs):
+            if schema.__name__ == 'IntroductionAudienceSelection':
+                self.calls.append(schema.__name__)
+                return schema(decisions=[dict(part_id=p.id, include=True,
+                    reason='Preserve the source service and its training prerequisite.',
+                    required_meanings=[dict(meaning=p.reading_note)]) for p in reading.parts])
+            if schema.__name__ == 'IntroductionAudienceReview':
+                self.calls.append(schema.__name__)
+                return schema(accepted=True, reason='The selected meanings preserve each service prerequisite.')
+            return super().generate_structured(messages, schema, **kwargs)
+    client = Client(draft)
     company = module.generate_summary_presentation(client, result, [1], object,
                                                    scope_ranges=reading.scope_ranges)
-    assert client.calls == ['SummarySynthesisDraft', 'SummarySynthesisReview']
+    assert client.calls == ['IntroductionAudienceSelection', 'IntroductionAudienceReview',
+                            'SummarySynthesisDraft', 'SummaryCoverageReview']
     assert len(company.summary_pages) == 5
     assert company.summary_review.status == 'complete'
     assert {pid for p in company.summary_pages for i in p.items for pid in i.part_ids} == {
