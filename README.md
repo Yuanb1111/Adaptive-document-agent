@@ -120,6 +120,20 @@ python -m pip install -r requirements-dev.txt
 python -m pytest
 ```
 
+Browser notification and progress-clock tests use Node.js 22:
+
+```text
+node --test tests/test_completion_notification_frontend.mjs tests/test_progress_timer_frontend.mjs
+```
+
+While analysis runs, the progress card polls the session's analysis worker every second,
+shows the current stage and elapsed times, and automatically opens the result or failure
+details when that worker finishes. Widget reruns observe the existing attempt without
+starting duplicate model requests. The animated running indicator reflects the analysis
+state independently of Streamlit's toolbar indicator. Percentages are stage estimates;
+elapsed time does not advance them. Workers and progress survive widget reruns within
+the active server session, but are not durable jobs across server restarts or new sessions.
+
 A Python 3.11 development-container configuration is included in `.devcontainer/` and starts Streamlit on port 8501 after attachment.
 
 ## Configuration

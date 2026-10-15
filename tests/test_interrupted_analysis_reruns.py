@@ -32,8 +32,12 @@ def flow(monkeypatch):
     monkeypatch.setattr(app, "create_llm_client", Mock(return_value="client"))
     gateways = Mock(return_value=gateway)
     monkeypatch.setattr(app, "LLMGateway", gateways)
+    monkeypatch.setattr(app, '_start_analysis_worker', lambda target: target())
+    st.fragment.side_effect = lambda **kwargs: lambda function: function
     progress = Mock()
-    kwargs = dict(scope_key="same-scope", analysis_focus="", settings=SimpleNamespace(model="test"),
+    from adaptive_document_agent.services.llm import LLMSettings, ProviderName, PrivacyMode
+    kwargs = dict(scope_key="same-scope", analysis_focus="", settings=LLMSettings(
+                  provider=ProviderName.MOCK, model='test', privacy_mode=PrivacyMode.LOCAL_ONLY),
                   cache=cache, progress=progress)
     # Cost rendering is covered separately; do not require UI layout here.
     from adaptive_document_agent.ui import llm_costs
@@ -46,45 +50,25 @@ def run(flow, **overrides):
     return app._analyse_upload(flow.st, b"%PDF", **(flow.kwargs | overrides))
 
 
-@pytest.mark.parametrize("point", ["progress", "status", "stage", "pipeline"])
-def test_interruption_propagates_and_waits_for_explicit_retry(flow, point):
-    interrupted = ScriptInterrupted()
+@pytest.mark.parametrize("point", ["stage", "pipeline"])
+def test_worker_interruption_waits_for_explicit_retry(flow, point):
     usage = {"stage": "discovery", "output_tokens": 7}
-
-    def cancel(*args, **kwargs):
-        assert flow.st.session_state["analysis_attempts"]["same-scope"]["state"] == "running"
-        raise interrupted
-
-    if point == "progress":
-        flow.progress.reset.side_effect = cancel
-    elif point == "status":
-        flow.st.status.side_effect = cancel
-    else:
-        def analyse(*args, progress, **kwargs):
-            flow.gateway.usage.append(usage)
-            if point == "stage":
-                progress("Planning presentation narrative")
-            raise interrupted
-        flow.orchestrator.analyse_pdf.side_effect = analyse
+    def analyse(*args, progress, **kwargs):
+        flow.gateway.usage.append(usage)
         if point == "stage":
-            flow.st.status.return_value.write.side_effect = cancel
-
-    with pytest.raises(ScriptInterrupted) as caught:
-        run(flow)
-    assert caught.value is interrupted
+            progress("Planning presentation narrative")
+        raise ScriptInterrupted()
+    flow.orchestrator.analyse_pdf.side_effect = analyse
+    assert run(flow) is None
     attempt = flow.st.session_state["analysis_attempts"]["same-scope"]
     assert attempt["state"] == "interrupted"
-    assert attempt["failure"]["usage"] == ([usage] if point in {"stage", "pipeline"} else [])
+    assert attempt["failure"]["usage"] == [usage]
     if point == "stage":
         assert attempt["stage"] == "Planning presentation narrative"
     starts = flow.orchestrator.analyse_pdf.call_count
     assert run(flow) is None
     assert flow.orchestrator.analyse_pdf.call_count == starts
     assert "interrupted" in flow.st.error.call_args.args[0]
-
-    flow.progress.reset.side_effect = None
-    flow.st.status.side_effect = None
-    flow.st.status.return_value.write.side_effect = None
     flow.orchestrator.analyse_pdf.side_effect = None
     assert run(flow, retry=True) is flow.result
     assert flow.gateways.call_args.kwargs["cache_enabled"] is True
@@ -95,13 +79,11 @@ def test_interruption_propagates_and_waits_for_explicit_retry(flow, point):
 @pytest.mark.parametrize("override", [{}, {"force": True}, {"retry": True}])
 def test_running_attempt_blocks_overlapping_analysis_even_explicit_retry(flow, override):
     entered, release = Event(), Event()
-
     def analyse(*args, progress, **kwargs):
         progress("Planning presentation narrative")
         entered.set()
         assert release.wait(5)
         return flow.result
-
     flow.orchestrator.analyse_pdf.side_effect = analyse
     with ThreadPoolExecutor(max_workers=1) as pool:
         first = pool.submit(run, flow)
@@ -109,44 +91,44 @@ def test_running_attempt_blocks_overlapping_analysis_even_explicit_retry(flow, o
             assert entered.wait(5)
             assert run(flow, **override) is None
             assert flow.orchestrator.analyse_pdf.call_count == 1
-            assert flow.progress.reset.call_count == 1
-            assert flow.progress.update.call_args.args[0] == "Planning presentation narrative"
-            flow.st.info.assert_called_once()
+            assert flow.progress.restore.call_args.args[0]['label'] == "Planning presentation narrative"
+            flow.st.fragment.assert_called_with(run_every=1)
+            flow.st.info.assert_not_called()
         finally:
             release.set()
         assert first.result(5) is flow.result
 
 
-def test_failure_is_saved_before_status_update_can_interrupt(flow):
+def test_failure_is_saved_before_ui_update_can_interrupt(flow):
     flow.orchestrator.analyse_pdf.side_effect = ValueError("bad evidence")
     flow.gateway.usage.append({"stage": "planning", "output_tokens": 8})
-    flow.st.status.return_value.update.side_effect = ScriptInterrupted()
+    flow.progress.restore.side_effect = ScriptInterrupted()
     with pytest.raises(ScriptInterrupted):
         run(flow)
     failure = app._analysis_failure(flow.st, "same-scope")
     assert "bad evidence" in failure["message"]
     assert failure["usage"] == flow.gateway.usage
-    assert flow.st.session_state['presentation_notification_outcomes'][0]['outcome'] == 'analysis_failed'
     assert flow.st.session_state["failed_llm_usage"] == flow.gateway.usage
-    flow.st.status.return_value.update.side_effect = None
+    flow.progress.restore.side_effect = None
     assert run(flow) is None
     assert flow.orchestrator.analyse_pdf.call_count == 1
+    assert flow.st.session_state['presentation_notification_outcomes'][0]['outcome'] == 'analysis_failed'
 
 
 def test_interruption_after_success_keeps_completed_result(flow):
-    flow.st.status.return_value.update.side_effect = ScriptInterrupted()
+    flow.progress.restore.side_effect = ScriptInterrupted()
     with pytest.raises(ScriptInterrupted):
         run(flow)
     assert app._analysis_failure(flow.st, "same-scope") is None
     assert flow.cache_values["analysis-result-same-scope"] is flow.result
+    flow.progress.restore.side_effect = None
     assert run(flow) is flow.result
     assert flow.orchestrator.analyse_pdf.call_count == 1
 
 
 def test_interrupted_scope_does_not_block_another_document(flow):
     flow.orchestrator.analyse_pdf.side_effect = ScriptInterrupted()
-    with pytest.raises(ScriptInterrupted):
-        run(flow)
+    assert run(flow) is None
     flow.orchestrator.analyse_pdf.side_effect = None
     assert run(flow, scope_key="different-scope") is flow.result
     assert app._analysis_failure(flow.st, "same-scope")["message"].startswith("Analysis was interrupted")

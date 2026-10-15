@@ -38,6 +38,29 @@ def test_progress_stays_monotonic_and_escapes_untrusted_messages():
     assert 'aria-valuenow="85"' in placeholder.text
 
 
+def test_elapsed_clock_keeps_stage_start_across_polls_and_freezes_on_failure():
+    now = [100.0]
+    ring = ProcessingProgress(Placeholder(), clock=lambda: now[0])
+    now[0] = 105
+    ring.update('Understanding document')
+    now[0] = 125
+    ring.update('Understanding document')
+    assert ring.stage_started_at == 105
+    assert ring.percent == 4  # Waiting time never advances the percentage.
+    ring.update('Selecting presentation questions before chart generation')
+    assert ring.stage_started_at == 125
+    now[0] = 145
+    ring.fail('Analysis stopped')
+    snapshot = ring.snapshot()
+    now[0] = 999
+    restored = ProcessingProgress(Placeholder(), clock=lambda: now[0])
+    restored.restore(snapshot)
+    assert restored.stopped_at == 145
+    assert restored.started_at == 100
+    assert restored.stage_started_at == 125
+    assert 'fourier-running" aria-hidden' not in restored.placeholder.text
+
+
 def test_export_reports_real_stages_and_does_not_finish_before_verification(monkeypatch, tmp_path):
     from tests.test_performance import export_setup, report, LocalRenderStub
     from adaptive_document_agent.services.export import export_pptx_with_report

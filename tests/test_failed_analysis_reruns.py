@@ -75,6 +75,9 @@ def flow(monkeypatch):
     monkeypatch.setattr(app, "cache_for_session", lambda *args, **kwargs: cache)
     monkeypatch.setattr(app, "create_llm_client", lambda settings: MockLLMClient())
     monkeypatch.setattr(app, "DocumentOrchestrator", Orchestrator)
+    # Cache/failure policy tests run deterministically; real worker/fragment
+    # lifecycle and UI interruption are exercised in the live-progress tests.
+    monkeypatch.setattr(app, '_start_analysis_worker', lambda target: target())
     from adaptive_document_agent.services import export_readiness
     from adaptive_document_agent.ui import processing_progress
     from adaptive_document_agent.utils import timing

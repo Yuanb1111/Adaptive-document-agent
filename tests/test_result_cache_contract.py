@@ -31,7 +31,8 @@ def test_new_output_contract_rebuilds_result_without_clearing_other_caches(tmp_p
     current = old_result.model_copy(update={"pipeline_version": app.PIPELINE_VERSION})
     calls = []
     monkeypatch.setattr(app, "create_llm_client", lambda settings: object())
-    monkeypatch.setattr(app, "LLMGateway", lambda *args, **kwargs: object())
+    monkeypatch.setattr(app, "LLMGateway", lambda *args, **kwargs: SimpleNamespace(usage=[]))
+    monkeypatch.setattr(app, '_start_analysis_worker', lambda target: target())
 
     def rebuild(*args, **kwargs):
         calls.append(True)

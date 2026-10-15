@@ -666,7 +666,7 @@ class DocumentOrchestrator:
             document=document, profile=profile, observations=index.observations,
             analysis_plan=plan, analysis_results=results, insights=insights,
         )
-        report_plan, topic_selection, topic_error = plan_outputs(self.gateway, output, timings=details)
+        report_plan, topic_selection, topic_error = plan_outputs(self.gateway, output, timings=details, progress=notify)
         # Scoped topic corrections retain their complete rejected drafts and
         # validation errors on the reporting snapshot, including partial success.
         issues.extend(output.validation_warnings)
@@ -684,6 +684,7 @@ class DocumentOrchestrator:
                         + " ".join(str(topic_error).split())[:800],
                 severity="warning", stage="presentation",
             ))
+        notify('Generating charts from selected presentation questions')
         charts = ChartPlanner().plan(
             plan, results, index, preferred_metrics=profile.metrics, insights=insights,
             report_plan=report_plan, analysis_focus=analysis_focus,

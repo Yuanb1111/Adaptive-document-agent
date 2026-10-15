@@ -19,10 +19,12 @@ def test_fixed_slide_limits_are_part_of_the_actual_upload_request(monkeypatch):
             return result
     monkeypatch.setattr(ui_app, 'DocumentOrchestrator', Orchestrator)
     monkeypatch.setattr(ui_app, 'create_llm_client', lambda settings: None)
-    monkeypatch.setattr(ui_app, 'LLMGateway', lambda *args, **kwargs: None)
+    monkeypatch.setattr(ui_app, 'LLMGateway', lambda *args, **kwargs: SimpleNamespace(usage=[]))
+    monkeypatch.setattr(ui_app, '_start_analysis_worker', lambda target: target())
+    from adaptive_document_agent.services.llm.config import LLMSettings
     instruction = budget_request('Keep scope and reporting periods separate.', fixed_presentation_budget())
     ui_app._analyse_upload(_Streamlit(), b'%PDF', scope_key='limits', analysis_focus=instruction,
-        settings=SimpleNamespace(model='mock'), cache=None,
+        settings=LLMSettings(model='mock'), cache=None,
         presentation_budget=PresentationBudget(body_slides=20, introduction_slides=5))
     assert captured == [instruction]
     assert 'at most 20 physical slides' in instruction

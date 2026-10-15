@@ -36,7 +36,8 @@ def test_upload_auto_analysis_reuses_result_and_manual_scope_can_override(monkey
     calls = []
     from adaptive_document_agent.models import PipelineResult, ParsedDocument, DocumentProfile
     result = PipelineResult(document=ParsedDocument(document_id='test', sha256='hash', safe_filename='test.pdf', page_count=1), profile=DocumentProfile())
-    settings = SimpleNamespace(model="configured-model")
+    from adaptive_document_agent.services.llm.config import LLMSettings
+    settings = LLMSettings(model="configured-model")
     cache = SimpleNamespace(get_model=lambda *args: None, set_model=lambda *args: None)
 
     class Orchestrator:
@@ -50,7 +51,8 @@ def test_upload_auto_analysis_reuses_result_and_manual_scope_can_override(monkey
 
     monkeypatch.setattr(ui_app, "DocumentOrchestrator", Orchestrator)
     monkeypatch.setattr(ui_app, "create_llm_client", lambda settings: "client")
-    monkeypatch.setattr(ui_app, "LLMGateway", lambda client, settings, **kwargs: "gateway")
+    monkeypatch.setattr(ui_app, "LLMGateway", lambda client, settings, **kwargs: SimpleNamespace(usage=[]))
+    monkeypatch.setattr(ui_app, '_start_analysis_worker', lambda target: target())
     kwargs = dict(scope_key="pdf-and-settings", analysis_focus="financial performance",
                   settings=settings, cache=cache)
 
@@ -58,7 +60,8 @@ def test_upload_auto_analysis_reuses_result_and_manual_scope_can_override(monkey
     assert calls == [(b"%PDF", "financial performance", None)]
     assert ui_app._analyse_upload(st, b"%PDF", **kwargs) is result
     assert len(calls) == 1
-    assert len(st.statuses) == 1
+    assert st.session_state['analysis_attempts']['pdf-and-settings']['stage'] == 'Discovering document scope'
+    assert not st.statuses  # Workers publish metadata instead of writing UI status.
 
     manual_scope = object()
     assert ui_app._analyse_upload(st, b"%PDF", **kwargs, scope=manual_scope, force=True) is result
