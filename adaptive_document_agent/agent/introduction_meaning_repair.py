@@ -9,7 +9,7 @@ from .prompting import untrusted_document_message
 class IntroductionMeaningEdit(BaseModel):
     model_config = ConfigDict(extra='forbid')
     meaning_id: str = Field(description='Exact supplied original meaning_id; its owning source part cannot change.')
-    required_meanings: list[RequiredMeaning] = Field(min_length=1, max_length=12)
+    required_meanings: list[RequiredMeaning] = Field(min_length=1)
 
 
 class IntroductionMeaningRevision(BaseModel):
@@ -50,8 +50,10 @@ def repair_meanings(gateway, source, selection, reason, review, *, cancelled=Non
          'unsupported wording to the scope actually established by its owning source; preserving '
          'the intended selected claim never means retaining an unsupported stronger statement. '
          'The revised union must preserve the intended content of every original meaning, with '
-         'only source-supported corrections and necessary qualifications. Each part may contain '
-         'at most 12 resulting meanings in total; do not hide separate assertions to meet this cap. '
+         'only source-supported corrections and necessary qualifications. This inventory records '
+         'semantic coverage, not visible slide count. Do not drop or recombine separate assertions '
+         'to fit an invented item limit; the presentation page budget still applies to the later '
+         'audience synthesis. '
          'Keep source-language audience-ready copy concise. Do not invent values, units, periods, '
          'claims or citations. Leave source_quote empty; Python retains each exact owned passage. '
          'This edit is not approval: the full source, selection and revised meanings will undergo '
@@ -76,9 +78,6 @@ def repair_meanings(gateway, source, selection, reason, review, *, cancelled=Non
     revised = {part_id: [] for part_id in included}
     for item in inventory:
         revised[item['part_id']].extend(edits[item['meaning_id']])
-    if any(len(meanings) > 12 for meanings in revised.values()):
-        record['error'] = 'Meaning correction exceeds the 12-meaning capacity of an included source part'
-        raise ValueError(record['error'])
     for part_id, meanings in revised.items():
         included[part_id].required_meanings = meanings
     if draft == selection:

@@ -64,8 +64,6 @@ class InventoryClient:
                 edits[-1]['required_meanings'] = []
             elif self.malformed == 'reassigned':
                 edits[-1]['part_id'] = 'part-3'
-            elif self.malformed == 'over-capacity':
-                edits[0]['required_meanings'] = [dict(meaning=f'Proposed assertion {i}.') for i in range(12)]
             return schema(edits=list(reversed(edits)))
         self.reviews.append(deepcopy(payload))
         if len(self.reviews) == 1:
@@ -103,7 +101,7 @@ def test_one_correction_covers_unreported_bundles_and_preserves_each_original_ow
     assert len(revision['meaning_inventory']) == 4
 
 
-@pytest.mark.parametrize('malformed', ['missing', 'duplicate', 'unknown', 'empty', 'reassigned', 'over-capacity'])
+@pytest.mark.parametrize('malformed', ['missing', 'duplicate', 'unknown', 'empty', 'reassigned'])
 def test_incomplete_inventory_empty_replacements_and_owner_reassignment_fail_closed(malformed):
     result, reading, _ = fixture(4)
     client = InventoryClient(malformed=malformed)

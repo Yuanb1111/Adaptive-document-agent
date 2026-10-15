@@ -280,6 +280,14 @@ class TableReconstructor:
     def _compatible(left: ExtractedTable, right: ExtractedTable) -> bool:
         if right.page != left.page + 1 or len(left.headers) != len(right.headers):
             return False
+        # An unproved header cannot authorize borrowing another page's scope.
+        if any(table.rows and all(row.alignment_status == 'ambiguous' for row in table.rows)
+               for table in (left,right)):
+            return False
+        from .source_header_scope import explicit_caption_key
+        left_caption,right_caption=explicit_caption_key(left),explicit_caption_key(right)
+        if left_caption and right_caption and left_caption != right_caption:
+            return False
         left_periods = [period for period in left.column_periods if period]
         right_periods = [period for period in right.column_periods if period]
         if left_periods and right_periods and left_periods != right_periods:

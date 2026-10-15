@@ -25,7 +25,7 @@ class AudienceDecision(BaseModel):
     part_id: str
     include: bool
     reason: str = Field(min_length=1,max_length=240)
-    required_meanings: list[RequiredMeaning] = Field(default_factory=list, max_length=12)
+    required_meanings: list[RequiredMeaning] = Field(default_factory=list)
 
 
 class IntroductionAudienceSelection(BaseModel):

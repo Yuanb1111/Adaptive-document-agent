@@ -152,19 +152,34 @@ class TableExtractor:
     def _analytical_copy(self, literal):
         """Analytical labels may normalize; the literal appendix remains separate."""
         from .table_reconstructor import TableReconstructor
+        from .source_header_scope import scoped_source_headers, quarantine_header_rows
         header=[row[:] for row in literal.raw_header_cells]
         for row,start,end in literal.raw_header_spans:
             for column in range(start+1,end+1):
                 header[row][column]=header[row][start]
-        defaults=self._infer_defaults(literal.raw_cells,' '.join(literal.raw_header_lines))
+        width=max((len(row) for row in literal.raw_cells),default=0)
+        header, exact_periods, ambiguous = scoped_source_headers(
+            header,width,original_header=literal.raw_header_cells,
+            source_spans=literal.raw_header_spans,body_rows=literal.raw_cells)
+        header_text=' '.join(str(cell) for row in header for cell in row if cell)
+        defaults=self._infer_defaults(literal.raw_cells,' '.join([*literal.raw_header_lines,header_text]))
         unit,scale,currency,raw_unit=defaults
         labels,periods,_,types,currencies,scales=TableReconstructor.reconstruct_multi_tier_headers(
             [*header,*literal.raw_cells],default_unit=unit,default_currency=currency,default_scale=scale,
             context='\n'.join(literal.raw_header_lines), header_row_count=len(header))
-        return literal.model_copy(deep=True,update={'headers':labels,'column_periods':periods,'column_types':types,
+        if exact_periods:
+            for column in range(1,len(periods)):
+                period=exact_periods.get(column)
+                old_period=periods[column]
+                periods[column]=period
+                if old_period and labels[column].startswith(old_period):
+                    labels[column]=((period or '')+labels[column][len(old_period):]).strip()
+        analytical=literal.model_copy(deep=True,update={'headers':labels,'column_periods':periods,'column_types':types,
             'column_currencies':currencies,'column_scales':scales,
             'rows':self._build_table_rows(literal.raw_cells,literal.page),
+            'raw_cells_include_headers':False,
             'default_unit':unit,'default_raw_unit':raw_unit,'default_unit_scale':scale,'default_currency':currency})
+        return quarantine_header_rows(analytical,ambiguous) if ambiguous else analytical
 
     @staticmethod
     def _clean(value: object) -> str | None:

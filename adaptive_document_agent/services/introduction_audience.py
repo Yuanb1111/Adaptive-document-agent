@@ -8,7 +8,7 @@ def validate_required_meanings(review, decisions):
     parts = {p.id: p for p in review.parts}
     for decision in decisions:
         meanings = decision.get('required_meanings', [])
-        if bool(meanings) != decision.get('include') or len(meanings) > 12:
+        if bool(meanings) != decision.get('include'):
             raise ValueError('Introduction selection requires source-bound central meanings for every included part')
         seen = set()
         for value in meanings:

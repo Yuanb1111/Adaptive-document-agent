@@ -16,6 +16,7 @@ def literal_table():
             ['', '/(loss)', 'margin', '/(loss)', 'margin'],
             ['', "RMB'000", '%', "RMB'000", '%'], ['', '', '', '(unaudited)', '']],
         raw_header_lines=["FY2022 FY2023", "RMB'000 % RMB'000 %"],
+        raw_header_spans=[(0,1,2),(0,3,4)],
         raw_cells=[['Total', '310', '41.2', '520', '32.4']])
 
 

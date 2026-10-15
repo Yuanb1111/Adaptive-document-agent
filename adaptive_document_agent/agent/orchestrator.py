@@ -660,8 +660,12 @@ class DocumentOrchestrator:
     ) -> PipelineResult:
         """Build all reporting artifacts from one validated analysis snapshot."""
         from .output_planning import plan_outputs
+        from adaptive_document_agent.extraction.source_header_scope import source_header_issues
 
         issues = list(issues)
+        for issue in source_header_issues(document):
+            if issue not in issues:
+                issues.append(issue)
         details: dict[str, int] = {}
         with record_timing(details, "insights"):
             insight_generator = InsightGenerator(self.gateway)
