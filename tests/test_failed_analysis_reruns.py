@@ -154,8 +154,8 @@ def test_reviewed_scope_retry_keeps_confirmed_ranges_and_success_cache(flow):
     flow.st.toggle.return_value = True
     app.run_app()
     assert not flow.attempts
-    from adaptive_document_agent.ui.presentation_requirements import with_slide_limits
-    key = app._analysis_scope_key(b"first-pdf", with_slide_limits('', 20, 5), flow.settings)
+    from adaptive_document_agent.services.presentation_requirements import budget_request, fixed_presentation_budget
+    key = app._analysis_scope_key(b"first-pdf", budget_request('', fixed_presentation_budget()), flow.settings)
     flow.st.session_state.update(analysis_scope=flow.preview, analysis_scope_key=key)
     flow.pressed.add("Analyse selected pages")
     app.run_app()

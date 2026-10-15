@@ -1,5 +1,15 @@
-"""Bind explicit numeric controls without asking a model to reinterpret them."""
+"""Bind presentation rules without asking a model to reinterpret numeric limits."""
 from adaptive_document_agent.models.customization import PresentationBudget, ReportRequirement, ReportRequirements
+
+
+def fixed_presentation_budget(budget: PresentationBudget | None = None) -> PresentationBudget:
+    """Every run uses the fixed caps; callers may request stricter limits only."""
+    return PresentationBudget(
+        body_slides=min(20, budget.body_slides) if budget else 20,
+        introduction_slides=min(5, budget.introduction_slides) if budget else 5,
+        analysis_slides=min(10, budget.analysis_slides) if budget else 10,
+        slide_scope='all',
+    )
 
 
 def budget_request(instructions: str, budget: PresentationBudget) -> str:

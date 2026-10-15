@@ -11,7 +11,7 @@ from adaptive_document_agent.services.presentation_evidence import (
 )
 from adaptive_document_agent.utils.ids import stable_id
 
-from .prompting import load_prompt, untrusted_document_message
+from .prompting import load_prompt, untrusted_document_message, with_presentation_limits
 
 
 def _reconciles_order(order, index, waterfall_data, visual_block_type) -> bool:
@@ -192,7 +192,7 @@ class PresentationTopicSelector:
         # Reuse the complete-point encoding already used by coverage review.
         # No series or interior point is sampled away to shorten this request.
         messages = [
-            {"role": "system", "content": load_prompt("presentation_topic_selection.txt")},
+            {"role": "system", "content": with_presentation_limits(load_prompt("presentation_topic_selection.txt"))},
             untrusted_document_message(encode(compact_context(payload))),
         ]
         from .report_requirements import instruction_messages

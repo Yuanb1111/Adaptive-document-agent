@@ -1,7 +1,7 @@
-from adaptive_document_agent.ui.presentation_requirements import with_slide_limits
+from adaptive_document_agent.services.presentation_requirements import budget_request, fixed_presentation_budget
 
 
-def test_visible_slide_limits_are_part_of_the_actual_upload_request(monkeypatch):
+def test_fixed_slide_limits_are_part_of_the_actual_upload_request(monkeypatch):
     from types import SimpleNamespace
     from tests.test_streamlit_auto_flow import _Streamlit
     from adaptive_document_agent.ui import app as ui_app
@@ -20,7 +20,7 @@ def test_visible_slide_limits_are_part_of_the_actual_upload_request(monkeypatch)
     monkeypatch.setattr(ui_app, 'DocumentOrchestrator', Orchestrator)
     monkeypatch.setattr(ui_app, 'create_llm_client', lambda settings: None)
     monkeypatch.setattr(ui_app, 'LLMGateway', lambda *args, **kwargs: None)
-    instruction = with_slide_limits('Keep scope and reporting periods separate.', 20, 5)
+    instruction = budget_request('Keep scope and reporting periods separate.', fixed_presentation_budget())
     ui_app._analyse_upload(_Streamlit(), b'%PDF', scope_key='limits', analysis_focus=instruction,
         settings=SimpleNamespace(model='mock'), cache=None,
         presentation_budget=PresentationBudget(body_slides=20, introduction_slides=5))
@@ -29,14 +29,16 @@ def test_visible_slide_limits_are_part_of_the_actual_upload_request(monkeypatch)
     assert 'at most 5 physical slides' in instruction
     assert 'count toward the total file limit' in instruction
     assert 'Keep scope and reporting periods separate.' in instruction
-    assert instruction != with_slide_limits('', 19, 5)
+    assert instruction != budget_request('', fixed_presentation_budget())
 
 
 def test_introduction_limit_cannot_exceed_whole_body_limit():
-    assert 'introduction must contain at most 3' in with_slide_limits('', 3, 5)
+    from adaptive_document_agent.models.customization import PresentationBudget
+    assert 'introduction must contain at most 3' in budget_request('',
+        fixed_presentation_budget(PresentationBudget(body_slides=3, introduction_slides=5)))
 
 
-def test_real_upload_widget_carries_limits_and_changes_analysis_cache_key():
+def test_real_upload_has_no_page_controls_and_always_carries_fixed_limits():
     from tests.test_streamlit_startup import run_fresh
     run_fresh('''
         from types import SimpleNamespace
@@ -57,18 +59,23 @@ def test_real_upload_widget_carries_limits_and_changes_analysis_cache_key():
             assert calls[-1][1].slide_scope == 'all'
             assert calls[-1][3] == ''
             first = calls[-1][2]
-            widgets = {item.label: item for item in app.number_input}
-            widgets['Maximum PPT slides'].set_value(18).run()
+            labels = {item.label for item in app.number_input}
+            assert 'Maximum PPT slides' not in labels
+            assert 'Maximum introduction slides' not in labels
+            assert 'Count appendices separately' not in {item.label for item in app.checkbox}
+            # Stale session values from an older release cannot change policy.
+            app.session_state['body_slide_limit'] = 100
+            app.session_state['introduction_slide_limit'] = 50
+            app.run()
             assert not app.exception, app.exception
-            assert calls[-1][1].body_slides == 18
+            assert calls[-1][1].body_slides == 20
+            assert calls[-1][1].introduction_slides == 5
+            assert calls[-1][1].slide_scope == 'all'
+            assert calls[-1][2] == first
+            app.text_area[0].input('Focus on source-supported risks.').run()
+            assert not app.exception, app.exception
+            assert calls[-1][3] == 'Focus on source-supported risks.'
             assert calls[-1][2] != first
-            second = calls[-1][2]
-            boxes = {item.label: item for item in app.checkbox}
-            assert not boxes['Count appendices separately'].value
-            boxes['Count appendices separately'].set_value(True).run()
-            assert not app.exception, app.exception
-            assert calls[-1][1].slide_scope == 'body'
-            assert calls[-1][2] != second
     ''')
 
 
@@ -89,7 +96,7 @@ def test_explicit_budget_survives_failed_free_text_interpretation():
         safe_filename='d.pdf', page_count=1), bound.original_request)
 
 
-def test_orchestrator_binds_explicit_limits_before_background_introduction(monkeypatch):
+def test_orchestrator_binds_fixed_limits_without_ui_settings(monkeypatch):
     from types import SimpleNamespace
     import pytest
     from adaptive_document_agent.agent import orchestrator, company_introduction
@@ -106,7 +113,28 @@ def test_orchestrator_binds_explicit_limits_before_background_introduction(monke
         raise RuntimeError('Reached introduction with explicit budgets')
     monkeypatch.setattr(company_introduction, 'prepare_company_introduction', prepared)
     with pytest.raises(RuntimeError, match='Reached introduction with explicit budgets'):
-        runner.analyse_pdf(b'source', presentation_budget=PresentationBudget(body_slides=20, introduction_slides=5))
+        runner.analyse_pdf(b'source')
+
+
+def test_callers_can_only_tighten_fixed_limits():
+    from adaptive_document_agent.models.customization import PresentationBudget
+    requested = PresentationBudget(body_slides=100, introduction_slides=30,
+                                   analysis_slides=50, slide_scope='body')
+    actual = fixed_presentation_budget(requested)
+    assert (actual.body_slides, actual.introduction_slides, actual.analysis_slides, actual.slide_scope) == (20, 5, 10, 'all')
+    assert requested.body_slides == 100
+    tighter = fixed_presentation_budget(PresentationBudget(body_slides=18, introduction_slides=3, analysis_slides=6))
+    assert (tighter.body_slides, tighter.introduction_slides, tighter.analysis_slides) == (18, 3, 6)
+
+
+def test_presentation_system_prompt_has_fixed_policy_even_without_custom_instructions():
+    from adaptive_document_agent.agent.prompting import with_presentation_limits
+    policy = with_presentation_limits('Plan only evidence-supported questions.')
+    assert 'at most 20 physical slides' in policy
+    assert 'at most 5 physical slides' in policy
+    assert 'all appendices and every continuation page' in policy
+    assert 'cannot increase these caps' in policy
+    assert 'Plan only evidence-supported questions.' in policy
 
 
 def test_retry_cannot_reuse_a_checkpoint_with_different_explicit_limits(monkeypatch):

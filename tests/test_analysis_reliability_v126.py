@@ -193,8 +193,8 @@ def test_partial_result_has_retry_state_and_is_never_cached_as_complete(flow):
 
 def test_reanalyse_does_not_take_another_scope_keys_preview(flow):
     from adaptive_document_agent.ui import app
-    from adaptive_document_agent.ui.presentation_requirements import with_slide_limits
-    key = app._analysis_scope_key(b'first-pdf', with_slide_limits('', 20, 5), flow.settings)
+    from adaptive_document_agent.services.presentation_requirements import budget_request, fixed_presentation_budget
+    key = app._analysis_scope_key(b'first-pdf', budget_request('', fixed_presentation_budget()), flow.settings)
     flow.st.session_state.update(analysis_result=flow.result, analysis_result_key=key,
         analysis_scope=flow.preview, analysis_scope_key='another-document-or-focus')
     flow.st.toggle.return_value = True
@@ -206,8 +206,10 @@ def test_reanalyse_does_not_take_another_scope_keys_preview(flow):
 
 def test_reporting_retry_skips_discovery_semantics_scoring_and_calculation(monkeypatch):
     from adaptive_document_agent.agent import orchestrator as module, company_introduction
+    from adaptive_document_agent.services.presentation_requirements import apply_presentation_budget, fixed_presentation_budget
     raw = b'checkpoint source'
     result = source_result()
+    result.profile.report_requirements = apply_presentation_budget(None, '', fixed_presentation_budget())
     result.document.sha256 = sha256_bytes(raw)
     result.pipeline_version, result.pipeline_state, result.retry_from = PIPELINE_VERSION, 'partial', 'reporting'
     gateway = SimpleNamespace(cache=None, discovery_workers=1, usage=[])

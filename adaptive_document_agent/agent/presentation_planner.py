@@ -8,7 +8,7 @@ from adaptive_document_agent.services.llm import LLMGateway
 from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
 
 from .presentation_plan_repairer import PresentationPlanRepairer
-from .prompting import load_prompt, untrusted_document_message
+from .prompting import load_prompt, untrusted_document_message, with_presentation_limits
 
 
 class PresentationPlanner:
@@ -85,7 +85,7 @@ class PresentationPlanner:
             "report_title": result.report_plan.title,
         }
         messages = [
-            {"role": "system", "content": load_prompt("presentation_planning.txt")},
+            {"role": "system", "content": with_presentation_limits(load_prompt("presentation_planning.txt"))},
             untrusted_document_message(json.dumps(payload, ensure_ascii=False)),
         ]
         from .report_requirements import instruction_messages

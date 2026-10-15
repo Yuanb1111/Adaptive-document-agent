@@ -12,7 +12,7 @@ from adaptive_document_agent.services.llm.exceptions import LLMResponseError, LL
 from adaptive_document_agent.services.compact_summary import compact_digest, compact_layout_errors
 from adaptive_document_agent.services.summary_validation import presentation_errors
 from adaptive_document_agent.utils.timing import record_timing
-from .prompting import untrusted_document_message
+from .prompting import untrusted_document_message, with_presentation_limits
 from .compact_summary_review import CompactReviewProtocolError, review_compact, validate_review_target
 from .summary_draft_protocol import SummaryDraftProtocolError, author_draft
 
@@ -241,6 +241,7 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
         'A company name, document purpose, financial result or topic list alone is insufficient. '
         'For a non-company source explain the document subject and scope without inventing a company.'},
         untrusted_document_message(json.dumps(payload,ensure_ascii=False))]
+    messages[0]['content'] = with_presentation_limits(messages[0]['content'])
     if len(languages)==1:
         messages.insert(1,{'role':'user','content':'Write every title, label and paragraph in '+next(iter(languages))+
                           '. Preserve literal proper names and fiscal labels. Translate all prose and unit words faithfully.'})

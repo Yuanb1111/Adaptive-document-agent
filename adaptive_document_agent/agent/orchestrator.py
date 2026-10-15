@@ -60,6 +60,8 @@ class DocumentOrchestrator:
     ) -> PipelineResult:
         # All background work belongs to this invocation, never to the reusable
         # orchestrator/session. ExitStack also drains it on any primary failure.
+        from adaptive_document_agent.services.presentation_requirements import fixed_presentation_budget
+        presentation_budget = fixed_presentation_budget(presentation_budget)
         with ExitStack() as resources:
             return self._analyse_pdf(
                 file, settings, progress=progress, analysis_focus=analysis_focus,

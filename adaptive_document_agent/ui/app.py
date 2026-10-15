@@ -268,21 +268,13 @@ def run_app() -> None:
     cache = cache_for_session(st.session_state, public_deployment=public_deployment)
     with st.container(border=True):
         branding.section_label(st, "01", "Upload your document")
-        body_slide_limit = st.number_input('Maximum PPT slides', min_value=1, max_value=200,
-            value=20, step=1, key='body_slide_limit',
-            help='Limits the complete file, including cover, introduction, charts, Data Index, conclusion and closing.')
-        introduction_slide_limit = st.number_input('Maximum introduction slides', min_value=1,
-            max_value=200, value=5, step=1, key='introduction_slide_limit',
-            help='A maximum, not a target. The introduction is included in the complete file limit.')
         with st.expander("Analysis options (optional)", expanded=False):
-            separate_appendices = st.checkbox('Count appendices separately', value=False,
-                help='Enable only when additional appendix pages may exceed the complete file limit.')
             analysis_focus = st.text_area(
                 "Analysis and PPT requirements (optional)",
                 placeholder="e.g. Focus on profitability, explain the business in detail, and append every table from a named chapter.",
                 height=88,
                 max_chars=6000,
-                help="Specify analysis priorities, content detail, narrative language, a slide limit, or a chapter whose tables belong in Data Index. The result shows interpreted requirements and completion checks. Original source-table cells, names, units and periods remain literal. Changing requirements or model after upload starts a new analysis.",
+                help="Specify analysis priorities, content detail, narrative language, or a chapter whose tables belong in Data Index. The result shows interpreted requirements and completion checks. Original source-table cells, names, units and periods remain literal. Changing requirements or model after upload starts a new analysis.",
             )
             review_scope = st.toggle(
                 "Review page scope before analysis (optional)", value=False,
@@ -290,12 +282,9 @@ def run_app() -> None:
             )
         uploaded = st.file_uploader("Upload one PDF", type=["pdf"], accept_multiple_files=False)
         st.caption("Analysis starts automatically after upload unless page-scope review is enabled.")
-    from .presentation_requirements import with_slide_limits
-    from adaptive_document_agent.models.customization import PresentationBudget
-    presentation_budget = PresentationBudget(body_slides=body_slide_limit,
-        introduction_slides=introduction_slide_limit,slide_scope='body' if separate_appendices else 'all')
-    scope_instructions = with_slide_limits(analysis_focus, body_slide_limit, introduction_slide_limit,
-        scope=presentation_budget.slide_scope)
+    from adaptive_document_agent.services.presentation_requirements import budget_request, fixed_presentation_budget
+    presentation_budget = fixed_presentation_budget()
+    scope_instructions = budget_request(analysis_focus, presentation_budget)
     if not uploaded:
         return
     raw_pdf = uploaded.getvalue()

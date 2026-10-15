@@ -9,6 +9,11 @@ def load_prompt(name: str) -> str:
     return (PROMPT_ROOT / name).read_text(encoding="utf-8")
 
 
+def with_presentation_limits(prompt: str) -> str:
+    """Put fixed physical-page rules in the trusted presentation system prompt."""
+    return load_prompt('presentation_limits.txt') + '\n\n' + prompt
+
+
 def untrusted_document_message(content: str) -> dict[str, str]:
     return {
         "role": "user",

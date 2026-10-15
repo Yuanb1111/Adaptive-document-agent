@@ -15,7 +15,7 @@ from adaptive_document_agent.models import Observation, PipelineResult, Presenta
 from adaptive_document_agent.models.presentation import PresentationOmission
 from adaptive_document_agent.services.llm import LLMGateway
 from adaptive_document_agent.services.llm.exceptions import LLMResponseError, LLMTransportError
-from .prompting import load_prompt, untrusted_document_message
+from .prompting import load_prompt, untrusted_document_message, with_presentation_limits
 from .coverage_representation import representation_links
 
 MAX_REVIEW_CHARACTERS = 120_000
@@ -91,7 +91,7 @@ def _review_batch(context, current, requested, lookup, primary_pages, gateway, v
     budget = budget if budget is not None else {'calls': 0}
     encoded = encode(context)
     messages = [
-        {'role': 'system', 'content': load_prompt('presentation_topic_selection.txt') + '\n\n'
+        {'role': 'system', 'content': with_presentation_limits(load_prompt('presentation_topic_selection.txt')) + '\n\n'
          + load_prompt('presentation_topic_coverage_review.txt') + '\n'
          'Retain every current selected source observation. Choose only fully evidenced series in this request. '
          'Deferred catalog entries have no decision yet. Read point_encoding; constants apply to every point. '
@@ -275,7 +275,7 @@ def review_topic_coverage(
     reviewed = None
     try:
         reviewed = gateway.generate_structured([
-            {"role": "system", "content": load_prompt("presentation_topic_selection.txt") + "\n\n"
+            {"role": "system", "content": with_presentation_limits(load_prompt("presentation_topic_selection.txt")) + "\n\n"
              + load_prompt("presentation_topic_coverage_review.txt")},
             *instructions,
             untrusted_document_message(encoded),
