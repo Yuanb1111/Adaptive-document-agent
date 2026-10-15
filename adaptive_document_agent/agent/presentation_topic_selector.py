@@ -216,8 +216,8 @@ class PresentationTopicSelector:
                 'topics and their continuations. Choose a coherent set of the most valuable supported '
                 'questions within this space; combine related questions rather than enumerating every '
                 'series. State honest evidence-bound omission reasons. Full extracted evidence remains '
-                'in diagnostics. Detailed continuations may move to an appendix only when the user '
-                'explicitly excludes appendices from the report budget. Never drop important caveats, '
+                'in diagnostics. Data Index source references count separately under a body budget; '
+                'every analytical continuation still counts in the body, wherever it is placed. Never drop important caveats, '
                 'change claims or add topics merely to fill this budget.'})
         selection = self.gateway.generate_structured(
             messages,

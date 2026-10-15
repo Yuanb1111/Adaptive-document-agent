@@ -10,6 +10,10 @@ def export_diagnostics(result, error=None, visual_report=None, preflight_report=
     report = financial.model_dump()
     report['planned_slides'] = report['total_slides']
     report['physical_slides'] = visual_report.slide_count if visual_report else None
+    counts = result.presentation_slide_counts
+    counts_match = bool(visual_report and counts.get('total') == visual_report.slide_count)
+    report['body_slides'] = counts.get('body') if counts_match else None
+    report['data_index_slides'] = counts.get('data_index') if counts_match else None
     if visual_report:
         report['total_slides'] = visual_report.slide_count
     report["financial_qa"] = financial.model_dump()

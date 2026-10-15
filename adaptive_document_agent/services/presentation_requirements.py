@@ -8,13 +8,15 @@ def fixed_presentation_budget(budget: PresentationBudget | None = None) -> Prese
         body_slides=min(20, budget.body_slides) if budget else 20,
         introduction_slides=min(5, budget.introduction_slides) if budget else 5,
         analysis_slides=min(10, budget.analysis_slides) if budget else 10,
-        slide_scope='all',
+        slide_scope='body',
     )
 
 
 def budget_request(instructions: str, budget: PresentationBudget) -> str:
     scope = 'body' if budget.slide_scope == 'body' else 'entire PPT file'
-    appendix = ('Appendices are counted separately and excluded from both body limits.' if budget.slide_scope == 'body'
+    appendix = ('Data Index source-reference and literal source-table pages are counted separately after the body. '
+                'Every analysis/chart continuation still counts toward the body and analysis limits, '
+                'even if placed or labelled as an appendix.' if budget.slide_scope == 'body'
                 else 'All appendices, Data Index, conclusion and closing count toward the total file limit.')
     return (instructions.strip() + '\n' if instructions.strip() else '') + (
         f'The presentation {scope} must contain at most {budget.body_slides} physical slides, '

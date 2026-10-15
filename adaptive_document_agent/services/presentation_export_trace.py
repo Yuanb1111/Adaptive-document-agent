@@ -54,6 +54,7 @@ def record_section(presentation,slide_plan,result):
 
 def clear_trace(result):
     result.presentation_export_trace=[]
+    result.presentation_slide_counts={}
     if result.profile.source_coverage:
         for section in result.profile.source_coverage.sections:
             section.export_mapping_status='not_recorded'

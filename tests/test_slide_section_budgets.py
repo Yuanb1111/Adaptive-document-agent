@@ -37,11 +37,11 @@ def test_physical_section_and_report_limits_survive_roundtrip():
     deck = Presentation()
     for n in range(25):
         slide = deck.slides.add_slide(deck.slide_layouts[6])
-        if n < 5 or n >= 20:
+        if n < 5:
             shape = slide.shapes.add_textbox(0, 0, 100, 100)
             shape.element.xpath('.//p:cNvPr')[0].set('descr', _PREFIX + json.dumps({'page_id': str(n)}))
         if n >= 20:
-            slide.element.cSld.set('name', 'ada:appendix')
+            slide.element.cSld.set('name', 'ada:data-index')
     stream = BytesIO(); deck.save(stream)
     deck = Presentation(stream)
     require_exported_budgets(deck, result)

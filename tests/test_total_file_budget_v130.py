@@ -148,7 +148,7 @@ def test_default_budget_counts_appendices_and_analysis_continuations_after_round
     deck = Presentation()
     for n in range(21):
         slide = deck.slides.add_slide(deck.slide_layouts[6])
-        if n >= 19: slide.element.cSld.set('name', 'ada:appendix')
+        if n >= 19: slide.element.cSld.set('name', 'ada:data-index')
     stream = BytesIO(); deck.save(stream)
     with pytest.raises(ValueError, match='report all has 21'):
         require_exported_budgets(Presentation(stream), result)

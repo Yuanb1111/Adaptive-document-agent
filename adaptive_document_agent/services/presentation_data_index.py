@@ -82,6 +82,8 @@ def render_data_index(presentation, result, index):
             x += w
         y += height + .10
     for page in [*pages, slide]:
+        from .presentation_body_budget import DATA_INDEX_TAG
+        page.element.cSld.set('name', DATA_INDEX_TAG)
         _text(page, _source_footer(sorted({p for entry in entries for p in entry['source_pages']})), .55,
               presentation.slide_height.inches - .82, width, .20, size=9, color=FOURIER_MUTED)
         page.notes_slide.notes_text_frame.text = notes

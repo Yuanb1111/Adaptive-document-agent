@@ -3,14 +3,14 @@ import pytest
 from pptx import Presentation
 from adaptive_document_agent.models import PresentationPlan, PresentationSlide
 from adaptive_document_agent.models.customization import ReportRequirement, ReportRequirements
-from adaptive_document_agent.services.presentation_body_budget import place_continuations_in_appendix
+from adaptive_document_agent.services.presentation_body_budget import place_data_index_after_body
 from tests.test_compact_summary_v111 import fixture
 
 
-@pytest.mark.parametrize('scope,overview,limit,moved', [
-    ('body', True, 3, True), ('all', True, 3, False),
-    ('body', False, 3, False), ('body', True, 6, False)])
-def test_only_detail_continuations_move_and_keep_every_shape_and_source_mapping(scope, overview, limit, moved):
+@pytest.mark.parametrize('scope,overview,limit', [
+    ('body', True, 3), ('all', True, 3),
+    ('body', False, 3), ('body', True, 6)])
+def test_only_source_index_moves_and_analysis_always_remains_body(scope, overview, limit):
     result, _, _ = fixture(1)
     result.profile.report_requirements = ReportRequirements(items=[ReportRequirement(
         id='length', kind='slide_limit', request_quote='Body limit', description='Body limit',
@@ -26,20 +26,18 @@ def test_only_detail_continuations_move_and_keep_every_shape_and_source_mapping(
     for text in ['Detail A','Overview','Cover','Detail B','Existing appendix','Closing']:
         slide = deck.slides.add_slide(deck.slide_layouts[6])
         slide.shapes.add_textbox(0, 0, 1000, 1000).text = text
-        if text == 'Existing appendix': slide.element.cSld.set('name', 'ada:appendix')
+        if text == 'Existing appendix': slide.element.cSld.set('name', 'ada:data-index')
     before = {s.slide_id: s.shapes[0].element.xml for s in deck.slides}
-    place_continuations_in_appendix(deck, result)
+    place_data_index_after_body(deck, result)
     assert {s.slide_id: s.shapes[0].element.xml for s in deck.slides} == before
     assert len(deck.slides) == 6
-    assert sum(s.element.cSld.get('name') != 'ada:appendix' for s in deck.slides) == (3 if moved else 5)
-    assert deck.slides[-1].shapes[0].text == 'Closing'
-    if moved:
-        assert [s.shapes[0].text for s in deck.slides] == [
-            'Overview', 'Cover', 'Detail A', 'Detail B', 'Existing appendix', 'Closing']
+    assert sum(s.element.cSld.get('name') != 'ada:data-index' for s in deck.slides) == 5
+    assert [s.shapes[0].text for s in deck.slides] == [
+        'Detail A', 'Overview', 'Cover', 'Detail B', 'Closing', 'Existing appendix']
     assert result.presentation_export_trace[1]['observation_ids'] == ['b','c']
     for record in result.presentation_export_trace:
         for number in record['slide_numbers']:
             assert ('Overview' if record['planned_slide_id']=='overview' else 'Detail') in deck.slides[number-1].shapes[0].text
     stream=BytesIO(); deck.save(stream)
     reopened=Presentation(stream)
-    assert sum(s.element.cSld.get('name')=='ada:appendix' for s in reopened.slides)==(3 if moved else 1)
+    assert sum(s.element.cSld.get('name')=='ada:data-index' for s in reopened.slides)==1

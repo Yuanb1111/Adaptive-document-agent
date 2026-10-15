@@ -71,4 +71,5 @@ class PipelineResult(BaseModel):
     export_timings_ms: dict[str, int] = Field(default_factory=dict)
     finalization: dict[str, object] | None = None
     presentation_export_trace: list[dict[str, object]] = Field(default_factory=list)
+    presentation_slide_counts: dict[str, int] = Field(default_factory=dict)
     customization_report: list[RequirementCheck] = Field(default_factory=list)

@@ -33,7 +33,8 @@ def exported_slide_numbers(presentation, result, requirement):
         numbers = {n for record in result.presentation_export_trace
                    if record.get('planned_slide_id') in ids for n in record['slide_numbers']}
     if requirement.slide_scope == 'body':
-        numbers = {n for n in numbers if presentation.slides[n - 1].element.cSld.get('name') != 'ada:appendix'}
+        from .presentation_body_budget import data_index_slide_numbers
+        numbers -= set(data_index_slide_numbers(presentation, result))
     return sorted(numbers)
 
 
@@ -54,3 +55,11 @@ def require_exported_budgets(presentation, result):
 def total_file_limit(result):
     limits = resolved_limits(result.profile.report_requirements, scope='all')
     return min(limits) if limits else None
+
+
+def report_budget(result):
+    """Choose the tightest report cap; retain its physical counting scope."""
+    requirements = result.profile.report_requirements
+    limits = [r for r in requirements.items if r.kind == 'slide_limit' and r.resolution == 'resolved'
+              and r.slide_section == 'report' and r.max_slides is not None] if requirements else []
+    return min(limits, key=lambda r: (r.max_slides, r.slide_scope == 'body')) if limits else None

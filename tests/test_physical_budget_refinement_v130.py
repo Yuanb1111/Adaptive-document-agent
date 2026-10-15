@@ -152,5 +152,3 @@ def test_brief_source_failure_cannot_request_a_different_topic_selection(monkeyp
         budget.refine_presentation_budget(client,result)
     assert client.calls==['PhysicalBudgetSelection','PhysicalBudgetReview']
     assert result.presentation_topics==original and result.pipeline_state=='partial'
-    result.profile.report_requirements=apply_presentation_budget(None,'',PresentationBudget(body_slides=20,introduction_slides=5,slide_scope='body'))
-    assert not budget.refine_presentation_budget(Client(),result)

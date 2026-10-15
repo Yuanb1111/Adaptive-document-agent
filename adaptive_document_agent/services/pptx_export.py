@@ -255,11 +255,12 @@ def _compose_presentation(result, template_path=None, *, artwork=None, source_pd
         render_requested_tables(presentation, result)
         for slide in presentation.slides:
             if slide.slide_id not in existing_ids:
-                slide.element.cSld.set('name', 'ada:appendix')
+                slide.element.cSld.set('name', 'ada:data-index')
     _add_thank_you_slide(presentation)
 
-    from .presentation_body_budget import place_continuations_in_appendix
-    place_continuations_in_appendix(presentation, result)
+    from .presentation_body_budget import place_data_index_after_body, slide_counts
+    place_data_index_after_body(presentation, result)
+    result.presentation_slide_counts = slide_counts(presentation, result)
     _number_slides(presentation)
     from .report_language import apply_report_language
     apply_report_language(presentation, result)
@@ -359,9 +360,9 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
     index = DocumentIndex(result.observations)
     chart_by_id = {item.id: item for item in _usable_charts(result)}
     from .presentation_key_figures import select_key_figures
-    from .slide_budgets import total_file_limit
-    compact_file = total_file_limit(result) is not None
-    # Audience selection and chart pages already carry these facts. A whole-file
+    from .slide_budgets import report_budget
+    compact_file = report_budget(result) is not None
+    # Audience selection and chart pages already carry these facts. A bounded
     # budget must not add automatic, duplicate opening sections.
     key_figures = [] if compact_file else select_key_figures(result, list(chart_by_id.values()))
     from .presentation_ratio_definitions import ratio_definitions
@@ -2350,7 +2351,7 @@ def _add_evidence_table_slides(
         generic_section = bool(thematic_labels) or all(t == "Reported Measures" for t, _ in theme_entries)
         slide_subtitle = subtitle or "Reported values with separate period headers and source provenance"
         slide = _base_slide(presentation, title, slide_subtitle)
-        slide.element.cSld.set('name', 'ada:appendix')
+        slide.element.cSld.set('name', 'ada:data-index')
         appendix_slides.append(slide)
         source_notes = []
         page_observations = []
