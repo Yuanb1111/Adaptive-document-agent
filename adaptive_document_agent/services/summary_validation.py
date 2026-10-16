@@ -6,6 +6,10 @@ from adaptive_document_agent.services.executive_brief import validate_executive_
 from adaptive_document_agent.services.source_quotes import normalize_quote
 from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
 from pydantic import Field
+from adaptive_document_agent.utils.validation_memo import ValidationMemo
+
+
+_reading_memo = ValidationMemo()
 
 
 class SummaryEvidenceItem(ExecutiveBriefItem):
@@ -50,6 +54,21 @@ def fact_errors(fact, result: PipelineResult, source_text: str, page: int, *, li
 
 
 def reading_errors(review: SummaryReview, result: PipelineResult, *, complete_scope=True) -> list[str]:
+    """Reuse exact reading checks while validating every changed source input.
+
+    Reading depends on the complete document (including geometry/outline),
+    retained observations, and reading assignment. Audience selection, layout
+    and independent semantic approval are checked separately on every call.
+    """
+    fields = {'document_id', 'document_sha256', 'source_pages', 'source_blocks',
+              'parts', 'scope_ranges'}
+    inputs = [str(complete_scope), review.model_dump_json(include=fields),
+              result.document.model_dump_json()]
+    inputs.extend(item.model_dump_json() for item in result.observations)
+    return _reading_memo.check(inputs, lambda: _reading_errors(review, result, complete_scope=complete_scope))
+
+
+def _reading_errors(review: SummaryReview, result: PipelineResult, *, complete_scope=True) -> list[str]:
     errors = []
     geometry_cache = {}
     if not review.source_pages or not review.source_blocks or not review.parts:

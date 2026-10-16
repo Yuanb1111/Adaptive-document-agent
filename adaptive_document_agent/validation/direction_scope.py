@@ -29,7 +29,7 @@ _VALUE_IN_PERIOD_START = re.compile(
 )
 _VALUE_IN_PERIOD_NEXT = re.compile(
     rf"\s+(?P<connector>to|and)\s+"
-    rf"(?P<value>(?:(?!\b(?:to|and)\b)[^;\n]){{1,100}}?)"
+    rf"(?P<value>(?:(?!\b(?:from|to|and)\b)[^;\n]){{1,100}}?)"
     rf"\bin\s+(?P<period>{_PERIOD})\b", re.I,
 )
 _REVERSED_VALUE_RANGE = re.compile(
@@ -67,21 +67,25 @@ def inherited_period_range(component: str, predicate_offset: int, local_context:
     mentions = list(re.finditer(rf"\b{_PERIOD}\b", prefix, re.I))
     if not mentions:
         return "", ""
-    ranges = list(_RANGE.finditer(prefix))
-    if (not ranges or any(not any(r.start() <= m.start() and m.end() <= r.end() for r in ranges)
+    ranges = [(r.start(), r.end(), r['start'], r['end'])
+              for pattern in (_RANGE, _VALUE_AT_DATE_RANGE, _REVERSED_VALUE_RANGE)
+              for r in pattern.finditer(prefix)]
+    ranges.extend((start, end, periods[0], periods[-1])
+                  for periods, start, end in _value_in_period_runs(prefix))
+    if (not ranges or any(not any(start <= m.start() and m.end() <= end for start, end, _, _ in ranges)
                           for m in mentions)):
         return "", "The preceding temporal qualifier does not identify one complete comparison range"
-    keys = {(re.sub(r"\s+", "", r['start']).casefold(),
-             re.sub(r"\s+", "", r['end']).casefold()) for r in ranges}
+    keys = {(re.sub(r"\s+", "", start).casefold(),
+             re.sub(r"\s+", "", end).casefold()) for _, _, start, end in ranges}
     if len(keys) != 1:
         return "", "Several preceding period ranges could qualify this direction word"
-    chosen = ranges[-1]
+    chosen = max(ranges, key=lambda item: item[1])
     # Keep the explicit year-end qualification used by _period_index rather
     # than silently converting bare years into balance-sheet dates.
     qualifier = re.search(r"(?i)(?:year[- ]end(?:\s+of)?|end\s+of\s+(?:the\s+)?year(?:\s+of)?)\s*$",
-                          prefix[:chosen.start()])
-    start = qualifier.start() if qualifier else chosen.start()
-    return prefix[start:chosen.end()], ""
+                          prefix[:chosen[0]])
+    start = qualifier.start() if qualifier else chosen[0]
+    return prefix[start:chosen[1]], ""
 
 
 def bind_endpoint_to_explicit_context(
@@ -240,7 +244,7 @@ def direction_context(clause: str, associations: list[DirectionSpan], direction:
     return clause[start:end]
 
 
-def _value_in_period_ranges(text: str) -> list[tuple[list[str], int]]:
+def _value_in_period_runs(text: str) -> list[tuple[list[str], int, int]]:
     """Read explicit value/period sequences without inferring a missing endpoint."""
     ranges = []
     for start in _VALUE_IN_PERIOD_START.finditer(text):
@@ -265,10 +269,16 @@ def _value_in_period_ranges(text: str) -> list[tuple[list[str], int]]:
             continue
         # A later unparsed period joined by "and" leaves the endpoint unclear.
         tail = text[last.end():]
-        if re.match(r"\s+and\b", tail, re.I) and re.search(rf"\b{_PERIOD}\b", tail, re.I):
+        if (re.match(r"\s+and\b", tail, re.I)
+                and not re.match(r"\s+and\s+from\b", tail, re.I)
+                and re.search(rf"\b{_PERIOD}\b", tail, re.I)):
             continue
-        ranges.append((periods, start.start()))
+        ranges.append((periods, start.start(), last.end()))
     return ranges
+
+
+def _value_in_period_ranges(text: str) -> list[tuple[list[str], int]]:
+    return [(periods, start) for periods, start, _ in _value_in_period_runs(text)]
 
 
 def resolve_direction_scope(

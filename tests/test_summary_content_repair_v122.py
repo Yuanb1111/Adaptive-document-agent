@@ -55,7 +55,7 @@ def test_identical_targeted_edits_are_idempotent_but_conflicts_fail(conflict):
         revised = apply_content_revision(original, patch, SummarySynthesisDraft)
         assert revised.pages[0] == original.pages[0]
         assert len(revised.pages[1].items) == len(original.pages[1].items)
-        assert revised.pages[1].items[0].model_dump() == dict(edit['replacement'], meaning_refs=[])
+        assert revised.pages[1].items[0].model_dump() == dict(edit['replacement'], meaning_refs=[], display=None)
         assert revised.pages[1].title == 'Market evidence'
 
 

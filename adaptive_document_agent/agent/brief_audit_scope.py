@@ -19,6 +19,14 @@ _PERIOD = re.compile(
     rf"|(?P<iso>{_YEAR}-\d{{2}}-\d{{2}})|(?P<date>{_CALENDAR_DATE})|(?P<year>{_YEAR})", re.I)
 _STATUS = re.compile(r"\b(?:unaudited|audited)\b", re.I)
 
+AUDIT_STATUS_SCOPE_RULE = (
+    'Each source_status_options entry belongs only to its identified source page, table, '
+    'quoted rows and column measure. Matching period labels do not transfer assurance '
+    'between tables or measures. Unknown on another column neither cancels a source-supported '
+    'status here nor authorizes a status there. When removing newly added table quantities, '
+    'preserve the qualifications required for the retained measure. Allowed spellings are '
+    'source context, never semantic approval; fresh independent meaning review remains mandatory.')
+
 
 def _geometric_statuses(page, table, labels):
     """Recheck preserved coordinates before trusting a column annotation."""
@@ -126,8 +134,16 @@ def source_audit_scope(item, result):
                         if (months, year) == duration:
                             aliases.add(date(int(year), [m.casefold() for m in _MONTHS].index(month) + 1,
                                              int(day)).isoformat())
+                # Preserve a column's normalized measure label only when its
+                # text is present in the cited passage. Metadata supplies its column
+                # address, not permission to invent a heading or meaning.
+                raw_label = table.headers[index] if index < len(table.headers) else ''
+                literal_label = _located_header(raw_label or '', page.text)
+                if not literal_label or not any(literal_label in q for q in quotes):
+                    literal_label = ''
                 columns.append({'column': index, 'period': period, 'status': status,
-                                'date_aliases': sorted(aliases - {period})})
+                                'date_aliases': sorted(aliases - {period}),
+                                'column_label': literal_label})
             inventory.append({'page': number, 'table_id': table.table_id, 'row_labels': rows,
                               'columns': columns, 'literal_audit_header_lines': labels,
                               'binding_basis': 'complete_quoted_row_and_verified_column_geometry',
@@ -241,17 +257,25 @@ def audit_status_errors(item, result, *, inventory=None):
 
 
 def audit_status_options(item, result, *, inventory=None):
-    """Expose exact period/status spellings without choosing audience meaning."""
+    """Retain table/row/column ownership instead of collapsing by period.
+
+    Different measures can share a period and have different source assurance.
+    These options do not select the measure a claim means or approve its copy.
+    """
     inventory = source_audit_scope(item, result) if inventory is None else inventory
-    periods = {}
+    options = []
     for table in inventory:
         for column in table['columns']:
-            key = re.sub(r'\s+', '', column['period']).upper()
-            periods.setdefault(key, set()).add(column['status'])
-    return [{'period': period, 'status': next(iter(statuses)) if len(statuses) == 1 else 'unknown',
-             'allowed_spellings': ([f'{period} ({next(iter(statuses))})', f'{next(iter(statuses))} {period}']
-                                   if len(statuses) == 1 and 'unknown' not in statuses else [])}
-            for period, statuses in sorted(periods.items())]
+            period = re.sub(r'\s+', '', column['period']).upper()
+            status = column['status']
+            options.append({'source_page': table['page'], 'source_table_id': table['table_id'],
+                'source_row_labels': list(table['row_labels']), 'source_column_index': column['column'],
+                'source_column_label': column.get('column_label', ''),
+                'period': period, 'date_aliases': list(column.get('date_aliases', [])), 'status': status,
+                'allowed_spellings': ([f'{period} ({status})', f'{status} {period}']
+                                      if status in {'audited', 'unaudited'} else []),
+                'binding_basis': table.get('binding_basis', '')})
+    return options
 
 
 def misplaced_parenthetical_statuses(item, result, *, inventory=None):

@@ -492,16 +492,32 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
             if source_corrected is not None:
                 candidate = source_corrected
                 merged = [item.model_dump(mode='json') for item in candidate.items]
-            corrected = correct_new_meaning_errors(gateway, candidate, result=result, excerpts=excerpts,
+            # A rejected source sibling cannot consume or block the existing
+            # meaning-correction opportunity for independently source-valid
+            # findings. Keep original addresses for the final merge/audit;
+            # the subset's changed items still require fresh meaning review.
+            source_valid = [i for i, item in enumerate(candidate.items)
+                            if not _item_errors(item, result, excerpts)]
+            meaning_candidate = candidate.model_copy(update={
+                'items': [candidate.items[i] for i in source_valid]}) if source_valid else None
+            if len(source_valid) != len(candidate.items):
+                audit['meaning_source_indices'] = source_valid
+            corrected = correct_new_meaning_errors(gateway, meaning_candidate, result=result, excerpts=excerpts,
                 topics=topics, source_context=source_context, evidence_catalog=evidence_catalog,
-                semantic_validator=semantic_validator, audit=audit, cancelled=cancelled)
+                semantic_validator=semantic_validator, audit=audit, cancelled=cancelled) if meaning_candidate else None
             final_meaning = audit.get('post_source_meaning_correction', {})
             if 'errors_after' in final_meaning:
                 audit['pre_meaning_correction_errors'] = audit['repair_errors']
-                audit['repair_errors'] = final_meaning['errors_after']
+                audit['repair_errors'] = [
+                    *(validate_executive_brief(candidate, result, excerpts=excerpts)
+                      if len(source_valid) != len(candidate.items) else []),
+                    *final_meaning['errors_after']]
             if corrected is not None:
-                _audit(result, audit, 'repaired')
-                return corrected
+                if len(source_valid) == len(candidate.items):
+                    _audit(result, audit, 'repaired')
+                    return corrected
+                for position, original_index in enumerate(source_valid):
+                    merged[original_index] = corrected.items[position].model_dump(mode='json')
         except LLMTransportError:
             raise
         except (LLMResponseError, ValueError) as exc:

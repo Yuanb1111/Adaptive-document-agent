@@ -28,6 +28,15 @@ The responsibility split is:
 
 PDF contents are untrusted source material. Instructions embedded in a document are treated as data, never as commands.
 
+The v148 update preserves table-owned assurance status during summary repairs,
+fixes category and period binding that could wrongly suppress findings, and
+repairs newly withheld copy after budget selection. Introductions support
+editable structured layouts through the existing independently reviewed author
+request. Exact-input reading and series caches, bounded parallel work and
+compact speaker notes reduce repeated processing. Independent review policies
+remain unchanged. See [the v148 reliability notes](docs/ANALYSIS_RELIABILITY_V148.md)
+for validation boundaries and the ten-minute end-to-end performance target.
+
 The v147 update locks identity and evidence during pages-only introduction compression, adds measured physical allocation feedback, reviews complete source series in parallel coverage deltas, defers disposable briefings until known budget changes are resolved, and binds targeted meaning repairs to exact source periods. Bounded editorial operations use the configured reasoning policy; source, independent meaning and export gates remain mandatory. CPU caches and note serialization reduce repeated local work. Extraction stays at `extraction-v20`; analysis advances to `analysis-v76`. Approximately ten minutes for the full pipeline remains an unverified target. See [the v147 reliability notes and validation boundaries](docs/ANALYSIS_RELIABILITY_V147.md).
 
 The v146 update repairs source-context loss across agent reading, claim validation and briefing review, preserves compound-unit dimensions and missing-data row boundaries, and improves native pagination, date labels and coverage disclosure. See [the v146 reliability and validation notes](docs/ANALYSIS_RELIABILITY_V146.md). Fresh extraction and analysis contracts invalidate affected older checkpoints.

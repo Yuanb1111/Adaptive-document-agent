@@ -1,6 +1,8 @@
 """Sparse duplicate summaries can disappear without losing source records."""
 
 import io
+import json
+import re
 
 import pytest
 from pptx import Presentation
@@ -108,7 +110,7 @@ def test_export_omits_duplicate_summary_and_contents_but_retains_full_provenance
     analysis = next(slide for slide in plan.slides if slide.slide_type == "analysis")
     summary.bullets = [analysis.title, analysis.section_title]
     summary.bullet_observation_ids = [["rev_2022", "rev_2023"], ["cr_2022", "cr_2023"]]
-    original_summary = summary.model_dump_json(indent=2)
+    original_summary = summary.model_dump(mode="json")
     original_plan = plan.model_dump()
     original_observations = [item.model_dump() for item in result.observations]
 
@@ -129,7 +131,17 @@ def test_export_omits_duplicate_summary_and_contents_but_retains_full_provenance
                if shape.name.startswith("contents:entry:")]
     assert entries and analysis.section_title in [shape.text for shape in entries]
     assert [shape.name for shape in entries] == [f"contents:entry:{i}" for i in range(1, len(entries) + 1)]
-    assert any(original_summary in slide.notes_slide.notes_text_frame.text for slide in deck.slides)
+    note_payloads = []
+    decoder = json.JSONDecoder()
+    for slide in deck.slides:
+        notes = slide.notes_slide.notes_text_frame.text
+        for match in re.finditer(r"\{", notes):
+            try:
+                payload, _ = decoder.raw_decode(notes, match.start())
+            except json.JSONDecodeError:
+                continue
+            note_payloads.append(payload)
+    assert original_summary in note_payloads
     assert plan.model_dump() == original_plan
     assert [item.model_dump() for item in result.observations] == original_observations
     for number, slide in enumerate(deck.slides, start=1):

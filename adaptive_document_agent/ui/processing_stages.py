@@ -34,7 +34,12 @@ _GROUPS = {
     'presentation_planning': (
         'Planning presentation narrative', 'Writing the evidence-bound executive briefing',
         'Retrying introduction with retained extraction and calculations',
+    ),
+    'presentation_budget': (
         'Refining analytical priorities using actual physical slide costs',
+        'Measuring the final briefing and complete PowerPoint budget',
+    ),
+    'final_briefing': (
         'Regenerating and independently checking the briefing against the final budgeted topics',
     ),
     'finalization': (
@@ -47,6 +52,7 @@ _GROUPS = {
 }
 _IDENTITIES = {message: identity for identity, messages in _GROUPS.items() for message in messages}
 _BATCH_PREFIXES = {
+    'Budget proposal ': 'presentation_budget',
     'Understanding selected pages ': 'discovery',
     'Understood selected pages ': 'discovery',
     'Understanding selected sections with ': 'discovery',

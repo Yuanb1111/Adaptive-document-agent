@@ -1,6 +1,7 @@
 """Complete source-bound introductory reading and model-authored slide decisions."""
 from typing import Literal
 from pydantic import BaseModel, Field
+from .summary_display import SummaryDisplay
 
 
 class SummaryPageRange(BaseModel):
@@ -59,6 +60,7 @@ class SummarySlideItem(SummaryFact):
     continuation_count: int = Field(default=1, ge=1)
     continuation_digest: str = ''
     reading_fact_copy: bool = False
+    display: SummaryDisplay | None = None
 
 
 class SummarySlidePage(BaseModel):

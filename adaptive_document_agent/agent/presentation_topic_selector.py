@@ -10,8 +10,11 @@ from adaptive_document_agent.services.presentation_evidence import (
     observation_uses_ambiguous_table,
 )
 from adaptive_document_agent.utils.ids import stable_id
+from adaptive_document_agent.utils.series_directory_cache import SeriesDirectoryCache
 
 from .prompting import load_prompt, untrusted_document_message, with_presentation_limits
+
+_series_directory_cache = SeriesDirectoryCache()
 
 
 def _reconciles_order(order, index, waterfall_data, visual_block_type) -> bool:
@@ -25,6 +28,11 @@ def _reconciles_order(order, index, waterfall_data, visual_block_type) -> bool:
 
 def series_directory(result: PipelineResult) -> tuple[list[dict[str, object]], dict[str, list]]:
     """Expose every extracted metric scope, without truncating to a chart quota."""
+    return _series_directory_cache.directory(result, _build_series_directory)
+
+
+def _build_series_directory(result: PipelineResult) -> tuple[list[dict[str, object]], dict[str, list]]:
+    """Build the full source-owned directory; cache hits never retain its objects."""
     directory: list[dict[str, object]] = []
     lookup: dict[str, list] = {}
     from adaptive_document_agent.services.presentation_ratio_definitions import ratio_definitions

@@ -7,7 +7,23 @@ def writer_test_value(schema, value):
     """Adapt only redundant quotation transport in explicitly address-only writers."""
     if 'SummaryWriterMeaningRef' in schema.model_json_schema().get('$defs', {}):
         from adaptive_document_agent.agent.summary_writer_copy import address_only_copy
-        return address_only_copy(value)
+        value = address_only_copy(value)
+        if any('display' in definition.get('required', [])
+               for definition in schema.model_json_schema().get('$defs', {}).values()):
+            # Synthetic writers explicitly choose ordinary paragraphs. This
+            # transport hint neither invents a semantic structure nor grants
+            # any independent coverage/meaning acceptance.
+            def display(node):
+                if isinstance(node, dict):
+                    if 'text' in node and 'fact_ids' in node and node.get('display') is None:
+                        node['display'] = {'layout': 'paragraphs', 'break_after': []}
+                    for child in node.values():
+                        display(child)
+                elif isinstance(node, list):
+                    for child in node:
+                        display(child)
+            display(value)
+        return value
     return value
 
 
@@ -35,6 +51,8 @@ def authored_test_draft(draft, messages):
     candidate = deepcopy(draft)
     for page in candidate['pages']:
         for item in page['items']:
+            if item.get('display') is None:
+                item['display'] = {'layout': 'paragraphs', 'break_after': []}
             item['meaning_refs'] = [dict(part_id=part_id, meaning_index=index)
                 for part_id in dict.fromkeys(owners[fid] for fid in item['fact_ids'] if fid in owners)
                 for index in range(len(meanings.get(part_id, [])))]

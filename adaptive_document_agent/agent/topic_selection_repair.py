@@ -2,6 +2,8 @@
 
 import json
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 
 from adaptive_document_agent.models import PresentationTopicSelection, ValidationIssue
 from adaptive_document_agent.services.llm.exceptions import LLMResponseError, LLMTransportError
@@ -50,11 +52,10 @@ def retain_valid_topics(selection, lookup, primary_pages, result, gateway, valid
                         "unit", "raw_unit", "currency", "period", "dimensions", "category_dimensions", "evidence"})
                     for item in lookup[sid]]} for sid in topic.series_ids]}
                for topic, error in repairable]
-    for (original, _), scoped_payload in zip(repairable, payload):
+    def request_correction(scoped_payload):
         encoded = json.dumps([scoped_payload], ensure_ascii=False, separators=(",", ":"))
         if len(encoded) > 40_000:
-            audit(original, "Scoped correction exceeds the bounded context budget", "correction_not_requested")
-            continue
+            return None, "Scoped correction exceeds the bounded context budget"
         try:
             revised = gateway.generate_structured([
                 {"role": "system", "content":
@@ -65,6 +66,24 @@ def retain_valid_topics(selection, lookup, primary_pages, result, gateway, valid
                  "Do not return other topics or omissions. Omit a topic only if it cannot be supported."},
                 untrusted_document_message(encoded),
             ], PresentationTopicSelection, stage="presentation", allow_repair=False)
+            return revised, None
+        except (LLMResponseError, LLMTransportError, ValueError) as exc:
+            return None, exc
+
+    workers = min(len(payload), getattr(gateway, 'discovery_workers', 1))
+    if workers > 1:
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix='topic-correction') as pool:
+            futures = [pool.submit(copy_context().run, request_correction, item) for item in payload]
+            responses = [future.result() for future in futures]
+    else:
+        responses = [request_correction(item) for item in payload]
+    # Requests are independent, while validation and audit order always follow
+    # the model-selected topic order. The gateway still owns call admission.
+    for (original, _), (revised, failure) in zip(repairable, responses):
+        if failure is not None:
+            audit(original, failure, 'correction_not_requested' if isinstance(failure, str) else 'correction_failed')
+            continue
+        try:
             originals = {original.id: original}
             revised_counts = Counter(t.id for t in revised.topics)
             for topic in revised.topics:
@@ -78,7 +97,7 @@ def retain_valid_topics(selection, lookup, primary_pages, result, gateway, valid
                     accepted[topic.id] = topic
                 except ValueError as exc:
                     audit(topic, exc, "correction")
-        except (LLMResponseError, LLMTransportError, ValueError) as exc:
+        except ValueError as exc:
             audit(original, exc, "correction_failed")
 
     # A bad optional takeaway must not erase a valid model-selected question.

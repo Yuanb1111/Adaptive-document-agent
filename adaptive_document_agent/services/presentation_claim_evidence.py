@@ -145,6 +145,11 @@ def _ranking_peers(shares, eligible, text):
 def _narrow(slide, replacements, selected=()):
     old = slide.title
     old_message = slide.message
+    authored_question = slide.analytical_question.strip()
+    from .presentation_share_claims import share_motion
+    neutral_question = (authored_question if re.match(r"\s*(?:how|what|which)\b", authored_question, re.I)
+                        and not _RANK.search(authored_question)
+                        and not any(share_motion(authored_question)) else "")
     title = slide.section_title.strip()
     if title and (_RANK.search(title) or _SHARE.search(title)):
         # A selected topic can name several measures even when one comparative
@@ -160,6 +165,11 @@ def _narrow(slide, replacements, selected=()):
         title = " and ".join(labels)
         if len(title) > 130:
             title = labels[0] + (" and related measures" if len(labels) > 1 else "")
+    if not title and neutral_question:
+        title = neutral_question
+    # A rejected directional claim does not invalidate the model's neutral,
+    # source-scoped question. Keep that question rather than erase its subject
+    # with a generic replacement. Ordinary source/period checks still apply.
     slide.title = title or "Reported measures"
     if slide.section_title:
         replacements[slide.section_title] = slide.title
@@ -176,7 +186,7 @@ def _narrow(slide, replacements, selected=()):
     elif slide.message == "Reported values across the cited periods." and title:
         # Cached plans may already contain the previous generic fallback.
         slide.message = f"Reported values for {title} across the cited periods."
-    slide.analytical_question = "How do the reported values vary across the cited periods?"
+    slide.analytical_question = neutral_question or slide.title
     slide.selection_reason = _NARROW_REASON
     replacements[old] = slide.title
     if old_message and old_message != slide.message:

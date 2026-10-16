@@ -374,18 +374,61 @@ def quoted_table_context(item, result, *, excerpts=None):
             if page.page_number not in recovered_tables:
                 recovered_tables[page.page_number] = BorderlessTableExtractor().extract(page, page.page_number)
             tables = recovered_tables[page.page_number]
-        for table in tables:
-            for row in table.rows:
-                cells = [str(cell).strip() for cell in row.cells if cell and str(cell).strip()]
-                labels = [cell for cell in cells if parse_number(cell) is None]
-                values = [cell for cell in cells if parse_number(cell) is not None]
-                if (not labels or not values or not all(normalize_quote(label) in quoted for label in labels)
-                        or not any(normalize_quote(cell) in quoted for cell in values)):
-                    continue
-                key = tuple(normalize_quote(label) for label in labels)
-                plausible[key].add(table.table_id)
-                if row.alignment_status == "resolved" and _quoted_complete_row(cells, quoted):
-                    matched[key].append((table, row))
+        def row_scope(row):
+            cells = [str(cell).strip() for cell in row.cells if cell and str(cell).strip()]
+            labels = [cell for cell in cells if parse_number(cell) is None]
+            values = [cell for cell in cells if parse_number(cell) is not None]
+            return cells, labels, values
+
+        # A parsed header fragment elsewhere on this page cannot suppress
+        # complete literal rows absent from all parsed grids. Existing labelled
+        # rows, including partial/unresolved rows, keep ownership and ambiguity.
+        def label_key(label):
+            return normalize_quote(re.sub(r"(?<=\w)(?:\(\d+\))+", "", label))
+        protected_labels = {label_key(labels[0]) for table in tables for row in table.rows
+                            if (labels := row_scope(row)[1])}
+        recovered_rows = []
+        if page.tables:
+            from adaptive_document_agent.extraction.borderless_table_extractor import BorderlessTableExtractor
+            parser = BorderlessTableExtractor()
+            gaps = {label_key(candidate.label) for index, line in enumerate(quote.text.splitlines())
+                    if (candidate := parser._parse_row(index, parser._clean_line(line)))
+                    and label_key(candidate.label) not in protected_labels}
+            if gaps:
+                if page.page_number not in recovered_tables:
+                    recovered_tables[page.page_number] = parser.extract(page, page.page_number)
+                added = []
+                for table in recovered_tables[page.page_number]:
+                    # Newly recovered column roles/units/periods must be carried
+                    # by this same continuous quotation, not a nearby table.
+                    headers = [normalize_quote(locate(raw, source))
+                               for raw in table.raw_header_lines if raw.strip()]
+                    if not headers or any(not header or header not in quoted for header in headers):
+                        continue
+                    for row in table.rows:
+                        cells, labels, values = row_scope(row)
+                        if (not labels or not values or label_key(labels[0]) not in gaps
+                                or label_key(labels[0]) in protected_labels
+                                or row.alignment_status != "resolved"
+                                or not _quoted_complete_row(cells, quoted)):
+                            continue
+                        recovered_rows.append((table, row))
+                        if all(existing.table_id != table.table_id for existing in added):
+                            added.append(table)
+                tables = [*tables, *added]
+        # Recovery adds only complete quote-local row gaps, never every row
+        # from a newly parsed page. Original tables still participate unchanged.
+        source_rows = [(table, row) for table in page.tables for row in table.rows] if page.tables else [
+            (table, row) for table in tables for row in table.rows]
+        for table, row in [*source_rows, *recovered_rows]:
+            cells, labels, values = row_scope(row)
+            if (not labels or not values or not all(normalize_quote(label) in quoted for label in labels)
+                    or not any(normalize_quote(cell) in quoted for cell in values)):
+                continue
+            key = tuple(normalize_quote(label) for label in labels)
+            plausible[key].add(table.table_id)
+            if row.alignment_status == "resolved" and _quoted_complete_row(cells, quoted):
+                matched[key].append((table, row))
         complete = []
         # An exact distinctive unit declaration inside the quotation scopes its
         # grid, even if another grid elsewhere repeats the same row label.

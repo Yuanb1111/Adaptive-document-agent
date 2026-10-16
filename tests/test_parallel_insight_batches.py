@@ -8,7 +8,7 @@ from tests.test_insight_batch_recovery import BatchClient, gateway, results
 
 
 def test_cloud_batches_overlap_and_cache_preserves_source_order(tmp_path):
-    barrier, lock = Barrier(2), Lock()
+    barrier, lock = Barrier(4), Lock()
     active = peak = 0
     class Client(BatchClient):
         supports_concurrent_requests = True
@@ -26,7 +26,7 @@ def test_cloud_batches_overlap_and_cache_preserves_source_order(tmp_path):
     client = Client()
     routed = gateway(client, tmp_path, local=False)
     generated = InsightGenerator(routed).generate(results(24))
-    assert peak == 2 and active == 0
+    assert peak == routed.discovery_workers == 4 and active == 0
     assert [i.result_ids[0] for i in generated] == [f'r{i}' for i in range(24)]
     assert all(i.evidence[0].page == n+1 for n,i in enumerate(generated))
     assert InsightGenerator(routed).generate(results(24)) == generated
@@ -68,4 +68,4 @@ def test_parallel_privacy_failure_cancels_pending_work_and_retains_original_erro
             raise PrivacyViolationError('Original endpoint rejection')
     with pytest.raises(PrivacyViolationError, match='Original endpoint rejection'):
         list(generate_batches(Gateway(), [r.model_dump() for r in results(24)], InsightList, 'Read evidence'))
-    assert set(calls) == {'r0','r6'}
+    assert {'r0', 'r6'} <= set(calls) <= {'r0', 'r6', 'r12', 'r18'}

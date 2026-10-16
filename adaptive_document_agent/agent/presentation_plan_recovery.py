@@ -6,6 +6,7 @@ PresentationPlanRepairer, and provides an evidence-only modern fallback deck
 when no proposed plan can be retained.
 """
 
+import json
 import re
 from collections import defaultdict
 
@@ -106,8 +107,25 @@ class PresentationPlanRecovery:
         if result.presentation_plan:
             # A retry for another topic cannot revive a previously withdrawn
             # takeaway, even when its shortened title equals its question.
-            base.editorial_notes.extend(note for note in result.presentation_plan.editorial_notes
-                                        if note.startswith(_WITHHELD_PREFIX))
+            current_topics = {topic.id: topic for topic in selection.topics}
+            for note in result.presentation_plan.editorial_notes:
+                if note.startswith('[previous_claim_scope_withheld] '):
+                    base.editorial_notes.append(note)
+                    continue
+                if not note.startswith(_WITHHELD_PREFIX):
+                    continue
+                try:
+                    previous_claim = json.loads(note[len(_WITHHELD_PREFIX):])
+                    topic = current_topics.get(previous_claim.get('topic_id'))
+                except (ValueError, TypeError, AttributeError):
+                    topic = None
+                if topic is not None and previous_claim.get('takeaway') != topic.takeaway:
+                    # A model-owned revision is a new claim, which must pass
+                    # every ordinary gate below. Preserve the rejection while
+                    # preventing an older draft's marker from vetoing it.
+                    base.editorial_notes.append('[previous_claim_scope_withheld] ' + note[len(_WITHHELD_PREFIX):])
+                else:
+                    base.editorial_notes.append(note)
         _, series_by_id = series_directory(result)
         from adaptive_document_agent.validation.topic_period_consistency import reconcile_topic_periods
         reconcile_topic_periods(result, series_by_id)

@@ -21,6 +21,7 @@ class BriefItem:
     short_title: str = ""
     table: Any | None = None
     conditions: str = ''
+    display: Any | None = None
 
 
 def omit_redundant_summary(plan: Any, summary: Any) -> bool:
@@ -145,6 +146,11 @@ def render_brief(presentation: Any, title: str, items: list[BriefItem], *,
 
 def render_profile(presentation: Any, title: str, items: list[BriefItem], *, notes: str = "") -> list:
     """Paginate supported profile facts instead of silently hiding them in notes."""
+    if items and any(item.display is not None for item in items):
+        from .summary_visual_layout import render_structured_profile_group
+        structured = render_structured_profile_group(presentation, title, items, notes=notes)
+        if structured is not None:
+            return [structured]
     compact_items = [item for item in items if item.text.strip() and not is_technical_copy(item.text)]
     if 3 <= len(compact_items) <= 4:
         compact_page = _render_profile_grid(presentation, title, compact_items, notes)

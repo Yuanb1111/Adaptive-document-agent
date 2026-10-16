@@ -25,11 +25,16 @@ _SCALES = {"": 1, "k": 1000, "thousand": 1000, "m": 1_000_000,
 
 
 @lru_cache(maxsize=4096)
-def _label_variants(original, canonical, presentation, categories):
+def _label_variants(original, canonical, presentation, categories, source_rows=()):
     """Reuse literal label parsing, never an observation or validation verdict."""
     aliases = set(extract_metric_aliases(original, canonical, presentation))
     for category in categories:
         aliases.update(f"{alias} for {category}" for alias in list(aliases))
+        # Composition extraction keeps the parent measure as metric_original
+        # and the literal source row as its category. That exact owned row is
+        # also a subject; a similarly named row elsewhere is never an alias.
+        if category.casefold() in {row.casefold() for row in source_rows}:
+            aliases.add(category)
     variants = set()
     for label in aliases:
         if not label:
@@ -61,7 +66,9 @@ def scoped_value_errors(slide: PresentationSlide, observations: list[Observation
         # The key includes every source label and category. Different values,
         # periods and current selections still undergo the full check below.
         variants = _label_variants(obs.metric_original, obs.metric_canonical, obs.presentation_label,
-                                   tuple(obs.category_dimensions.values()))
+                                   tuple(obs.category_dimensions.values()),
+                                   tuple(sorted({e.row_label.strip() for e in obs.evidence
+                                                 if e.row_label and e.row_label.strip()})))
         for variant in variants:
             group = by_label.setdefault(variant, [])
             if obs.id in selected_ids and obs not in group:

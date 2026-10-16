@@ -1,5 +1,6 @@
 """Validate editorial copy against literal page-bound evidence, without calculations."""
 import re
+from functools import lru_cache
 from adaptive_document_agent.models import PipelineResult
 from adaptive_document_agent.models.executive_brief import ExecutiveBrief
 from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
@@ -38,7 +39,8 @@ _MONEY_QUANTITY = re.compile(
 )
 
 
-def _quantities(text: str) -> set[tuple[str, str, str]]:
+@lru_cache(maxsize=2048)
+def _quantities(text: str) -> frozenset[tuple[str, str, str]]:
     from .calendar_claims import split_calendar_dates
     text, _ = split_calendar_dates(text)
     text = PresentationPlanValidator._without_period_durations(text)
@@ -56,7 +58,7 @@ def _quantities(text: str) -> set[tuple[str, str, str]]:
             value = '-' + value.lstrip('-')
         output.add(((match['prefix'] or match['suffix'] or '').casefold(), value,
                     match['unit'].casefold()))
-    return output
+    return frozenset(output)
 
 
 def _explicit_nonparenthesized_quantities(text):

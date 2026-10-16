@@ -5,6 +5,7 @@ from types import UnionType
 from typing import Union, get_args, get_origin
 
 from pydantic import BaseModel, ConfigDict, Field, create_model
+from pydantic_core import PydanticUndefined
 
 
 class SummaryWriterMeaningRef(BaseModel):
@@ -13,21 +14,23 @@ class SummaryWriterMeaningRef(BaseModel):
     meaning_index: int = Field(ge=0)
 
 
-def _writer_annotation(annotation):
+def _writer_annotation(annotation, require_display):
     if isinstance(annotation, type) and issubclass(annotation, BaseModel):
-        return writer_schema(annotation)
+        return writer_schema(annotation, require_display=require_display)
     origin, arguments = get_origin(annotation), get_args(annotation)
     if origin is list:
-        return list[_writer_annotation(arguments[0])]
+        return list[_writer_annotation(arguments[0], require_display)]
     if origin in (Union, UnionType):
-        mapped = tuple(_writer_annotation(argument) for argument in arguments)
+        mapped = tuple(_writer_annotation(argument, require_display) for argument in arguments)
         return Union[mapped] if mapped != arguments else annotation
     return annotation
 
 
 @lru_cache(maxsize=128)
-def writer_schema(schema):
+def writer_schema(schema, *, require_display=None):
     """Clone only affected schema paths; preserve operation names and all constraints."""
+    if require_display is None:
+        require_display = any(base.__name__ == 'SummarySynthesisDraft' for base in schema.__mro__)
     fields = {}
     for name, field in schema.model_fields.items():
         if name == 'meaning_refs' and 'text' in schema.model_fields:
@@ -36,10 +39,18 @@ def writer_schema(schema):
             copied.description = ('Identify only exact source part_id and meaning_index for meanings '
                 'expressed in this current paragraph. Python binds its full exact text; these '
                 'addresses do not establish semantic coverage or approval.')
+        elif require_display and name == 'display' and 'text' in schema.model_fields:
+            from adaptive_document_agent.models.summary_display import SummaryDisplay
+            annotation = writer_schema(SummaryDisplay, require_display=True)
+            copied = Field(description='Choose an explicit supported display layout for this complete item. '
+                'Use paragraphs when no source-supported semantic visual structure is appropriate.')
         else:
-            annotation = _writer_annotation(field.annotation)
+            annotation = _writer_annotation(field.annotation, require_display)
             copied = deepcopy(field)
-        if annotation != field.annotation:
+        if require_display and schema.__name__ == 'SummaryDisplay' and name == 'layout':
+            copied.default = PydanticUndefined
+            copied.default_factory = None
+        if annotation != field.annotation or copied.is_required() != field.is_required():
             fields[name] = (annotation, copied)
     if not fields:
         return schema

@@ -298,7 +298,8 @@ class SyntheticReportingClient(SchemaReplayClient):
                 numeric_comparison=False, comparisons=[]) for row in values[0]])
         else:
             raise AssertionError('Unexpected synthetic reporting operation: ' + name)
-        typed = schema.model_validate(value)
+        from tests.summary_author_helpers import writer_test_value
+        typed = schema.model_validate(writer_test_value(schema, value))
         return typed, LLMResponse(text=typed.model_dump_json(), usage=LLMUsage(provider='mock', model='synthetic'))
 
 

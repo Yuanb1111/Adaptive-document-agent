@@ -1,7 +1,7 @@
 """One residual source correction after a Brief patch makes strict progress."""
 import json
 import re
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, create_model
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError, create_model
 from adaptive_document_agent.models.executive_brief import ExecutiveBrief
 from adaptive_document_agent.services.executive_brief import validate_executive_brief
 from .prompting import untrusted_document_message
@@ -53,7 +53,12 @@ def _remove_unused_magnitude_bindings(item, indices):
 
 
 def correct_residual_source_errors(gateway, brief, *, result, excerpts, initial_errors, audit, cancelled=None):
-    """Freeze source-valid findings, citations and labels; require all sources to pass."""
+    """Freeze valid findings and retain each independently source-valid correction.
+
+    This accepts source bindings only. A partial result still contains the
+    unchanged rejected siblings and must pass the caller's item selection,
+    whole-brief and fresh independent meaning gates before it can be returned.
+    """
     before = [error for errors in initial_errors.values() for error in errors
               if not error.startswith('Meaning review:')]
     remaining = validate_executive_brief(brief, result, excerpts=excerpts)
@@ -111,15 +116,34 @@ def correct_residual_source_errors(gateway, brief, *, result, excerpts, initial_
     proposed = gateway.generate_structured(messages, schema, stage='report', allow_repair=False,
                                            max_tokens=12000, cancelled=cancelled)
     values = proposed.model_dump(mode='json')
+    if set(values) != set(schema.model_fields):
+        raise ValueError('Source correction must cover exactly the requested item addresses')
     record['proposal'] = values
     items = [item.model_copy(deep=True) for item in brief.items]
-    removal_errors = []
+    accepted, rejected, protocol_failures = [], {}, []
     for i in failed:
-        items[i].text = values[f'item_{i}']['text']
-        items[i], errors = _remove_unused_magnitude_bindings(
-            items[i], values[f'item_{i}']['remove_quantity_representation_indices'])
-        removal_errors.extend(f'{items[i].label}: {error}' for error in errors)
+        try:
+            patch = SourceTextCorrection.model_validate(values[f'item_{i}'])
+        except ValidationError as exc:
+            rejected[i] = ['Source correction schema is invalid: ' + str(exc)]
+            protocol_failures.append(exc)
+            continue
+        candidate = items[i].model_copy(update={'text': patch.text})
+        candidate, errors = _remove_unused_magnitude_bindings(
+            candidate, patch.remove_quantity_representation_indices)
+        errors = [*errors, *validate_executive_brief(
+            ExecutiveBrief(title='Source check', items=[candidate]), result, excerpts=excerpts)]
+        if errors:
+            rejected[i] = errors
+        elif candidate != items[i]:
+            items[i] = candidate
+            accepted.append(i)
     corrected = brief.model_copy(update={'items':items})
-    errors = [*removal_errors, *validate_executive_brief(corrected, result, excerpts=excerpts)]
-    record.update(errors_after=errors, status='accepted_source' if not errors else 'rejected')
-    return corrected if not errors and corrected != brief else None
+    errors = validate_executive_brief(corrected, result, excerpts=excerpts)
+    record.update(errors_after=errors, accepted_indices=accepted, rejected_items=rejected,
+                  semantic_approval=False,
+                  status='accepted_source' if accepted and not errors else
+                         'partial_source' if accepted else 'rejected')
+    if protocol_failures and not accepted:
+        raise ValueError('No source correction item satisfies its immutable patch contract') from protocol_failures[0]
+    return corrected if accepted else None

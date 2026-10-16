@@ -447,7 +447,7 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
         presentation.slides[-1].notes_slide.notes_text_frame.text += (
             ("\n\nVerified brief scheduled as the final Conclusion; original plan:\n" if final_summary else
              "\n\nOmitted duplicate summary; original copy and evidence references:\n")
-            + summary.model_dump_json(indent=2)
+            + summary.model_dump_json()
         )
     else:
         summary_start = len(presentation.slides)
@@ -746,17 +746,16 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
         if not plan.company.summary_pages and len(presentation.slides):
             presentation.slides[-1].notes_slide.notes_text_frame.text += (
                 '\n\nComplete Summary reading and omission decisions:\n'
-                + plan.company.summary_review.model_dump_json(indent=2))
+                + plan.company.summary_review.model_dump_json())
         for index, page in enumerate(plan.company.summary_pages):
             if page.placement != placement:
                 continue
-            from .localized_summary_copy import summary_item_copy
-            items = [BriefItem(item.label, summary_item_copy(result, page, i), item.source_pages)
-                     for i, item in enumerate(page.items)]
-            notes = page.model_dump_json(indent=2)
+            from .summary_visual_layout import summary_brief_items
+            items = summary_brief_items(result, page)
+            notes = page.model_dump_json()
             if index == 0:
                 notes += '\n\nComplete Summary reading and decisions:\n' + (
-                    plan.company.summary_review.model_dump_json(indent=2))
+                    plan.company.summary_review.model_dump_json())
             source_visual = getattr(presentation, '_ada_source_visual', None)
             if page.compact or plan.company.summary_review.max_intro_slides is not None:
                 rendered = render_profile(presentation,page.title,items,notes=notes)
@@ -795,7 +794,7 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
         for page_index, summary in enumerate(available_summaries):
             items = [BriefItem(item.label, item.text, item.source_pages) for item in summary.items]
             title = summary.title
-            notes = summary.model_dump_json(indent=2)
+            notes = summary.model_dump_json()
             if page_index == 0 and company_name:
                 title = company_name
                 first = items[0]
@@ -881,7 +880,7 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
         items[0] = BriefItem(first.title, "Issuer name not identified in supplied pages. " + first.text, first.pages)
     # Full fields and source context remain available without clipping the
     # visible labels or constructing large, mostly empty cards.
-    notes = company.model_dump_json(indent=2) + "\n\n" + result.profile.document_summary
+    notes = company.model_dump_json() + "\n\n" + result.profile.document_summary
     visible_copy = " ".join(item.text for item in items).casefold()
     represented_fact_labels = {
         "industry": bool(company.industry),
@@ -960,7 +959,7 @@ def _add_planned_summary(
     if selected_brief and (result.executive_brief is not None or any(
             issue.code == 'executive_brief_unavailable' for issue in result.validation_warnings)):
         from .presentation_summary import render_complete_summary
-        notes = result.executive_brief.model_dump_json(indent=2) if result.executive_brief else ''
+        notes = result.executive_brief.model_dump_json() if result.executive_brief else ''
         render_complete_summary(presentation, slide_plan.title if slide_plan.title == 'Conclusion' else brief_title, selected_brief,
                                 notes=notes, single_column=True)
         return
@@ -1448,7 +1447,7 @@ def _add_document_overview(presentation: Any, result: PipelineResult) -> None:
     brief_title, selected_brief = display_brief(result)
     if selected_brief:
         from .presentation_summary import render_complete_summary
-        notes = result.executive_brief.model_dump_json(indent=2) if result.executive_brief else ''
+        notes = result.executive_brief.model_dump_json() if result.executive_brief else ''
         render_complete_summary(presentation, brief_title, selected_brief,
                                 notes=notes, single_column=True)
         return

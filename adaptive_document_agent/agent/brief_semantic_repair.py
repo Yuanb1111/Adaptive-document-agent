@@ -7,7 +7,9 @@ from adaptive_document_agent.models.executive_brief import ExecutiveBrief
 from adaptive_document_agent.services.executive_brief import validate_executive_brief
 from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
 from .prompting import untrusted_document_message
-from .brief_audit_scope import source_audit_scope, audit_status_errors
+from .brief_audit_scope import (
+    AUDIT_STATUS_SCOPE_RULE, source_audit_scope, audit_status_errors, audit_status_options,
+)
 from .brief_period_clarification import period_clarification_options
 from .brief_meaning_contract import check_meaning_contract
 
@@ -69,6 +71,9 @@ def correct_new_meaning_errors(gateway, brief, *, result, excerpts, topics, sour
         untrusted_document_message(json.dumps(dict(
             failed_items={f'item_{i}': brief.items[i].model_dump(mode='json') for i in failed},
             source_audit_scope={f'item_{i}': inventories[i] for i in failed},
+            source_status_options={f'item_{i}': audit_status_options(brief.items[i], result,
+                inventory=inventories[i]) for i in failed},
+            source_status_scope_rule=AUDIT_STATUS_SCOPE_RULE,
             period_clarifications={f'item_{i}': periods[i] for i in failed},
             errors={f'item_{i}': reasons for i, reasons in failed.items()}), ensure_ascii=False))]
     original_messages = list(messages)
@@ -124,6 +129,9 @@ def correct_new_meaning_errors(gateway, brief, *, result, excerpts, topics, sour
                  'does not permit adding them to this meaning-only patch. Keep the already displayed '
                  'figures and permitted period clarifications. Move an ambiguous audit-status label '
                  'directly beside its supported period; never assign a status to an unknown column. '
+                 + AUDIT_STATUS_SCOPE_RULE + ' '
+                 'Do not delete a required source-supported status when removing an unrelated '
+                 'new quantity; preserve the retained measure and its own qualification. '
                  'Return exactly the schema item_N keys and only {text: ...}. Make the smallest '
                  'correction, preserve all other findings and qualifications. This is the final '
                  'shared format/contract retry, not a new briefing or a new review loop.'}]

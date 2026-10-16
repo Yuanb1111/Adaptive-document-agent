@@ -1,7 +1,9 @@
 """Keep a meaning-only correction inside its displayed quantities and source periods."""
 from adaptive_document_agent.services.executive_brief import _quantities
 from adaptive_document_agent.services.brief_table_evidence import canonical_quantity, quoted_table_context
-from .brief_audit_scope import audit_status_errors, audit_status_options, misplaced_parenthetical_statuses
+from .brief_audit_scope import (
+    AUDIT_STATUS_SCOPE_RULE, audit_status_errors, audit_status_options, misplaced_parenthetical_statuses,
+)
 from .brief_period_clarification import original_period_identities, quantity_text_with_bound_dates
 
 
@@ -54,5 +56,6 @@ def check_meaning_contract(original, candidate, indices, *, result, excerpts, in
                 'new_table_quantities_to_remove': sorted(introduced),
                 'period_clarifications': periods[index],
                 'source_status_options': audit_status_options(item, result, inventory=inventories[index]),
+                'source_status_scope_rule': AUDIT_STATUS_SCOPE_RULE,
                 'misplaced_statuses': placements}
     return candidate.model_copy(update={'items': items}), errors, feedback, bool(errors) and recoverable

@@ -2,6 +2,7 @@
 import json
 from copy import deepcopy
 from hashlib import sha256
+from time import perf_counter
 from pydantic import BaseModel, ConfigDict, Field
 
 from adaptive_document_agent.models import ValidationIssue
@@ -118,6 +119,10 @@ def refine_presentation_budget(gateway, result, *, progress=None):
         'only with explicit source-aware reasons. Complete extraction stays in analysis/data exports. '
         'Keep material counterevidence, definitions, attribution, scope, latest-period qualifications '
         'and comparable periods. A comparison must retain both endpoints and its conditions. '
+        'When related retained topics end on different source dates, explicitly identify each '
+        'topic cutoff and qualify the different coverage; never imply that an older composition '
+        'is the latest balance sheet or extrapolate a missing category. Preserve any interior '
+        'reversal when describing an ordered sequence of values. '
         'Original model-selected questions are editable drafts, not immutable user requirements. '
         'You need not keep every original topic or every metric named in an original question. '
         'Prefer omitting an entire lower-priority topic over keeping an annual trend but omitting a '
@@ -165,14 +170,19 @@ def refine_presentation_budget(gateway, result, *, progress=None):
                 untrusted_document_message(json.dumps(context,ensure_ascii=False))]
     attempts = []
     failed_projections = {}
+    from .topic_repair_memo import RejectedTopicRepairMemo
+    rejected_takeaway_repairs = RejectedTopicRepairMemo()
     raw_observations = [o.model_dump(mode='json') for o in result.observations]
     for attempt in range(2):
         record = {'attempt':attempt+1, 'status':'pending',
                   'measured_budget_allocation':allocation}
         attempts.append(record)
         try:
+            notify(f'Budget proposal {attempt+1}/2: choosing evidence priorities')
+            started = perf_counter()
             draft = complete_budget_output(gateway,messages,PhysicalBudgetSelection,record,
                 audit_key='selection_output_attempts',token_limits=SELECTION_TOKEN_LIMITS)
+            record.setdefault('timings_ms', {})['selection'] = int((perf_counter()-started)*1000)
             record['proposal'] = draft.model_dump(mode='json')
             record['inventory_diagnostics'] = selection_inventory_diagnostics(draft, original)
             try:
@@ -203,11 +213,17 @@ def refine_presentation_budget(gateway, result, *, progress=None):
             candidate = result.model_copy(deep=True)
             candidate.presentation_topics = selection
             from .topic_plan_compiler import compile_topic_plan
+            notify(f'Budget proposal {attempt+1}/2: compiling and checking selected findings')
+            started = perf_counter()
             plan = compile_topic_plan(candidate)
+            from .topic_takeaway_repair import repair_withheld_takeaways
+            plan = repair_withheld_takeaways(gateway, candidate, plan,
+                                             rejected_memo=rejected_takeaway_repairs)
             plan.company = result.presentation_plan.company.model_copy(deep=True)
             candidate.presentation_plan = plan
             from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
             PresentationPlanValidator().validate(plan,candidate)
+            record['timings_ms']['compilation_and_source_checks'] = int((perf_counter()-started)*1000)
             if [o.model_dump(mode='json') for o in candidate.observations] != raw_observations:
                 raise ValueError('Physical budget refinement changed retained extraction')
             native_identity = _native_projection_identity(candidate)
@@ -218,7 +234,10 @@ def refine_presentation_budget(gateway, result, *, progress=None):
                     measured_attempt=prior['attempt'], identical_full_compiled_inputs=True,
                     semantic_approval=False)
                 raise ValueError('Identical compiled native inputs retain the known failed physical cost: '+prior['error'])
+            notify(f'Budget proposal {attempt+1}/2: measuring native PowerPoint pages')
+            started = perf_counter()
             projected, projected_counts = measure(candidate)
+            record['timings_ms']['native_measurement'] = int((perf_counter()-started)*1000)
             projected_counts = {**projected_counts, 'native_groups': measured_native_groups(candidate, lookup)}
             record['projected_counts'] = projected_counts
             # Measure existing pages without inventing future Conclusion cost.
@@ -251,6 +270,8 @@ def refine_presentation_budget(gateway, result, *, progress=None):
             validate_subset(review_target, original, lookup, candidate)
             record['review_target'] = review_target.model_dump(mode='json')
             record['applied_selection'] = candidate.presentation_topics.model_dump(mode='json')
+            notify(f'Budget proposal {attempt+1}/2: independently reviewing scope and omissions')
+            started = perf_counter()
             verdict = complete_budget_output(gateway,[
                 {'role':'system','content':rules + ' Independently review only. Accept if the revised '
                  'questions/copy faithfully match their retained source evidence and every omitted '
@@ -266,13 +287,16 @@ def refine_presentation_budget(gateway, result, *, progress=None):
                 *instruction_messages(result.profile,purpose='physical budget omission review'),
                 untrusted_document_message(json.dumps({'source':context,'proposal':record['review_target']},ensure_ascii=False))],
                 PhysicalBudgetReview,record,audit_key='review_output_attempts',token_limits=REVIEW_TOKEN_LIMITS)
+            record['timings_ms']['independent_review'] = int((perf_counter()-started)*1000)
             record['independent_review'] = verdict.model_dump(mode='json')
             if not verdict.accepted:
                 raise ValueError('Physical budget selection was independently rejected: '+verdict.reason)
             from .executive_brief import ExecutiveBriefWriter
             notify('Regenerating and independently checking the briefing against the final budgeted topics')
             try:
+                started = perf_counter()
                 candidate.executive_brief = ExecutiveBriefWriter(gateway).generate(candidate)
+                record['timings_ms']['final_briefing'] = int((perf_counter()-started)*1000)
             except ValueError as exc:
                 record['brief_error'] = str(exc)
                 record['brief_audits'] = [w.model_dump(mode='json') for w in candidate.validation_warnings
@@ -282,7 +306,10 @@ def refine_presentation_budget(gateway, result, *, progress=None):
                 result.pipeline_state = 'partial'
                 result.retry_from = 'reporting'
                 raise FinalBudgetBriefError('Final budgeted briefing failed source checks: '+str(exc)) from exc
+            notify('Measuring the final briefing and complete PowerPoint budget')
+            started = perf_counter()
             final_deck, final_counts = measure(candidate)
+            record['timings_ms']['final_native_measurement'] = int((perf_counter()-started)*1000)
             record['final_counts'] = final_counts
             require_exported_budgets(final_deck,candidate)
             if [o.model_dump(mode='json') for o in candidate.observations] != raw_observations:

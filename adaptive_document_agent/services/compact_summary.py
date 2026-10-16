@@ -7,7 +7,15 @@ from .source_quotes import split_literal_quote
 
 
 def compact_digest(pages):
-    return sha256(json.dumps([p.model_dump(mode='json') for p in pages],
+    values = [p.model_dump(mode='json') for p in pages]
+    # A newly optional geometry field must not invalidate an independently
+    # accepted historical draft that never proposed a semantic visual layout.
+    # Real writer-selected structure remains part of the reviewed digest.
+    for page in values:
+        for item in page['items']:
+            if item.get('display') is None:
+                item.pop('display', None)
+    return sha256(json.dumps(values,
                              sort_keys=True, ensure_ascii=False).encode('utf-8')).hexdigest()
 
 

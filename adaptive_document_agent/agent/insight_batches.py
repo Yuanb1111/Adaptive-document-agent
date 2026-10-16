@@ -76,7 +76,7 @@ def generate_batches(gateway: LLMGateway, records: list[dict], schema: type,
         yield ids, generated
 
     batches = list(_batches(records))
-    workers = min(2, getattr(gateway, 'discovery_workers', 1), len(batches))
+    workers = min(getattr(gateway, 'discovery_workers', 1), len(batches))
     if workers <= 1:
         for batch in batches:
             yield from request(batch)

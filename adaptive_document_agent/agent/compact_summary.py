@@ -7,6 +7,7 @@ from concurrent.futures import CancelledError
 from pydantic import BaseModel, ConfigDict, Field
 
 from adaptive_document_agent.models.summary import SummarySlideItem, SummarySlidePage, SummaryPartDecision, SummaryFactRef
+from adaptive_document_agent.models.summary_display import SummaryDisplay
 from adaptive_document_agent.services.source_quotes import normalize_quote
 from adaptive_document_agent.services.llm.exceptions import LLMResponseError, LLMTransportError, PrivacyViolationError, LLMStructuredOutputError
 from adaptive_document_agent.services.compact_summary import compact_digest, compact_layout_errors
@@ -30,6 +31,7 @@ class CompactSummaryItem(BaseModel):
     meaning_refs: list[AuthoredMeaningRef] = Field(default_factory=list, description=
         'For each selected meaning expressed here, identify its exact source part/index and literal visible quote. '
         'These author references do not establish independent semantic approval.')
+    display: SummaryDisplay | None = None
 
 
 class CompactSummaryPage(BaseModel):
@@ -169,7 +171,7 @@ def expand_compact(draft,catalog,review):
             from .summary_theme_layout import split_compact_item
             items.extend(split_compact_item(item.text, page.title, f'{n}:{len(items)}', dict(label=item.label,
                 part_ids=list(dict.fromkeys(r.part_id for r in refs)),source_refs=refs,
-                source_quote='\n\n'.join(quotes),source_pages=sorted(source_pages))))
+                source_quote='\n\n'.join(quotes),source_pages=sorted(source_pages), display=item.display)))
         title_refs = {(ref.part_id, ref.fact_index): ref for item in items for ref in item.source_refs}
         from .summary_theme_layout import pack_theme_items
         prototype = SummarySlidePage(id=f'compact_summary_{n+1}', title=page.title,
@@ -493,6 +495,10 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
                      + 'Accept only if its assigned paragraph meaningfully summarizes '
                      'that part, preserving its material conditions, attribution, definition, '
                      'comparison direction, reporting period and uncertainty. '
+                     'When an item proposes display structure, independently verify that a comparison, '
+                     'timeline or relationship is explicitly supported by these statements and their source. '
+                     'A visual grouping cannot invent categories, chronology, causal links or missing values. '
+                     'Layout breaks must retain each assertion with its necessary qualifications. '
                      'Concise qualitative synthesis is valid; do not require enumeration of every '
                      'table cell or example when the substantive meaning, reporting scope and material '
                      'qualifications remain accurate. Evaluate the union of all paragraphs bound to '

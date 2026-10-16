@@ -1,6 +1,7 @@
 """Deterministic safety checks for AI-authored presentation plans."""
 
 from collections import Counter
+from functools import lru_cache
 import re
 
 from adaptive_document_agent.models import PipelineResult, PresentationPlan
@@ -532,6 +533,7 @@ class PresentationPlanValidator:
         return re.sub(r"(?<![A-Za-z0-9_])([+-])\s+(?=\d)", r"\1", value)
 
     @staticmethod
+    @lru_cache(maxsize=16384)
     def _normalize_number(value: str) -> str:
         clean = value.replace("\u00a0", " ").replace("\u202f", " ").replace("\u2019", "'").lstrip("+")
         suffix = "%" if clean.endswith("%") else ""
