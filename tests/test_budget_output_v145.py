@@ -157,7 +157,7 @@ def prepared_refinement(monkeypatch):
 
 
 def test_selection_and_independent_review_each_recover_capacity_before_publication(monkeypatch):
-    result, _, draft, brief_calls = prepared_refinement(monkeypatch)
+    result, original, draft, brief_calls = prepared_refinement(monkeypatch)
     raw = deepcopy(result.observations)
     verdict = budget.PhysicalBudgetReview(accepted=True,
         reason='Recent reversal and adverse outcome remain; the older scope is explicitly omitted.')
@@ -165,7 +165,7 @@ def test_selection_and_independent_review_each_recover_capacity_before_publicati
         response('{"accepted":', finish='length'), response(verdict)])
     assert budget.refine_presentation_budget(llm, result)
     assert len(client.requests) == 4 and len(brief_calls) == 1
-    assert result.presentation_topics == draft.selection and result.observations == raw
+    assert result.presentation_topics == budget.canonical_budget_selection(draft, original) and result.observations == raw
     audit = json.loads(result.validation_warnings[-1].message)
     assert len(audit['attempts']) == 1
     record = audit['attempts'][0]
@@ -242,16 +242,16 @@ def test_two_semantic_rejections_remain_bounded_despite_four_capacity_recoveries
     assert all(r['independent_review']['accepted'] is False for r in records)
 
 
-def test_even_review_approval_cannot_publish_a_twenty_first_body_page(monkeypatch):
+def test_native_projection_rejects_an_over_budget_body_before_paid_omission_review(monkeypatch):
     result, original, draft, brief_calls = prepared_refinement(monkeypatch)
     monkeypatch.setattr(budget, 'measure', lambda current: measurement(current, 23, 12))
-    verdict = budget.PhysicalBudgetReview(accepted=True, reason='The exact selected source scope is defensible.')
-    llm, client = gateway([response(draft), response(verdict)] * 2)
+    llm, client = gateway([response(draft)] * 2)
     with pytest.raises(ValueError, match='maximum is 20'):
         budget.refine_presentation_budget(llm, result)
-    assert len(client.requests) == 4 and not brief_calls
+    assert len(client.requests) == 2 and not brief_calls
     assert result.presentation_topics == original
     assert all(r['projected_counts']['total'] == 23 for r in failure_audit(result)['attempts'])
+    assert all('independent_review' not in r for r in failure_audit(result)['attempts'])
 
 
 def test_capacity_recovery_cannot_bypass_complete_source_id_decisions(monkeypatch):
@@ -271,7 +271,7 @@ def test_capacity_recovery_cannot_bypass_complete_source_id_decisions(monkeypatc
     assert all(len(record['selection_output_attempts']) == 2 for record in records)
 
 
-def test_review_approval_cannot_publish_six_introduction_pages(monkeypatch):
+def test_native_projection_rejects_six_introduction_pages_before_paid_omission_review(monkeypatch):
     result, original, draft, brief_calls = prepared_refinement(monkeypatch)
     from adaptive_document_agent.services.summary_export import _PREFIX
 
@@ -287,10 +287,9 @@ def test_review_approval_cannot_publish_six_introduction_pages(monkeypatch):
         return deck, {**counts, 'introduction': 6}
 
     monkeypatch.setattr(budget, 'measure', overlong_intro)
-    verdict = budget.PhysicalBudgetReview(accepted=True, reason='The selected source scope remains defensible.')
-    llm, client = gateway([response(draft), response(verdict)] * 2)
+    llm, client = gateway([response(draft)] * 2)
     with pytest.raises(ValueError, match='introduction (all|body) has 6'):
         budget.refine_presentation_budget(llm, result)
-    assert len(client.requests) == 4 and not brief_calls
+    assert len(client.requests) == 2 and not brief_calls
     assert result.presentation_topics == original
     assert all(r['projected_counts']['introduction'] == 6 for r in failure_audit(result)['attempts'])

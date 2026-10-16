@@ -8,6 +8,7 @@ concurrency, not live-provider end-to-end performance.
 """
 
 import argparse
+import ast
 import hashlib
 import importlib.util
 import json
@@ -176,8 +177,13 @@ def run(args):
 
     def score_response(messages, options):
         schema = json.loads(messages[0]["content"].split("schema: ", 1)[1])
+        requested = next((message['content'].split(': ', 1)[1] for message in messages
+            if message['content'].startswith('Current batch candidate IDs to score: ')), None)
+        identifiers = set(ast.literal_eval(requested)) if requested is not None else None
+        requested_scores = lambda scores: [score for score in scores
+            if identifiers is None or score['candidate_id'] in identifiers]
         if "reason_catalog" not in schema["properties"]:
-            return {"scores": legacy_scores}
+            return {"scores": requested_scores(legacy_scores)}
         catalog = reason_catalog
         # The production list representation preserves duplicate IDs for audit;
         # the transitional dict branch also lets this runner inspect older worktrees.
@@ -185,7 +191,7 @@ def run(args):
             catalog = [{"id": key, "text": value} for key, value in catalog.items()]
         return {
             "reason_catalog": catalog,
-            "scores": compact_decisions,
+            "scores": requested_scores(compact_decisions),
         }
 
     def score_run(gateway):
@@ -196,7 +202,10 @@ def run(args):
         )
         return [item.model_dump(mode="json", include={"candidate", "score", "reasons", "rejected"}) for item in scores]
 
-    output["scoring"] = measured(score_run, [score_response])
+    from adaptive_document_agent.agent import value_scorer
+    batch_size = getattr(value_scorer, 'SCORING_BATCH_SIZE', len(candidates))
+    scoring_batches = (len(candidates) + batch_size - 1) // batch_size
+    output["scoring"] = measured(score_run, [score_response] * scoring_batches)
     output["schedule"] = scheduling(args.harness, args.repeats)
     return output
 

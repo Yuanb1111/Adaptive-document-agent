@@ -45,7 +45,8 @@ def test_repeated_internal_server_error_stops_after_two_attempts(monkeypatch):
     assert complete.call_count==2 and len(e.value.attempts)==2
 
 
-def test_parallel_scoring_retains_source_order_and_caller_progress():
+def test_parallel_scoring_retains_source_order_and_caller_progress(monkeypatch):
+    monkeypatch.setattr('adaptive_document_agent.agent.value_scorer.SCORING_BATCH_SIZE',40)
     candidates,_,profile,_,_=scoring_fixture(80)
     barrier=Barrier(2)
     class Client:

@@ -137,12 +137,14 @@ def revise_content(gateway, draft, messages, schema, audit, *, source=None, erro
         'targets; address EACH one against its full required_meanings entry, including separately '
         'stated characteristics and qualifications. Never fix only the first issue or substitute '
         'a broad label. Every corrected or added item must carry meaning_refs with each exact '
-        'part_id, meaning_index and a literal summary_quote in its current text. Preserve existing '
+        'part_id and meaning_index. Do not return summary_quote; Python binds each address to '
+        'the full exact current paragraph text. Preserve existing '
         'supported meanings and their explicit references. All required meanings remain mandatory; '
         'short prose targets cannot authorize their removal. Self-reported references never '
         'replace the independent full meaning review.')
+    from .summary_writer_copy import address_only_copy
     repair_messages = [instruction, untrusted_document_message(json.dumps(
-        dict(source_facts=source_facts, editable_groups=editable, errors=errors,
+        dict(source_facts=source_facts, editable_groups=address_only_copy(editable), errors=errors,
              meaning_deficits=meaning_deficits or [],
              required_meanings={p['id']: p['required_meanings'] for p in (source or {}).get('parts', [])
                                 if p.get('required_meanings')}), ensure_ascii=False))]

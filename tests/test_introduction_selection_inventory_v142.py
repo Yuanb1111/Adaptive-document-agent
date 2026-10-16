@@ -82,6 +82,13 @@ class SelectionClient:
             return schema(edits=[dict(meaning_id='meaning-0', required_meanings=[
                 dict(meaning='Team AA supports scheduling.'),
                 dict(meaning='Team AA requires staff training before service delivery.')])])
+        if schema.__name__ == 'IntroductionMeaningResolution':
+            return schema(finding_dispositions=[dict(finding_id=finding['finding_id'],
+                classification='already_covered', action='already_covered',
+                referenced_meaning_ids=[row['meaning_id'] for row in payload['current_meanings']],
+                source_quote=payload['source']['parts'][0]['source_text'],
+                reason='Untrusted author disposition remains subject to the rejecting final review.')
+                for finding in payload['findings']])
         assert schema.__name__ == 'IntroductionAudienceReview'
         self.reviews.append(deepcopy(payload))
         assert payload['inventory_revision_base'] is not None
@@ -179,5 +186,5 @@ def test_valid_inventory_never_substitutes_for_final_independent_semantic_accept
     with pytest.raises(ValueError, match='not independently accepted'):
         select_introduction_audience(client, result, reading)
     assert client.calls.count('IntroductionAudienceInventoryCorrection') == 1
-    assert len(client.reviews) == 2
+    assert len(client.reviews) == (3 if mode == 'reject_after_meaning' else 2)
     assert reading.audience_part_ids is None and not reading.audience_selection

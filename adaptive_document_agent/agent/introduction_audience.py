@@ -88,8 +88,9 @@ def select_introduction_audience(gateway, result, review, *, cancelled=None):
     inventory_revision_base = None
     inventory_correction_used = False
     binding_budget = {'used': False}
-    # Two original semantic rounds, one optional additive correction, and at most
-    # one binding re-review across them: no more than four independent reviews.
+    meaning_resolution = None
+    # At most three semantic rounds, including a first meaning correction after
+    # a selection rewrite, plus one shared binding re-review.
     for attempt in range(3):
         if selection is None:
             selection = complete_response(gateway, messages, IntroductionAudienceSelection, cancelled=cancelled)
@@ -129,10 +130,11 @@ def select_introduction_audience(gateway, result, review, *, cancelled=None):
              'period or attribution as grounds for bundling them. '
              'Verify EVERY meaning as actual audience copy against its OWN complete source part. '
              'Reject unsupported values, scope, causal claims, units, periods, attribution and uncertainty. '
-             'The source_quote is the original owning passage copied by Python, not evidence authored '
-             'by a model. Populated canonical source_quote fields are expected at this REVIEW step; '
-             'do not reject them for being nonempty. Empty-quote output requirements apply only to '
-             'the earlier authoring response, before Python binds the evidence. '
+             'Canonical source_quote fields are the original owning passage copied by Python and '
+             'retained in the audit, not evidence authored by a model. This review wire references '
+             'that complete source.parts[].source_text by part_id rather than repeating each '
+             'canonical quotation. Empty-quote output requirements apply only to authoring, '
+             'before Python binds the evidence; omitted repeated fields are not missing evidence. '
              'proposed_source_quote, if present, is an untrusted diagnostic proposal and '
              'cannot establish evidence or replace the actual source. Copying an owned passage does '
              'not prove the assertion: reject a meaning not grounded in that exact part. '
@@ -157,7 +159,7 @@ def select_introduction_audience(gateway, result, review, *, cancelled=None):
         verdict = review_current_selection(gateway, source, values, review_rules, review,
             attempt=attempt, meaning_revision_base=meaning_revision_base,
             inventory_revision_base=inventory_revision_base, binding_budget=binding_budget,
-            cancelled=cancelled)
+            cancelled=cancelled, meaning_resolution=meaning_resolution)
         attempts.append({'decisions':values,'review':verdict.model_dump()})
         # Retain rejected proposals too: a failed selection must be diagnosable
         # without assigning it the independently accepted audience state.
@@ -170,7 +172,8 @@ def select_introduction_audience(gateway, result, review, *, cancelled=None):
                 'independent_review':verdict.model_dump(),'attempts':attempts}
             audience_part_ids(review)
             return
-        if attempt == 0 and verdict.repair_scope == 'meanings':
+        if (attempt < 2 and meaning_revision_base is None
+                and verdict.repair_scope == 'meanings'):
             from .introduction_meaning_repair import repair_meanings
             meaning_revision_base = values
             feedback = json.dumps(verdict.model_dump(mode='json'), ensure_ascii=False)
@@ -183,6 +186,12 @@ def select_introduction_audience(gateway, result, review, *, cancelled=None):
             selection = add_newly_required_parts(gateway, source, selection, values, verdict,
                                                  rules, review, cancelled=cancelled)
             continue
+        if (attempt == 1 and meaning_revision_base is not None
+                and verdict.repair_scope == 'meanings'):
+            from .introduction_meaning_resolution import resolve_meaning_findings
+            selection, meaning_resolution = resolve_meaning_findings(
+                gateway, source, selection, values, verdict, review, cancelled=cancelled)
+            continue
         if attempt != 0:
             break
         selection = None
@@ -194,10 +203,15 @@ def select_introduction_audience(gateway, result, review, *, cancelled=None):
 def complete_response(gateway, messages, schema, *, cancelled=None):
     """One bounded capacity retry regenerates from full source, never partial JSON.
 
-    Semantic operations retain provider reasoning defaults. Their output budget
-    accommodates both reasoning and the exact per-part decision inventory.
+    LLMGateway applies each operation's configured reasoning policy. The output
+    budget accommodates the exact inventory and any provider reasoning tokens.
     """
-    limits = (32000, 40000) if issubclass(schema, IntroductionAudienceSelection) else (24000, 32000)
+    # A full-source review can exhaust the same capacity as selection. Start at
+    # the already supported larger budget to avoid discarding a near-complete
+    # review; only a proven truncation can use the single capacity retry.
+    limits = ((32000, 40000) if issubclass(schema, (IntroductionAudienceSelection,
+                                                 IntroductionAudienceReview))
+              else (24000, 32000))
     for limit in limits:
         try:
             return gateway.generate_structured(messages, schema, stage='presentation',

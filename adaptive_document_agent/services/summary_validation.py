@@ -51,6 +51,7 @@ def fact_errors(fact, result: PipelineResult, source_text: str, page: int, *, li
 
 def reading_errors(review: SummaryReview, result: PipelineResult, *, complete_scope=True) -> list[str]:
     errors = []
+    geometry_cache = {}
     if not review.source_pages or not review.source_blocks or not review.parts:
         errors.append('Complete Summary reading requires supplied source pages, blocks and parts')
     if (review.document_id, review.document_sha256) != (result.document.document_id, result.document.sha256):
@@ -114,7 +115,7 @@ def reading_errors(review: SummaryReview, result: PipelineResult, *, complete_sc
             errors.append('Heading-only classification cannot hide a substantive source passage')
         if part.role == 'layout':
             from .summary_layout_evidence import mechanical_layout
-            if not mechanical_layout(source, block.page, result):
+            if not mechanical_layout(source, block.page, result, geometry_cache=geometry_cache):
                 # Length can expose hidden prose, but must not veto a group
                 # whose individual source header/footer lines are all proved.
                 if visible_length > 180:

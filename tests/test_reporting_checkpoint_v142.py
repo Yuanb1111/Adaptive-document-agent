@@ -37,7 +37,11 @@ def _payloads(messages):
         if not content.startswith('<UNTRUSTED_DOCUMENT_CONTENT>'):
             continue
         try:
-            values.append(json.loads(content.split('\n', 1)[1].rsplit('\n', 1)[0]))
+            value = json.loads(content.split('\n', 1)[1].rsplit('\n', 1)[0])
+            if isinstance(value, dict) and 'current_selection_digest' in value:
+                from tests.introduction_review_helpers import materialize_review_wire
+                value = materialize_review_wire(value)
+            values.append(value)
         except (ValueError, IndexError):
             continue
     return values
@@ -64,7 +68,7 @@ def _decisions(parts):
 
 def _synthetic_meaning_refs(parts, text):
     """Explicit author mappings for exact synthetic meaning text only."""
-    return [dict(part_id=part['id'], meaning_index=index, summary_quote=meaning['meaning'])
+    return [dict(part_id=part['id'], meaning_index=index)
             for part in parts for index, meaning in enumerate(part.get('required_meanings', []))
             if meaning['meaning'] in text]
 
@@ -110,7 +114,8 @@ class CheckpointClient(SchemaReplayClient):
 
     def _response(self, schema, value, provenance):
         self.provenance.append(dict(operation=schema.__name__, provenance=provenance))
-        typed = schema.model_validate(deepcopy(value))
+        from tests.summary_author_helpers import writer_test_value
+        typed = schema.model_validate(writer_test_value(schema, deepcopy(value)))
         return typed, LLMResponse(text=typed.model_dump_json(),
             usage=LLMUsage(provider='mock', model='offline-recorded-artifact'))
 

@@ -10,15 +10,17 @@ from adaptive_document_agent.services.customization_checks import check_requirem
 from tests.test_compact_summary_v111 import fixture, Reviewer
 
 
-def test_global_synthesis_keeps_configured_reasoning_defaults():
+@pytest.mark.parametrize('setting', ['reduced', 'provider_default'])
+def test_bounded_synthesis_honors_reasoning_configuration_and_unknown_review_is_unchanged(setting):
     from adaptive_document_agent.services.llm import LLMSettings
     from adaptive_document_agent.services.llm.reasoning_policy import request_reasoning_policy
-    settings = LLMSettings(simple_task_reasoning='reduced')
+    settings = LLMSettings(provider='deepseek', simple_task_reasoning=setting)
     for operation in ('SummarySynthesisDraft', 'SummarySynthesisReview'):
         policy = request_reasoning_policy(settings, stage='presentation', operation=operation,
                                           model='deepseek-flash')
-        assert policy['intent'] == 'preserve'
-        assert policy['options'] == {}
+        reduced = operation == 'SummarySynthesisDraft' and setting == 'reduced'
+        assert policy['intent'] == ('reduce' if reduced else 'preserve')
+        assert policy['options'] == ({'extra_body': {'thinking': {'type': 'disabled'}}} if reduced else {})
 
 
 def test_targeted_revision_is_bounded_and_honors_small_task_reasoning():
@@ -175,7 +177,7 @@ def test_physical_budget_repair_does_not_spend_semantic_content_repair():
             if schema.__name__ == 'SummarySynthesisRevision':
                 return schema(replacements=[dict(item_id='g2_i0',
                     replacement=corrected['pages'][2]['items'][0])])
-            if schema is SummarySynthesisDraft:
+            if issubclass(schema, SummarySynthesisDraft) or schema.__name__ == 'SummaryLayoutPages':
                 self.draft = self.drafts[self.authored]
                 self.authored += 1
             else:
@@ -205,7 +207,7 @@ def test_source_correction_leaves_one_revision_for_independent_meaning_review():
         authored = 0
         reviewed = 0
         def generate_structured(self, messages, schema, **kwargs):
-            if schema is CompactSummaryDraft or schema.__name__ == 'SummarySynthesisRevision':
+            if issubclass(schema, CompactSummaryDraft) or schema.__name__ == 'SummarySynthesisRevision':
                 self.draft = [missing, complete, final][self.authored]
                 self.authored += 1
             else:
@@ -234,7 +236,7 @@ def test_meaning_patch_can_correct_new_evidence_binding_after_prior_source_repai
         authored = 0
         reviewed = 0
         def generate_structured(self, messages, schema, **kwargs):
-            if schema is CompactSummaryDraft or schema.__name__ == 'SummarySynthesisRevision':
+            if issubclass(schema, CompactSummaryDraft) or schema.__name__ == 'SummarySynthesisRevision':
                 self.draft = [missing, complete, unsupported, final][self.authored]
                 self.authored += 1
             else:
@@ -259,7 +261,7 @@ def test_second_meaning_correction_requires_strictly_fewer_rejected_parts():
             authored = 0
             reviewed = 0
             def generate_structured(self, messages, schema, **kwargs):
-                if schema is CompactSummaryDraft or schema.__name__ == 'SummarySynthesisRevision':
+                if issubclass(schema, CompactSummaryDraft) or schema.__name__ == 'SummarySynthesisRevision':
                     self.draft = copy.deepcopy(initial)
                     self.draft['pages'][0]['items'][0]['text'] += ' Training is required.' * self.authored
                     self.authored += 1

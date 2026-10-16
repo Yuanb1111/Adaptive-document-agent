@@ -30,7 +30,9 @@ def test_exact_owner_source_replaces_model_retyping_before_independent_review():
     client = Client()
     select_introduction_audience(client, result, review)
     meaning = client.reviews[0]['decisions'][0]['required_meanings'][0]
-    assert meaning['source_quote'] == original
+    assert 'source_quote' not in meaning
+    assert client.reviews[0]['source']['parts'][0]['source_text'] == original
+    assert review.audience_selection['decisions'][0]['required_meanings'][0]['source_quote'] == original
     assert meaning['proposed_source_quote'] == 'A model reconstruction that is not actual source text.'
     assert audience_part_ids(review) == {'part-0'}
     payload, _ = compact_input(review)
@@ -49,7 +51,7 @@ def test_review_does_not_apply_author_empty_quote_instruction_to_python_bound_ev
             else:
                 assert _AUTHOR_EVIDENCE_RULE not in system
                 assert 'leave source_quote empty' not in system
-                assert 'Populated canonical source_quote fields are expected' in system
+                assert 'source.parts[].source_text by part_id' in system
                 assert 'reject a meaning not grounded in that exact part' in system
             return super().generate_structured(messages, schema, **kwargs)
     select_introduction_audience(CheckRoles(), result, review)
@@ -64,8 +66,13 @@ def test_copying_owned_evidence_cannot_certify_an_unsupported_assertion():
         select_introduction_audience(client, result, review)
     assert len(client.reviews) == 2
     assert review.audience_part_ids is None and not review.audience_selection
-    assert all(p['decisions'][0]['required_meanings'][0]['source_quote'] == review.parts[0].source_text
+    assert all('source_quote' not in p['decisions'][0]['required_meanings'][0]
+               and p['source']['parts'][0]['source_text'] == review.parts[0].source_text
                for p in client.reviews)
+    history = [a for a in review.plan_audits if 'introduction_audience_attempt' in a]
+    assert len(history) == len(client.reviews)
+    assert all(a['decisions'][0]['required_meanings'][0]['source_quote'] == review.parts[0].source_text
+               for a in history)
 
 
 def test_post_review_quote_changes_fail_even_if_they_are_owned_substrings():

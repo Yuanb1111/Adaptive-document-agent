@@ -7,7 +7,11 @@ def _text(value):
     return ' '.join(value.split())
 
 
-def _geometry_rows(page):
+def _geometry_rows(page, cache=None):
+    # Invocation-owned geometry only: no prior document, mutable source or
+    # semantic acceptance can be reused on a later validation.
+    if cache is not None and id(page) in cache:
+        return cache[id(page)]
     rows = []
     for block in page.text_blocks:
         candidates = block.get('lines') or ([block] if len(str(block.get('text', '')).splitlines()) == 1 else [])
@@ -23,6 +27,8 @@ def _geometry_rows(page):
                 continue
             if all(math.isfinite(value) for value in box) and box[2] > box[0] and box[3] > box[1]:
                 rows.append((text, box))
+    if cache is not None:
+        cache[id(page)] = rows
     return rows
 
 
@@ -35,8 +41,8 @@ def _label_like(text):
     return not cased or text.isupper() or text.istitle()
 
 
-def _margin_matches(text, page):
-    rows = _geometry_rows(page)
+def _margin_matches(text, page, cache=None):
+    rows = _geometry_rows(page, cache)
     matches = [box for value, box in rows if value == text]
     if not matches:
         return []
@@ -56,15 +62,15 @@ def _margin_matches(text, page):
     return margins
 
 
-def _running_label(text, page, pages):
+def _running_label(text, page, pages, cache=None):
     if not _label_like(text):
         return None
-    matches = _margin_matches(text, page)
+    matches = _margin_matches(text, page, cache)
     if matches:
         band, box = matches[0]
         peers = []
         for candidate in pages:
-            aligned = _margin_matches(text, candidate)
+            aligned = _margin_matches(text, candidate, cache)
             if aligned and all(other_band == band and abs(other[1] - box[1]) <= 16
                                for other_band, other in aligned):
                 peers.append(candidate.page_number)
@@ -72,7 +78,7 @@ def _running_label(text, page, pages):
             return {'basis': 'repeated_source_margin', 'bbox': list(box), 'peer_pages': sorted(set(peers))}
     # Older retained documents may lack geometry. Use this conservative
     # textual proof only when geometry cannot contradict the edge location.
-    if _geometry_rows(page):
+    if _geometry_rows(page, cache):
         return None
     def edges(candidate):
         lines = [_text(line) for line in candidate.text.splitlines() if line.strip()]
@@ -83,7 +89,7 @@ def _running_label(text, page, pages):
     return None
 
 
-def layout_line_evidence(source: str, page_number: int, result) -> list[dict]:
+def layout_line_evidence(source: str, page_number: int, result, *, geometry_cache=None) -> list[dict]:
     """Prove every grouped layout line; retain wording and model roles unchanged."""
     page = next((p for p in result.document.pages if p.page_number == page_number), None)
     source_lines = source.splitlines() or ['']
@@ -119,11 +125,12 @@ def layout_line_evidence(source: str, page_number: int, result) -> list[dict]:
         elif text in headers:
             proof = {'basis': 'retained_source_table_header'}
         else:
-            proof = _running_label(text, page, result.document.pages)
+            proof = _running_label(text, page, result.document.pages, geometry_cache)
         records.append({'line': number, 'text': raw, 'proved': proof is not None,
                         **(proof or {'basis': 'no_mechanical_source_evidence'})})
     return records
 
 
-def mechanical_layout(source: str, page_number: int, result) -> bool:
-    return all(line['proved'] for line in layout_line_evidence(source, page_number, result))
+def mechanical_layout(source: str, page_number: int, result, *, geometry_cache=None) -> bool:
+    return all(line['proved'] for line in layout_line_evidence(
+        source, page_number, result, geometry_cache=geometry_cache))

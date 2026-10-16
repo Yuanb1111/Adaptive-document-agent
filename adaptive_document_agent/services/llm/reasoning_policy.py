@@ -12,7 +12,7 @@ from .config import LLMSettings, ProviderName
 from .costs import direct_deepseek
 from .credentials import DEFAULT_ENDPOINTS, provider_endpoint
 
-REASONING_POLICY_VERSION = "operation-reasoning-v8"
+REASONING_POLICY_VERSION = "operation-reasoning-v9"
 # Documented model IDs, independent of pricing data. New aliases/models do not
 # inherit transport capabilities by prefix. See docs/LLM_REASONING_POLICY.md.
 _DEEPSEEK_THINKING_MODELS = frozenset({"deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro"})
@@ -23,6 +23,7 @@ _DEEPSEEK_THINKING_MODELS = frozenset({"deepseek-flash", "deepseek-v4-flash", "d
 _DOCUMENTED_OPENAI_LOW_EFFORT_MODELS = frozenset({"gpt-6-luna"})
 _SIMPLE_OPERATIONS = frozenset({("presentation", "IntroductionPages"), ("report", "BriefSourcePages"),
                               ("presentation", "TopicCoverageReview"),
+                              ("presentation", "TopicCoverageDelta"),
                               ("presentation", "TakeawayCorrection"),
                               ("report", "ExecutiveBriefPatch"),
                               # Editorial operations consume already validated analysis.
@@ -40,6 +41,17 @@ _SIMPLE_OPERATIONS = frozenset({("presentation", "IntroductionPages"), ("report"
                               ("presentation", "SummaryStringRepairs"),
                               ("presentation", "SummarySynthesisRevision"),
                               ("presentation", "SummaryBodyAllocation"),
+                              # These bounded editorial operations consume owned
+                              # passages and an explicit meaning/quantity inventory.
+                              # Their independent source and numerical gates remain
+                              # mandatory; a long reasoning trace is not acceptance.
+                              ("presentation", "SummarySynthesisDraft"),
+                              ("presentation", "IntroductionAudienceSelection"),
+                              ("presentation", "IntroductionMeaningRevision"),
+                              ("presentation", "IntroductionMeaningResolution"),
+                              ("presentation", "SummaryCoverageReview"),
+                              ("presentation", "PhysicalBudgetReview"),
+                              ("report", "BriefMeaningReview"),
                               # Only a failed, split mapping assignment uses the
                               # configured reduced-reasoning recovery policy.
                               ("semantic", "SemanticResolutionRecovery"),

@@ -134,3 +134,55 @@ def batch_context(compact, selection, ids):
         'Other catalog entries are deferred to separate review batches. Retain current selected evidence; '
         'do not select, exclude or infer values for deferred series. Every batch is reviewed before committing changes.')
     return result
+
+
+def delta_context(compact, selection, ids):
+    """Full requested facts plus immutable accepted-topic handles.
+
+    No catalog or previously accepted point grid is repeated. Every candidate
+    is assigned to exactly one bounded request; related period-view handles
+    remain visible without pretending their deferred values were supplied.
+    """
+    wanted = set(ids)
+    keep = {'document_purpose', 'user_focus', 'primary_analysis_ranges', 'important_sections',
+            'point_encoding', 'reported_point_columns', 'latest_numeric_interval_columns'}
+    result = {key: value for key, value in compact.items() if key in keep}
+    result['all_extracted_series'] = [row for row in compact['all_extracted_series'] if row['id'] in wanted]
+    result['accepted_topic_handles'] = [
+        {key: getattr(topic, key) for key in ('id', 'title', 'question', 'takeaway', 'caveats', 'series_ids')}
+        for topic in selection.topics]
+    result['series_requiring_coverage_decision'] = list(ids)
+    result['same_source_row_period_views'] = [view for view in compact.get('same_source_row_period_views', [])
+        if any(entry['series_id'] in wanted for entry in view['same_source_row'])]
+    for key in ('ratio_definitions', 'source_row_qualifications'):
+        result[key] = [row for row in compact.get(key, []) if row['series_id'] in wanted]
+    result['batch_scope'] = (
+        'Every requested series has its complete raw/normalized points and source qualifications. '
+        'Accepted topic handles are immutable prior decisions, not newly supplied source values. '
+        'All other candidates are independently reviewed in other batches; their absence here means '
+        'deferred evidence, never source absence or irrelevance. Period-view links preserve the complete '
+        'relationship metadata; never infer deferred values or compare different reporting durations. '
+        'Return only requested include/omit decisions; do not rewrite accepted topics.')
+    return result
+
+
+def merge_context(compact, selection, included, batches):
+    """Re-expose complete facts once for model-owned final topic synthesis."""
+    selected = {sid for topic in selection.topics for sid in topic.series_ids}
+    visible = selected | set(included)
+    result = delta_context(compact, selection, sorted(visible))
+    result.pop('accepted_topic_handles')
+    result['current_selection'] = selection.model_dump(mode='json')
+    result['series_requiring_coverage_decision'] = list(included)
+    result['selectable_series_ids'] = sorted(visible)
+    result['batch_review_handles'] = batches
+    result['batch_scope'] = (
+        'Synthesize only these fully evidenced original and provisionally included series. '
+        'Original accepted source observations are immutable. All remaining candidates received '
+        'source-aware model omission decisions in the independent batch audit; their complete facts '
+        'remain in those requests and the retained document model, not hidden or certified absent. '
+        'Those deferred omissions are not selectable here without their source facts. '
+        'Independently review each proposed addition against this complete selected evidence, '
+        'then merge complementary questions within the audience budget. A provisional inclusion '
+        'may be omitted only with an explicit source-supported reason in coverage_decisions.')
+    return result

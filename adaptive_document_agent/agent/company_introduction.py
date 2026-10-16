@@ -117,6 +117,10 @@ class PreparedCompanyIntroduction:
         return bool(self._future is not None and self._future.done()
                     and (self._future.cancelled() or self._future.exception() is not None))
 
+    def background_running(self) -> bool:
+        """Reserve request capacity only while this invocation's worker is active."""
+        return self._pool is not None and self._future is not None and not self._future.done()
+
     def raise_if_failed(self) -> None:
         """Inspect only completed work, including from another editorial worker.
 

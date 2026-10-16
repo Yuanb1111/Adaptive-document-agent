@@ -14,6 +14,8 @@ from .prompting import untrusted_document_message
 class IntroductionReviewFinding(BaseModel):
     model_config = ConfigDict(extra='forbid')
     kind: Literal['meaning', 'included_part', 'omitted_part']
+    issue_type: Literal['unsupported_assertion', 'missing_qualification', 'new_assertion',
+                        'atomicity', 'unspecified'] = 'unspecified'
     part_id: str
     meaning_id: str = ''
     current_meaning: str = ''
@@ -64,6 +66,8 @@ def binding_errors(verdict, payload):
             if (current is None or current['part_id'] != finding.part_id
                     or current['meaning'] != finding.current_meaning):
                 errors.append('Finding does not quote the exact current meaning: ' + finding.meaning_id)
+            if finding.issue_type == 'new_assertion':
+                errors.append('A new independent assertion needs a part-level finding after checking its whole meaning union')
         else:
             if finding.meaning_id or finding.current_meaning:
                 errors.append('Part-level finding must not refer to an existing or stale meaning')
@@ -92,18 +96,64 @@ _BINDING_RULES = (
     'semantic review, with findings empty. Do not invent findings merely to match an earlier '
     'verdict. If a prior verdict was unbound, independently review the full current draft '
     'again and return your actual current judgment; this is not automatic approval.'
+    ' Review each included part as the UNION of all its current meanings, not each meaning as a '
+    'standalone summary of its full source passage. Search every current meaning owned by that '
+    'part before claiming an assertion is missing. Another current meaning may already express '
+    'it completely. Classify every finding with issue_type: unsupported_assertion, '
+    'missing_qualification, new_assertion or atomicity. A necessary qualification belongs to an '
+    'already selected assertion; another independent source claim is new_assertion and needs a '
+    'part-level finding with a section-materiality reason. An included source part does not '
+    'require every fact in that passage to become selected copy. Do not turn optional numerical '
+    'analyses, illustrative details or unrelated claims into qualifications of another assertion. '
+    'Atomicity correction must keep measures together with their periods, bases and attribution. '
+    'Canonical source quotations are retained in the audit; this review wire references the exact '
+    'source.parts[].source_text by part_id instead of repeating those full passages per meaning. '
+    'If meaning_resolution is supplied, independently adjudicate EVERY finding disposition against '
+    'the complete owned source and CURRENT union. It is a proposal, never an acceptance. '
+    'Disposition referenced_meaning_ids refer ONLY to meaning_resolution.before_resolution_meanings, '
+    'the explicitly labelled immutable PRE-EDIT namespace. Atomic splits can renumber the final '
+    'current_meanings; never reinterpret those historical IDs in the current namespace. Follow '
+    'the exact before assertion and owning part to the current union by its actual preserved meaning. '
+    'already-covered references for actual assertion coverage, outside-scope reasons for genuine '
+    'section relevance, and corrected copy for source truth and preservation. Reject a disguised '
+    'missing condition or dropped selected assertion. Preserve the intended selected union in '
+    'meaning_revision_base AND meaning_resolution.decisions_before, including assertions added '
+    'by the first revision, with unsupported wording corrected to its actual source scope. '
+    'Report any remaining genuine defect; never invent another requirement merely because the '
+    'prior review rejected the candidate.'
 )
+
+
+def selection_wire(values):
+    """Reference each complete source passage once without changing canonical audit data."""
+    if values is None:
+        return None
+    if isinstance(values, dict):
+        return {**values, 'decisions': selection_wire(values['decisions'])} if 'decisions' in values else dict(values)
+    return [{**decision, 'required_meanings': [
+        {key: value for key, value in meaning.items() if key != 'source_quote' or not value}
+        for meaning in decision.get('required_meanings', [])]}
+        if 'required_meanings' in decision else dict(decision) for decision in values]
 
 
 def review_current_selection(gateway, source, values, rules, review, *, attempt,
                              meaning_revision_base, inventory_revision_base,
-                             binding_budget, cancelled=None):
+                             binding_budget, cancelled=None, meaning_resolution=None):
     """At most one shared binding re-review; bound semantic rejections are final verdicts."""
     from .introduction_audience import complete_response
-    payload = dict(source=source, decisions=values, current_meanings=current_meanings(values),
+    inventory = [{key: value for key, value in row.items() if key != 'source_quote'}
+                 for row in current_meanings(values)]
+    resolution = dict(meaning_resolution) if meaning_resolution is not None else None
+    if resolution is not None:
+        resolution['decisions_before'] = selection_wire(resolution['decisions_before'])
+    payload = dict(source=source, decisions=selection_wire(values), current_meanings=inventory,
                    current_selection_digest=selection_digest(review, values),
-                   meaning_revision_base=meaning_revision_base,
-                   inventory_revision_base=inventory_revision_base)
+                   meaning_revision_base=selection_wire(meaning_revision_base),
+                   inventory_revision_base=selection_wire(inventory_revision_base),
+                   meaning_resolution=resolution,
+                   current_meaning_unions=[dict(part_id=decision['part_id'], meaning_ids=[
+                       row['meaning_id'] for row in inventory if row['part_id'] == decision['part_id']])
+                       for decision in values if decision['include']])
     for re_review in (False, True):
         record = dict(round=attempt + 1, re_review=re_review,
                       selection_digest=payload['current_selection_digest'], decisions=values,

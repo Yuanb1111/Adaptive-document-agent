@@ -20,6 +20,7 @@ def layout_feedback(draft, pages, review, catalog):
     from adaptive_document_agent.services.pptx_export import _resolve_template_path
     from adaptive_document_agent.services.slide_compositor import _lines
     from .summary_authored_coverage import meaning_inventory
+    from .summary_group_geometry import paragraph_geometry, group_geometry, group_slot_pressure
 
     path = _resolve_template_path()
     width, height = _template_dimensions(str(path), path.stat().st_mtime_ns)
@@ -51,6 +52,7 @@ def layout_feedback(draft, pages, review, catalog):
                 heading_lines=len(_lines('00  ' + item.label, copy_width, 18)),
                 heading_errors=compact_heading_errors(item.label),
                 fact_ids=list(item.fact_ids), meaning_refs=refs))
+            rows[-1].update(paragraph_geometry(item, copy_width))
         groups.append(dict(group_id=f'g{group_index}', title=page.title,
             placement=getattr(page, 'placement', 'body'), title_lines=title_lines,
             title_errors=compact_title_errors(page.title),
@@ -59,8 +61,19 @@ def layout_feedback(draft, pages, review, catalog):
             full_width_inches=round(copy_width, 6),
             body_capacity_inches=round(compact_body_capacity(page.title, width, height), 6),
             plain_title_body_capacity_inches=round(height - 1.28 - top, 6), paragraphs=rows))
+        groups[-1].update(group_geometry(page, rows, copy_width, height))
     inventory = meaning_inventory(selected_meaning_source(review))
     body_count = sum(page.placement == 'body' for page in pages) if pages is not None else None
+    from .summary_layout_geometry import physical_allocation, physical_page_loads
+    allocation = physical_allocation(review.max_intro_slides,
+        logical_groups=sum(group['placement'] == 'body' for group in groups), physical_slides=body_count)
+    page_loads = physical_page_loads(pages, draft, catalog)
+    for group in groups:
+        identifiers = {row['item_id'] for row in group['paragraphs']}
+        owned = [page for page in page_loads if any(identifiers.intersection(row['authored_item_ids'])
+                 for row in page['paragraphs'])]
+        group['current_physical_slides'] = len(owned) if pages is not None else None
+        group['physical_slide_numbers'] = [page['physical_slide'] for page in owned]
     occupied = 0.0
     for page in pages or []:
         if page.placement != 'body':
@@ -69,7 +82,8 @@ def layout_feedback(draft, pages, review, catalog):
         occupied += top + .12 * max(0, len(page.items) - 1)
         occupied += sum(_item_height(BriefItem(item.label, item.text, []), copy_width)
                         for item in page.items)
-    return dict(version='physical-meaning-layout-v1', semantic_approval=False,
+    pressure = group_slot_pressure(groups, page_loads, review.max_intro_slides)
+    return dict(version='physical-meaning-layout-v2', semantic_approval=False,
         template=dict(width_inches=width, height_inches=height, body_font_pt=16,
             paragraph_heading_font_pt=18, title_font_pt=32, footer_reserve_inches=1.28,
             paragraph_gap_inches=.12, max_items_per_physical_slide=4,
@@ -82,6 +96,7 @@ def layout_feedback(draft, pages, review, catalog):
             invalid_paragraph_headings=sum(bool(row['heading_errors']) for group in groups
                                            for row in group['paragraphs']),
             estimated_body_occupied_inches=round(occupied, 6) if pages is not None else None),
+        physical_allocation=allocation, physical_pages=page_loads, group_slot_pressure=pressure,
         groups=groups, meaning_inventory=inventory,
         meaning_assignments=[dict(part_id=row['part_id'], meaning_index=row['meaning_index'],
                                  locations=assignments[(row['part_id'], row['meaning_index'])])

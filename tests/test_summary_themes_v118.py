@@ -32,7 +32,7 @@ class Themes:
                 ids[-1] = ids[0]
             return schema(themes=[dict(title='Service prerequisites', part_ids=ids[i:i+10])
                                   for i in range(0, len(ids), 10)])
-        if schema is CompactSummaryDraft:
+        if issubclass(schema, CompactSummaryDraft):
             facts = [f for p in payload['parts'] for f in p['facts']]
             quotes = {q['id']: q['text'] for q in payload['source_quotes']}
             names = [(f.get('text') or quotes[f['quote_ref']]).split()[1] for f in facts]

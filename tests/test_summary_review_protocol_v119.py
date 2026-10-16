@@ -26,7 +26,7 @@ def test_schema_retry_supplies_raw_draft_and_exact_field_failure():
     class Client(Reviewer):
         attempts = 0
         def generate_structured(self, messages, schema, **kwargs):
-            if schema is CompactSummaryDraft:
+            if issubclass(schema, CompactSummaryDraft):
                 self.attempts += 1
                 if self.attempts == 1:
                     try:
@@ -49,12 +49,12 @@ def test_rejected_opening_reason_reaches_editorial_repair():
     class Client(Reviewer):
         attempts = 0
         def generate_structured(self, messages, schema, **kwargs):
-            if schema is CompactSummaryDraft or schema.__name__ == 'SummarySynthesisRevision':
+            if issubclass(schema, CompactSummaryDraft) or schema.__name__ == 'SummarySynthesisRevision':
                 self.attempts += 1
                 if self.attempts == 2:
                     assert 'Missing actual service scope' in messages[-1]['content']
             value = super().generate_structured(messages, schema, **kwargs)
-            if schema is CompactSummaryDraft and self.attempts == 1:
+            if issubclass(schema, CompactSummaryDraft) and self.attempts == 1:
                 value.pages[0].items[0].text = 'This page lists teams and the topics described in the document.'
             if schema is CompactSummaryReview and self.attempts == 1:
                 value.opening_accepted = False

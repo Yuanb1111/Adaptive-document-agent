@@ -18,7 +18,7 @@ def test_content_omission_then_format_failure_then_six_items_is_recoverable():
     class Client(Reviewer):
         drafts = 0
         def generate_structured(self,messages,schema,**kwargs):
-            if schema is CompactSummaryDraft or schema.__name__ == 'SummarySynthesisRevision':
+            if issubclass(schema, CompactSummaryDraft) or schema.__name__ == 'SummarySynthesisRevision':
                 self.drafts += 1
                 if self.drafts==2:
                     raw = json.dumps({'replacements': 'invalid format'})

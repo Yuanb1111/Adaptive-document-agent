@@ -119,7 +119,10 @@ class DocumentOrchestrator:
             index = DocumentModelBuilder().build(observations)
             from .company_introduction import prepare_company_introduction
             attach_introduction = resources.enter_context(prepare_company_introduction(
-                self.gateway, PipelineResult(document=document, profile=profile), timings=details))
+                self.gateway, PipelineResult(document=document, profile=profile,
+                    presentation_plan=(resume.presentation_plan.model_copy(deep=True)
+                        if resume.retry_from == 'reporting' and resume.presentation_plan else None)),
+                timings=details))
             notify('Retrying introduction with retained extraction and calculations')
         else:
             notify("Reading PDF")
@@ -243,7 +246,9 @@ class DocumentOrchestrator:
                     before_scoring=True)
             with record_timing(timings, "candidate_generation"):
                 candidates = AnalysisCandidateGenerator().generate(index, profile)
-                scores = AnalysisValueScorer(self.gateway).score(candidates, index, profile, progress=notify)
+                scores = AnalysisValueScorer(self.gateway).score(candidates, index, profile, progress=notify,
+                    reserved_workers=int(attach_introduction is not None
+                        and attach_introduction.background_running()))
 
             notify("Selecting useful analyses")
             with record_timing(timings, "analysis_planning"):
@@ -366,7 +371,9 @@ class DocumentOrchestrator:
                             index = DocumentModelBuilder().build(observations)
                             notify("Recalculating and validating recovered evidence")
                             candidates = AnalysisCandidateGenerator().generate(index, profile)
-                            scores = AnalysisValueScorer(editorial_gateway).score(candidates, index, profile)
+                            scores = AnalysisValueScorer(editorial_gateway).score(candidates, index, profile,
+                                reserved_workers=int(attach_introduction is not None
+                                    and attach_introduction.background_running()))
                             plan = AnalysisPlanner().plan(scores, index)
                             results = AnalysisExecutor().execute(plan, index)
                             # Replace stale validation and report artifacts together.
@@ -399,6 +406,7 @@ class DocumentOrchestrator:
                     notify(f"Diagnostics: 0 charts retained. {len(index.metrics())} metrics found; {len(failure_reasons)} candidate series failed chartability.")
 
             prepared_brief = None
+            deferred_brief = False
 
             presentation_plan = None
             if self.gateway:
@@ -429,7 +437,7 @@ class DocumentOrchestrator:
                         editorial_gateway = IntroductionGuardedGateway(self.gateway, attach_introduction)
                         editorial_gateway.check()
                         def prepare_stable_topic_brief(current, compiled):
-                            nonlocal prepared_brief
+                            nonlocal prepared_brief, deferred_brief
                             if prepared_brief is not None:
                                 raise RuntimeError('Executive briefing was already prepared for this run')
                             from .prepared_executive_brief import prepare_executive_brief
@@ -437,6 +445,10 @@ class DocumentOrchestrator:
                             # Identity is attached only on the caller, and its source
                             # snapshot cannot be mutated by later visual planning.
                             checkpoint.presentation_plan = compiled.model_copy(deep=True)
+                            from .brief_budget_schedule import briefing_waits_for_budget
+                            if briefing_waits_for_budget(current, compiled):
+                                deferred_brief = True
+                                return
                             seed = current.model_copy(deep=True)
                             seed.presentation_plan = compiled.model_copy(deep=True)
                             try:
@@ -444,6 +456,10 @@ class DocumentOrchestrator:
                                     attach_introduction(seed.presentation_plan, seed)
                             except (LLMResponseError, ValueError) as exc:
                                 raise IntroductionVerificationFailed(str(exc)) from exc
+                            from .brief_budget_schedule import native_briefing_waits_for_budget
+                            if native_briefing_waits_for_budget(seed, seed.presentation_plan):
+                                deferred_brief = True
+                                return
                             prepared_brief = resources.enter_context(
                                 prepare_executive_brief(editorial_gateway, seed, timings=details))
 
@@ -555,7 +571,15 @@ class DocumentOrchestrator:
 
             checkpoint.presentation_plan = presentation_plan
             executive_brief = None
-            if self.gateway:
+            from .brief_budget_schedule import native_briefing_waits_for_budget
+            if prepared_brief is None and not deferred_brief:
+                deferred_brief = native_briefing_waits_for_budget(checkpoint, presentation_plan)
+            if self.gateway and deferred_brief:
+                issues.append(ValidationIssue(code='executive_brief_deferred_to_budget',
+                    stage='report', severity='info', message=
+                    'The selected draft already exceeds a slide limit. Deferred the briefing until '
+                    'model-owned physical selection is stable, avoiding a disposable first briefing.'))
+            if self.gateway and not deferred_brief:
                 notify("Writing the evidence-bound executive briefing")
                 from .prepared_executive_brief import current_executive_brief
                 with record_timing(timings, "executive_brief"):
@@ -625,6 +649,9 @@ class DocumentOrchestrator:
             try:
                 with record_timing(final_result.stage_details_ms, 'physical_presentation_budget'):
                     refine_presentation_budget(self.gateway,final_result,progress=notify)
+                    if deferred_brief:
+                        from .brief_budget_schedule import complete_deferred_brief
+                        complete_deferred_brief(self.gateway, final_result, progress=notify)
             except (ValueError, LLMResponseError, FinalBudgetBriefError) as exc:
                 final_result.pipeline_state = 'partial'
                 final_result.retry_from = 'reporting'
@@ -635,6 +662,11 @@ class DocumentOrchestrator:
             final_result.retry_from = 'reporting'
             resources.close()
             final_result.llm_usage = list(self.gateway.usage) if self.gateway else []
+            final_result.timings_ms = dict(timings)
+            final_result.pipeline_total_ms = int((perf_counter() - pipeline_started) * 1000)
+            final_result.stage_details_ms['foreground_uninstrumented'] = max(0,
+                final_result.pipeline_total_ms - sum(timings.values())
+                - final_result.stage_details_ms.get('physical_presentation_budget', 0))
             notify('Analysis incomplete; diagnostics and retry checkpoint retained')
             return final_result
         notify("Complete")
@@ -662,7 +694,8 @@ class DocumentOrchestrator:
         # Stage details overlap by design. Account for the remaining foreground
         # work without pretending every nested/background time is additive.
         final_result.stage_details_ms['foreground_uninstrumented'] = max(0,
-            final_result.pipeline_total_ms - sum(timings.values()))
+            final_result.pipeline_total_ms - sum(timings.values())
+            - final_result.stage_details_ms.get('physical_presentation_budget', 0))
         final_result.stage_details_ms['brief_identity_wait'] = timings.get('brief_identity_wait', 0)
         return final_result
 

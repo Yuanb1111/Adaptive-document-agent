@@ -39,7 +39,7 @@ def record_section(presentation,slide_plan,result):
                     original=None
                 if isinstance(original,dict):
                     original['ADA_EXPORT_TRACE_V1']=trace
-                    notes.text=json.dumps(original,ensure_ascii=False,indent=2)
+                    notes.text=json.dumps(original,ensure_ascii=False,separators=(',', ':'))
                 else:
                     notes.text+='\n\nADA_EXPORT_TRACE_V1\n'+json.dumps(trace,ensure_ascii=False)
             coverage=result.profile.source_coverage
@@ -86,7 +86,9 @@ def rebase_trace(presentation, result, number_map):
             if previous is not None:
                 structured.setdefault('ADA_PRIOR_EXPORT_TRACES_V1', []).append(previous)
             structured['ADA_EXPORT_TRACE_V1'] = current
-            notes.text = json.dumps(structured, ensure_ascii=False, indent=2)
+            notes.text = json.dumps(structured, ensure_ascii=False, separators=(',', ':'))
         else:
-            notes.text = notes.text.replace('ADA_EXPORT_TRACE_V1', 'ADA_PRIOR_EXPORT_TRACE_V1')
-            notes.text += '\n\nADA_EXPORT_TRACE_V1\n' + json.dumps(current, ensure_ascii=False)
+            # One assignment avoids rebuilding all existing OOXML paragraphs
+            # twice. Historical source notes and both trace versions survive.
+            notes.text = (notes.text.replace('ADA_EXPORT_TRACE_V1', 'ADA_PRIOR_EXPORT_TRACE_V1')
+                          + '\n\nADA_EXPORT_TRACE_V1\n' + json.dumps(current, ensure_ascii=False))

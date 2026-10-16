@@ -180,7 +180,7 @@ def test_external_v143_whole_reporting_retry_stops_at_new_author_mapping_boundar
     checkpoint_hash = hashlib.sha256(original_bytes).hexdigest()
     source = PipelineResult.model_validate_json(original_bytes)
     assert source.pipeline_version == SUPPORTED_RECORDED_VERSION
-    assert (EXTRACTION_VERSION, ANALYSIS_VERSION) == ('extraction-v20', 'analysis-v75')
+    assert (EXTRACTION_VERSION, ANALYSIS_VERSION) == ('extraction-v20', 'analysis-v76')
     assert source.pipeline_state == 'partial' and source.retry_from == 'reporting'
     assert hashlib.sha256(raw).hexdigest() == source.document.sha256
     assert len(source.observations) == 1623 and len(source.analysis_results) == 5
@@ -260,7 +260,8 @@ class SyntheticCoverageFlowClient(SyntheticReportingClient):
         self.after_failure_calls = []
 
     def _typed(self, schema, value):
-        typed = schema.model_validate(value)
+        from tests.summary_author_helpers import writer_test_value
+        typed = schema.model_validate(writer_test_value(schema, value))
         return typed, LLMResponse(text=typed.model_dump_json(), usage=LLMUsage(provider='mock', model='synthetic-v144'))
 
     def _prose(self, candidate):

@@ -66,7 +66,8 @@ def run_score(response, *, count=4, maximum=20, cache=None):
     return scores, client, gateway
 
 
-def test_full_and_compact_wire_expand_to_identical_ranking_selection_reasons_and_evidence():
+def test_full_and_compact_wire_expand_to_identical_ranking_selection_reasons_and_evidence(monkeypatch):
+    monkeypatch.setattr('adaptive_document_agent.agent.value_scorer.SCORING_BATCH_SIZE',40)  # Single-response codec test.
     candidates, index, profile, compact, legacy = scoring_fixture()
     before_candidates = [item.model_dump() for item in candidates]
     before_observations = [index.get(identifier).model_dump() for candidate in candidates for identifier in candidate.observation_ids]
@@ -114,7 +115,8 @@ def test_source_reason_interning_is_exact_reversible_and_nonmutating():
     assert len(str(payload)) < len(str({"document_profile": profile.model_dump(mode="json"), "candidates": before}))
 
 
-def test_request_uses_compact_source_references_and_existing_untrusted_boundaries():
+def test_request_uses_compact_source_references_and_existing_untrusted_boundaries(monkeypatch):
+    monkeypatch.setattr('adaptive_document_agent.agent.value_scorer.SCORING_BATCH_SIZE',40)  # Single-response codec test.
     _, _, _, compact, _ = scoring_fixture()
     _, client, _ = run_score(compact, count=40)
     message = client.calls[0][1]["content"]
@@ -270,7 +272,9 @@ def test_prefilter_budget_keeps_every_candidate_and_unrequested_model_decisions_
         {"candidate_id": bounded[0].id, "score": .9, "reasons": ["Reviewed supplied candidate."]},
         {"candidate_id": outside.id, "score": 1.0, "reasons": ["This candidate was not supplied for review."]},
     ]}
-    client = MockLLMClient([response, {'scores':[]}, {'scores':[]}, {'scores':[]}])
+    from adaptive_document_agent.agent.value_scorer import SCORING_BATCH_SIZE
+    batch_count = (len(bounded) + SCORING_BATCH_SIZE - 1) // SCORING_BATCH_SIZE
+    client = MockLLMClient([response, *[{'scores':[]} for _ in range(batch_count-1)]])
     scores = AnalysisValueScorer(LLMGateway(client, LLMSettings(provider=ProviderName.MOCK))).score(candidates, index, profile)
     assert len(scores) == 164
     assert sum(not item.rejected for item in scores) == 1
@@ -280,7 +284,7 @@ def test_prefilter_budget_keeps_every_candidate_and_unrequested_model_decisions_
     assert scores[0].semantic_audit.response_audit.unmatched_decisions[0].candidate_id == outside.id
     wire = ast.literal_eval(client.calls[0][1]['content'].split('\n', 1)[1].rsplit('\n', 1)[0])
     assert len(wire['candidates']) == 160
-    assert len(client.calls)==4
+    assert len(client.calls)==batch_count
     assert all('source_reason_ref' in {**wire.get('candidate_constants', {}), **row} for row in wire['candidates'])
 
 

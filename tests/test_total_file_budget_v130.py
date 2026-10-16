@@ -84,7 +84,7 @@ def test_truncated_selection_regenerates_once_from_full_source_with_bounded_capa
             return schema(accepted=True, reason='Complete source conditions are retained.')
     client = Client()
     assert complete_response(client, messages, IntroductionAudienceReview).accepted
-    assert [kwargs['max_tokens'] for _, kwargs in client.calls] == [24000, 32000]
+    assert [kwargs['max_tokens'] for _, kwargs in client.calls] == [32000, 40000]
     assert all(request == messages and kwargs['allow_repair'] is False for request, kwargs in client.calls)
 
 

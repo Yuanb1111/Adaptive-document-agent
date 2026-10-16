@@ -19,7 +19,7 @@ def source():
     result.presentation_plan = compile_topic_plan(result)
     result.profile.report_requirements = apply_presentation_budget(None,'',PresentationBudget(body_slides=20,introduction_slides=5))
     selected = PresentationTopicSelection(topics=[_topic(interim,'recent'),_topic(adverse,'constraint')])
-    draft = budget.PhysicalBudgetSelection(selection=selected,decisions=[
+    draft = budget.PhysicalBudgetSelection(topics=selected.topics,decisions=[
         dict(series_id=annual,include=False,reason='Older history remains in source records; the recent reversal and adverse outcome are retained.'),
         dict(series_id=interim,include=True,reason='Latest comparable decline qualifies historical growth.'),
         dict(series_id=adverse,include=True,reason='Adverse operating outcome is material counterevidence.')])
@@ -29,8 +29,8 @@ def source():
 @pytest.mark.parametrize('mutation',['unknown_topic','unknown_series','missing_decision','duplicate_decision','false_include','blank_reason'])
 def test_source_subset_and_complete_series_decisions_are_mandatory(mutation):
     result,lookup,original,draft = source()
-    if mutation=='unknown_topic':draft.selection.topics[0].id='new-document-specific-topic'
-    elif mutation=='unknown_series':draft.selection.topics[0].series_ids=['unseen-source']
+    if mutation=='unknown_topic':draft.topics[0].id='new-document-specific-topic'
+    elif mutation=='unknown_series':draft.topics[0].series_ids=['unseen-source']
     elif mutation=='missing_decision':draft.decisions.pop()
     elif mutation=='duplicate_decision':draft.decisions[-1]=draft.decisions[0]
     elif mutation=='false_include':draft.decisions[0].include=True
@@ -46,7 +46,7 @@ def measurement(result, total, analysis):
         if n>=total-2:slide.element.cSld.set('name','ada:conclusion')
     identifier = next(s.id for s in result.presentation_plan.slides if s.slide_type=='analysis')
     result.presentation_export_trace=[dict(planned_slide_id=identifier,slide_numbers=list(range(5,5+analysis)))]
-    return deck,dict(total=total,introduction=3,analysis=analysis,topic_pages=[])
+    return deck,dict(total=total,body=total,data_index=0,introduction=3,analysis=analysis,topic_pages=[])
 
 
 @pytest.mark.parametrize('accepted',[True,False])
@@ -73,7 +73,7 @@ def test_measured_cost_refinement_requires_review_and_refreshes_only_final_brief
     if accepted:
         assert budget.refine_presentation_budget(client,result)
         assert counts==[23,18,18] and len(brief_calls)==1
-        assert result.presentation_topics==draft.selection
+        assert result.presentation_topics==budget.canonical_budget_selection(draft,original)
         assert result.validation_warnings[-1].code=='presentation_physical_budget_review'
     else:
         with pytest.raises(ValueError,match='independently rejected'):
@@ -112,9 +112,9 @@ def test_fitting_or_body_only_plans_need_no_paid_budget_selection(monkeypatch):
 
 
 def test_source_wording_correction_keeps_scope_and_does_not_consume_omission_review(monkeypatch):
-    result,_,_,draft=source()
+    result,_,original,draft=source()
     bad=draft.model_copy(deep=True)
-    bad.selection.topics[0].rationale='The supported measure is 999 units.'
+    bad.topics[0].rationale='The supported measure is 999 units.'
     monkeypatch.setattr(budget,'measure',lambda current:measurement(current,
         23 if len(current.presentation_topics.topics)==3 else 18,
         12 if len(current.presentation_topics.topics)==3 else 8))
@@ -126,12 +126,12 @@ def test_source_wording_correction_keeps_scope_and_does_not_consume_omission_rev
             self.calls.append(schema.__name__)
             if schema is budget.PhysicalBudgetSelection:return bad
             if schema is PresentationTopicSelection:
-                return PresentationTopicSelection(topics=[draft.selection.topics[0]])
+                return PresentationTopicSelection(topics=[draft.topics[0]])
             return schema(accepted=True,reason='The corrected copy preserves recent reversal and adverse context.')
     client=Client()
     assert budget.refine_presentation_budget(client,result)
     assert client.calls==['PhysicalBudgetSelection','PresentationTopicSelection','PhysicalBudgetReview']
-    assert result.presentation_topics==draft.selection
+    assert result.presentation_topics==budget.canonical_budget_selection(draft,original)
 
 
 def test_brief_source_failure_cannot_request_a_different_topic_selection(monkeypatch):

@@ -50,7 +50,7 @@ def test_batched_scores_keep_global_ranking_full_context_and_original_source_fie
     candidates,index,profile,client,gateway=score_fixture()
     original=[c.model_dump() for c in candidates]
     batched=AnalysisValueScorer(gateway).score(candidates,index,profile,maximum=12)
-    assert len(client.targets)==3 and max(map(len,client.targets))<=40
+    assert len(client.targets)==5 and max(map(len,client.targets))<=20
     assert sorted(i for batch in client.targets for i in batch)==sorted(c.id for c in candidates)
     for messages in client.calls:
         wire=ast.literal_eval(messages[1]['content'].split('\n',1)[1].rsplit('\n',1)[0])
@@ -61,10 +61,11 @@ def test_batched_scores_keep_global_ranking_full_context_and_original_source_fie
     assert [s.model_dump(exclude={'semantic_audit'}) for s in batched]==[s.model_dump(exclude={'semantic_audit'}) for s in monolithic]
     assert [c.model_dump() for c in candidates]==original
     restored=CandidateScore.model_validate_json(batched[0].model_dump_json())
-    assert restored==batched[0] and len(restored.semantic_audit.response_audit.batches)==3
+    assert restored==batched[0] and len(restored.semantic_audit.response_audit.batches)==5
 
 
-def test_length_65536_failure_splits_only_failed_batch_and_keeps_completed_requests_cached(tmp_path):
+def test_length_65536_failure_splits_only_failed_batch_and_keeps_completed_requests_cached(tmp_path,monkeypatch):
+    monkeypatch.setattr(value_scorer,'SCORING_BATCH_SIZE',40)  # Historical failed-parent shape.
     from adaptive_document_agent.utils.caching import DiskCache
     candidates,index,profile,client,gateway=score_fixture()
     bounded=value_scorer.AnalysisCandidateGenerator._prefilter(candidates,index,profile)
@@ -131,7 +132,8 @@ def test_privacy_and_transport_errors_do_not_trigger_smaller_batches(failure):
     assert len(client.calls)==1
 
 
-def test_repeated_truncation_has_bounded_retries_and_remains_a_visible_failure():
+def test_repeated_truncation_has_bounded_retries_and_remains_a_visible_failure(monkeypatch):
+    monkeypatch.setattr(value_scorer,'SCORING_BATCH_SIZE',40)  # Exercise every old recovery depth.
     candidates,index,profile,client,gateway=score_fixture(always_truncated=True)
     with pytest.raises(LLMStructuredOutputError,match='one complete candidate'):
         AnalysisValueScorer(gateway).score(candidates,index,profile)

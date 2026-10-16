@@ -1,5 +1,5 @@
 """A partial reviewer diagnosis cannot leave other selected assertions unexamined."""
-from tests.introduction_review_helpers import review_response
+from tests.introduction_review_helpers import review_response, review_payload
 from copy import deepcopy
 import json
 
@@ -10,7 +10,7 @@ from tests.test_compact_summary_v111 import fixture
 
 
 def context(messages):
-    return json.loads(messages[-1]['content'].split('\n', 1)[1].rsplit('\n', 1)[0])
+    return review_payload(messages)
 
 
 class InventoryClient:
@@ -69,6 +69,15 @@ class InventoryClient:
             elif self.malformed == 'reassigned':
                 edits[-1]['part_id'] = 'part-3'
             return schema(edits=list(reversed(edits)))
+        if schema.__name__ == 'IntroductionMeaningResolution':
+            return schema(finding_dispositions=[dict(finding_id=finding['finding_id'],
+                classification='already_covered', action='already_covered',
+                referenced_meaning_ids=[row['meaning_id'] for row in payload['current_meanings']
+                                        if row['part_id'] == finding['part_id']],
+                source_quote=next(part['source_text'] for part in payload['source']['parts']
+                                  if part['id'] == finding['part_id']),
+                reason='Deliberately untrusted fixture disposition; final reviewer must reject the actual defect.')
+                for finding in payload['findings']])
         self.reviews.append(deepcopy(payload))
         if len(self.reviews) == 1:
             # Simulate a real reviewer naming one defect but missing other bundles.
@@ -133,7 +142,7 @@ def test_complete_mapping_cannot_bypass_final_semantic_review_or_trigger_more_re
     client = InventoryClient(**{defect: True})
     with pytest.raises(ValueError, match='not independently accepted'):
         select_introduction_audience(client, result, reading)
-    assert len(client.calls) == 4 and len(client.reviews) == 2
+    assert len(client.calls) == 6 and len(client.reviews) == 3
     assert reading.audience_part_ids is None and not reading.audience_selection
     rejected = [audit for audit in reading.plan_audits if 'introduction_audience_attempt' in audit]
-    assert len(rejected) == 2 and all(not audit['review']['accepted'] for audit in rejected)
+    assert len(rejected) == 3 and all(not audit['review']['accepted'] for audit in rejected)

@@ -21,6 +21,7 @@ from tests.test_candidate_scoring_batches import BatchClient, score_fixture
 def test_repeated_length_failures_reach_singletons_without_losing_decisions(
     monkeypatch, tmp_path, provider, customized,
 ):
+    monkeypatch.setattr('adaptive_document_agent.agent.value_scorer.SCORING_BATCH_SIZE',40)
     candidates, index, profile, client, baseline_gateway = score_fixture(41)
     if customized:
         profile.report_requirements = ReportRequirements(
@@ -34,7 +35,7 @@ def test_repeated_length_failures_reach_singletons_without_losing_decisions(
     settings = LLMSettings(provider=provider, model='deepseek-flash', discovery_workers=1,
         privacy_mode=PrivacyMode.LOCAL_ONLY if provider == ProviderName.OLLAMA else PrivacyMode.CLOUD)
     adapter = LiteLLMProvider(settings)
-    calls = []
+    calls, truncated_texts = [], []
 
     def complete(messages, **kwargs):
         ids = ast.literal_eval(messages[-1]['content'].split(': ', 1)[1])
@@ -55,6 +56,7 @@ def test_repeated_length_failures_reach_singletons_without_losing_decisions(
             # Even valid JSON under a length finish must be discarded, not salvaged.
             for decision in response['scores']:
                 decision.update(score=1, rejected=False, reasons=['Unfinished decision'])
+            truncated_texts.append(json.dumps(response))
         return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(
             content=json.dumps(response)), finish_reason='length' if truncated else 'stop')],
             usage=SimpleNamespace(prompt_tokens=100, completion_tokens=12000 if truncated else 100))
@@ -72,6 +74,8 @@ def test_repeated_length_failures_reach_singletons_without_losing_decisions(
     assert len(audit) == 80
     assert sum(bool(a.error) for a in audit) == 39
     assert all(not a.scores and a.output_tokens == 12000 for a in audit if a.error)
+    assert [a.truncated_response for a in audit if a.error] == truncated_texts
+    assert all(a.truncated_response is None for a in audit if not a.error)
     assert all('chunk_id' in row and 'recovery_depth' in row for row in gateway.usage)
     assert max(row['recovery_depth'] for row in gateway.usage) == 6
     assert not any(row['status'] == 'format_repair' for row in gateway.usage)

@@ -7,6 +7,7 @@ for that measure.
 """
 
 from decimal import Decimal, InvalidOperation
+from functools import lru_cache
 import re
 
 from adaptive_document_agent.models import Observation, PresentationSlide
@@ -23,6 +24,28 @@ _SCALES = {"": 1, "k": 1000, "thousand": 1000, "m": 1_000_000,
            "billion": 1_000_000_000}
 
 
+@lru_cache(maxsize=4096)
+def _label_variants(original, canonical, presentation, categories):
+    """Reuse literal label parsing, never an observation or validation verdict."""
+    aliases = set(extract_metric_aliases(original, canonical, presentation))
+    for category in categories:
+        aliases.update(f"{alias} for {category}" for alias in list(aliases))
+    variants = set()
+    for label in aliases:
+        if not label:
+            continue
+        label = " ".join(label.replace("_", " ").casefold().split())
+        variants.add(label)
+        for match in re.finditer(r"\b(\w+)/(\w+)\b", label):
+            variants.update(label[:match.start()] + option + label[match.end():] for option in match.groups())
+    return tuple(sorted(variants))
+
+
+@lru_cache(maxsize=4096)
+def _label_pattern(label):
+    return re.compile(r"(?<!\w)" + r"\s+".join(re.escape(w) for w in label.split()) + r"(?!\w)", re.I)
+
+
 def _number(value):
     try:
         return abs(Decimal(str(value).strip().replace(",", "").strip("()")))
@@ -35,22 +58,14 @@ def scoped_value_errors(slide: PresentationSlide, observations: list[Observation
     by_label: dict[str, list[Observation]] = {}
     selected_ids = {o.id for o in observations}
     for obs in label_catalog if label_catalog is not None else observations:
-        aliases = set(extract_metric_aliases(obs.metric_original, obs.metric_canonical, obs.presentation_label))
-        # A source category qualifies a measure, rather than naming a second
-        # measure inside e.g. "ASP for six-axis cobots".
-        for category in obs.category_dimensions.values():
-            aliases.update(f"{alias} for {category}" for alias in list(aliases))
-        for label in aliases:
-            if label:
-                label = " ".join(label.replace("_", " ").casefold().split())
-                variants = {label}
-                for match in re.finditer(r"\b(\w+)/(\w+)\b", label):
-                    variants.update(label[:match.start()] + option + label[match.end():] for option in match.groups())
-                for variant in variants:
-                    group = by_label.setdefault(variant, [])
-                    if obs.id in selected_ids:
-                        if obs not in group:
-                            group.append(obs)
+        # The key includes every source label and category. Different values,
+        # periods and current selections still undergo the full check below.
+        variants = _label_variants(obs.metric_original, obs.metric_canonical, obs.presentation_label,
+                                   tuple(obs.category_dimensions.values()))
+        for variant in variants:
+            group = by_label.setdefault(variant, [])
+            if obs.id in selected_ids and obs not in group:
+                group.append(obs)
     errors = []
     for component in [slide.title, slide.message, *slide.bullets]:
         # Preserve decimal points and split only definite statement boundaries.
@@ -58,8 +73,7 @@ def scoped_value_errors(slide: PresentationSlide, observations: list[Observation
         for clause_index, clause in enumerate(clauses):
             matches = []
             for label in by_label:
-                pattern = r"(?<!\w)" + r"\s+".join(re.escape(w) for w in label.split()) + r"(?!\w)"
-                matches.extend((m.start(), m.end(), label) for m in re.finditer(pattern, clause, re.IGNORECASE))
+                matches.extend((m.start(), m.end(), label) for m in _label_pattern(label).finditer(clause))
             selected = []
             for match in sorted(matches, key=lambda m: (-(m[1] - m[0]), m[0])):
                 if not any(match[0] < old[1] and match[1] > old[0] for old in selected):

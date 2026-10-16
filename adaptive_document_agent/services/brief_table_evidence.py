@@ -264,7 +264,8 @@ def _column_basis(table, column, source, locate=_located_header):
     return ""
 
 
-def _unit_supported(table, column, currency, scale, source, parsed, locate=_located_header, row_index=None):
+def _unit_supported(table, column, currency, scale, source, parsed, locate=_located_header, row_index=None,
+                    quoted=''):
     """A column annotation cannot supply a unit absent from the cited context."""
     if parsed.currency and parsed.raw_unit:
         return True  # Already matched the explicit cell declaration above.
@@ -284,7 +285,8 @@ def _unit_supported(table, column, currency, scale, source, parsed, locate=_loca
         if (unit.currency and canonical_quantity(unit.currency, "", "")[0] == currency
                 and (unit.scale or 1) == scale):
             return True
-    return False
+    from .brief_split_unit_header import paired_column_unit_supported
+    return paired_column_unit_supported(table, column, currency, scale, source, quoted, locate)
 
 
 def _quoted_complete_row(cells: list[str], quoted: str) -> bool:
@@ -449,7 +451,8 @@ def quoted_table_context(item, result, *, excerpts=None):
                     continue
                 if parsed.raw_unit and parsed.scale != scale:
                     continue
-                if not _unit_supported(table, column, currency, scale, source, parsed, locate, row_index):
+                if not _unit_supported(table, column, currency, scale, source, parsed, locate, row_index,
+                                       quoted=quoted):
                     continue
                 basis = _column_basis(table, column, source, locate)
                 if basis is None:

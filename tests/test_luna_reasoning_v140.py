@@ -105,12 +105,13 @@ def test_other_providers_cannot_borrow_static_openai_capability(monkeypatch, pro
 @pytest.mark.parametrize('stage,operation', [
     ('semantic', 'SemanticResolution'), ('planner', 'AnalysisPlan'), ('insight', 'InsightList'),
     ('presentation', 'PresentationTopicSelection'), ('presentation', 'IntroductionDraft'),
-    ('presentation', 'IntroductionAudienceReview'), ('report', 'BriefMeaningReview'),
-    ('presentation', 'SummaryCoverageReview'),
+    ('presentation', 'IntroductionAudienceReview'),
+    ('presentation', 'SummaryLayoutPages'),
+    ('presentation', 'PhysicalBudgetSelection'),
     ('presentation', 'PresentationPlan'), ('presentation', 'UnknownOperation'),
     ('planner', 'IntroductionPages'), ('report', 'text'),
 ])
-def test_luna_analytical_and_independent_review_operations_preserve_defaults(monkeypatch, stage, operation):
+def test_luna_analytical_and_unknown_operations_preserve_defaults(monkeypatch, stage, operation):
     monkeypatch.delitem(sys.modules, 'litellm', raising=False)
     policy = _policy(stage=stage, operation=operation)
     assert policy['options'] == {} and policy['intent'] == 'preserve'

@@ -43,6 +43,8 @@ class Reviewer:
     def generate_structured(self,messages,schema,**kwargs):
         self.calls.append(schema.__name__)
         if issubclass(schema, CompactSummaryDraft):return schema.model_validate(authored_test_draft(self.draft, messages))
+        if schema.__name__ == 'SummaryLayoutPages':
+            return schema.model_validate({'pages': authored_test_draft(self.draft, messages)['pages']})
         if schema.__name__ == 'SummarySynthesisRevision':
             payload=json.loads(messages[1]['content'].split('\n',1)[1].rsplit('\n',1)[0])
             replacements, additions = [], []

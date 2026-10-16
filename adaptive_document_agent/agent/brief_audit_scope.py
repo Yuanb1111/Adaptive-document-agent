@@ -238,3 +238,50 @@ def audit_status_errors(item, result, *, inventory=None):
             errors.append(f"Audit status '{status[0]}' for '{period[0]}' lacks unambiguous "
                           'source column support; unmarked columns remain unknown, not audited or unaudited.')
     return list(dict.fromkeys(errors))
+
+
+def audit_status_options(item, result, *, inventory=None):
+    """Expose exact period/status spellings without choosing audience meaning."""
+    inventory = source_audit_scope(item, result) if inventory is None else inventory
+    periods = {}
+    for table in inventory:
+        for column in table['columns']:
+            key = re.sub(r'\s+', '', column['period']).upper()
+            periods.setdefault(key, set()).add(column['status'])
+    return [{'period': period, 'status': next(iter(statuses)) if len(statuses) == 1 else 'unknown',
+             'allowed_spellings': ([f'{period} ({next(iter(statuses))})', f'{next(iter(statuses))} {period}']
+                                   if len(statuses) == 1 and 'unknown' not in statuses else [])}
+            for period, statuses in sorted(periods.items())]
+
+
+def misplaced_parenthetical_statuses(item, result, *, inventory=None):
+    """Locate unsafe status placement with a different, actually supported target.
+
+    This is correction feedback, never a rewrite or a reason to accept the
+    ambiguous phrase. The model must return unambiguous text and pass all gates.
+    """
+    inventory = source_audit_scope(item, result) if inventory is None else inventory
+    columns = [column for table in inventory for column in table['columns']]
+    declared = {re.sub(r'\s+', '', column['period']).upper() for column in columns}
+    feedback = []
+    for status, preceding, keys in _assertions(item.text, columns):
+        if preceding.end() > status.start() or not re.fullmatch(
+                r'\s*\(\s*', item.text[preceding.end():status.start()]):
+            continue
+        tail = item.text[status.end():]
+        if not re.match(r'\s*:', tail):
+            continue
+        end = tail.find(')')
+        if end < 0:
+            continue
+        inner = {key for match in _PERIOD.finditer(tail[:end]) for key in _period_keys(match, columns)} & declared
+        if len(inner) != 1 or inner & keys:
+            continue
+        actual = {column['status'] for column in columns
+                  if re.sub(r'\s+', '', column['period']).upper() in inner}
+        if actual != {status[0].casefold()}:
+            continue
+        feedback.append({'status': status[0].casefold(), 'ambiguous_preceding_period': preceding[0],
+                         'supported_inner_period': next(iter(inner)),
+                         'required_action': 'Place the status directly beside its supported period; do not qualify the preceding period.'})
+    return feedback

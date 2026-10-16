@@ -60,6 +60,14 @@ class CapacityClient:
                 edits.append(dict(meaning_id=item['meaning_id'],
                                   required_meanings=[dict(meaning=value) for value in replacements]))
             return schema(edits=edits)
+        if schema.__name__ == 'IntroductionMeaningResolution':
+            return schema(finding_dispositions=[dict(finding_id=finding['finding_id'],
+                classification='already_covered', action='already_covered',
+                referenced_meaning_ids=[row['meaning_id'] for row in payload['current_meanings']
+                                        if row['part_id'] == finding['part_id']],
+                source_quote=payload['source']['parts'][0]['source_text'],
+                reason='Untrusted author claims coverage; the independent final reviewer still rejects.')
+                for finding in payload['findings']])
         self.reviews.append(deepcopy(payload))
         if len(self.reviews) == 1 and self.groups < len(self.claims):
             return review_response(schema, messages, accepted=False, repair_scope='meanings',
@@ -101,7 +109,7 @@ def test_large_revised_inventory_still_requires_final_independent_source_and_uni
     client = CapacityClient(claims, accept_final=False, unsupported=unsupported)
     with pytest.raises(ValueError, match='not independently accepted'):
         select_introduction_audience(client, result, reading)
-    assert len(client.reviews) == 2
+    assert len(client.reviews) == 3
     assert len(client.reviews[-1]['decisions'][0]['required_meanings']) == len(claims)
     assert reading.audience_part_ids is None and not reading.audience_selection
     assert client.calls.count('IntroductionMeaningRevision') == 1

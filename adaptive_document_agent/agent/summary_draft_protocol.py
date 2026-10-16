@@ -22,6 +22,16 @@ def author_draft(
     audit: dict[str, Any], *, cancelled: Event | None = None,
 ) -> Draft:
     """Two draft attempts, or one draft plus a patch with one gateway repair."""
+    from .summary_writer_copy import writer_schema, bind_writer_copy
+    canonical_schema = schema
+    schema = writer_schema(schema)
+    def canonical(draft):
+        bound, count = bind_writer_copy(draft, canonical_schema)
+        if count:
+            audit['writer_copy_binding'] = dict(reference_count=count,
+                quote_source='exact_full_current_paragraph', model_owns='part_id_and_meaning_index',
+                semantic_approval=False)
+        return bound
     original = list(messages)
     attempts = audit.setdefault('draft_format_attempts', [])
     for attempt in range(2):
@@ -33,7 +43,7 @@ def author_draft(
             draft = gateway.generate_structured(messages, schema, stage='presentation',
                 allow_repair=False, cancelled=cancelled)
             record['status'] = 'success'
-            return draft
+            return canonical(draft)
         except LLMStructuredOutputError as exc:
             record.update(status='invalid_format', raw_response=exc.response.text,
                           validation_detail=str(exc.__cause__ or exc))
@@ -60,11 +70,13 @@ def author_draft(
                     patch_record.update(status='invalid_format', validation_detail=str(repair_error))
                     raise SummaryDraftProtocolError('Summary draft format repair exhausted: '+str(repair_error)) from repair_error
                 patch_record['status'] = 'success'
-                return draft
+                return canonical(draft)
             messages = original + [untrusted_document_message(json.dumps(record,ensure_ascii=False)),
-                {'role':'user','content':'Repair the response format against the schema. Keep all supplied '
-                 'content, qualifications, identity and exact fact IDs. Pages are logical groups; Python '
-                 'paginates complete items. Do not drop content to fit a group. Split overlong prose into '
+                {'role':'user','content':'Repair the response format against the schema. Preserve the '
+                 'semantic audience/content scope of the original instructions, every required claim '
+                 'and qualification, identity and exact fact IDs. Evidence context does not expand that '
+                 'scope during format recovery. Pages are logical groups; Python '
+                 'paginates complete items. Do not drop required content to fit a group. Split overlong prose into '
                  'complete items with its original evidence. If the schema and user permit a supporting '
                  'appendix, move detailed supporting items there instead of bloating the body. '
                  'Do not invent or truncate claims.'}]

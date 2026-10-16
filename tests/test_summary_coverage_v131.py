@@ -138,7 +138,7 @@ def test_measured_layout_feedback_merges_groups_without_dropping_required_meanin
     class Client(Reviewer):
         author_calls = 0
         def generate_structured(self, messages, schema, **kwargs):
-            if issubclass(schema, CompactSummaryDraft):
+            if issubclass(schema, CompactSummaryDraft) or schema.__name__ == 'SummaryLayoutPages':
                 self.author_calls += 1
                 if self.author_calls == 2:
                     record = json.loads(messages[-2]['content'].split('\n',1)[1].rsplit('\n',1)[0])

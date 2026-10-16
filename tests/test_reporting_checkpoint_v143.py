@@ -71,7 +71,8 @@ class EarlyCheckpointClient(SchemaReplayClient):
 
     def _response(self, schema, value, provenance):
         self.provenance.append(dict(operation=schema.__name__, provenance=provenance))
-        typed = schema.model_validate(deepcopy(value))
+        from tests.summary_author_helpers import writer_test_value
+        typed = schema.model_validate(writer_test_value(schema, deepcopy(value)))
         return typed, LLMResponse(text=typed.model_dump_json(),
             usage=LLMUsage(provider='mock', model='offline-retained-stage-artifact'))
 
@@ -283,7 +284,8 @@ class SyntheticCapacityBindingClient(SyntheticReportingClient):
         self.before_addition = None
 
     def _typed(self, schema, value):
-        typed = schema.model_validate(value)
+        from tests.summary_author_helpers import writer_test_value
+        typed = schema.model_validate(writer_test_value(schema, value))
         return typed, LLMResponse(text=typed.model_dump_json(),
             usage=LLMUsage(provider='mock', model='synthetic-v143-reporting'))
 

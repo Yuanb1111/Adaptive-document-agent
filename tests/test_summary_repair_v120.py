@@ -160,13 +160,13 @@ def test_numeric_repair_has_exact_previous_copy_errors_and_succeeds_after_correc
     class Client(Reviewer):
         attempts = 0
         def generate_structured(self, messages, schema, **kwargs):
-            if schema is CompactSummaryDraft or schema.__name__ == 'SummarySynthesisRevision':
+            if issubclass(schema, CompactSummaryDraft) or schema.__name__ == 'SummarySynthesisRevision':
                 self.attempts += 1
                 if self.attempts == 2:
                     assert 'RMB999 million' in messages[-1]['content']
                     assert 'unsupported numeric claims' in messages[-1]['content']
             response = super().generate_structured(messages, schema, **kwargs)
-            if schema is CompactSummaryDraft and self.attempts == 1:
+            if issubclass(schema, CompactSummaryDraft) and self.attempts == 1:
                 response.pages[0].items[0].text = 'Teams generated RMB999 million revenue.'
             return response
     client = Client(draft)

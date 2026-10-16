@@ -52,7 +52,7 @@ def payload_from(messages):
 
 def item(text, indices=range(4)):
     return dict(label='Service conditions', text=text, fact_ids=['f0'],
-        meaning_refs=[dict(part_id='part-0', meaning_index=index, summary_quote=text) for index in indices])
+        meaning_refs=[dict(part_id='part-0', meaning_index=index) for index in indices])
 
 
 class LateClient:

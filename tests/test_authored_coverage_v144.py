@@ -145,7 +145,7 @@ def test_revision_must_update_references_to_the_actual_new_paragraph():
     assert authored_coverage_errors(revised, source, catalog, {}) == []
 
 
-def test_layout_rewrite_is_rechecked_after_pagination_not_against_previous_copy():
+def test_layout_rewrite_binds_addresses_to_new_copy_before_the_independent_review():
     _, review, source, catalog, draft = authored_fixture()
     first, second = draft.pages[0].items
     draft.pages[0].items = [first]
@@ -157,15 +157,17 @@ def test_layout_rewrite_is_rechecked_after_pagination_not_against_previous_copy(
     item.text = 'Teams AA and AB provide scheduling; staff preparation is required before service delivery.'
     item.fact_ids = ['f0', 'f1']
     item.meaning_refs.extend(ref.model_copy(deep=True) for ref in second.meaning_refs)
-    client = MockLLMClient([revised.model_dump(mode='json')])
+    from adaptive_document_agent.agent.summary_writer_copy import address_only_copy
+    client = MockLLMClient([address_only_copy({'pages': revised.model_dump(mode='json')['pages']})])
     gateway = LLMGateway(client, LLMSettings())
     audit = {}
     current, pages = paginate_draft(gateway, draft, catalog, review, [], audit,
                                     expand_compact, CompactSummaryDraft)
     assert len(client.calls) == 1 and len(pages) == 1
     assert audit['layout_attempts'][0]['status'] == 'overflow'
-    assert any('not visible in its exact paragraph' in error
-               for error in authored_coverage_errors(current, source, catalog, {}))
+    assert not authored_coverage_errors(current, source, catalog, {})
+    assert all(ref.summary_quote == item.text for page in current.pages for item in page.items for ref in item.meaning_refs)
+    assert audit['layout_attempts'][0]['writer_copy_binding']['semantic_approval'] is False
 
 
 def test_complete_author_self_report_cannot_override_independent_rejection():

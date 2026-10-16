@@ -43,6 +43,9 @@ class SemanticScoringBatchAudit(BaseModel):
     validation_errors: list[str] = Field(default_factory=list)
     error: str = ''
     output_tokens: int | None = None
+    # Untrusted diagnostic text only. A length-finished response never supplies
+    # accepted decisions, even when its partial text happens to be valid JSON.
+    truncated_response: str | None = None
 
 
 class SemanticScoringResponseAudit(BaseModel):

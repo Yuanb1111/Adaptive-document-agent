@@ -19,10 +19,13 @@ class FormatSequence:
 
     def generate_structured(self, messages, schema, **kwargs):
         self.calls.append((messages, kwargs))
+        assert schema.__name__ == 'SummaryLayoutPages'
+        assert set(schema.model_fields) == {'pages'}
         value = self.responses.pop(0)
         if value == 'invalid':
             raise LLMStructuredOutputError('Malformed response', response=LLMResponse(text='{}'))
-        return schema.model_validate(value.model_dump(mode='json'))
+        from adaptive_document_agent.agent.summary_writer_copy import address_only_copy
+        return schema.model_validate(address_only_copy({'pages': value.model_dump(mode='json')['pages']}))
 
 
 def test_each_geometry_correction_keeps_its_own_single_format_repair_bound():
@@ -89,7 +92,9 @@ def test_cancellation_after_first_compression_blocks_the_second_request():
 
 def test_two_compressions_keep_the_same_loopback_only_gateway():
     _, review, catalog, original, packed = compression_fixture()
-    client = MockLLMClient([original.model_dump(mode='json'), packed.model_dump(mode='json')])
+    from adaptive_document_agent.agent.summary_writer_copy import address_only_copy
+    client = MockLLMClient([address_only_copy({'pages': value.model_dump(mode='json')['pages']})
+                           for value in (original, packed)])
     settings = LLMSettings(provider=ProviderName.OPENAI_COMPATIBLE, model='local-author',
         base_url='http://127.0.0.1:8000/v1', privacy_mode=PrivacyMode.LOCAL_ONLY)
     gateway = LLMGateway(client, settings, cache_enabled=False)
@@ -98,7 +103,7 @@ def test_two_compressions_keep_the_same_loopback_only_gateway():
     assert gateway.settings is settings and gateway.settings.is_local
     assert gateway.settings.privacy_mode is PrivacyMode.LOCAL_ONLY
     assert gateway.client is client
-    assert [row['operation'] for row in gateway.usage] == ['CompactSummaryDraft', 'CompactSummaryDraft']
+    assert [row['operation'] for row in gateway.usage] == ['SummaryLayoutPages', 'SummaryLayoutPages']
 
 
 def test_loopback_transport_failure_does_not_launch_another_model():

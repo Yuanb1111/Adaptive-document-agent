@@ -23,6 +23,9 @@ MAX_REVIEW_BATCHES = 24
 MAX_REVIEW_CALLS = MAX_REVIEW_BATCHES + 12
 MAX_REVIEW_OUTPUT_TOKENS = 8192
 MAX_REVIEW_DECISIONS = 32
+# Delta output contains no repeated topic descriptions, so twice as many
+# complete per-series decisions fit the same bounded output contract.
+MAX_DELTA_DECISIONS = 64
 
 
 def _missing_included_facts(reviewed, lookup):
@@ -326,95 +329,9 @@ def review_topic_coverage(
 
 def _review_bounded(selection, candidates, lookup, primary_pages, payload, gateway, validate, record,
                     *, instructions=()):
-    """Review all facts in bounded batches and commit only a complete valid merge."""
-    from .coverage_review_context import compact_context, batch_context, encode
-    compact = compact_context(payload)
-    current = selection.model_copy(deep=True)
-    remaining = list(candidates)
-    decisions = {}
-    batches = []
-    budget = {'calls': 0}
-    try:
-        while remaining:
-            represented = [o for topic in current.topics for sid in topic.series_ids for o in lookup[sid]]
-            # Exact overlapping views are already structurally represented by
-            # accepted semantic choices, not chosen by a Python importance rank.
-            covered = [sid for sid in remaining if representation_links(lookup[sid], represented) is not None]
-            for sid in covered:
-                decisions[sid] = CoverageDecision(series_id=sid, decision='include',
-                    reason='All source observations are represented in an accepted model-selected view.')
-            remaining = [sid for sid in remaining if sid not in set(covered)]
-            if not remaining:
-                break
-            if len(batches) >= MAX_REVIEW_BATCHES:
-                raise ValueError('Complete coverage review exceeds the bounded batch count; no series was silently sampled.')
-            batch_budget = int(MAX_REVIEW_CHARACTERS * .88)
-            if len(encode(compact)) <= batch_budget and not batches and len(remaining) <= MAX_REVIEW_DECISIONS:
-                requested = remaining[:]
-                context = {**compact, 'current_selection': current.model_dump(mode='json'),
-                           'series_requiring_coverage_decision': requested}
-            else:
-                # Encoding size grows monotonically with this ordered prefix.
-                # Search its boundary rather than rebuilding every prefix.
-                low, high = 0, min(len(remaining), MAX_REVIEW_DECISIONS)
-                while low < high:
-                    middle = (low + high + 1) // 2
-                    proposal = batch_context(compact, current, remaining[:middle])
-                    if len(encode(proposal)) <= batch_budget:
-                        low = middle
-                    else:
-                        high = middle - 1
-                requested = remaining[:low]
-                if not requested:
-                    proposal = batch_context(compact, current, remaining[:1])
-                    if len(encode(proposal)) <= MAX_REVIEW_CHARACTERS:
-                        requested = remaining[:1]  # Never split or sample a complete series.
-                    else:
-                        raise ValueError('One complete series and accepted context exceed the bounded review budget; no series was silently sampled.')
-                context = batch_context(compact, current, requested)
-            encoded = encode(context)
-            batch_audit = {'series_ids': requested, 'context_characters': len(encoded)}
-            batches.append(batch_audit)
-            revised, local = _review_batch(context, current, requested, lookup,
-                                           primary_pages, gateway, validate, batch_audit, budget,
-                                           instructions=instructions)
-            final_ids = {sid for topic in revised.topics for sid in topic.series_ids}
-            decisions.update(local)
-            # Carry model-authored reasons forward, including earlier batches.
-            omitted = {o.series_id for o in revised.omissions}
-            for omission in current.omissions:
-                if len(revised.omissions) >= 12:
-                    break
-                if omission.series_id not in final_ids and omission.series_id not in omitted:
-                    revised.omissions.append(omission.model_copy(deep=True))
-                    omitted.add(omission.series_id)
-            current = revised
-            remaining = [sid for sid in remaining if sid not in local]
-        final_ids = {sid for topic in current.topics for sid in topic.series_ids}
-        represented = [o for sid in final_ids for o in lookup[sid]]
-        for sid, decision in list(decisions.items()):
-            if decision.decision == 'omit' and representation_links(lookup[sid], represented) is not None:
-                # A later accepted complete composition can represent an earlier
-                # excluded individual view. Keep its semantic decision in the
-                # batch audit and reconcile only final structural coverage.
-                decisions[sid] = CoverageDecision(series_id=sid, decision='include',
-                    reason='Represented by a later model-selected complete view; the original reasoning remains in the batch audit.')
-        if set(decisions) != set(candidates):
-            raise ValueError('Complete coverage review left series without a decision.')
-        omitted = {o.series_id for o in current.omissions}
-        for decision in decisions.values():
-            if len(current.omissions) >= 12:
-                break
-            if decision.decision == 'omit' and decision.series_id not in omitted:
-                current.omissions.append(PresentationOmission(series_id=decision.series_id, reason=decision.reason))
-                omitted.add(decision.series_id)
-        validate(current, lookup, primary_pages=primary_pages)
-    except (LLMResponseError, LLMTransportError, ValueError) as exc:
-        record('presentation_topic_coverage_unresolved', 'warning', {
-            'reason': str(exc), 'batches': batches, 'unreviewed_series_ids': remaining,
-            'context_characters': len(encode(payload)), 'limit': MAX_REVIEW_CHARACTERS})
-        return selection
-    record('presentation_topic_coverage_review', 'info', {'batches': batches,
-        'review': {**current.model_dump(mode='json'),
-                   'coverage_decisions': [decisions[sid].model_dump(mode='json') for sid in candidates]}})
-    return current
+    """Review independent complete-fact deltas, then commit one validated merge."""
+    from .coverage_delta_review import review_deltas
+    return review_deltas(selection, candidates, lookup, primary_pages, payload, gateway,
+        validate, record, instructions=instructions, characters=MAX_REVIEW_CHARACTERS,
+        decision_limit=MAX_DELTA_DECISIONS, batch_limit=MAX_REVIEW_BATCHES,
+        call_limit=MAX_REVIEW_CALLS, tokens=MAX_REVIEW_OUTPUT_TOKENS)

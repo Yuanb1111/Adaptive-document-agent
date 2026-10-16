@@ -1,7 +1,7 @@
 """Large catalogs must review every fact without losing accepted evidence."""
 import json
 import pytest
-from adaptive_document_agent.agent.coverage_review_context import compact_context, batch_context, encode
+from adaptive_document_agent.agent.coverage_review_context import compact_context, batch_context, delta_context, encode
 from adaptive_document_agent.agent.topic_coverage_review import TopicCoverageReview, review_topic_coverage
 from adaptive_document_agent.agent.presentation_topic_selector import PresentationTopicSelector
 from adaptive_document_agent.models import PresentationTopicSelection
@@ -226,6 +226,7 @@ def test_batched_review_is_complete_and_transactional(monkeypatch, fail_second):
     limit = max(len(encode(batch_context(compact, selection, [sid]))) for sid in candidates) + 5
     assert len(encode(batch_context(compact, selection, [interim, adverse]))) > limit
     monkeypatch.setattr(module, 'MAX_REVIEW_CHARACTERS', limit)
+    monkeypatch.setattr(module, 'MAX_DELTA_DECISIONS', 1)
     # This tests a complete multi-batch transaction independently of the
     # production request budget; the budget rollback has its own test.
     assert 3 < len(candidates) <= module.MAX_REVIEW_BATCHES < module.MAX_REVIEW_CALLS
@@ -233,21 +234,24 @@ def test_batched_review_is_complete_and_transactional(monkeypatch, fail_second):
     class Gateway:
         calls = []
         def generate_structured(self, messages, response_model, **kwargs):
-            data = json.loads(messages[-1]['content'].split('\n', 1)[1].rsplit('\n', 1)[0])
+            source = next(m for m in messages if m['role'] == 'user'
+                          and 'series_requiring_coverage_decision' in m['content'])
+            data = json.loads(source['content'].split('\n', 1)[1].rsplit('\n', 1)[0])
             self.calls.append(data)
             assert len(encode(data)) <= limit
             ids = data['series_requiring_coverage_decision']
-            if fail_second and len(self.calls) == 2:
+            if fail_second and len(self.calls) >= 2:
                 ids = []  # A malformed review must roll back the first batch.
-            return TopicCoverageReview(**data['current_selection'], coverage_decisions=[
+            return response_model(coverage_decisions=[
                 {'series_id': sid, 'decision': 'omit', 'reason': 'This evidence does not alter the requested historical question.'}
                 for sid in ids])
     gateway = Gateway()
     raw = result.model_dump(include={'observations', 'presentation_topics', 'charts'})
     selected = review_topic_coverage(selection, result, lookup, set(), payload, gateway, PresentationTopicSelector._validate)
-    assert len(gateway.calls) == (2 if fail_second else len(candidates))
+    assert (2 <= len(gateway.calls) <= 3) if fail_second else len(gateway.calls) == len(candidates)
     requested = [sid for data in gateway.calls for sid in data['series_requiring_coverage_decision']]
-    assert len(requested) == len(set(requested))
+    if not fail_second:
+        assert len(requested) == len(set(requested))
     if not fail_second:
         assert set(requested) == set(candidates)
     assert result.model_dump(include={'observations', 'presentation_topics', 'charts'}) == raw
@@ -273,13 +277,14 @@ def test_call_budget_exhaustion_rolls_back_partial_review(monkeypatch):
     compact=compact_context(payload)
     limit=max(len(encode(batch_context(compact,selection,[sid]))) for sid in candidates)+5
     monkeypatch.setattr(module,'MAX_REVIEW_CHARACTERS',limit)
+    monkeypatch.setattr(module,'MAX_DELTA_DECISIONS',1)
     monkeypatch.setattr(module,'MAX_REVIEW_CALLS',3)
     class Gateway:
         def __init__(self):self.calls=[]
         def generate_structured(self,messages,model,**kwargs):
             data=json.loads(messages[-1]['content'].split('\n',1)[1].rsplit('\n',1)[0]);self.calls.append(data)
             assert kwargs['max_tokens']==module.MAX_REVIEW_OUTPUT_TOKENS
-            return TopicCoverageReview(**data['current_selection'],coverage_decisions=[
+            return model(coverage_decisions=[
                 dict(series_id=sid,decision='omit',reason='Outside the requested question') for sid in data['series_requiring_coverage_decision']])
     gateway=Gateway()
     revised=review_topic_coverage(selection,result,lookup,set(),payload,gateway,PresentationTopicSelector._validate)
@@ -304,6 +309,7 @@ def test_short_input_still_batches_decisions_to_fit_bounded_output(monkeypatch):
     selection = PresentationTopicSelection(topics=[_topic(annual)])
     candidates = {sid for sid in lookup if sid != annual}
     monkeypatch.setattr(module, 'MAX_REVIEW_DECISIONS', 2)
+    monkeypatch.setattr(module, 'MAX_DELTA_DECISIONS', 2)
     class Gateway:
         def __init__(self): self.requested = []
         def generate_structured(self, messages, response_model, **kwargs):
@@ -311,7 +317,7 @@ def test_short_input_still_batches_decisions_to_fit_bounded_output(monkeypatch):
             ids = data['series_requiring_coverage_decision']
             assert len(ids) <= 2
             self.requested.extend(ids)
-            return TopicCoverageReview(**data['current_selection'], coverage_decisions=[
+            return response_model(coverage_decisions=[
                 {'series_id': sid, 'decision': 'omit', 'reason': 'Outside this model-selected historical question.'}
                 for sid in ids])
     gateway = Gateway()
@@ -323,6 +329,7 @@ def test_short_input_still_batches_decisions_to_fit_bounded_output(monkeypatch):
 def test_large_catalog_reviews_more_than_eight_batches_without_sampling(monkeypatch):
     from adaptive_document_agent.agent import topic_coverage_review as module
     monkeypatch.setattr(module, 'MAX_REVIEW_DECISIONS', 16)
+    monkeypatch.setattr(module, 'MAX_DELTA_DECISIONS', 16)
     result, lookup, annual, _, _, payload = context_fixture(extra=300)
     selection = PresentationTopicSelection(topics=[_topic(annual)])
     candidates = {sid for sid in lookup if sid != annual}
@@ -335,7 +342,7 @@ def test_large_catalog_reviews_more_than_eight_batches_without_sampling(monkeypa
             ids = data['series_requiring_coverage_decision']
             self.calls += 1
             self.requested.extend(ids)
-            return TopicCoverageReview(**data['current_selection'], coverage_decisions=[
+            return model(coverage_decisions=[
                 dict(series_id=sid, decision='omit', reason='Outside the requested historical comparison scope.')
                 for sid in ids])
     gateway = Gateway()

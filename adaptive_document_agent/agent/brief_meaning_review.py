@@ -14,8 +14,9 @@ from .prompting import untrusted_document_message
 class MeaningComparison(BaseModel):
     model_config = ConfigDict(extra='forbid')
     claim: str = Field(min_length=1, max_length=550)
-    start_value: str
-    end_value: str
+    comparison_kind: Literal['endpoints', 'reported_delta'] = 'endpoints'
+    start_value: str = ''
+    end_value: str = ''
     direction: Literal['increase', 'decrease', 'equal']
     absolute_magnitude: bool = False
     measure_basis: Literal['flow_total', 'source_percentage'] = 'flow_total'
@@ -27,6 +28,11 @@ class MeaningComparison(BaseModel):
     end_context: str = Field(default='', max_length=10000)
     start_duration_months: int | None = Field(default=None, ge=1, le=120)
     end_duration_months: int | None = Field(default=None, ge=1, le=120)
+    delta_value: str = ''
+    delta_ref: str = Field(default='', max_length=80)
+    delta_context: str = Field(default='', max_length=10000)
+    delta_quote: str = Field(default='', max_length=2000)
+    source_direction: Literal['increase', 'decrease', 'equal'] | None = None
 
 
 class MeaningVerdict(BaseModel):
@@ -44,7 +50,15 @@ class BriefMeaningReview(BaseModel):
 
 
 def comparison_errors(comparison, item, *, pages=None, source_percentages=None):
+    if comparison.comparison_kind == 'reported_delta':
+        from .brief_reported_delta import reported_delta_errors
+        return reported_delta_errors(comparison, item, pages=pages)
     errors = []
+    # A reviewer may echo its source-direction diagnostic for either kind.
+    # Endpoint direction is still computed from the bound numeric pair below;
+    # only an actual delta amount/binding mixes incompatible transports.
+    if comparison.delta_value or comparison.delta_ref or comparison.delta_context or comparison.delta_quote:
+        errors.append('Endpoint comparisons cannot carry an unrelated reported-change payload')
     if comparison.claim not in item.text:
         errors.append('Comparison does not bind an exact audience claim')
     from adaptive_document_agent.services.source_quotes import continuous_quote_passages
@@ -161,8 +175,32 @@ def meaning_validator(gateway, *, cancelled=None, result=None):
              'one reported number exceeds another. In a finding containing both actual changes and '
              'separately dated facts, list only its asserted changes. Still verify all dated facts, '
              'units, period associations and qualifications in the item verdict. '
+             'Read ALL supplied owned evidence, including narrative passages after a table. A directly '
+             'stated narrative total can support the same total claim even when the table presents '
+             'separate component rows. Do not reject such a literal total for lacking an identical '
+             'table row or demand a newly enumerated component breakdown. Separately stated openings '
+             'and closures, inflows and outflows, or other different measures are not a directional '
+             'comparison merely because the two counts differ. '
              'For EVERY asserted numeric change, provide a comparison with the exact claim substring, '
              'source numeric coefficients (no scale conversion), claimed direction and literal source references. '
+             'Use comparison_kind=endpoints for actual FROM/TO levels. A literal change stated BY '
+             'an amount, or an increase/decrease OF an amount, is comparison_kind=reported_delta: '
+             'leave all start/end values, refs and contexts empty; return exact delta_value, '
+             'delta_ref and a short contiguous delta_quote from that source describing the reported '
+             'change. Independently extract source_direction from that literal phrase; direction is '
+             'the audience asserted direction and must agree. Never invent levels or set start=end '
+             'to represent a reported delta. delta_value keeps its exact coefficient and inline '
+             'currency/scale, never a conversion. delta_quote must state that amount as a change, '
+             'not merely a reported level. Python checks the exact amount/form and source binding. '
+             'For an inline monetary delta, delta_value MUST retain the full literal currency and '
+             'scale; a bare coefficient cannot match a monetary source. A source-reported percentage '
+             'change retains its literal percent unit in delta_value and in both claim and source. '
+             'A percent, percentage-point change, monetary amount and bare coefficient are distinct; '
+             'do not compute a rate, remove its unit or convert between these forms. '
+             'BY requires an actual change '
+             'predicate, not acquisition/payment/valuation wording. For a shared predicate such as '
+             'one asset increasing by an amount and another asset by another amount, bind the full '
+             'contiguous claim containing that shared change predicate, not only the second noun phrase. '
              'For a table cell whose currency/scale appears separately in its header, return the bare '
              'literal signed coefficient in start_value/end_value; do not prepend a currency or unit '
              'to create a quantity string absent from that literal passage. Cite the complete table '
@@ -177,6 +215,20 @@ def meaning_validator(gateway, *, cancelled=None, result=None):
              'Keep reasons concise (under 200 characters); return JSON only, no analysis essay. '
              'Report durations in months only when the source defines them; use null for point-in-time stock measures. State whether '
              'the claim compares absolute magnitudes (e.g. loss narrowing). Python calculates direction. '
+             'When absolute_magnitude=true, direction describes the POSITIVE magnitude in audience '
+             'copy, not signed cash flow: a source -20 to -30 has magnitude INCREASE, while -30 '
+             'to -20 has magnitude DECREASE. Preserve signed source endpoints and set only the '
+             'appropriate magnitude flag; never change their signs to obtain a desired direction. '
+             'Check audit qualification for EACH measure and period; a qualifier attached only '
+             'to the first comparison does not automatically qualify a later implicit-period clause. '
+             'Before finding a missing audit qualification, identify the EXACT affected measure, '
+             'period and literal source-supported status in your reason. Reconcile that finding '
+             'with the same period column in source_audit_scope. An unknown column cannot require '
+             'an audited or unaudited label. If one period is unknown and its comparative is '
+             'unaudited, an explicit unaudited label on that comparative in EACH measure clause '
+             'satisfies that status obligation; never demand the label on the unknown period. '
+             'Check the actual current audience text before reporting an omission: a source-bound '
+             'qualification already present on the affected measure and period is not missing. '
              'Same numbers appearing somewhere in a table do not support a claimed association. '
              'A decline from 2% to 3% is false; annual and six-month losses do not establish a trend. '
              'Set measure_basis=flow_total for period aggregate amounts/counts: compared durations must match. '
@@ -240,7 +292,7 @@ def meaning_validator(gateway, *, cancelled=None, result=None):
                 failed.append('Every asserted numeric change needs source-bound comparison endpoints')
             for comparison in verdict.comparisons:
                 updates = {}
-                for field in ('start', 'end'):
+                for field in ('start', 'end', 'delta'):
                     ref = getattr(comparison, field + '_ref')
                     if ref:
                         context = catalogs[verdict.index].get(ref)

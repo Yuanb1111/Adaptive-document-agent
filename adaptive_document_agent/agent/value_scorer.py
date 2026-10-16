@@ -1,7 +1,8 @@
 """Bound candidate volume using relevance, evidence, and redundancy signals."""
 
 from collections import Counter, defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
+from threading import Event, Lock
 
 from pydantic import BaseModel, Field
 
@@ -25,7 +26,9 @@ from .candidate_generator import AnalysisCandidateGenerator
 # Use the same type on the wire and in saved audit records so cache/export
 # round trips retain model identity as well as all original values.
 SemanticCandidateScore = SemanticCandidateDecision
-SCORING_BATCH_SIZE = 40
+# Response capacity, independent of document type or analytical importance.
+# Every request still sees the complete reviewed candidate comparison context.
+SCORING_BATCH_SIZE = 20
 
 
 class SemanticCandidateScores(BaseModel):
@@ -136,9 +139,10 @@ class AnalysisValueScorer:
     def __init__(self, gateway: LLMGateway | None = None) -> None:
         self.gateway = gateway
 
-    def score(self, candidates: list[AnalysisCandidate], index: DocumentIndex, profile: DocumentProfile, *, maximum: int = 20, progress=None) -> list[CandidateScore]:
+    def score(self, candidates: list[AnalysisCandidate], index: DocumentIndex, profile: DocumentProfile, *, maximum: int = 20, progress=None, reserved_workers: int = 0) -> list[CandidateScore]:
         bounded = AnalysisCandidateGenerator._prefilter(candidates, index, profile) if self.gateway else candidates
-        batches, attempts = self._semantic_batches(bounded, profile, progress=progress)
+        batches, attempts = self._semantic_batches(bounded, profile, progress=progress,
+                                                  reserved_workers=reserved_workers)
         bounded_ids = {item.id for item in bounded}
         decisions: dict[str, list[SemanticCandidateDecision]] = defaultdict(list)
         catalogs: dict[int, dict[str, list[str]]] = {}
@@ -207,23 +211,30 @@ class AnalysisValueScorer:
 
     def _semantic_batches(
         self, candidates: list[AnalysisCandidate], profile: DocumentProfile, *, progress=None,
+        reserved_workers: int = 0,
     ) -> tuple[list[tuple[list[str], SemanticCandidateScores]], list[SemanticScoringBatchAudit]]:
         """Keep global comparison context; retry only an explicitly truncated batch."""
         if not self.gateway or not candidates:
             return [], []
+        if type(reserved_workers) is not int or reserved_workers < 0:
+            raise ValueError('reserved_workers must be a nonnegative integer')
         notify = progress or (lambda _: None)
+        cancelled, failure_lock, failures = Event(), Lock(), []
 
         def review(focus: list[AnalysisCandidate], depth: int = 0):
+            if cancelled.is_set():
+                raise CancelledError('Candidate scoring cancelled after an independent batch failed')
             identifiers = [item.id for item in focus]
             completed, attempts = [], []
             try:
-                response = self._semantic_scores(candidates, profile, focus=identifiers, depth=depth)
+                response = self._semantic_scores(candidates, profile, focus=identifiers, depth=depth,
+                                                 cancelled=cancelled)
             except LLMStructuredOutputError as exc:
                 usage = exc.response.usage
                 if not usage or usage.finish_reason != 'length':
                     raise
                 attempts.append(SemanticScoringBatchAudit(candidate_ids=identifiers, error=str(exc),
-                    output_tokens=usage.output_tokens))
+                    output_tokens=usage.output_tokens, truncated_response=exc.response.text))
                 # Each split strictly reduces the number of complete candidates.
                 # A fixed depth used to stop at five candidates in a 40-item
                 # batch, even though smaller requests could still recover.
@@ -248,24 +259,43 @@ class AnalysisValueScorer:
             completed.append((identifiers, response))
             return completed, attempts
 
+        def run(group):
+            try:
+                return review(group)
+            except BaseException as exc:
+                # Capture the originating failure before signalling peers. A
+                # queued peer's CancelledError must not hide that diagnosis.
+                with failure_lock:
+                    if not failures:
+                        failures.append(exc)
+                cancelled.set()
+                raise
+
         groups = [candidates[start:start+SCORING_BATCH_SIZE] for start in range(0, len(candidates), SCORING_BATCH_SIZE)]
         notify(f'Scoring analysis candidates (0/{len(groups)})')
-        workers = min(2, getattr(self.gateway, 'discovery_workers', 1), len(groups))
+        # The gateway owns the actual cross-stage admission bound. A caller can
+        # reserve capacity for an independently active mandatory task without
+        # guessing thread state here. Local/stateful gateways expose one slot.
+        workers = max(1, min(getattr(self.gateway, 'discovery_workers', 1) - reserved_workers,
+                             len(groups)))
         outcomes = {}
         if workers > 1:
             with ThreadPoolExecutor(max_workers=workers, thread_name_prefix='candidate-scoring') as pool:
-                futures = {pool.submit(review, group): index for index, group in enumerate(groups)}
+                futures = {pool.submit(run, group): index for index, group in enumerate(groups)}
                 try:
                     for future in as_completed(futures):
                         outcomes[futures[future]] = future.result()
                         notify(f'Scoring analysis candidates ({len(outcomes)}/{len(groups)})')
                 except BaseException:
+                    cancelled.set()
                     for future in futures:
                         future.cancel()
+                    if failures:
+                        raise failures[0]
                     raise
         else:
             for index, group in enumerate(groups):
-                outcomes[index] = review(group)
+                outcomes[index] = run(group)
                 notify(f'Scoring analysis candidates ({len(outcomes)}/{len(groups)})')
         completed, attempts = [], []
         for index in sorted(outcomes):
@@ -274,7 +304,7 @@ class AnalysisValueScorer:
             attempts.extend(audits)
         return completed, attempts
 
-    def _semantic_scores(self, candidates: list[AnalysisCandidate], profile: DocumentProfile, *, focus=None, depth=0) -> SemanticCandidateScores | None:
+    def _semantic_scores(self, candidates: list[AnalysisCandidate], profile: DocumentProfile, *, focus=None, depth=0, cancelled=None) -> SemanticCandidateScores | None:
         if not self.gateway or not candidates:
             return None
         from .report_requirements import instruction_messages
@@ -296,6 +326,7 @@ class AnalysisValueScorer:
             stage="planner",
             request_metadata={'chunk_id': stable_id('candidate-scoring', *identifiers),
                               'recovery_depth': depth},
+            cancelled=cancelled,
         )
         return response
 

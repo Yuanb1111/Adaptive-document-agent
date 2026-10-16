@@ -54,13 +54,15 @@ class RecordedLayoutCheckpointClient(RecordedCoverageCheckpointClient):
         if name in self.retained_intro_operations:
             return super().generate_structured(messages, response_model, **kwargs)
         self.calls.append(name)
-        if name == 'SummarySynthesisDraft':
+        if name in {'SummarySynthesisDraft', 'SummaryLayoutPages'}:
             self.author_inputs.append(deepcopy(_payloads(messages)))
             position = len(self.author_inputs) - 1
             if position < len(self.layout_drafts):
                 provenance = ('recorded_initial_author_artifact' if position == 0 else
                               'historical_layout_response_under_new_feedback_transport')
-                return self._response(response_model, self.layout_drafts[position], provenance)
+                value = self.layout_drafts[position]
+                if name == 'SummaryLayoutPages': value = {'pages': value['pages']}
+                return self._response(response_model, value, provenance)
         self.missing_responses.append(name)
         self.provenance.append(dict(operation=name, provenance='unavailable_new_compression_or_independent_response'))
         self.known_failure.set()
@@ -104,7 +106,7 @@ def test_external_v144_whole_retry_replays_two_drafts_then_stops_at_new_compress
     assert source.pipeline_version == SUPPORTED_RECORDED_VERSION
     # Source row/unit and direction contracts changed in v146. Historical
     # reporting replay below still retains its exact input evidence.
-    assert (EXTRACTION_VERSION, ANALYSIS_VERSION) == ('extraction-v20', 'analysis-v75')
+    assert (EXTRACTION_VERSION, ANALYSIS_VERSION) == ('extraction-v20', 'analysis-v76')
     assert source.pipeline_state == 'partial' and source.retry_from == 'reporting'
     assert hashlib.sha256(raw).hexdigest() == source.document.sha256
     assert len(source.observations) == 1623 and len(source.analysis_results) == 12
@@ -125,7 +127,7 @@ def test_external_v144_whole_retry_replays_two_drafts_then_stops_at_new_compress
     assert result.document == original.document
     assert result.observations == original.observations and result.analysis_results == original.analysis_results
     assert client.review_position == 2
-    assert len(client.author_inputs) >= 3 and client.missing_responses[0] == 'SummarySynthesisDraft'
+    assert len(client.author_inputs) >= 3 and client.missing_responses[0] == 'SummaryLayoutPages'
     assert not any(name in client.calls for name in ('InsightList', 'ReportPlan', 'PresentationTopicSelection',
         'SummaryCoverageReview', 'BriefSourcePages', 'ExecutiveBrief', 'BriefMeaningReview'))
     summary = _warnings(result, 'company_introduction_summary_audit')[0]
@@ -135,7 +137,7 @@ def test_external_v144_whole_retry_replays_two_drafts_then_stops_at_new_compress
     attempts = [item for row in summary['plan_audits'] for item in row.get('layout_attempts', [])]
     assert len(attempts) >= 2 and all(item['status'] == 'overflow' for item in attempts[:2])
     assert all(sum(group['placement'] == 'body' for group in item['physical_groups']) == 7 for item in attempts[:2])
-    assert attempts[0]['layout_feedback']['version'] == 'physical-meaning-layout-v1'
+    assert attempts[0]['layout_feedback']['version'] == 'physical-meaning-layout-v2'
     assert attempts[1]['compression_round'] == 2
     assert result.pipeline_state == 'partial' and result.retry_from == 'reporting' and not is_complete(result)
     assert result.executive_brief is None and any(i.code == 'editorial_stages_skipped' for i in result.validation_warnings)
@@ -197,7 +199,7 @@ class SyntheticLayoutFlowClient(SyntheticCoverageFlowClient):
 
     def generate_structured(self, messages, response_model, **kwargs):
         schema, name = response_model, response_model.__name__
-        if name not in {'IntroductionAudienceSelection', 'SummarySynthesisDraft', 'SummaryCoverageReview',
+        if name not in {'IntroductionAudienceSelection', 'SummarySynthesisDraft', 'SummaryLayoutPages', 'SummaryCoverageReview',
                         'SummarySynthesisRevision'}:
             return super().generate_structured(messages, response_model, **kwargs)
         self.calls.append(name)
@@ -214,12 +216,13 @@ class SyntheticLayoutFlowClient(SyntheticCoverageFlowClient):
                     reason='The synthetic service and explicit training prerequisites define the audience scope.',
                     required_meanings=[dict(meaning=meaning) for meaning in meanings]))
             return self._typed(schema, dict(decisions=decisions))
-        if name == 'SummarySynthesisDraft':
-            source = next(value for value in payloads if isinstance(value, dict) and 'parts' in value)
-            self.parts = deepcopy(source['parts'])
-            self.entries = [dict(part_id=part['id'], meaning_index=index, meaning=meaning['meaning'])
-                for part in self.parts for index, meaning in enumerate(part['required_meanings'])]
-            assert len(self.entries) == 41 and len(source['meaning_inventory']) == 41
+        if name in {'SummarySynthesisDraft', 'SummaryLayoutPages'}:
+            if name == 'SummarySynthesisDraft':
+                source = next(value for value in payloads if isinstance(value, dict) and 'parts' in value)
+                self.parts = deepcopy(source['parts'])
+                self.entries = [dict(part_id=part['id'], meaning_index=index, meaning=meaning['meaning'])
+                    for part in self.parts for index, meaning in enumerate(part['required_meanings'])]
+                assert len(self.entries) == 41 and len(source['meaning_inventory']) == 41
             self.author_inputs.append(deepcopy(payloads))
             compressed = len(self.author_inputs) > 1 and self.failure_mode != 'still_seven_pages'
             value = self._draft(compressed=compressed)
@@ -271,7 +274,7 @@ def test_whole_report_compression_retains_all_41_meanings_in_five_native_intro_p
     attempts = [item for row in review.plan_audits for item in row.get('layout_attempts', [])]
     assert [item['status'] for item in attempts] == ['overflow', 'success']
     assert len(attempts[0]['physical_groups']) == 7
-    assert attempts[0]['layout_feedback']['version'] == 'physical-meaning-layout-v1'
+    assert attempts[0]['layout_feedback']['version'] == 'physical-meaning-layout-v2'
     from adaptive_document_agent.services.pptx_export import build_presentation
     from pptx import Presentation
     reopened = Presentation(BytesIO(build_presentation(result)))

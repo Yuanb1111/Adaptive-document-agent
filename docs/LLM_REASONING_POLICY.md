@@ -19,7 +19,20 @@ without changing prompts, response validation, routing, credentials or privacy:
   use the same opt-out reduction. `SummaryReadBatch` now uses it for bounded
   structural reading and source-span capture. Complete line assignment, literal
   source ownership, numerical checks and independent compact-part meaning review
-  remain required. `BriefMeaningReview` retains provider defaults.
+  remain required.
+- In v147, initial owned-source synthesis, audience meaning
+  selection/correction, final briefing meaning review, physical-budget review
+  and incremental coverage decisions use the configured editorial reduction too.
+  These operations still decide meaning through the model and retain their full
+  independent source, quantity, qualification, coverage and physical-page gates.
+  This avoids spending tens of thousands of reasoning tokens before emitting a
+  bounded decision. Analytical discovery, resolution, insight generation and
+  initial topic selection retain their existing policies. The explicit
+  `provider_default` opt-out and exact route/capability checks remain effective.
+  `IntroductionAudienceReview`, `SummaryLayoutPages` and `PhysicalBudgetSelection` retain provider defaults: deciding introductory
+  importance, qualifying scope and preservation across an entire source union
+  and physical synthesis, or choosing a faithful audience scope against actual chart-group costs,
+  requires substantive semantic work.
 - `SemanticCandidateScores` uses the opt-out reduction for bounded ranking of
   the supplied evidence-backed candidate set. Global context, explicit rationales,
   incomplete-decision quarantine and LLM semantic selection remain unchanged.

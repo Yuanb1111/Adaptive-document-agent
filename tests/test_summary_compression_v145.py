@@ -38,7 +38,9 @@ class DraftClient:
 
     def generate_structured(self, messages, schema, **kwargs):
         self.calls.append(deepcopy(messages))
-        return schema.model_validate(self.drafts.pop(0).model_dump(mode='json'))
+        from adaptive_document_agent.agent.summary_writer_copy import address_only_copy
+        value = address_only_copy(self.drafts.pop(0).model_dump(mode='json'))
+        return schema.model_validate({'pages': value['pages']} if schema.__name__ == 'SummaryLayoutPages' else value)
 
 
 def paginate(client, draft, catalog, review, audit, **kwargs):
@@ -71,23 +73,25 @@ def test_final_overflow_stops_after_exactly_two_compressions():
     assert not any(row.get('rendered_pages') for row in audit['layout_attempts'])
 
 
-@pytest.mark.parametrize('mutation', ['missing', 'unknown', 'wrong_owner', 'stale_quote',
-                                    'removed_fact', 'changed_identity'])
+@pytest.mark.parametrize('mutation', ['missing', 'unknown', 'wrong_owner',
+                                    'removed_fact'])
 def test_compression_cannot_use_shorter_geometry_to_bypass_source_bindings(mutation):
     _, review, catalog, original, packed = compression_fixture()
     item = packed.pages[0].items[0]
     if mutation == 'missing': item.meaning_refs.clear()
     elif mutation == 'unknown': item.meaning_refs[0].meaning_index = 7
     elif mutation == 'wrong_owner': item.fact_ids = ['f1']
-    elif mutation == 'stale_quote': item.meaning_refs[0].summary_quote = 'Previous draft wording.'
     elif mutation == 'removed_fact': packed.pages[0].items.pop()
-    elif mutation == 'changed_identity': packed.stock_code = 'invented'
-    client, audit = DraftClient(packed), {}
+    client, audit = DraftClient(packed, packed) if mutation == 'missing' else DraftClient(packed), {}
     with pytest.raises(SummaryDraftProtocolError, match='source preservation'):
         paginate(client, original, catalog, review, audit)
-    assert len(client.calls) == 1
-    assert [row['status'] for row in audit['layout_attempts']] == ['overflow', 'source_invalid']
-    assert 'physical_groups' not in audit['layout_attempts'][1]
+    assert len(client.calls) == (2 if mutation == 'missing' else 1)
+    assert [row['status'] for row in audit['layout_attempts']] == (['overflow', 'source_invalid', 'source_invalid']
+        if mutation == 'missing' else ['overflow', 'source_invalid'])
+    if mutation == 'missing':
+        assert audit['layout_attempts'][1]['compression_recovery']['consumes_existing_final_compression']
+    else:
+        assert 'physical_groups' not in audit['layout_attempts'][1]
 
 
 def test_initial_missing_reference_remains_in_the_existing_source_repair_phase():
@@ -175,7 +179,7 @@ def test_successful_compression_still_requires_a_fresh_independent_meaning_verdi
         authors = 0
 
         def generate_structured(self, messages, schema, **kwargs):
-            if issubclass(schema, CompactSummaryDraft):
+            if issubclass(schema, CompactSummaryDraft) or schema.__name__ == 'SummaryLayoutPages':
                 self.authors += 1
                 self.draft = [original, packed][min(self.authors - 1, 1)].model_dump(mode='json')
             return super().generate_structured(messages, schema, **kwargs)

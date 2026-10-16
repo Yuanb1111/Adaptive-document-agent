@@ -324,6 +324,20 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
     from .brief_native_quantities import native_quantity_options
     repair_context['source_native_money_options'] = native_quantity_options(
         original, invalid, result, excerpts)
+    from .brief_audit_scope import source_audit_scope, audit_status_options
+    from .brief_period_clarification import period_clarification_options
+    qualification_options = {}
+    for index in invalid:
+        try:
+            item = ExecutiveBriefItem.model_validate(bounded_quote_item(original['items'][index], excerpts))
+        except ValueError:
+            continue
+        inventory = source_audit_scope(item, result)
+        qualification_options[f'item_{index}'] = {
+            'source_audit_scope': inventory,
+            'source_status_options': audit_status_options(item, result, inventory=inventory),
+            'period_clarifications': period_clarification_options(item, result, inventory=inventory)}
+    repair_context['source_qualification_options'] = qualification_options
     repair_messages = [
         {'role': 'system', 'content': messages[0]['content'] + '\nRepair only the requested invalid item_N '
          'fields (zero-based original positions), and title only when present in the response schema. '
@@ -339,10 +353,25 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
          'exact quantity_representations annotation. Preserve unit denominators and source headers. '
          'The magnitude_option supplies that exact annotation: when using its positive amount_text, '
          'copy quantity_representation into quantity_representations verbatim. A positive outflow/loss '
-         'without the annotation is invalid. Repeat a per-unit denominator on BOTH compared prices; '
+         'without the annotation is invalid. These are mutually exclusive display choices: an '
+         'explicit signed negative amount needs no positive-magnitude annotation. If you choose '
+         'the signed form, remove its old positive annotation from quantity_representations; '
+         'retain only annotations matching positive amounts actually displayed in the revised item. '
+         'Do not copy a magnitude_option annotation beside its signed amount_text. '
+         'Repeat a per-unit denominator on BOTH compared prices; '
          'a denominator on the first amount does not qualify the second. When a period/date is '
          'unsupported, cite its actual header evidence_blocks along with the complete row; never '
          'reuse a row-only quotation to claim a date that is absent from its evidence. '
+         'Use source_qualification_options to retain column-specific audit caveats in this SAME patch. '
+         'Place a status directly beside its supported period, never beside a different comparison '
+         'period. Unknown supports neither audited nor unaudited; do not infer status from an interim '
+         'date. A supplied period_clarification can spell out an already-bound prior-year comparison '
+         'when needed to attach its qualification. Do not enumerate unrelated dates or extra table cells. '
+         'Apply the source-bound status to EVERY affected measure/period: repeat it for each '
+         'comparison or explicitly state one common period/status scope covering all following '
+         'comparisons. A status beside the first measure alone does not qualify a later implicit-date '
+         'clause. Check all owned narrative evidence as well as tables before changing a literal '
+         'total; do not add component figures merely because reviewer feedback preferred a breakdown. '
          'Do not repeat a rejected conversion or omit the finding merely because its native scale is less compact. '
          'When shortening prose, retain its valid source context and shared assumptions. '
          'Every comparison cell needs its complete source unit; quote adjacent blocks when a sentence '
