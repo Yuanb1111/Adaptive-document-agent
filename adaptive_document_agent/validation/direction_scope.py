@@ -51,6 +51,39 @@ class DirectionScope:
     error: str = ""
 
 
+def inherited_period_range(component: str, predicate_offset: int, local_context: str) -> tuple[str, str]:
+    """Retain an explicit earlier range across coordinated clause boundaries.
+
+    Clause splitting must not turn a dated comparison into a whole-series
+    comparison. Only one explicit range in the same sentence can be shared;
+    a predicate's own periods always win. No period is taken from the data.
+    """
+    if re.search(rf"\b{_PERIOD}\b", local_context, re.I):
+        return "", ""
+    prefix = component[:predicate_offset]
+    boundaries = list(re.finditer(r"[;\r\n]|\.(?!\d)\s+", prefix))
+    if boundaries:
+        prefix = prefix[boundaries[-1].end():]
+    mentions = list(re.finditer(rf"\b{_PERIOD}\b", prefix, re.I))
+    if not mentions:
+        return "", ""
+    ranges = list(_RANGE.finditer(prefix))
+    if (not ranges or any(not any(r.start() <= m.start() and m.end() <= r.end() for r in ranges)
+                          for m in mentions)):
+        return "", "The preceding temporal qualifier does not identify one complete comparison range"
+    keys = {(re.sub(r"\s+", "", r['start']).casefold(),
+             re.sub(r"\s+", "", r['end']).casefold()) for r in ranges}
+    if len(keys) != 1:
+        return "", "Several preceding period ranges could qualify this direction word"
+    chosen = ranges[-1]
+    # Keep the explicit year-end qualification used by _period_index rather
+    # than silently converting bare years into balance-sheet dates.
+    qualifier = re.search(r"(?i)(?:year[- ]end(?:\s+of)?|end\s+of\s+(?:the\s+)?year(?:\s+of)?)\s*$",
+                          prefix[:chosen.start()])
+    start = qualifier.start() if qualifier else chosen.start()
+    return prefix[start:chosen.end()], ""
+
+
 def bind_endpoint_to_explicit_context(
     claim: str, context: str, *, direction_end: int | None = None,
     direction_word: str = "",
@@ -247,6 +280,7 @@ def resolve_direction_scope(
     *,
     allow_other_period_bases: bool = False,
     metric_spans: list[tuple[int, int]] | None = None,
+    inherited_range: str = "",
 ) -> DirectionScope:
     """Resolve explicit bounds or an unambiguous ordered sequence.
 
@@ -261,6 +295,8 @@ def resolve_direction_scope(
     lo, hi = _group_bounds(clause, associations, position, metric_spans)
     local_start, local_end = _context_bounds(clause, associations, position, position, metric_spans)
     local_text = clause[local_start:local_end]
+    if inherited_range and not re.search(rf"\b{_PERIOD}\b", local_text, re.I):
+        local_text += " " + inherited_range
     # Model prose often places a sourced value before each period, e.g.
     # "from 100 units at 2021-12-31 to 120 units at 2024-10-31" or
     # "from 100 units in FY2021 to 120 in FY2022 and 130 in FY2023".

@@ -298,13 +298,16 @@ def test_failed_reading_response_cache_is_revoked_before_local_retry(tmp_path):
     good = {'parts': [dict(block_id='b', start_line=1, end_line=1, title='Dividends',
         role='content', reading_note='A substantive dividend disclosure', facts=[dict(
             label='Dividends', text=text, quote_start_line=1, quote_end_line=1)])]}
-    client = MockLLMClient([bad, bad, bad, good])
+    # Exhaust both full readings and both bounded layout rereads before the
+    # separate local retry supplies a valid substantive-content decision.
+    client = MockLLMClient([bad, bad, bad, bad, good])
     gateway = LLMGateway(client, LLMSettings(provider=ProviderName.MOCK, model='offline'), cache=DiskCache(tmp_path))
     first = _read_batch(gateway, result, [block], Event())
     assert first.error is not None and not list(tmp_path.glob('llm-*.json'))
+    assert len(client.calls) == 4
     retried = _read_batch(gateway, result, [block], Event())
     assert retried.error is None and retried.parts[0].role == 'content'
-    assert len(client.calls) == 4
+    assert len(client.calls) == 5
 
 
 def test_explicit_group_company_row_labels_remain_different_scopes_after_metric_mapping():

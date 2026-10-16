@@ -46,6 +46,7 @@ from .direction_scope import (
     context_sign_transition_supported,
     direction_context,
     has_temporal_sequence,
+    inherited_period_range,
     predicate_conjunctions,
     resolve_direction_scope,
 )
@@ -119,6 +120,8 @@ class DirectionalClaimIssue(ValidationIssue):
     claim_start: int | None = None
     claim_end: int | None = None
     span_required: bool = False
+    # A contradiction can be certain while a shared token has no safe rewrite.
+    repair_blocked_reason: str = ""
 
 
 def observation_series_partition_key(obs: Observation) -> tuple:
@@ -1269,7 +1272,7 @@ def split_into_clauses(text: str) -> list[str]:
         r"\r?\n+",
         r";\s*",
         r"\s+[—–]\s+",
-        r"(?<!\d)\.(?!\d)\s+",
+        r"\.(?!\d)\s+",
         r",\s+(?:while|whilst|whereas|although|though|but|however|yet|and)\b",
         r"\b(?:while|whilst|whereas|although|though|but|however|yet)\b",
         r",\s+(?=[a-zA-Z])",
@@ -1592,6 +1595,16 @@ def _associate_clause_direction_spans(
         if closest_m:
             # Source-qualified coordinated subjects share one predicate.
             owners = {name for ms, me, name in metric_spans if (ms, me) == closest_span}
+            # Distinct complete subjects may also share a trailing predicate:
+            # "capacity and demand fell" must validate both source series.
+            # Ratio/component qualifiers have already been bound above and
+            # cannot enter this chain without an explicit conjunction.
+            if closest_span[1] <= ds:
+                left = closest_span[0]
+                for ms, me, name in reversed(metric_spans):
+                    if me <= left and re.fullmatch(r"\s*(?:,?\s*and|&)\s*", clause[me:left], re.I):
+                        owners.add(name)
+                        left = ms
             assocs.extend((owner, dw, ds, de) for owner in sorted(owners))
     return assocs
 
@@ -1790,6 +1803,7 @@ class ClaimValidator:
         ]
 
         seen_issues: set[tuple] = set()
+        shared_predicates: dict[tuple, set[str]] = defaultdict(set)
 
         for comp_type, comp_text, bullet_idx in components:
             if not comp_text.strip():
@@ -1860,6 +1874,9 @@ class ClaimValidator:
                     assocs = ratio_assocs
                 metric_spans = [m.span() for aliases in metric_aliases_map.values() for alias in aliases
                                 for m in re.finditer(r"\b" + re.escape(alias) + r"\b", clause, re.I)]
+                for metric, word, start, end in assocs:
+                    shared_predicates[(comp_type, bullet_idx, clause_offset + start,
+                                       clause_offset + end)].add(metric)
 
                 for m_name, dir_word, direction_start, direction_end in assocs:
                     if m_name == "__ambiguous_source_metric__":
@@ -1879,6 +1896,23 @@ class ClaimValidator:
                     scope_text = direction_context(
                         clause, assocs, (m_name, dir_word, direction_start, direction_end), metric_spans
                     )
+                    inherited_range, inherited_error = ("", "")
+                    if not has_temporal_sequence(clause, assocs, m_name, metric_spans):
+                        inherited_range, inherited_error = inherited_period_range(
+                            comp_text, clause_offset + direction_start, scope_text,
+                        )
+                    if inherited_error:
+                        issues.append(DirectionalClaimIssue(
+                            code="direction_scope_ambiguous", severity="error", stage="presentation",
+                            message=f"Slide {slide.id} {comp_type}: '{m_name}' — {inherited_error}.",
+                            slide_id=slide.id, metric_name=m_name, target_component=comp_type,
+                            bullet_index=bullet_idx, offending_direction=dir_word,
+                            expected_direction="UNRESOLVED_SCOPE",
+                            related_ids=[o.id for s in series_list for o in s["sorted_obs"]],
+                        ))
+                        continue
+                    if inherited_range:
+                        scope_text += " " + inherited_range
                     category_series = [s for s in series_list if s["first"].category_dimensions]
                     if len(category_series) == len(series_list) and len(series_list) > 1:
                         qualified = [s for s in series_list if _series_category_in_text(s, scope_text)]
@@ -2127,6 +2161,7 @@ class ClaimValidator:
                             ),
                             allow_other_period_bases=len(matching_series) > 1,
                             metric_spans=metric_spans,
+                            inherited_range=inherited_range,
                         )
                         if scope.error:
                             issues.append(DirectionalClaimIssue(
@@ -2288,6 +2323,22 @@ class ClaimValidator:
                         matches.append((offset + start + token.start(), offset + start + token.end()))
             if len(matches) == 1:
                 issue.claim_start, issue.claim_end = matches[0]
+        for (component, index, start, end), owners in shared_predicates.items():
+            if len(owners) < 2:
+                continue
+            bound = [issue for issue in issues if isinstance(issue, DirectionalClaimIssue)
+                     and issue.target_component == component and issue.bullet_index == index
+                     and issue.claim_start is not None and issue.claim_end is not None
+                     and start <= issue.claim_start < issue.claim_end <= end]
+            if {issue.metric_name for issue in bound} != owners:
+                # Changing a shared word for one subject would corrupt another
+                # subject whose existing direction is supported. Keep the
+                # truthful contradiction and its evidence; block only repair.
+                for issue in bound:
+                    issue.repair_blocked_reason = (
+                        f"The shared predicate '{issue.offending_direction}' cannot be independently "
+                        "repaired for coordinated source metrics.")
+                    issue.message += " " + issue.repair_blocked_reason
         return issues
 
     def validate_slide_claims(
@@ -2307,6 +2358,8 @@ class ClaimValidator:
 
 def apply_structured_issue_replacement(text: str, issue: DirectionalClaimIssue) -> tuple[str, bool]:
     """Replace the offending direction in text using the expected trend state and semantic family."""
+    if issue.repair_blocked_reason:
+        return text, False
     state = issue.expected_direction
     offending = issue.offending_direction
     family = issue.semantic_family

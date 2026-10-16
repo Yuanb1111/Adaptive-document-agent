@@ -81,6 +81,12 @@ class ObservationExtractor:
             # disappear from the identity of the following source rows.
             label = self._row_label(row.cells[0], allow_generic=not numeric_columns)
             if label and not numeric_columns:
+                # Missing-data tokens occupy data cells. They must not become
+                # a parent category merely because parse_number rejects them.
+                # Reconstructed section rows have empty measure cells; retain
+                # the source row and its metadata without inventing zeroes.
+                if any((cell or "").strip() for cell in row.cells[1:]):
+                    continue
                 from .unit_evidence import standalone_unit_declaration
                 if standalone_unit_declaration(row):
                     # This is a source unit heading, not a semantic category.
@@ -100,6 +106,14 @@ class ObservationExtractor:
             # Deduction detection ("Less:", "减：")
             is_deduction = getattr(row, "is_deduction", False) or bool(re.search(r"(?i)^[:\-\s]*(?:less|减)[:：\s]+", label))
             clean_label = re.sub(r"(?i)^[:\-\s]*(?:less|减)[:：\s]+", "", label).strip() if is_deduction else label
+
+            # Explicit named totals are independent measurements. A preceding
+            # unrelated scope must not rename "Total ..." to its own name.
+            # A matching group's total retains its composition identity.
+            if re.match(r"(?i)^(?:(?:grand\s+)?total\b|合计|总计)", clean_label):
+                total_for = re.sub(r"(?i)^(?:grand\s+)?total\s+", "", clean_label).strip()
+                if not current_section or total_for.casefold() != current_section.casefold():
+                    current_section = None
 
             # Category / hierarchy detection
             is_category_under_metric = False
@@ -246,7 +260,19 @@ class ObservationExtractor:
         is_count = count_metric or (col_type == "count" and not is_monetary_item)
         monetary_evidence = is_monetary_item or bool(local_currency or column_currency or source_units.currency) or unit == "currency" or source_units.unit == "currency"
 
-        if is_multiple_metric(metric) or col_type == "ratio" or unit == "multiple":
+        if source_units.unit == "compound":
+            unit = source_units.normalized_unit or f"compound:{source_units.raw_unit}"
+            currency = None
+            scale = number.scale * (source_units.scale if source_units.scale is not None else 1.0)
+            value = number.value * (source_units.scale if source_units.scale is not None else 1.0)
+            semantic_type, unit_family = "compound_ratio", "compound"
+            display_unit = source_units.raw_unit or ""
+            dimensions = {**(dimensions or {}), "column_role": "compound"}
+            if source_units.normalized_unit is None:
+                value, scale = None, None
+                validation_status = "ambiguous"
+                anomaly_notes.append("Compound source unit retained; denominator normalization is unresolved.")
+        elif is_multiple_metric(metric) or col_type == "ratio" or unit == "multiple":
             unit, currency, scale = "multiple", None, 1.0
             value = number.value
             semantic_type = "multiple"
@@ -389,6 +415,10 @@ class ObservationExtractor:
                 currency=currency,
                 compact=False,
             )
+        elif unit_family == "compound":
+            # The coefficient remains readable even when a source compound
+            # dimension cannot safely enter normalized numeric calculations.
+            disp_val = f"{raw}  {effective_raw_unit or ''}".strip()
 
         from .reporting_scope import table_reporting_scope
         reporting_scope = table_reporting_scope(table, row_index, column, current_section)

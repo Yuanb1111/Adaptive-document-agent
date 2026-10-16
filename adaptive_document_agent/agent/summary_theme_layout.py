@@ -63,17 +63,30 @@ def pack_theme_items(page: SummarySlidePage, items: list[SummarySlideItem]) -> l
             raise SummaryLayoutError('A theme paragraph needs shorter complete model-authored copy: ' + item.label)
     count = len(items)
     minimum_pages = [count + 1] * count + [0]
+    # Among equally short valid paginations, balance complete copy instead of
+    # stranding a short final paragraph after a dense multi-column page.
+    from adaptive_document_agent.services.presentation_brief import BriefItem, _item_height
+    from adaptive_document_agent.services.compact_summary import _template_dimensions
+    from adaptive_document_agent.services.pptx_export import _resolve_template_path
+    path = _resolve_template_path()
+    width, _ = _template_dimensions(str(path), path.stat().st_mtime_ns)
+    loads = [0.0]
+    for item in items:
+        loads.append(loads[-1] + _item_height(BriefItem(item.label, item.text, []), width - 1.3))
+    balance = [float('inf')] * count + [0.0]
     next_offsets = [0] * count
     for start in range(count - 1, -1, -1):
-        # Prefer the longer first page on equal page counts; deterministic
-        # ties retain the earliest authored material on the opening slide.
+        # Page count takes precedence. Only a geometric tie can rebalance
+        # whole paragraphs, and exact ties retain the longer opening page.
         for end in range(min(count, start + 4), start, -1):
             probe = page.model_copy(update={'items': items[start:end]})
             if compact_layout_errors([probe]):
                 continue
             candidate_pages = 1 + minimum_pages[end]
-            if candidate_pages < minimum_pages[start]:
+            candidate_balance = (loads[end] - loads[start]) ** 2 + balance[end]
+            if (candidate_pages, candidate_balance) < (minimum_pages[start], balance[start]):
                 minimum_pages[start], next_offsets[start] = candidate_pages, end
+                balance[start] = candidate_balance
     packed, start = [], 0
     while start < count:
         end = next_offsets[start]

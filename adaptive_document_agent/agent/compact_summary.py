@@ -278,6 +278,11 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
         budget_message = {'role':'user','content':
             f'The complete introduction has a budget of {review.max_intro_slides} physical slides. '
             'Synthesize ALL supplied parts together, not one page per passage or minor theme. '
+            'Define each concept once and combine overlapping business descriptions with all their '
+            'source bindings. Write an independent third-person introduction rather than copying '
+            'the source organisation\'s first-person voice. Balance complete paragraphs across '
+            'the measured physical pages; avoid a dense narrow-column page followed by one '
+            'short continuation paragraph when a readable balanced grouping preserves the evidence. '
             'Use at most this many logical groups, normally three or four concise paragraphs per group. '
             'Combine related source parts into each paragraph with all their fact IDs. Summarize tables '
             'qualitatively instead of enumerating their cells; exact values remain in the evidence appendix. '

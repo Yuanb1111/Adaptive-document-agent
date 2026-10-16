@@ -13,9 +13,20 @@ def editorial_closing_items(result):
     from adaptive_document_agent.agent.brief_source_checks import uncited_source_checks
     from adaptive_document_agent.agent.topic_coverage_review import coverage_review_pending
 
-    items = [BriefItem('Checked evidence not referenced',
-        f"Original review question: {check['question']} Review impact: {check['decision_impact']}",
+    # Scope-selection questions and reviewer deliberations belong to the
+    # exported audit, not audience conclusions. Keep a concrete visible limit
+    # and the affected source pages without presenting the question as fact.
+    items = [BriefItem('Source coverage limit',
+        'Additional source evidence has not been incorporated into these conclusions. '
+        'Review the cited pages before relying on the summary as a complete assessment.',
         check['pages']) for check in uncited_source_checks(result, result.executive_brief)]
+    coverage = result.profile.source_coverage
+    pending = [check for check in coverage.checks if check.status in {'unchecked', 'incomplete', 'failed'}] if coverage else []
+    if pending:
+        items.append(BriefItem('Source review incomplete',
+            'Some supplementary source pages could not be fully reviewed. '
+            'These conclusions may omit material context from the cited pages.',
+            sorted({page for check in pending for page in check.pages})))
     if coverage_review_pending(result):
         items.append(BriefItem('Coverage review incomplete',
             'Material omissions may remain; complete review before final use.', []))
@@ -26,6 +37,7 @@ def render_closing(presentation, result, plan):
     # The final briefing already appears in the summary. Preserve the prior
     # plan in notes without repeating its findings or reviving stale claims.
     if result.executive_brief is not None:
+        from adaptive_document_agent.agent.brief_source_checks import uncited_source_checks
         from .executive_brief import validate_executive_brief
         errors = validate_executive_brief(result.executive_brief, result)
         if errors:
@@ -33,6 +45,10 @@ def render_closing(presentation, result, plan):
         from .presentation_summary import render_complete_summary
         findings = editorial_closing_items(result)
         notes = json.dumps({'executive_brief': result.executive_brief.model_dump(mode='json'),
+                            'unresolved_source_checks': uncited_source_checks(result, result.executive_brief),
+                            'source_review_checks': ([check.model_dump(mode='json')
+                                for check in result.profile.source_coverage.checks]
+                                if result.profile.source_coverage else []),
                             'superseded_closing_plan': plan.model_dump(mode='json')}, ensure_ascii=False)
         if findings:
             slides = render_complete_summary(presentation, 'Review status', findings, notes=notes)

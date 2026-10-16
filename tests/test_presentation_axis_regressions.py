@@ -46,7 +46,7 @@ def test_explicit_dates_use_calendar_spacing_and_keep_unequal_intervals():
     serials = [float(p.text) for p in chart._chartSpace.xpath(".//c:cat/c:numRef/c:numCache/c:pt/c:v")]
     assert serials[1] - serials[0] == (date.fromisoformat(dates[1]) - date.fromisoformat(dates[0])).days
     assert serials[2] - serials[1] != serials[1] - serials[0]
-    assert float(chart._chartSpace.xpath(".//c:dateAx/c:scaling/c:min")[0].get("val")) < serials[0]
+    assert float(chart._chartSpace.xpath(".//c:dateAx/c:scaling/c:min")[0].get("val")) == serials[0]
     assert float(chart._chartSpace.xpath(".//c:dateAx/c:scaling/c:max")[0].get("val")) > serials[-1]
 
 
@@ -72,9 +72,12 @@ def test_narrow_date_chart_uses_explicit_small_numeric_point_labels_and_preserve
     assert chart._chartSpace.xpath('.//c:dateAx')
     assert len(chart._chartSpace.xpath('.//c:cat/c:numRef/c:numCache/c:pt')) == 5
     assert list(chart.series[0].values) == [149, 298, 111, 73, 81]
-    for point in chart.series[0].points:
+    for i, point in enumerate(chart.series[0].points):
         label = point.data_label.text_frame
-        assert not any(year in label.text for year in ['2021', '2022', '2023', '2024'])
+        if i == len(dates) - 1:
+            assert '31 Oct 2024' in label.text
+        else:
+            assert not any(year in label.text for year in ['2021', '2022', '2023', '2024'])
         assert all(run.font.size.pt == 9 for p in label.paragraphs for run in p.runs)
 
 

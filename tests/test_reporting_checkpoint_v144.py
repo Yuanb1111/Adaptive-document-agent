@@ -180,7 +180,7 @@ def test_external_v143_whole_reporting_retry_stops_at_new_author_mapping_boundar
     checkpoint_hash = hashlib.sha256(original_bytes).hexdigest()
     source = PipelineResult.model_validate_json(original_bytes)
     assert source.pipeline_version == SUPPORTED_RECORDED_VERSION
-    assert (EXTRACTION_VERSION, ANALYSIS_VERSION) == ('extraction-v19', 'analysis-v74')
+    assert (EXTRACTION_VERSION, ANALYSIS_VERSION) == ('extraction-v20', 'analysis-v75')
     assert source.pipeline_state == 'partial' and source.retry_from == 'reporting'
     assert hashlib.sha256(raw).hexdigest() == source.document.sha256
     assert len(source.observations) == 1623 and len(source.analysis_results) == 5

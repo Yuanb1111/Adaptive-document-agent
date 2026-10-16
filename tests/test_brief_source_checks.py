@@ -38,7 +38,10 @@ def test_uncited_found_check_names_question_impact_and_source_in_warning_and_clo
     assert 'cancellation' in warning.message and 'certainty of future demand' in warning.message
     slides = render_closing(blank_deck(), result, PresentationSlide(id='closing', slide_type='risks', title='Conclusions'))
     text = ' '.join(shape.text for slide in slides for shape in slide.shapes if shape.has_text_frame)
-    assert 'Check cancellation conditions' in text and 'Changes certainty of future demand' in text
+    assert 'Source coverage limit' in text and 'cited pages' in text
+    assert 'Check cancellation conditions' not in text and 'Changes certainty of future demand' not in text
+    notes = ' '.join(slide.notes_slide.notes_text_frame.text for slide in slides)
+    assert 'Check cancellation conditions' in notes and 'Changes certainty of future demand' in notes
 
 
 def test_forged_or_wrong_page_check_never_becomes_source_evidence():
@@ -46,6 +49,21 @@ def test_forged_or_wrong_page_check_never_becomes_source_evidence():
     result.profile.source_coverage.checks[0].evidence_quotes = {1: ['Invented constraint']}
     records, passages = source_check_context(result)
     assert not passages and not records[0]['evidence'] and not records[0]['context_complete']
+
+
+def test_failed_source_check_stays_visible_after_other_checked_evidence_is_cited():
+    from adaptive_document_agent.models.executive_brief import ExecutiveBrief
+    result, constraint = sample()
+    result.executive_brief = ExecutiveBrief.model_validate(payload(constraint, 12, 'Constraint'))
+    result.profile.source_coverage.checks.append(SourceCheck(section_id='supplement', pages=[5],
+        reason='Original internal question', decision_impact='Original internal deliberation',
+        status='failed', finding='Transport failed'))
+    slides = render_closing(blank_deck(), result,
+        PresentationSlide(id='closing', slide_type='risks', title='Conclusions'))
+    text = ' '.join(shape.text for slide in slides for shape in slide.shapes if shape.has_text_frame)
+    assert 'Source review incomplete' in text and 'p. 5' in text
+    assert 'Original internal' not in text and 'Transport failed' not in text
+    assert 'Original internal question' in slides[0].notes_slide.notes_text_frame.text
 
 
 def test_synthetic_join_cannot_authorize_quote_missing_from_original_page():

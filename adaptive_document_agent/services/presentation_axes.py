@@ -29,13 +29,14 @@ def style_date_axis(chart, dates, width):
     from pptx.oxml.xmlchemy import OxmlElement
 
     axis = chart.category_axis
-    axis.tick_labels.number_format = "mmm yyyy"
+    axis.tick_labels.number_format = "dd mmm yyyy" if width >= 5 else "mmm yyyy"
     axis.tick_labels.number_format_is_linked = False
-    # Give endpoint labels breathing room beside the value axis and slide edge.
-    # This changes the display window only; the workbook retains exact dates.
+    # Anchor regular calendar ticks to a reported date. Arbitrary padding on
+    # the left shifted annual December observations to November tick labels.
+    # The right display window may expand without changing the tick origin.
     padding = max(1, (max(dates) - min(dates)).days * .06)
     origin = date(1899, 12, 30)
-    for tag, value in (("c:min", (min(dates) - origin).days - padding),
+    for tag, value in (("c:min", (min(dates) - origin).days),
                        ("c:max", (max(dates) - origin).days + padding)):
         nodes = axis._element.scaling.xpath(tag)
         element = nodes[0] if nodes else OxmlElement(tag)
@@ -63,7 +64,8 @@ def label_source_dates(chart, dates, *, width=6, precision=None):
     series = chart.series[0]
     for i, (point, day, value) in enumerate(zip(series.points, dates, series.values)):
         label = point.data_label
-        label.position = XL_DATA_LABEL_POSITION.ABOVE if i % 2 == 0 else XL_DATA_LABEL_POSITION.BELOW
+        label.position = (XL_DATA_LABEL_POSITION.RIGHT if width < 5 and i == 0 else
+                          XL_DATA_LABEL_POSITION.ABOVE if i % 2 == 0 else XL_DATA_LABEL_POSITION.BELOW)
         # The plotted values are already scaled; labels use that same unit.
         amount = (f'{value:,.{precision}f}' if precision is not None
                   else f'{value:,.2f}'.rstrip('0').rstrip('.'))
@@ -72,7 +74,10 @@ def label_source_dates(chart, dates, *, width=6, precision=None):
         # On a three-panel slide full dates beside every marker collide with
         # neighboring values. Calendar spacing stays intact; exact dates remain
         # in the editable workbook and source-data appendix.
-        label.text_frame.text = amount if width < 5 else f'{day:%d %b %Y}: {amount}'
+        # Narrow date axes can omit a final interim tick. Preserve that exact
+        # observed endpoint visibly, rather than only in the workbook.
+        label.text_frame.text = (f'{day:%d %b %Y}: {amount}'
+                                 if width >= 5 or i == len(dates) - 1 else amount)
         for paragraph in label.text_frame.paragraphs:
             paragraph.font.size = Pt(9)
             for run in paragraph.runs:

@@ -20,13 +20,15 @@ def standalone_unit_declaration(row) -> UnitDefaults | None:
     if not row.cells or any((cell or '').strip() for cell in row.cells[1:]):
         return None
     label = (row.cells[0] or '').strip()
+    defaults = infer_unit_defaults(label)
+    if defaults.unit == "compound" and label.strip("()（） ") == defaults.raw_unit:
+        return defaults
     # Require the entire heading to be a unit declaration. A metric containing
     # a currency (or a narrative sentence) must never change following rows.
     if not re.fullmatch(r"(?i)\(?\s*(?:in\s+)?(?:(?:thousands?|millions?|billions?)\s+(?:of\s+)?)?"
                         r"(?:RMB|CNY|USD|HKD|EUR|GBP|US\$|HK\$)"
                         r"(?:\s*(?:in\s+)?(?:['’]000s?|thousands?|millions?|billions?))?\s*\)?", label):
         return None
-    defaults = infer_unit_defaults(label)
     return defaults if defaults.currency else None
 
 
@@ -41,9 +43,9 @@ def cell_unit_defaults(table: ExtractedTable, row_index: int, column_label: str 
     column_defaults = infer_unit_defaults(column_label or '')
     # A row-specific currency/denominator overrides table scaling. A bare
     # currency COLUMN still belongs to the explicit table unit declaration.
-    if row_defaults.currency:
+    if row_defaults.unit == "compound" or row_defaults.currency:
         return CellUnitDefaults(**vars(row_defaults))
-    if column_defaults.currency and column_defaults.scale:
+    if column_defaults.unit == "compound" or (column_defaults.currency and column_defaults.scale):
         return CellUnitDefaults(**vars(column_defaults))
 
     for previous in reversed(table.rows[:row_index]):
@@ -57,6 +59,8 @@ def cell_unit_defaults(table: ExtractedTable, row_index: int, column_label: str 
         if re.fullmatch(r"(?i)\s*\(?\s*in\s+(?:thousands?|millions?|billions?)(?:\s*,?\s*except\s+(?:for\s+)?percentages)?\s*\)?\s*",line)),None)
     for line in reversed(lines):
         defaults = infer_unit_defaults(line)
+        if defaults.unit == "compound":
+            return CellUnitDefaults(**vars(defaults), allow_column_defaults=False)
         if not defaults.currency:
             continue
         # "for ASP" qualifies just that column; "except for percentages"
@@ -81,6 +85,9 @@ def cell_unit_defaults(table: ExtractedTable, row_index: int, column_label: str 
         return CellUnitDefaults(allow_column_defaults=False)
     if column_defaults.currency and table.default_currency not in (None,column_defaults.currency):
         return CellUnitDefaults(**vars(column_defaults),allow_column_defaults=False)
+    retained = infer_unit_defaults(table.default_raw_unit or "")
+    if retained.unit == "compound":
+        return CellUnitDefaults(**vars(retained), allow_column_defaults=False)
     return CellUnitDefaults(
         unit=table.default_unit,
         currency=table.default_currency,

@@ -112,13 +112,13 @@ def reading_errors(review: SummaryReview, result: PipelineResult, *, complete_sc
         visible_length = len(' '.join(source.split()))
         if part.role == 'heading' and (visible_length > 180 or len([line for line in source.splitlines() if line.strip()]) > 2):
             errors.append('Heading-only classification cannot hide a substantive source passage')
-        # A compact multi-tier header can have several nonempty lines.
-        # Reject long body text, not a legitimate year/unit/header group.
-        if part.role == 'layout' and visible_length > 180:
-            errors.append('Layout-only classification cannot hide a substantive source passage')
         if part.role == 'layout':
             from .summary_layout_evidence import mechanical_layout
             if not mechanical_layout(source, block.page, result):
+                # Length can expose hidden prose, but must not veto a group
+                # whose individual source header/footer lines are all proved.
+                if visible_length > 180:
+                    errors.append('Layout-only classification cannot hide a substantive source passage')
                 errors.append('Nonblank layout needs source header/footer evidence; re-read this range for substantive content')
         for fact in part.facts:
             errors.extend(fact_errors(fact, result, source, block.page, literal_reading=True))

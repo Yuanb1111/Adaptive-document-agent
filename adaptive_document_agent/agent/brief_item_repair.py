@@ -19,6 +19,7 @@ from .prompting import untrusted_document_message
 from .brief_quote_bounds import bounded_quote_item
 from .brief_evidence_blocks import (ReferencedBrief, ReferencedBriefItem, expand_brief,
                                     expand_item)
+from .brief_table_headers import bind_brief_headers, bind_table_headers
 
 BriefTitle = Annotated[str, *ExecutiveBrief.model_fields['title'].metadata]
 
@@ -122,7 +123,7 @@ def _audit(result: PipelineResult, audit: dict[str, Any], outcome: str) -> None:
     audit['outcome'] = outcome
     result.validation_warnings.append(ValidationIssue(
         code='executive_brief_repair_audit', stage='report',
-        severity='info' if outcome in {'repaired', 'quote_reformatted', 'selected'} else 'warning',
+        severity='info' if outcome in {'repaired', 'quote_reformatted', 'selected', 'table_context_bound'} else 'warning',
         message=json.dumps(audit, ensure_ascii=False, allow_nan=False),
     ))
 
@@ -226,6 +227,11 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
     if evidence_catalog is not None:
         audit['reference_response'] = original
         original = expand_brief(original, evidence_catalog)
+    unbound = original
+    original, header_bindings = bind_brief_headers(original, result, excerpts)
+    if header_bindings:
+        audit['before_table_context_binding'] = unbound
+        audit['table_context_bindings'] = header_bindings
     audit['original'] = original
     if 7 < len(original['items']) <= 32:
         # Selection precedes locks. Only the model decides which findings are
@@ -283,6 +289,8 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
             _audit(result, audit, 'quote_reformatted')
         elif audit.get('selection'):
             _audit(result, audit, 'selected')
+        elif header_bindings:
+            _audit(result, audit, 'table_context_bound')
         return brief
 
     fields: dict[str, Any] = {f'item_{index}': (ExecutiveBriefItem, ...) for index in invalid}
@@ -359,6 +367,9 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
                         else [expand_item(item, evidence_catalog) for item in value] if key == 'additions'
                         else value for key, value in supplied.items()}
         audit['returned_patch'] = supplied
+        supplied = {key: bind_table_headers(value, result, excerpts)[0] if key.startswith('item_')
+                    else [bind_table_headers(item, result, excerpts)[0] for item in value]
+                    if key == 'additions' else value for key, value in supplied.items()}
         supplied = {key: _retain_cited_context(value, original['items'][int(key[5:])], excerpts)
                     if key.startswith('item_') else value for key, value in supplied.items()}
         patch_values = patch_model.model_validate(supplied).model_dump(mode='json')

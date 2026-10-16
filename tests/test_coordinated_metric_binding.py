@@ -2,7 +2,11 @@
 
 import pytest
 
-from adaptive_document_agent.validation.claim_validator import ClaimValidator
+from adaptive_document_agent.models import PresentationPlan
+from adaptive_document_agent.validation.claim_validator import (
+    ClaimValidator, apply_structured_issue_replacement, repair_presentation_plan,
+    repair_presentation_plan_from_issues,
+)
 from tests.test_segmented_direction_claims import _series, _slide
 
 
@@ -37,6 +41,31 @@ def test_shared_predicate_checks_both_categories_independently(wrong_category):
     assert contradictions[0].metric_name.startswith(wrong_category.casefold())
     assert contradictions[0].start_period == "FY2021"
     assert contradictions[0].end_period == "FY2023"
+
+
+@pytest.mark.parametrize("component", ["title", "message", "bullets"])
+@pytest.mark.parametrize("wrong_category", ["Six-axis", "Integrated"])
+def test_shared_word_cannot_be_repaired_for_one_category_while_other_category_is_correct(component, wrong_category):
+    observations = _observations()
+    for item in observations:
+        if item.metric_original.startswith(wrong_category) and item.period == "FY2023":
+            item.value, item.raw_value = 20, "20"
+    text = ("Six-axis and integrated cobot gross margins rose while four-axis gross margin fell "
+            "between FY2021 and FY2023.")
+    slide = _slide(text, observations, component)
+    issues = ClaimValidator().validate_slide(slide, observations)
+    assert len(issues) == 1
+    issue = issues[0]
+    assert issue.code == "directional_contradiction" and issue.repair_blocked_reason
+    assert issue.expected_direction == "DECREASED"
+    assert text[issue.claim_start:issue.claim_end] == "rose"
+    assert apply_structured_issue_replacement(text, issue) == (text, False)
+    plan = PresentationPlan(title="Review", slides=[slide])
+    before = plan.model_dump(mode="json")
+    assert not repair_presentation_plan_from_issues(plan, issues)[1]
+    assert plan.model_dump(mode="json") == before
+    assert not repair_presentation_plan(plan, observations)[1]
+    assert plan.model_dump(mode="json") == before
 
 
 @pytest.mark.parametrize("subject", ["Six-axis and unknown cobot", "Six-axis and six-axis cobot"])

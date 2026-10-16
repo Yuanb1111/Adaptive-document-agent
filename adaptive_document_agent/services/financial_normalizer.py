@@ -138,12 +138,37 @@ class FinancialNormalizer:
         # 3. Unit and Currency Inference (never leave as 'unknown' for obvious metrics)
         lower_metric = f"{metric_orig} {metric_canon}".strip().casefold()
         current_unit = (obs.unit or "").strip().casefold()
+        from adaptive_document_agent.extraction.normalizer import compound_unit_defaults
+        from adaptive_document_agent.extraction.numeric_parser import parse_number
+
+        compound = compound_unit_defaults(obs.raw_unit or "") or compound_unit_defaults(metric_orig)
 
         is_explicit_ratio = bool(re.search(r"\b(?:margin|share of|ratio|proportion|growth rate|cagr|rate)\b|%|利润率|占比|比例|增长率", lower_metric))
         # Intrinsic units take precedence over financial-statement keywords.  For
         # example, "inventory turnover days" contains "inventory", but is not a
         # monetary balance-sheet amount.
-        if is_days_metric(lower_metric) or any(k in lower_metric for k in _DAYS_METRIC_KEYWORDS):
+        if compound:
+            obs.unit = compound.normalized_unit or f"compound:{compound.raw_unit}"
+            obs.normalized_unit = obs.unit
+            obs.unit_family = "compound"
+            obs.semantic_type = "compound_ratio"
+            obs.currency = None
+            # Rebuild from retained source coefficients, so a stale monetary
+            # interpretation is corrected and normalization remains idempotent.
+            parsed = parse_number(obs.raw_value)
+            if compound.normalized_unit is None:
+                obs.value = obs.normalized_value = obs.unit_scale = None
+            elif parsed:
+                factor = compound.scale if compound.scale is not None else 1.0
+                obs.value = parsed.value * factor
+                obs.normalized_value = obs.value
+                obs.unit_scale = parsed.scale * factor
+            obs.raw_unit = compound.raw_unit
+            obs.display_unit = compound.raw_unit or ""
+            obs.display_value = f"{obs.raw_value}  {obs.display_unit}".strip()
+            if compound.normalized_unit is None:
+                obs.validation_status = "ambiguous"
+        elif is_days_metric(lower_metric) or any(k in lower_metric for k in _DAYS_METRIC_KEYWORDS):
             obs.unit = "days"
             obs.unit_family = "days"
             obs.display_unit = "days"

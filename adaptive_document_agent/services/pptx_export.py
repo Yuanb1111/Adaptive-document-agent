@@ -397,6 +397,10 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
                           if s.slide_type != 'risks' or has_review_status]
     if final_summary:
         contents_slides.append(summary.model_copy(update={'title': 'Conclusion', 'section_title': 'Conclusion'}))
+    # Native composition places all source indexes after the audience body.
+    # Apply the same stable ordering to the agenda, including a final brief.
+    contents_slides = ([s for s in contents_slides if s.slide_type != 'appendix']
+                       + [s for s in contents_slides if s.slide_type == 'appendix'])
     from .presentation_scope import scope_items
     if not scope_items(result):
         contents_slides = [s for s in contents_slides if s.slide_type != "data_quality"]

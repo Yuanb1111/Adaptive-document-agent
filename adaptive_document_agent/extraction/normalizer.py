@@ -18,6 +18,72 @@ class UnitDefaults:
     scale: float | None = None
     currency: str | None = None
     raw_unit: str | None = None
+    normalized_unit: str | None = None
+
+
+# A source denominator can contain a currency without making the observation
+# a monetary amount. Only recognize literal unit expressions, never metric
+# names such as "profit / revenue" as units.
+_PHYSICAL_UNIT = re.compile(
+    r"(?i)(?:kg(?:co2e)?|g(?:co2e)?|mg|tonnes?|metric\s+tons?|tco2e|t|"
+    r"m[23²³]|cm[23²³]|km[23²³]|k?wh|mwh|gwh|[kmg]?j|"
+    r"lit(?:er|re)s?|ml|l|hours?|days?|units?|employees?|patients?|visits?)"
+)
+_UNIT_SCALE = re.compile(r"(?i)^(?:in\s+)?(thousands?|millions?|billions?)\s+(?:of\s+)?")
+
+
+def compound_unit_defaults(text: str) -> UnitDefaults | None:
+    """Keep a nonmonetary numerator and its denominator as one source unit.
+
+    Convert only explicit scalar prefixes on the two sides. Currency in the
+    denominator is dimensional evidence, not the observation's currency. An
+    unresolved denominator remains an explicit compound unit with no inferred
+    normalization factor.
+    """
+    compact = " ".join(text.split()).strip()
+    candidates = re.findall(r"[（(]([^()（）]*?(?:/|\bper\b)[^()（）]*)[)）]", compact, re.I)
+    if not re.search(r"[()（）]", compact):
+        candidates.append(compact)
+    for candidate in candidates:
+        parts = re.split(r"\s*/\s*|\s+per\s+", candidate, maxsplit=1, flags=re.I)
+        if len(parts) != 2:
+            continue
+        numerator, denominator = (part.strip() for part in parts)
+        prefix = _UNIT_SCALE.match(numerator)
+        numerator_scale = next((amount for pattern, amount in _SCALES if prefix and re.search(pattern, prefix.group(1), re.I)), 1.0)
+        numerator_base = numerator[prefix.end():].strip() if prefix else numerator
+        known_numerator = bool(_PHYSICAL_UNIT.fullmatch(numerator_base))
+        # Revenue/sales names qualify the denominator; they do not change its
+        # dimensional currency. Preserve the entire phrase as raw evidence.
+        denominator_base = re.sub(r"(?i)^(?:revenue|sales|turnover)\s+", "", denominator)
+        denominator_base = re.sub(r"[’'`]\s*(?=(?:thousand|million|billion))", " ", denominator_base)
+        denominator_base = denominator_base.strip()
+        currency = next((code for pattern, code in _CURRENCIES if re.search(pattern, denominator_base, re.I)), None)
+        if not known_numerator:
+            # An unfamiliar literal unit must also be kept out of the money
+            # branch. Leave its conversion unresolved rather than guessing.
+            if not currency or not re.fullmatch(r"[A-Za-z][A-Za-z0-9²³^_-]{0,15}", numerator_base):
+                continue
+            if any(re.search(pattern, numerator_base, re.I) for pattern, _ in _CURRENCIES):
+                continue
+        denominator_scale = next((amount for pattern, amount in _SCALES if re.search(pattern, denominator_base, re.I)), 1.0)
+        if currency:
+            residue = denominator_base
+            for pattern, _ in (*_CURRENCIES, *_SCALES):
+                residue = re.sub(pattern, "", residue, flags=re.I)
+            residue = re.sub(r"(?i)\b(?:in|of)\b|[’'`]", "", residue).strip()
+            normalized_denominator = currency if not residue else None
+        else:
+            den_prefix = _UNIT_SCALE.match(denominator_base)
+            den_unit = denominator_base[den_prefix.end():].strip() if den_prefix else denominator_base
+            normalized_denominator = den_unit if _PHYSICAL_UNIT.fullmatch(den_unit) else None
+        normalized_unit = f"compound:{numerator_base}/{normalized_denominator}" if known_numerator and normalized_denominator else None
+        return UnitDefaults(
+            unit="compound", currency=None, raw_unit=candidate,
+            scale=numerator_scale / denominator_scale if normalized_unit else None,
+            normalized_unit=normalized_unit,
+        )
+    return None
 
 
 _CURRENCIES: tuple[tuple[str, str], ...] = (
@@ -42,6 +108,8 @@ def infer_unit_defaults(text: str) -> UnitDefaults:
     The source phrase is retained so presentation never has to reconstruct or
     guess whether a reported number was stated in units, thousands, or millions.
     """
+    if compound := compound_unit_defaults(text):
+        return compound
     compact = " ".join(text.split())
     lowered = compact.casefold()
     curr_first_pattern = re.compile(
@@ -112,6 +180,14 @@ def normalize_financial_fact(
     scale = parsed.scale
     currency = parsed.currency or default_currency
     unit = parsed.unit
+
+    if compound := compound_unit_defaults(raw_unit or ""):
+        factor = compound.scale if compound.scale is not None else 1.0
+        return (
+            parsed.value * factor if compound.normalized_unit else None,
+            compound.normalized_unit or f"compound:{compound.raw_unit}",
+            str(raw_value), compound.raw_unit or "", None,
+        )
 
     if raw_unit:
         inferred = infer_unit_defaults(raw_unit)

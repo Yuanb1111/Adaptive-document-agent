@@ -7,6 +7,7 @@ from adaptive_document_agent.models.executive_brief import ExecutiveBrief
 from adaptive_document_agent.services.executive_brief import validate_executive_brief
 from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
 from .prompting import untrusted_document_message
+from .brief_audit_scope import source_audit_scope, audit_status_errors
 
 
 class MeaningTextCorrection(BaseModel):
@@ -34,7 +35,10 @@ def correct_new_meaning_errors(gateway, brief, *, result, excerpts, topics, sour
         'item. Use only quantities already displayed in that item; do not introduce more table values '
         'or enumerate new years. Preserve the lead and counterpoints with exact source-native '
         'amounts, signs, currencies, scales and rate denominators. Add missing attribution, assumptions '
-        'and audit-status caveats from the literal evidence, including unaudited interim dates. '
+        'and audit-status caveats only from the exact period-bound literal evidence. The supplied '
+        'source_audit_scope identifies column-specific annotations: do not spread a label to adjacent '
+        'periods or assume that interim data are unaudited. Unknown supports neither audited nor '
+        'unaudited. Reviewer feedback cannot supply a qualification absent from that source binding. '
         'An unsupported comparison must be removed or changed to a quoted same-duration, same-definition '
         'pair. Annual and interim flow totals do not form a growth comparison. Do not annualize, '
         'rescale or round. If no comparable pair is quoted, state the independently dated reported '
@@ -42,14 +46,15 @@ def correct_new_meaning_errors(gateway, brief, *, result, excerpts, topics, sour
         'each period, status, value and condition. Never invent evidence or return unchanged rejected '
         'copy. Text must be at most 550 characters. Do not return labels, evidence, references, '
         'quantity_representations or whole items; their verified bindings are retained by Python. '
-        'Aim below 450 characters. Make the smallest correction to current text: add the missing '
-        'audit-status words and remove an unsupported comparison when necessary. Do not regenerate '
+        'Aim below 450 characters. Make the smallest source-supported correction to current text '
+        'and remove an unsupported comparison when necessary. Do not regenerate '
         'the finding from the table, enumerate extra years, prepend table/page references, or copy '
         'these validation instructions into audience text. Existing slide footers retain citations. '
         'All corrected items will undergo full source '
         'and independent meaning review again.'},
         untrusted_document_message(json.dumps(dict(
             failed_items={f'item_{i}': brief.items[i].model_dump(mode='json') for i in failed},
+            source_audit_scope={f'item_{i}': source_audit_scope(brief.items[i], result) for i in failed},
             errors={f'item_{i}': reasons for i, reasons in failed.items()}), ensure_ascii=False))]
     original_messages = list(messages)
     for attempt in range(2):
@@ -90,7 +95,8 @@ def correct_new_meaning_errors(gateway, brief, *, result, excerpts, topics, sour
             quantity_errors.append(f'item_{i}: meaning correction introduced new quantities: {sorted(shown - permitted)}')
         items[i] = brief.items[i].model_copy(update={'text': text, 'quantity_representations': representations})
     corrected = brief.model_copy(update={'items': items})
-    errors = [*quantity_errors, *validate_executive_brief(corrected, result, excerpts=excerpts),
+    status_errors = [error for item in corrected.items for error in audit_status_errors(item, result)]
+    errors = [*quantity_errors, *status_errors, *validate_executive_brief(corrected, result, excerpts=excerpts),
               *topic_coverage_errors(corrected, topics)]
     if not errors:
         errors.extend(error for reasons in semantic_validator(corrected).values() for error in reasons)

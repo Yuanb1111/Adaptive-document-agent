@@ -299,6 +299,14 @@ def classify_metric(
     lower = clean.casefold()
     short_title = shorten_metric_title(clean)
 
+    from adaptive_document_agent.extraction.normalizer import compound_unit_defaults
+    if (unit or "").startswith("compound:") or unit == "compound" or compound_unit_defaults(raw_unit or ""):
+        return MetricSemantic(
+            metric_type="compound", unit_family="compound", semantic_type="compound_ratio",
+            clean_name=clean, display_unit=raw_unit or "", is_currency=False,
+            is_percentage=False, is_multiple=False, short_display_name=short_title,
+        )
+
     # 1. Multiples / Ratios (Current ratio, Quick ratio, etc.)
     # Must precede percentage and currency checks to prevent ratios from being misclassified as percent.
     if any(k in lower for k in _MULTIPLE_KEYWORDS) and not any(k in lower for k in ("days", "% of", "share of")):
@@ -541,6 +549,8 @@ def format_metric_display_value(
     compact: bool = False,
 ) -> str:
     """Format exact card display value based on typed semantics."""
+    if semantic.unit_family == "compound":
+        return f"{raw_val}  {raw_unit or semantic.display_unit}".strip()
     if semantic.is_multiple:
         clean = str(raw_val).rstrip("xX").strip()
         return f"{clean}x"

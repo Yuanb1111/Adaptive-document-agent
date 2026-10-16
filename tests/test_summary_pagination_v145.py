@@ -39,6 +39,16 @@ def test_complete_group_avoids_staging_boundaries_without_losing_copy_or_evidenc
         p.model_dump(exclude={'id'}) for p in pages]
 
 
+def test_equal_page_count_balances_complete_copy_instead_of_dense_and_sparse_pages():
+    review, catalog, draft = prepared_group(4)
+    for index, item in enumerate(draft.pages[0].items):
+        item.text = ('Supported service words ' * 17 + f'Team {chr(65 + index)}.').strip()
+    pages = expand_compact(draft, catalog, review)
+    assert [len(page.items) for page in pages] == [2, 2]
+    assert not compact_layout_errors(pages)
+    assert [item.text for page in pages for item in page.items] == [item.text for item in draft.pages[0].items]
+
+
 @pytest.mark.parametrize('second_title', ['Service delivery', 'Customer training'])
 def test_distinct_authored_groups_remain_separate_even_when_their_titles_match(second_title):
     review, catalog, _ = prepared_group(4)
