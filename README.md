@@ -28,6 +28,13 @@ The responsibility split is:
 
 PDF contents are untrusted source material. Instructions embedded in a document are treated as data, never as commands.
 
+The v149 update handles mixed introduction findings in one bounded repair:
+omitted source parts and defects in selected assertions can be corrected
+together before the existing fresh independent review. Source-owned edits and
+compact review history protect established content and reduce repeated work.
+See [the v149 repair notes](docs/INTRODUCTION_REPAIR_V149.md) for validation and
+the measured-performance boundary.
+
 The v148 update preserves table-owned assurance status during summary repairs,
 fixes category and period binding that could wrongly suppress findings, and
 repairs newly withheld copy after budget selection. Introductions support

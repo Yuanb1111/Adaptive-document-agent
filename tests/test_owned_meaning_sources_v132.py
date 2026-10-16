@@ -29,11 +29,14 @@ def test_exact_owner_source_replaces_model_retyping_before_independent_review():
     original = review.parts[0].source_text
     client = Client()
     select_introduction_audience(client, result, review)
-    meaning = client.reviews[0]['decisions'][0]['required_meanings'][0]
+    decision = client.reviews[0]['decisions'][0]
+    meaning = client.reviews[0]['current_meanings'][0]
+    assert decision['required_meaning_ids'] == [meaning['meaning_id']]
     assert 'source_quote' not in meaning
     assert client.reviews[0]['source']['parts'][0]['source_text'] == original
     assert review.audience_selection['decisions'][0]['required_meanings'][0]['source_quote'] == original
-    assert meaning['proposed_source_quote'] == 'A model reconstruction that is not actual source text.'
+    assert decision['meaning_metadata'] == [dict(meaning_id=meaning['meaning_id'], fields={
+        'proposed_source_quote': 'A model reconstruction that is not actual source text.'})]
     assert audience_part_ids(review) == {'part-0'}
     payload, _ = compact_input(review)
     assert payload['parts'][0]['required_meanings'][0]['source_quote'] == original
@@ -66,7 +69,8 @@ def test_copying_owned_evidence_cannot_certify_an_unsupported_assertion():
         select_introduction_audience(client, result, review)
     assert len(client.reviews) == 2
     assert review.audience_part_ids is None and not review.audience_selection
-    assert all('source_quote' not in p['decisions'][0]['required_meanings'][0]
+    assert all('source_quote' not in p['current_meanings'][0]
+               and p['decisions'][0]['required_meaning_ids'] == [p['current_meanings'][0]['meaning_id']]
                and p['source']['parts'][0]['source_text'] == review.parts[0].source_text
                for p in client.reviews)
     history = [a for a in review.plan_audits if 'introduction_audience_attempt' in a]

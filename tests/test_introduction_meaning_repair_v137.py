@@ -1,5 +1,5 @@
 """A rejected atomicity checklist gets a bounded source-bound patch and review."""
-from tests.introduction_review_helpers import review_response
+from tests.introduction_review_helpers import review_payload, review_response
 from copy import deepcopy
 import json
 import pytest
@@ -39,7 +39,7 @@ class MeaningClient:
                 source_quote=self.reading.parts[0].source_text,
                 reason='The complete union retains the service and separate training condition.')
                 for finding in context['findings']])
-        context = json.loads(messages[-1]['content'].split('\n', 1)[1].rsplit('\n', 1)[0])
+        context = review_payload(messages)
         self.reviews.append(deepcopy(context))
         return review_response(schema, messages, accepted=self.accept and len(self.reviews) == 2,
             repair_scope='meanings', reason='Split service scope and training prerequisite into independent assertions.')

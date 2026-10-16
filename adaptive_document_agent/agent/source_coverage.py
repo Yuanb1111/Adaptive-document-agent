@@ -26,7 +26,7 @@ class CoverageTarget(BaseModel):
 class SourceCoverageSelection(BaseModel):
     model_config = ConfigDict(extra='forbid')
     targets: list[CoverageTarget] = Field(default_factory=list, max_length=MAX_CHECKS)
-    rationale: str = Field(min_length=1, max_length=600)
+    rationale: str = Field(min_length=1, max_length=2000)
 
 
 class CoverageQuote(BaseModel):

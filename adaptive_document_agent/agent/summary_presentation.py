@@ -51,7 +51,8 @@ def generate_summary_presentation(gateway, result, pages, response_model, *, sco
             # A body cap still bounds the audience introduction. Data Index
             # exemptions do not require every read passage on a visible slide.
             from .introduction_audience import select_introduction_audience
-            select_introduction_audience(gateway,result,review,cancelled=cancelled)
+            with record_timing(review.timings_ms, 'audience_selection'):
+                select_introduction_audience(gateway,result,review,cancelled=cancelled)
             from .compact_summary import generate_compact_summary, SummarySynthesisDraft
             with record_timing(review.timings_ms, 'editorial'):
                 generate_compact_summary(gateway, result, review, company, cancelled=cancelled,

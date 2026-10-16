@@ -13,6 +13,12 @@ def materialize_review_wire(payload):
     sources = {part['id']: part['source_text'] for part in payload.get('source', {}).get('parts', [])}
     for row in payload.get('current_meanings', []):
         row.setdefault('source_quote', sources.get(row['part_id'], ''))
+    def references(values, inventory):
+        for decision in values:
+            metadata = {row['meaning_id']: row['fields'] for row in decision.pop('meaning_metadata', [])}
+            decision['required_meanings'] = [dict(meaning=inventory[identifier]['meaning'],
+                source_quote=sources.get(decision['part_id'], ''), **metadata.get(identifier, {}))
+                for identifier in decision.pop('required_meaning_ids')]
     def decisions(values):
         if isinstance(values, dict):
             decisions(values.get('decisions', []))
@@ -21,8 +27,15 @@ def materialize_review_wire(payload):
                 for meaning in decision.get('required_meanings', []):
                     meaning.setdefault('source_quote', sources.get(decision['part_id'], ''))
     if payload.get('current_selection_digest'):
+        if payload.get('decisions_reference_namespace') == 'current_meanings':
+            references(payload['decisions'], {row['meaning_id']: row for row in payload['current_meanings']})
         for field in ('decisions', 'meaning_revision_base', 'inventory_revision_base'):
             decisions(payload.get(field))
+        resolution = payload.get('meaning_resolution')
+        if resolution and resolution.get('decisions_before_namespace') == 'before_resolution_meanings':
+            before = {row['meaning_id']: row for row in resolution['before_resolution_meanings']}
+            references(resolution['decisions_before'], before)
+            decisions(resolution['decisions_before'])
     return payload
 
 

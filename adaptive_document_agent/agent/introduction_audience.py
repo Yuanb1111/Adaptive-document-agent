@@ -11,6 +11,10 @@ _AUTHOR_EVIDENCE_RULE = (
     'Python fills this field from the exact owning source part before independent review.'
 )
 
+# Audit rationale is retained verbatim; concise author wording remains a
+# prompt preference and never a reason to truncate a complete explanation.
+AUDIENCE_REASON_MAX_LENGTH = 2000
+
 
 class RequiredMeaning(BaseModel):
     model_config = ConfigDict(extra='forbid')
@@ -24,7 +28,7 @@ class AudienceDecision(BaseModel):
     model_config = ConfigDict(extra='forbid')
     part_id: str
     include: bool
-    reason: str = Field(min_length=1,max_length=240)
+    reason: str = Field(min_length=1, max_length=AUDIENCE_REASON_MAX_LENGTH)
     required_meanings: list[RequiredMeaning] = Field(default_factory=list)
 
 
@@ -58,6 +62,8 @@ def select_introduction_audience(gateway, result, review, *, cancelled=None):
         'Each meaning is ONE independently checkable assertion with its own necessary qualifiers. '
         'Write it as a concise, audience-ready assertion in the source narrative language, preferably '
         'under 25 words. This wording will seed the actual visible copy; do not write editorial notes. '
+        'Short wording is a preference, never permission to omit a comparison object, sample or product '
+        'scope, benchmark, basis or condition; exceed that preferred length when necessary qualifiers require it. '
         'Split different measures, platforms, activities or unrelated subjects into separate meanings; '
         'never bundle the whole paragraph into one long checklist sentence. Keep a measure together '
         'with its period, basis and attribution, rather than splitting those necessary qualifications. '
@@ -179,6 +185,16 @@ def select_introduction_audience(gateway, result, review, *, cancelled=None):
             feedback = json.dumps(verdict.model_dump(mode='json'), ensure_ascii=False)
             selection = repair_meanings(gateway, source, selection, feedback, review,
                                         cancelled=cancelled)
+            continue
+        if (attempt < 2 and any(f.kind == 'omitted_part' for f in verdict.findings)
+                and any(f.kind != 'omitted_part' for f in verdict.findings)):
+            # The targeted correction must own every mixed finding. A pure
+            # omission addition protects included copy and cannot repair it.
+            from .introduction_meaning_resolution import resolve_meaning_findings
+            if meaning_revision_base is None:
+                meaning_revision_base = values
+            selection, meaning_resolution = resolve_meaning_findings(
+                gateway, source, selection, values, verdict, review, cancelled=cancelled)
             continue
         if (attempt == 1 and meaning_revision_base is not None
                 and any(f.kind == 'omitted_part' for f in verdict.findings)):

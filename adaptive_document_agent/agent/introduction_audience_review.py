@@ -2,6 +2,7 @@
 from concurrent.futures import CancelledError
 import json
 from typing import Literal
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -80,6 +81,8 @@ def binding_errors(verdict, payload):
 
 _BINDING_RULES = (
     ' The ONLY current candidate is decisions, indexed verbatim by current_meanings. '
+    'Each decision required_meaning_ids references the exact ordered assertions in current_meanings; '
+    'their complete text occurs there once. decisions_reference_namespace is current_meanings. '
     'Copy current_selection_digest into selection_digest. meaning_revision_base and '
     'inventory_revision_base are preservation-only historical baselines, NOT current copy. '
     'Never criticize a baseline assertion as though it were still present in the current draft. '
@@ -121,6 +124,22 @@ _BINDING_RULES = (
     'by the first revision, with unsupported wording corrected to its actual source scope. '
     'Report any remaining genuine defect; never invent another requirement merely because the '
     'prior review rejected the candidate.'
+    ' If prior_bound_reviews is supplied, it is invocation-local historical context, NOT acceptance '
+    'of the current selection and never permission to skip full fresh review. Compare each historical '
+    'finding against the CURRENT owned meaning union and determine whether it is repaired, remains '
+    'a genuine defect, or was based on an incorrect prior interpretation. Historical meaning IDs '
+    'address only their historical_namespace; exact_current_meaning_ids are textual links, not '
+    'semantic approval. Briefly account for that comparison in reason and bind every unresolved '
+    'finding to CURRENT IDs. Source text occurs once in source.parts; historical source_part_ref '
+    'and normalized spans refer to that same owned evidence. scope_deltas records earlier choices '
+    'that differ from current decisions; otherwise the include/omit choices and their reasons match. '
+    'For a newly required independent assertion, explain in the existing finding reason why it is '
+    'essential to this audience SECTION and why an earlier same-source relevance judgment needs '
+    'revision under the unchanged context. A supported risk list, industry statistic or contrast '
+    'does not become mandatory merely because it shares a passage with selected copy. Still report '
+    'a true newly discovered omission; prior silence or a prior bound verdict cannot immunize it. '
+    'A necessary qualifier of a selected assertion must still be preserved and may be rejected '
+    'regardless of history; never reclassify it as optional background to obtain acceptance.'
 )
 
 
@@ -141,22 +160,30 @@ def review_current_selection(gateway, source, values, rules, review, *, attempt,
                              binding_budget, cancelled=None, meaning_resolution=None):
     """At most one shared binding re-review; bound semantic rejections are final verdicts."""
     from .introduction_audience import complete_response
+    from .introduction_review_history import (
+        decision_references, prior_bound_history, review_context_identity, resolution_wire)
     inventory = [{key: value for key, value in row.items() if key != 'source_quote'}
                  for row in current_meanings(values)]
-    resolution = dict(meaning_resolution) if meaning_resolution is not None else None
+    resolution = resolution_wire(meaning_resolution)
     if resolution is not None:
         resolution['decisions_before'] = selection_wire(resolution['decisions_before'])
-    payload = dict(source=source, decisions=selection_wire(values), current_meanings=inventory,
+    context_identity = review_context_identity(source, rules, review)
+    flow_id = binding_budget.setdefault('review_flow_id', uuid4().hex)
+    payload = dict(source=source, decisions=decision_references(values, inventory), current_meanings=inventory,
+                   decisions_reference_namespace='current_meanings',
                    current_selection_digest=selection_digest(review, values),
                    meaning_revision_base=selection_wire(meaning_revision_base),
                    inventory_revision_base=selection_wire(inventory_revision_base),
                    meaning_resolution=resolution,
+                   prior_bound_reviews=prior_bound_history(review, source, values, context_identity, flow_id),
                    current_meaning_unions=[dict(part_id=decision['part_id'], meaning_ids=[
                        row['meaning_id'] for row in inventory if row['part_id'] == decision['part_id']])
                        for decision in values if decision['include']])
     for re_review in (False, True):
         record = dict(round=attempt + 1, re_review=re_review,
                       selection_digest=payload['current_selection_digest'], decisions=values,
+                      context_identity=context_identity, flow_id=flow_id,
+                      prior_bound_review_count=len(payload['prior_bound_reviews']),
                       status='pending')
         review.plan_audits.append({'introduction_audience_review': record})
         try:
