@@ -72,6 +72,32 @@ def compact_continuation_errors(groups, review, result):
     return errors
 
 
+def compact_title_errors(title):
+    """Match the native template header's Arial 32, 8.91-inch, three-line limit."""
+    from .text_capacity import wrap_copy
+    return (['Compact summary title exceeds readable three-line capacity: ' + title]
+            if len(wrap_copy(title, 8.91, 32)) > 3 else [])
+
+
+def compact_body_capacity(title, slide_width, slide_height):
+    """Reserve the same continuation header as render_profile's full-width path."""
+    from .text_capacity import wrap_copy
+    header_width = min(9.06, slide_width - .60) - .15
+    lines = len(wrap_copy(title + ' (continued)', header_width, 32))
+    top = max(1.45, .27 + lines * (32 / 72 * 1.22) + .15 + .12)
+    return slide_height - 1.28 - top
+
+
+def compact_heading_errors(label):
+    """Match native full-width numbered paragraph headings before splitting copy."""
+    from .text_capacity import wrap_copy
+    from .pptx_export import _resolve_template_path
+    path = _resolve_template_path()
+    width, _ = _template_dimensions(str(path), path.stat().st_mtime_ns)
+    return (['Compact summary paragraph heading exceeds readable two-line capacity: ' + label]
+            if len(wrap_copy('00  ' + label, width - 1.3, 18)) > 2 else [])
+
+
 def compact_layout_errors(pages):
     from .presentation_brief import BriefItem, _item_height, _heading_height, _copy_height, is_technical_copy
     from .slide_compositor import _lines
@@ -81,9 +107,12 @@ def compact_layout_errors(pages):
     full_width=slide_width-1.3
     errors = []
     for page in pages:
+        errors.extend(compact_title_errors(page.title))
+        for item in page.items:
+            errors.extend(compact_heading_errors(item.label))
         # Match the wide native text layout and reserve a wrapped template title.
         top = max(1.45,.27 + len(_lines(page.title,min(8.91,slide_width-.75),32)) * (32/72*1.22) + .27)
-        capacity = slide_height - 1.28 - top
+        capacity = compact_body_capacity(page.title, slide_width, slide_height)
         items = [BriefItem(i.label,i.text,i.source_pages) for i in page.items]
         needed = sum(_item_height(i,full_width) for i in items) + .12 * (len(items)-1)
         grid_fits = False

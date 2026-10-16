@@ -6,6 +6,9 @@ from adaptive_document_agent.models import PresentationTopicSelection, Validatio
 from adaptive_document_agent.services.slide_budgets import report_budget, resolved_limits, exported_slide_numbers, require_exported_budgets
 from adaptive_document_agent.models.customization import ReportRequirement
 from .prompting import untrusted_document_message
+from .presentation_budget_output import (
+    complete_budget_output, SELECTION_TOKEN_LIMITS, REVIEW_TOKEN_LIMITS,
+)
 
 
 class BudgetSeriesDecision(BaseModel):
@@ -130,11 +133,11 @@ def refine_presentation_budget(gateway, result, *, progress=None):
     attempts = []
     raw_observations = [o.model_dump(mode='json') for o in result.observations]
     for attempt in range(2):
-        record = {'attempt':attempt+1}
+        record = {'attempt':attempt+1, 'status':'pending'}
         attempts.append(record)
         try:
-            draft = gateway.generate_structured(messages,PhysicalBudgetSelection,stage='presentation',
-                allow_repair=False,max_tokens=24000)
+            draft = complete_budget_output(gateway,messages,PhysicalBudgetSelection,record,
+                audit_key='selection_output_attempts',token_limits=SELECTION_TOKEN_LIMITS)
             record['proposal'] = draft.model_dump(mode='json')
             try:
                 validate_subset(draft,original,lookup,result)
@@ -158,7 +161,7 @@ def refine_presentation_budget(gateway, result, *, progress=None):
                 draft = draft.model_copy(update={'selection':repaired})
                 record['proposal'] = draft.model_dump(mode='json')
                 validate_subset(draft,original,lookup,result)
-            verdict = gateway.generate_structured([
+            verdict = complete_budget_output(gateway,[
                 {'role':'system','content':rules + ' Independently review only. Accept if the revised '
                  'questions/copy faithfully match their retained source evidence and every omitted '
                  'series has a defensible importance/redundancy reason. Reject missing material '
@@ -172,7 +175,7 @@ def refine_presentation_budget(gateway, result, *, progress=None):
                  'because fewer series were selected. Return accepted and reason.'},
                 *instruction_messages(result.profile,purpose='physical budget omission review'),
                 untrusted_document_message(json.dumps({'source':context,'proposal':record['proposal']},ensure_ascii=False))],
-                PhysicalBudgetReview,stage='presentation',allow_repair=False,max_tokens=16000)
+                PhysicalBudgetReview,record,audit_key='review_output_attempts',token_limits=REVIEW_TOKEN_LIMITS)
             record['independent_review'] = verdict.model_dump(mode='json')
             if not verdict.accepted:
                 raise ValueError('Physical budget selection was independently rejected: '+verdict.reason)
@@ -213,6 +216,7 @@ def refine_presentation_budget(gateway, result, *, progress=None):
             require_exported_budgets(final_deck,candidate)
             if [o.model_dump(mode='json') for o in candidate.observations] != raw_observations:
                 raise ValueError('Final briefing changed retained extraction')
+            record['status'] = 'accepted'
             candidate.validation_warnings.append(ValidationIssue(code='presentation_physical_budget_review',
                 severity='info',stage='presentation',message=json.dumps({'original_counts':counts,
                     'original_selection':original.model_dump(mode='json'),'attempts':attempts},ensure_ascii=False)))
@@ -221,16 +225,34 @@ def refine_presentation_budget(gateway, result, *, progress=None):
                 setattr(result,field,getattr(candidate,field))
             return True
         except ValueError as exc:
-            record['error'] = str(exc)
-            messages += [untrusted_document_message(json.dumps(record,ensure_ascii=False)),
+            record.update(status='rejected',error=str(exc),error_type=type(exc).__name__)
+            # Failed physical outputs remain diagnostics only. Give the next
+            # semantic proposal the completed draft/verdict and measurements,
+            # never a truncated JSON prefix to continue or reinterpret.
+            feedback = {key:value for key,value in record.items()
+                        if key not in {'selection_output_attempts','review_output_attempts'}}
+            messages += [untrusted_document_message(json.dumps(feedback,ensure_ascii=False)),
                 {'role':'user','content':'Correct this rejected proposal using the SAME complete source. '
                  'Respect the measured physical costs and every independent review failure; never '
                  'return an unchanged over-budget proposal or remove necessary conditions.'}]
+        except Exception as exc:
+            # Capacity, transport, privacy and cancellation failures cannot be
+            # repurposed as a different semantic omission proposal. Keep every
+            # prior proposal/verdict/measurement before propagating unchanged.
+            record.update(status='failed',error=str(exc),error_type=type(exc).__name__)
+            _record_failure(result,counts,original,attempts)
+            raise
+    _record_failure(result,counts,original,attempts)
+    raise ValueError('Presentation physical budget refinement exhausted: '+attempts[-1]['error'])
+
+
+def _record_failure(result,counts,original,attempts):
+    """Persist the actual proposal history even when generation never completed."""
     result.validation_warnings.append(ValidationIssue(code='presentation_physical_budget_failed',
-        severity='warning',stage='presentation',message=json.dumps({'original_counts':counts,'attempts':attempts},ensure_ascii=False)))
+        severity='warning',stage='presentation',message=json.dumps({'original_counts':counts,
+            'original_selection':original.model_dump(mode='json'),'attempts':attempts},ensure_ascii=False)))
     result.pipeline_state = 'partial'
     result.retry_from = 'reporting'
-    raise ValueError('Presentation physical budget refinement exhausted: '+attempts[-1]['error'])
 
 
 class FinalBudgetBriefError(RuntimeError):

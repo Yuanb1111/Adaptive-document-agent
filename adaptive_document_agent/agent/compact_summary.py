@@ -171,11 +171,15 @@ def expand_compact(draft,catalog,review):
                 part_ids=list(dict.fromkeys(r.part_id for r in refs)),source_refs=refs,
                 source_quote='\n\n'.join(quotes),source_pages=sorted(source_pages))))
         title_refs = {(ref.part_id, ref.fact_index): ref for item in items for ref in item.source_refs}
-        for offset in range(0,len(items),4):
-            pages.append(SummarySlidePage(id=f'compact_summary_{n+1}'+(f'_{offset//4+1}' if offset else ''),
-                title=page.title,source_section=page.title,items=items[offset:offset+4],compact=True,
-                placement=getattr(page, 'placement', 'body'),
-                title_source_refs=list(title_refs.values())))
+        from .summary_theme_layout import pack_theme_items
+        prototype = SummarySlidePage(id=f'compact_summary_{n+1}', title=page.title,
+            source_section=page.title, items=items[:1], compact=True,
+            placement=getattr(page, 'placement', 'body'), title_source_refs=list(title_refs.values()))
+        # The author supplied one coherent group, not chunks of four physical
+        # slides. Pack its complete ordered content before enforcing the
+        # rendered page schema so a staging boundary cannot strand space.
+        for offset, physical in enumerate(pack_theme_items(prototype, items)):
+            pages.append(physical.model_copy(update={'id': prototype.id + (f'_{offset+1}' if offset else '')}))
     pages.sort(key=lambda page: page.placement != 'body')
     used = {pid for page in pages for item in page.items for pid in item.part_ids}
     audience_reasons = {d['part_id']: d['reason'] for d in review.audience_selection.get('decisions',[])}
@@ -234,6 +238,11 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
         'An evidence_only entry is literal internal source, not finished copy. Interpret it and merge '
         'headers or lead-ins with the related substantive material; do not publish isolated fragments. '
         'Pages are logical content groups; Python creates final slides of at most four paragraphs. '
+        'Every new logical group starts a new physical page. Use short, descriptive group titles '
+        'that fit one title line where possible, and short paragraph labels. Repeated title, label '
+        'and body wording consumes the same physical budget as new information. State a shared '
+        'assertion once with all supporting fact_ids and meaning_refs rather than repeating it for '
+        'different source parts. Never remove a distinct selected meaning to save space. '
         'Use up to 32 complete items per group if necessary, target 160-240 Latin-equivalent characters each '
         '(CJK characters count as two). Keep complete sentences, attribution and material qualifications. '
         'The transport item text limit is 6000 characters; prefer complete concise paragraphs below 1200. '

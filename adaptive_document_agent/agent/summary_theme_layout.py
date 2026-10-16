@@ -1,10 +1,19 @@
 """Pack whole authored items into readable pages without changing their claims."""
-from adaptive_document_agent.models.summary import SummarySlidePage
-from adaptive_document_agent.services.compact_summary import compact_layout_errors
+from adaptive_document_agent.models.summary import SummarySlideItem, SummarySlidePage
+from adaptive_document_agent.services.compact_summary import (
+    compact_heading_errors, compact_layout_errors, compact_title_errors)
 
 
 def split_compact_item(text, title, identity, values):
     """Lossless continuation layout before the final slide-item schema applies."""
+    title_errors = compact_title_errors(title)
+    if title_errors:
+        # Reducing paragraph length cannot repair the native title box. Keep
+        # all body copy intact and let the bounded title repair handle it.
+        raise SummaryLayoutError('; '.join(title_errors))
+    heading_errors = compact_heading_errors(values['label'])
+    if heading_errors:
+        raise SummaryLayoutError('; '.join(heading_errors))
     from hashlib import sha256
     from adaptive_document_agent.models.summary import SummarySlideItem
     from .summary_editorial import split_editorial_copy
@@ -33,22 +42,50 @@ class SummaryLayoutError(ValueError):
     """One complete paragraph cannot fit on an otherwise empty slide."""
 
 
+def pack_theme_items(page: SummarySlidePage, items: list[SummarySlideItem]) -> list[SummarySlidePage]:
+    """Find the fewest readable pages for one complete ordered authored group.
+
+    Geometry is not monotone in item count: three/four paragraphs can fit the
+    native grid even when two cannot fit the vertical layout. Consider every
+    contiguous one-to-four-item candidate instead of ending a page at the
+    first overflow. No paragraph, evidence binding or author order is changed.
+    """
+    if not items:
+        return []
+    title_errors = compact_title_errors(page.title)
+    if title_errors:
+        raise SummaryLayoutError('; '.join(title_errors))
+    for item in items:
+        heading_errors = compact_heading_errors(item.label)
+        if heading_errors:
+            raise SummaryLayoutError('; '.join(heading_errors))
+        if compact_layout_errors([page.model_copy(update={'items': [item]})]):
+            raise SummaryLayoutError('A theme paragraph needs shorter complete model-authored copy: ' + item.label)
+    count = len(items)
+    minimum_pages = [count + 1] * count + [0]
+    next_offsets = [0] * count
+    for start in range(count - 1, -1, -1):
+        # Prefer the longer first page on equal page counts; deterministic
+        # ties retain the earliest authored material on the opening slide.
+        for end in range(min(count, start + 4), start, -1):
+            probe = page.model_copy(update={'items': items[start:end]})
+            if compact_layout_errors([probe]):
+                continue
+            candidate_pages = 1 + minimum_pages[end]
+            if candidate_pages < minimum_pages[start]:
+                minimum_pages[start], next_offsets[start] = candidate_pages, end
+    packed, start = [], 0
+    while start < count:
+        end = next_offsets[start]
+        packed.append(page.model_copy(update={'items': items[start:end]}))
+        start = end
+    return packed
+
+
 def pack_theme_pages(pages: list[SummarySlidePage]) -> list[SummarySlidePage]:
-    packed = []
-    for page in pages:
-        items = []
-        for item in page.items:
-            probe = page.model_copy(update={'items': items + [item]})
-            if items and (len(items)>=4 or compact_layout_errors([probe])):
-                packed.append(page.model_copy(update={'items':items}))
-                items = []
-            single = page.model_copy(update={'items':[item]})
-            if compact_layout_errors([single]):
-                raise SummaryLayoutError('A theme paragraph needs shorter complete model-authored copy: '+item.label)
-            items.append(item)
-        if items:
-            packed.append(page.model_copy(update={'items':items}))
-    return [page.model_copy(update={'id':f'theme_page_{i+1}'}) for i,page in enumerate(packed)]
+    """Pack each supplied group independently; never merge separate headings."""
+    packed = [packed_page for page in pages for packed_page in pack_theme_items(page, page.items)]
+    return [page.model_copy(update={'id': f'theme_page_{i+1}'}) for i, page in enumerate(packed)]
 
 
 def merge_identical_items(pages, review):
