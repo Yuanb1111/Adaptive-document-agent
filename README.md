@@ -28,6 +28,16 @@ The responsibility split is:
 
 PDF contents are untrusted source material. Instructions embedded in a document are treated as data, never as commands.
 
+The v152 update lets a newly discovered, source-bound introduction defect enter
+targeted repair after the standard three reviews. Recovery permits at most five
+semantic reviews in total, uses source quotation/owner/issue identities rather
+than changing reason wording, and stops repeated unchanged rejected drafts.
+Every current finding is addressed together; unrelated assertions and raw source
+evidence stay protected. The single shared binding recheck is unchanged, and a
+fresh independent full-source acceptance is still mandatory. No provider or
+document can be guaranteed to succeed by bypassing these checks. Extraction and
+analysis cache contracts remain unchanged.
+
 The v151 update isolates historical introduction drafts and verdicts from the
 current assertion inventory. Historical findings carry version-qualified
 references, and the existing single binding recheck receives exact returned/current

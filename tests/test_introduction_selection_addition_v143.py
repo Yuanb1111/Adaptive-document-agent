@@ -131,7 +131,9 @@ def test_final_independent_rejection_still_blocks_with_no_second_addition(fault)
     assert client.calls.count('IntroductionAudienceReview') == 3
     assert reading.audience_part_ids is None and not reading.audience_selection
     assert client.reviews[-1]['decisions'][0] == client.reviews[-2]['decisions'][0]
-    assert reading.plan_audits[-1]['review']['accepted'] is False
+    last_review = next(audit['review'] for audit in reversed(reading.plan_audits) if 'review' in audit)
+    assert last_review['accepted'] is False
+    assert reading.plan_audits[-1]['introduction_recovery_budget']['repair_allowed'] is False
 
 
 @pytest.mark.parametrize('fault', ['exception', 'final_exception'])

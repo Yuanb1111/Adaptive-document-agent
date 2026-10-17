@@ -95,9 +95,11 @@ def select_introduction_audience(gateway, result, review, *, cancelled=None):
     inventory_correction_used = False
     binding_budget = {'used': False}
     meaning_resolution = None
-    # At most three semantic rounds, including a first meaning correction after
-    # a selection rewrite, plus one shared binding re-review.
-    for attempt in range(3):
+    from .introduction_recovery import IntroductionRepairBudget, MAX_SEMANTIC_REVIEWS
+    recovery = IntroductionRepairBudget()
+    # Three standard rounds, then bounded recovery for newly discovered bound
+    # source findings. Every correction still needs a fresh independent review.
+    for attempt in range(MAX_SEMANTIC_REVIEWS):
         if selection is None:
             selection = complete_response(gateway, messages, IntroductionAudienceSelection, cancelled=cancelled)
         from .introduction_selection_inventory import inventory_diagnostics, invalid_inventory, repair_selection_inventory
@@ -178,15 +180,16 @@ def select_introduction_audience(gateway, result, review, *, cancelled=None):
                 'independent_review':verdict.model_dump(),'attempts':attempts}
             audience_part_ids(review)
             return
-        if (attempt < 2 and meaning_revision_base is None
-                and verdict.repair_scope == 'meanings'):
+        if not recovery.allow_repair(values, verdict, review, attempt=attempt):
+            break
+        if meaning_revision_base is None and verdict.repair_scope == 'meanings':
             from .introduction_meaning_repair import repair_meanings
             meaning_revision_base = values
             feedback = json.dumps(verdict.model_dump(mode='json'), ensure_ascii=False)
             selection = repair_meanings(gateway, source, selection, feedback, review,
                                         cancelled=cancelled)
             continue
-        if (attempt < 2 and any(f.kind == 'omitted_part' for f in verdict.findings)
+        if (any(f.kind == 'omitted_part' for f in verdict.findings)
                 and any(f.kind != 'omitted_part' for f in verdict.findings)):
             # The targeted correction must own every mixed finding. A pure
             # omission addition protects included copy and cannot repair it.
@@ -196,20 +199,19 @@ def select_introduction_audience(gateway, result, review, *, cancelled=None):
             selection, meaning_resolution = resolve_meaning_findings(
                 gateway, source, selection, values, verdict, review, cancelled=cancelled)
             continue
-        if (attempt == 1 and meaning_revision_base is not None
+        if (attempt >= 1 and meaning_revision_base is not None
                 and any(f.kind == 'omitted_part' for f in verdict.findings)):
             from .introduction_selection_addition import add_newly_required_parts
             selection = add_newly_required_parts(gateway, source, selection, values, verdict,
                                                  rules, review, cancelled=cancelled)
             continue
-        if (attempt == 1 and meaning_revision_base is not None
-                and verdict.repair_scope == 'meanings'):
+        if attempt >= 1:
             from .introduction_meaning_resolution import resolve_meaning_findings
+            if meaning_revision_base is None:
+                meaning_revision_base = values
             selection, meaning_resolution = resolve_meaning_findings(
                 gateway, source, selection, values, verdict, review, cancelled=cancelled)
             continue
-        if attempt != 0:
-            break
         selection = None
         messages += [untrusted_document_message(json.dumps(attempts[-1],ensure_ascii=False)),
             {'role':'user','content':'Correct the rejected selection with all supplied source parts retained in context.'}]

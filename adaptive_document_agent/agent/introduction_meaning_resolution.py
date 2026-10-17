@@ -1,4 +1,4 @@
-"""One final union-aware correction, never an automatic override of a rejection."""
+"""Source-owned union-aware correction, never an override of a rejection."""
 from concurrent.futures import CancelledError
 import json
 from typing import Literal
@@ -158,7 +158,7 @@ def apply_meaning_resolution(selection, response, findings, source):
 
 
 def resolve_meaning_findings(gateway, source, selection, values, verdict, review, *, cancelled=None):
-    """Spend the existing final semantic round on correction plus fresh adjudication."""
+    """Correct exact current findings within the caller's bounded review budget."""
     findings = finding_inventory(verdict)
     # Full source occurs once. Each assertion's exact owning part is its lookup.
     meanings = [{key: value for key, value in row.items() if key != 'source_quote'}
