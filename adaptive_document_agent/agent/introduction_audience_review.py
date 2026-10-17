@@ -117,6 +117,11 @@ _BINDING_RULES = (
     'source.parts[].source_text by part_id instead of repeating those full passages per meaning. '
     'If meaning_resolution is supplied, independently adjudicate EVERY finding disposition against '
     'the complete owned source and CURRENT union. It is a proposal, never an acceptance. '
+    'Disposition source_part_ref identifies the complete canonical evidence copied by Python from '
+    'that exact finding-owned source.parts[].source_text; omitted repeated source_quote fields are '
+    'not absent evidence. Any model-proposed disposition quotations retained in the audit are '
+    'untrusted diagnostics and cannot establish evidence. Canonical source copying proves only '
+    'provenance: independently judge each proposed classification, action and source-aware reason. '
     'Disposition referenced_meaning_ids refer ONLY to meaning_resolution.before_resolution_meanings, '
     'the explicitly labelled immutable PRE-EDIT namespace. Atomic splits can renumber the final '
     'current_meanings; never reinterpret those historical IDs in the current namespace. Follow '
@@ -180,7 +185,7 @@ def review_current_selection(gateway, source, values, rules, review, *, attempt,
     from .introduction_review_context import historical_context, binding_recheck
     inventory = [{key: value for key, value in row.items() if key != 'source_quote'}
                  for row in current_meanings(values)]
-    resolution = resolution_wire(meaning_resolution)
+    resolution = resolution_wire(meaning_resolution, source=source)
     if resolution is not None:
         resolution['decisions_before'] = selection_wire(resolution['decisions_before'])
     context_identity = review_context_identity(source, rules, review)

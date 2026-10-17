@@ -107,8 +107,8 @@ def decision_references(decisions, rows):
     return wire
 
 
-def resolution_wire(resolution):
-    """Reference exact immutable before-meaning rows instead of repeating their copy."""
+def resolution_wire(resolution, *, source=None):
+    """Reference exact historical copy and verified canonical owned evidence once."""
     if resolution is None:
         return None
     value = deepcopy(resolution)
@@ -117,4 +117,19 @@ def resolution_wire(resolution):
         return value
     value['decisions_before'] = decision_references(value['decisions_before'], rows)
     value['decisions_before_namespace'] = 'before_resolution_meanings'
+    if value.get('disposition_evidence_binding') == 'exact_finding_owned_source_parts' and source is not None:
+        findings = {finding['finding_id']: finding for finding in value['findings']}
+        parts = {part['id']: part for part in source['parts']}
+        dispositions = value['finding_dispositions']
+        if (len(findings) != len(value['findings']) or len(parts) != len(source['parts'])
+                or len({row['finding_id'] for row in dispositions}) != len(dispositions)
+                or {row['finding_id'] for row in dispositions} != set(findings)):
+            raise ValueError('Resolution evidence references require every exact finding ID once')
+        for disposition in dispositions:
+            part_id = findings[disposition['finding_id']]['part_id']
+            if (part_id not in parts or not normalize_quote(parts[part_id]['source_text'])
+                    or disposition.get('source_quote') != parts[part_id]['source_text']):
+                raise ValueError('Resolution canonical evidence does not match its exact owning source part')
+            disposition.pop('source_quote')
+            disposition['source_part_ref'] = part_id
     return value

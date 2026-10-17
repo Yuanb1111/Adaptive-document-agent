@@ -38,7 +38,8 @@ class FindingDisposition(BaseModel):
                             'atomicity', 'already_covered']
     action: Literal['corrected', 'already_covered', 'outside_selected_scope']
     referenced_meaning_ids: list[str] = Field(default_factory=list)
-    source_quote: str = Field(min_length=1, max_length=16000)
+    source_quote: str = Field(default='', max_length=16000,
+        description='Leave empty. Python binds the complete literal text of the exact finding-owned source part; do not retype evidence.')
     reason: str = Field(min_length=1, max_length=2000)
 
 
@@ -55,16 +56,16 @@ def finding_inventory(verdict):
             for index, finding in enumerate(verdict.findings)]
 
 
-def apply_meaning_resolution(selection, response, findings, source):
-    """Validate exact addresses and preserve unedited assertions mechanically."""
-    draft = selection.model_copy(deep=True)
+def _finding_ownership(selection, findings, source):
+    """Resolve exact finding addresses before copying any owned source evidence."""
     values = selection.model_dump(mode='json')['decisions']
     meanings = {row['meaning_id']: row for row in current_meanings(values)}
-    decisions = {decision.part_id: decision for decision in draft.decisions}
+    decisions = {decision.part_id: decision for decision in selection.decisions}
     parts = {part['id']: part for part in source['parts']}
     expected = {finding['finding_id']: finding for finding in findings}
     allowed = {finding['part_id'] for finding in findings}
-    if (not expected or len(expected) != len(findings) or any(
+    if (len(decisions) != len(selection.decisions) or len(parts) != len(source['parts'])
+            or not expected or len(expected) != len(findings) or any(
             part_id not in decisions or part_id not in parts for part_id in allowed)):
         raise ValueError('Meaning resolution requires findings on exact current source parts')
     for finding in findings:
@@ -80,6 +81,34 @@ def apply_meaning_resolution(selection, response, findings, source):
                 raise ValueError('Finding does not identify its exact current owned meaning')
         elif finding.get('meaning_id') or finding.get('current_meaning'):
             raise ValueError('Part-level finding cannot address a current meaning')
+    return meanings, decisions, parts, expected, allowed
+
+
+def _exact_dispositions(response, expected):
+    resolutions = {entry.finding_id: entry for entry in response.finding_dispositions}
+    if len(resolutions) != len(response.finding_dispositions) or set(resolutions) != set(expected):
+        raise ValueError('Meaning resolution must dispose of every exact finding ID once')
+    return resolutions
+
+
+def _bind_disposition_evidence(selection, response, findings, source):
+    """Bind evidence transport only; classifications and semantic decisions stay proposed."""
+    _, _, parts, expected, _ = _finding_ownership(selection, findings, source)
+    _exact_dispositions(response, expected)
+    for finding in findings:
+        quote = normalize_quote(finding['source_quote'])
+        if not quote or quote not in normalize_quote(parts[finding['part_id']]['source_text']):
+            raise ValueError('Meaning resolution requires literal source-bound original findings')
+    bound = response.model_copy(deep=True)
+    for entry in bound.finding_dispositions:
+        entry.source_quote = parts[expected[entry.finding_id]['part_id']]['source_text']
+    return bound
+
+
+def apply_meaning_resolution(selection, response, findings, source):
+    """Validate exact addresses and preserve unedited assertions mechanically."""
+    draft = selection.model_copy(deep=True)
+    meanings, decisions, parts, expected, allowed = _finding_ownership(draft, findings, source)
     editable_meanings = {finding['meaning_id'] for finding in findings if finding['kind'] == 'meaning'}
     included_parts = {part_id for part_id in allowed if decisions[part_id].include}
     omitted_parts = allowed - included_parts
@@ -106,9 +135,7 @@ def apply_meaning_resolution(selection, response, findings, source):
                 or not inclusion.required_meanings):
             raise ValueError('Meaning resolution inclusion requires one exact identified omitted part and an explicit reason')
         inclusions[inclusion.part_id] = inclusion
-    resolutions = {entry.finding_id: entry for entry in response.finding_dispositions}
-    if (len(resolutions) != len(response.finding_dispositions) or set(resolutions) != set(expected)):
-        raise ValueError('Meaning resolution must dispose of every exact finding ID once')
+    resolutions = _exact_dispositions(response, expected)
     for identifier, entry in resolutions.items():
         finding = expected[identifier]
         part_id = finding['part_id']
@@ -195,8 +222,11 @@ def resolve_meaning_findings(gateway, source, selection, values, verdict, review
         'remain unchanged except these explicitly proposed inclusions. Resolve ALL mixed findings '
         'in this ONE response: an omitted part does not excuse leaving an included claim defective. '
         'Do not invent facts, numbers, units, periods or evidence. Leave edited meaning source_quote '
-        'empty; Python restores each complete owned passage. Every disposition needs a literal quotation '
-        'from its own source part and a reason. A completely unchanged reply is allowed only when every finding has a valid '
+        'empty; Python restores each complete owned passage. Also leave EVERY disposition source_quote '
+        'empty: Python binds its complete source passage through the exact finding_id and owning part, '
+        'after validating those addresses. Do not reconstruct, join or paraphrase quotations. Every '
+        'disposition still needs a substantive source-aware reason; copied source is not semantic proof. '
+        'A completely unchanged reply is allowed only when every finding has a valid '
         'already-covered or outside-scope disposition. Your reply is NOT acceptance. The final fresh '
         'independent full-source review must adjudicate every disposition and the entire revised union.')
     try:
@@ -205,14 +235,18 @@ def resolve_meaning_findings(gateway, source, selection, values, verdict, review
                 findings=findings, eligible_inclusions=eligible_inclusions), ensure_ascii=False))],
             IntroductionMeaningResolution, cancelled=cancelled)
         record['response'] = response.model_dump(mode='json')
-        draft = apply_meaning_resolution(selection, response, findings, source)
+        record['response_source_quotes_status'] = 'untrusted_diagnostic_only'
+        bound_response = _bind_disposition_evidence(selection, response, findings, source)
+        record['bound_finding_dispositions'] = bound_response.model_dump(mode='json')['finding_dispositions']
+        draft = apply_meaning_resolution(selection, bound_response, findings, source)
     except Exception as exc:
         record.update(status='cancelled' if isinstance(exc, CancelledError) else 'failed',
                       error_type=type(exc).__name__, error=str(exc))
         raise
     record.update(status='protocol_validated', semantic_approval=False,
                   changed=draft != selection, decisions_after=draft.model_dump(mode='json')['decisions'])
-    return draft, dict(findings=findings, finding_dispositions=record['response']['finding_dispositions'],
+    return draft, dict(findings=findings, finding_dispositions=record['bound_finding_dispositions'],
         inclusions=record['response']['inclusions'],
+        disposition_evidence_binding='exact_finding_owned_source_parts',
         reference_namespace='before_resolution_meanings', before_resolution_meanings=meanings,
         decisions_before=values, semantic_approval=False)

@@ -28,6 +28,17 @@ The responsibility split is:
 
 PDF contents are untrusted source material. Instructions embedded in a document are treated as data, never as commands.
 
+The v153 update binds introduction repair-disposition evidence in Python through
+the exact finding and its verified source owner. Model-proposed quotations remain
+untrusted audit diagnostics; joining nonadjacent source sentences cannot replace
+the original evidence or approve a correction. A fresh independent review still
+judges the complete revised meaning union. Coverage merge requests use lossless
+dictionary encoding for repeated metadata while retaining every source series,
+point and qualification. Final merge output capacity is sized from the complete
+proposed decision ledger within a fixed ceiling. Existing context limits and
+semantic validators remain in force. Extraction and analysis cache contracts
+remain unchanged.
+
 The v152 update lets a newly discovered, source-bound introduction defect enter
 targeted repair after the standard three reviews. Recovery permits at most five
 semantic reviews in total, uses source quotation/owner/issue identities rather
