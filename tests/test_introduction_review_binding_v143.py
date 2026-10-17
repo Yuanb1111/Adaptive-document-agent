@@ -104,7 +104,7 @@ def test_stale_false_can_only_be_replaced_by_a_new_full_context_independent_verd
     first, second = client.requests
     for key in ('source', 'decisions', 'current_meanings', 'current_selection_digest', 'meaning_revision_base'):
         assert first[key] == second[key]
-    assert second['previous_unbound_review']['accepted'] is False
+    assert second['historical_context']['previous_unbound_review']['accepted'] is False
     assert second['review_binding_errors']
     records = [a['introduction_audience_review'] for a in reading.plan_audits]
     assert [a['status'] for a in records] == ['invalid_binding', 'bound']

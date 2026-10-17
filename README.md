@@ -28,6 +28,14 @@ The responsibility split is:
 
 PDF contents are untrusted source material. Instructions embedded in a document are treated as data, never as commands.
 
+The v151 update isolates historical introduction drafts and verdicts from the
+current assertion inventory. Historical findings carry version-qualified
+references, and the existing single binding recheck receives exact returned/current
+text contrasts. These mechanical comparisons never establish semantic acceptance:
+a fresh independent full-source review is still required, and repeated stale or
+otherwise unbound verdicts still fail. Extraction and analysis cache contracts
+remain unchanged. Local protocol tests do not establish fresh model acceptance.
+
 The v150 update preserves original text boundaries when verifying introductory
 copy across native text boxes. Contiguous multilingual fragments no longer gain
 invented spaces during binding or final export checks. Missing, changed,

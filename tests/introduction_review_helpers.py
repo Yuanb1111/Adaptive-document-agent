@@ -10,6 +10,11 @@ def review_payload(messages):
 def materialize_review_wire(payload):
     # Synthetic legacy responders consume the canonical quote view. The real
     # wire keeps the complete owning passage only once under source.parts.
+    # Legacy synthetic responders inspect canonical baseline names; production
+    # requests isolate them under historical_context, never as current copy.
+    for key in ('meaning_revision_base', 'inventory_revision_base', 'meaning_resolution', 'prior_bound_reviews'):
+        if key in payload.get('historical_context', {}):
+            payload.setdefault(key, payload['historical_context'][key])
     sources = {part['id']: part['source_text'] for part in payload.get('source', {}).get('parts', [])}
     for row in payload.get('current_meanings', []):
         row.setdefault('source_quote', sources.get(row['part_id'], ''))

@@ -50,7 +50,7 @@ def test_same_context_new_background_finding_has_prior_scope_and_requires_sectio
     original = deepcopy(reading.plan_audits)
     def newly_required_risk(schema, messages):
         wire = raw_payload(messages)
-        history = wire['prior_bound_reviews']
+        history = wire['historical_context']['prior_bound_reviews']
         assert len(history) == 1
         assert history[0]['source_and_section_context_unchanged']
         assert history[0]['scope_deltas'] == []
@@ -79,7 +79,7 @@ def test_past_bound_acceptance_never_immunizes_a_true_missing_qualifier():
         schema, messages, accepted=True, reason='A previous synthetic reviewer accepted this scope.'))
     verdict, requests = review_once(reading, payload, budget, reject_current, attempt=1)
     assert not verdict.accepted and len(requests) == 1
-    history = raw_payload(requests[0])['prior_bound_reviews']
+    history = raw_payload(requests[0])['historical_context']['prior_bound_reviews']
     assert history[0]['accepted'] is True
     assert history[0]['semantic_approval_for_current_selection'] is False
     assert verdict.findings[0].issue_type == 'missing_qualification'
@@ -101,7 +101,7 @@ def test_only_same_flow_exactly_bound_history_is_exposed(fault):
     elif fault == 'stale_finding': record['review']['findings'][0]['current_meaning'] = 'Stale assertion.'
     else: record['review']['findings'][0]['source_quote'] = 'Not in the actual owned source.'
     _, requests = review_once(reading, payload, budget, reject_current, attempt=1)
-    assert raw_payload(requests[0])['prior_bound_reviews'] == []
+    assert raw_payload(requests[0])['historical_context']['prior_bound_reviews'] == []
 
 
 @pytest.mark.parametrize('change', ['source', 'purpose', 'budget', 'rules'])
@@ -118,7 +118,7 @@ def test_changed_source_or_audience_context_cannot_supply_an_old_scope_precedent
     elif change == 'budget': reading.max_intro_slides = 2
     else: rules += ' Include a complete risk assessment in this section.'
     _, requests = review_once(reading, payload, budget, reject_current, attempt=1, source=source, rules=rules)
-    assert raw_payload(requests[0])['prior_bound_reviews'] == []
+    assert raw_payload(requests[0])['historical_context']['prior_bound_reviews'] == []
 
 
 def test_history_uses_owned_source_references_and_exact_current_copy_links_without_duplication():
@@ -131,7 +131,8 @@ def test_history_uses_owned_source_references_and_exact_current_copy_links_witho
     row = history[0]['findings'][0]
     assert row['source_part_ref'] == payload['decisions'][0]['part_id']
     assert row['source_normalized_span'][0] == 0
-    assert row['exact_current_meaning_ids'] == [row['historical_meaning_id']]
+    assert row['exact_current_meaning_ids'] == [row['historical_meaning_ref'].split('/', 1)[1]]
+    assert row['historical_text_present_in_current_part'] is True
     assert row['current_part_copy_unchanged'] is True
     serialized = json.dumps(history)
     assert 'source_quote' not in serialized and 'source_text' not in serialized

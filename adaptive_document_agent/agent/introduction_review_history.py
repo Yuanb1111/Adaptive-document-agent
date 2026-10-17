@@ -62,10 +62,14 @@ def prior_bound_history(review, source, values, context_identity, flow_id):
                        current_part_copy_unchanged=[m['meaning'] for m in before[finding.part_id]['required_meanings']]
                        == [m['meaning'] for m in current.get(finding.part_id, {}).get('required_meanings', [])])
             if finding.kind == 'meaning':
-                row.update(historical_meaning_id=finding.meaning_id,
+                exact = [m['meaning_id'] for m in current_rows
+                         if m['part_id'] == finding.part_id and m['meaning'] == finding.current_meaning]
+                row.update(historical_meaning_ref=f'{digest}/{finding.meaning_id}',
                            historical_meaning=finding.current_meaning,
-                           exact_current_meaning_ids=[m['meaning_id'] for m in current_rows
-                               if m['part_id'] == finding.part_id and m['meaning'] == finding.current_meaning])
+                           exact_current_meaning_ids=exact,
+                           historical_text_present_in_current_part=bool(exact),
+                           current_part_meaning_ids=[m['meaning_id'] for m in current_rows
+                               if m['part_id'] == finding.part_id])
             findings.append(row)
         history.append(dict(round=record['round'], historical_namespace=digest,
             accepted=verdict.accepted, reason=verdict.reason, repair_scope=verdict.repair_scope,

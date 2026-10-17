@@ -157,7 +157,7 @@ def test_split_keeps_disposition_ids_in_an_explicit_before_namespace():
                         referenced_meaning_ids=['part-0:meaning-2'], source_quote='Staff training is required before delivery.',
                         reason='The immutable second meaning already states training.')])
             payload = json.loads(messages[-1]['content'].split('\n', 1)[1].rsplit('\n', 1)[0])
-            resolution = payload['meaning_resolution']
+            resolution = payload['historical_context']['meaning_resolution']
             assert resolution['reference_namespace'] == 'before_resolution_meanings'
             historical = {row['meaning_id']: row['meaning'] for row in resolution['before_resolution_meanings']}
             current = {row['meaning_id']: row['meaning'] for row in payload['current_meanings']}
