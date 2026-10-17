@@ -7,6 +7,16 @@ from .display_copy_tokens import display_text
 _PREFIX = 'ADA_SUMMARY_ITEM_V2:'
 
 
+def _native_copy_variants(segments: list[str]) -> set[str]:
+    """Rejoin exact slices, also supporting older whitespace-trimmed continuations.
+
+    Never insert a mandatory word separator: a shape boundary can fall between
+    sentences without spaces or inside a word. Keep existing whitespace within
+    each segment, and retain the established normalization for display markup.
+    """
+    return {normalize_quote(display_text(separator.join(segments))) for separator in ('', ' ')}
+
+
 def bind_summary_items(slide, page):
     bind_summary_pages([slide], page)
 
@@ -38,15 +48,15 @@ def bind_summary_pages(slides, page, *, texts=None):
             segments = []
             while offset < len(ordered):
                 segments.append(ordered[offset]); offset += 1
-                combined = normalize_quote(display_text(' '.join(shape.text for shape in segments)))
-                if combined == target:
+                combined = _native_copy_variants([shape.text for shape in segments])
+                if target in combined:
                     bindings.append(segments)
                     break
-                if not target.startswith(combined):
+                if not any(target.startswith(copy) for copy in combined):
                     break
             else:
-                combined = ''
-            if combined != target:
+                combined = set()
+            if target not in combined:
                 raise ValueError('Summary fact lacks complete ordered visible native copy: ' + page.id)
         if offset != len(ordered):
             raise ValueError('Summary native copy has unbound extra text: ' + page.id)
@@ -109,7 +119,7 @@ def verify_summary_export(presentation, result):
         if f'{page_id}:{index}' not in localized:
             expected.add(normalize_quote(display_text(mapping.get(item.text, item.text))))
         if (len(values) != values[0][1] or
-                normalize_quote(display_text(' '.join(text for text, _ in values))) not in expected):
+                not _native_copy_variants([text for text, _ in values]) & expected):
             raise ValueError('Introductory evidence is missing from visible native slide copy or its complete continuation')
     limit = company.summary_review.max_intro_slides
     if limit is not None and len(body_slides)>limit:

@@ -28,6 +28,12 @@ The responsibility split is:
 
 PDF contents are untrusted source material. Instructions embedded in a document are treated as data, never as commands.
 
+The v150 update preserves original text boundaries when verifying introductory
+copy across native text boxes. Contiguous multilingual fragments no longer gain
+invented spaces during binding or final export checks. Missing, changed,
+duplicated and reordered copy still blocks export. Extraction and analysis cache
+contracts remain unchanged.
+
 The v149 update handles mixed introduction findings in one bounded repair:
 omitted source parts and defects in selected assertions can be corrected
 together before the existing fresh independent review. Source-owned edits and
