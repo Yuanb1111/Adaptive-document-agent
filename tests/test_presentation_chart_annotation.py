@@ -1,5 +1,7 @@
 """Chart captions compute only compatible observed changes."""
 
+import pytest
+
 from adaptive_document_agent.services.presentation_chart_annotation import chart_change_annotation
 from test_presentation_key_figures import _result
 from test_source_row_composition import source_matrix
@@ -89,3 +91,65 @@ def test_iso_endpoint_scope_matches_date_labels_with_audit_marker():
     assert chart_change_annotation(chart, index).endswith('+10 units')
     assert chart_change_annotation(chart, index,
         scope_text='From 2022-12-31 to 2024-10-31').endswith('-70 units')
+
+
+def _date_series():
+    result = _result()
+    template = result.observations[0]
+    points = [template.model_copy(deep=True, update={
+        'id': f'balance-{i}', 'period': day, 'as_of_date': day,
+        'period_type': 'point_in_time', 'period_basis': 'date',
+        'value': value, 'raw_value': str(value),
+        'audited_status': 'unaudited' if i == 4 else 'unknown'})
+        for i, (day, value) in enumerate(zip(
+            ('2021-12-31', '2022-12-31', '2023-12-31', '2024-06-30', '2024-10-31'),
+            (100, 120, 90, 70, 80)))]
+    chart = result.charts[0].model_copy(update={'observation_ids': [o.id for o in points]})
+    return chart, {o.id: o for o in points}
+
+
+@pytest.mark.parametrize('scope, expected', [
+    ('Change from 2023-12-31 to 2024-10-31', '31 Dec 2023 to 31 Oct 2024*: -10 units'),
+    ('Change from 31 Dec 2023 to 31 Oct 2024*', '31 Dec 2023 to 31 Oct 2024*: -10 units'),
+    ('2022-12-31 through 2024-06-30', '31 Dec 2022 to 30 Jun 2024: -50 units'),
+    ('2023-12-31 to 2024-10-31. From 2023-12-31 to 2024-10-31.',
+     '31 Dec 2023 to 31 Oct 2024*: -10 units'),
+    ('Latest balance at 2024-10-31', '30 Jun 2024 to 31 Oct 2024*: +10 units'),
+])
+def test_explicit_range_can_start_or_end_inside_the_chart(scope, expected):
+    chart, index = _date_series()
+    before = [item.model_dump() for item in index.values()]
+    assert chart_change_annotation(chart, index, scope_text=scope) == expected
+    assert [item.model_dump() for item in index.values()] == before
+
+
+@pytest.mark.parametrize('scope', [
+    '2020-12-31 to 2024-10-31',
+    '2023-12-31 to 2025-10-31',
+    '2021-12-31 to 2023-12-31; 2023-12-31 to 2024-10-31',
+    '2021-12-31 to 2023-12-31 to 2024-10-31',
+    '31 Dec 2021 to 31 Dec 2023 to 31 Oct 2024',
+    '2024-10-31 to 2023-12-31',
+    '2023-12-31 to 2023-12-31',
+])
+def test_unsupported_or_ambiguous_explicit_ranges_never_fall_back(scope):
+    chart, index = _date_series()
+    assert chart_change_annotation(chart, index, scope_text=scope) == ''
+
+
+def test_composition_change_respects_explicit_interior_endpoint_pair():
+    observations = source_matrix()
+    later = [item.model_copy(deep=True, update={'id': item.id + '-later', 'period': 'FY2025'})
+             for item in observations if item.period == 'FY2024']
+    observations.extend(later)
+    for item in observations:
+        if item.evidence[0].row_label == 'Hardware' and item.period == 'FY2025':
+            item.value, item.raw_value = 50, '50'
+        if item.evidence[0].row_label == 'Other' and item.period == 'FY2025':
+            item.value, item.raw_value = 0, '0'
+    chart = next(chart for chart in presentation_compositions(DocumentIndex(observations))
+                 if chart.chart_type == 'stacked_percent')
+    index = {item.id: item for item in observations}
+    annotation = chart_change_annotation(chart, index, scope_text='FY2024 to FY2025')
+    assert annotation == 'Hardware share, FY2024 to FY2025: +10.0 pp'
+    assert chart_change_annotation(chart, index, scope_text='FY2024 to FY2026') == ''

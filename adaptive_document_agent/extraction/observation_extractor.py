@@ -59,10 +59,12 @@ class ObservationExtractor:
         if len(table.headers) < 2 or not table.rows:
             return []
         output: list[Observation] = []
+        dimension_columns = {index for index, role in enumerate(table.column_types) if role == "dimension"}
         meaningful_header_list = [
             header
-            for header in table.headers[1:]
+            for column, header in enumerate(table.headers[1:], 1)
             if self._meaningful_header(header)
+            and column not in dimension_columns
         ]
         column_metric_mode = len(set(meaningful_header_list)) >= 2
         comparison_contexts = table_comparison_contexts(table)
@@ -75,7 +77,14 @@ class ObservationExtractor:
                 continue
             if not row.cells:
                 continue
-            numeric_columns = [column for column, raw in enumerate(row.cells[1:], start=1) if raw and parse_number(raw)]
+            field_dimensions = {
+                table.headers[column]: str(raw).strip()
+                for column, raw in enumerate(row.cells[1:], 1)
+                if raw and column in dimension_columns
+                and column < len(table.headers)
+            }
+            numeric_columns = [column for column, raw in enumerate(row.cells[1:], start=1)
+                               if raw and parse_number(raw) and column not in dimension_columns]
             # Generic words can be explicit scope headings (e.g. "Current" or
             # "Other"). They are insufficient standalone metrics, but must not
             # disappear from the identity of the following source rows.
@@ -131,8 +140,8 @@ class ObservationExtractor:
                     continue
 
                 is_pct_col = explicit_percentage(header) or explicit_percentage(row.cells[column])
-                dimensions: dict[str, str] = {}
-                cat_dims: dict[str, str] = {}
+                dimensions: dict[str, str] = dict(field_dimensions)
+                cat_dims: dict[str, str] = dict(field_dimensions)
 
                 if column_metric_mode and self._meaningful_header(header):
                     metric = f"{current_section}: {header}" if current_section else header

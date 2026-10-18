@@ -99,7 +99,8 @@ def _is_cramped_multi_chart_slide(slide: PresentationSlide, chart_lookup: dict[s
                 return True
         elif len(series_names) > 3 or len({o.period for o in obs}) > 6:
             return True
-        if len(_lines(chart.title, 3.73, CHART_TITLE_PT)) > 3:
+        from adaptive_document_agent.services.presentation_labels import readable_chart_heading
+        if len(_lines(readable_chart_heading(chart.title), 3.73, CHART_TITLE_PT)) > 3:
             return True
 
     return False

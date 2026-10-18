@@ -2,6 +2,35 @@
 import re
 
 
+def _literal_note_key(text: str) -> str:
+    """Ignore typography only; extra conditions remain a different note."""
+    text = re.sub(r'^\(\d+\)\s*', '', ' '.join(text.split()))
+    return text.rstrip('.').casefold()
+
+
+def _source_unit_caveat(caveat: str, observations) -> str:
+    """Label an exact retained raw-unit statement as source reporting units.
+
+    Chart display scaling is independent of the original reporting scale. Do
+    not guess the scope of metric-specific or mixed-unit statements, and keep
+    any trailing qualification verbatim.
+    """
+    if not observations or any(not item.raw_unit or not item.evidence for item in observations):
+        return caveat
+    raw_units = {' '.join(item.raw_unit.split()) for item in observations}
+    if len(raw_units) != 1:
+        return caveat
+    raw_unit = next(iter(raw_units))
+    aliases = {raw_unit, re.sub(r'\s+in\s+', ' ', raw_unit, flags=re.I)}
+    unit_pattern = '|'.join(re.escape(unit) for unit in sorted(aliases, key=len, reverse=True))
+    match = re.fullmatch(
+        rf'(?P<subject>(?:All )?(?:amounts|values)) (?P<rest>are (?:presented|reported|shown) in '
+        rf'(?:{unit_pattern})(?:[.;].*)?)', caveat, re.I | re.S)
+    if not match:
+        return caveat
+    return f"Source {match.group('subject').lower()} {match.group('rest')}"
+
+
 def _repeats_definition(copy, definition, *, sole_definition):
     """Recognize complete literal division statements, preserving extra caveats."""
     text = ' '.join(copy.split()).strip().rstrip('.')
@@ -22,6 +51,7 @@ def slide_context_notes(result, slide, charts, index, *, definitions=None):
     from .presentation_labels import qualified_metric_name
 
     notes = []
+    source_note_keys = set()
     displayed_definitions = []
     definitions = definitions if definitions is not None else ratio_definitions(result) if charts else []
     for chart in charts:
@@ -35,8 +65,15 @@ def slide_context_notes(result, slide, charts, index, *, definitions=None):
             factor = f" × {definition['multiplier']:g}" if definition.get("multiplier") is not None else ""
             notes.append(f"{label}: {definition['numerator']} / {definition['denominator']}{factor}.")
         from .source_row_qualifications import source_row_qualifications
-        notes.extend(note['text'] for note in source_row_qualifications(
-            [index.get(oid) for oid in chart.observation_ids if index.get(oid)], result.document))
+        source_notes = source_row_qualifications(
+            [index.get(oid) for oid in chart.observation_ids if index.get(oid)], result.document)
+        notes.extend(note['text'] for note in source_notes)
+        source_note_keys.update(_literal_note_key(note['text']) for note in source_notes)
+    displayed_ids = {oid for chart in charts for oid in chart.observation_ids}
+    if not displayed_ids:
+        displayed_ids = set(slide.observation_ids)
+        displayed_ids.update(oid for block in slide.visual_blocks for oid in block.observation_ids)
+    displayed = [index.get(oid) for oid in displayed_ids if index.get(oid)]
     plan = result.presentation_plan
     if plan and slide.theme_id:
         first = next((page for page in plan.slides
@@ -49,13 +86,15 @@ def slide_context_notes(result, slide, charts, index, *, definitions=None):
                 if caveat == "Displayed composition covers the validated selected-category matrix for its cited periods.":
                     continue
                 if caveat.strip():
+                    if _literal_note_key(caveat) in source_note_keys:
+                        continue  # Keep the bound source wording once, including its qualifiers.
                     if re.fullmatch(r"(?:FY|Annual) columns'? audit status (?:is )?unknown\.?", caveat.strip(), re.I):
                         continue  # No affirmative qualifier is supplied; source metadata remains in the audit.
                     if re.fullmatch(r'Interim results are unaudited and separate from annual periods\.?', caveat.strip(), re.I):
                         notes.append('Interim and annual periods are shown separately. '
                                      'Unaudited markers apply only to the identified source columns.')
                     else:
-                        notes.append(caveat.strip())
+                        notes.append(_source_unit_caveat(caveat.strip(), displayed))
     # Keep the precise, source-bound formula once. Suppress only complete
     # duplicate division statements, never a sentence with an extra condition.
     return list(dict.fromkeys(note for note in notes if not any(

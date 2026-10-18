@@ -11,6 +11,50 @@ from adaptive_document_agent.document_model.series import metric_identity_key
 from adaptive_document_agent.validation.claim_validator import are_observations_compatible
 
 
+def _stated_period_pair(ordered, scope_text: str) -> tuple[bool, tuple[int, int] | None]:
+    """Resolve literal endpoint labels, without choosing among competing ranges.
+
+    Period-shaped labels also detect unsupported endpoints so an explicit range
+    cannot silently become an unrelated latest-period comparison.
+    """
+    aliases: dict[str, set[int]] = {}
+    for position, item in enumerate(ordered):
+        for label in (format_observation_period(item), item.period, item.as_of_date):
+            if label:
+                key = " ".join(label.rstrip("*").split()).casefold()
+                aliases.setdefault(key, set()).add(position)
+    if not scope_text or not aliases:
+        return False, None
+    literal_labels = [re.escape(label).replace(r"\ ", r"\s+")
+                      for label in sorted(aliases, key=len, reverse=True)]
+    period_shapes = [r"\d{4}[-/.]\d{2}[-/.]\d{2}",
+                     r"\d{1,2}\s+[a-z]{3,9}\s+\d{4}",
+                     r"[a-z]{3,9}\s+\d{1,2},?\s+\d{4}",
+                     r"(?:FY|[1-9]M|1[0-2]M|Q[1-4]|[12]H)\s*\d{4}",
+                     r"\d{4}"]
+    token = "(?:" + "|".join([*literal_labels, *period_shapes]) + ")"
+    pattern = re.compile(rf"(?<!\w)(?P<start>{token})\*?\s*"
+                         rf"(?:to|through|until|[-–—])\s*(?P<end>{token})\*?"
+                         rf"(?!\w|[-/.]\d{{2}}(?!\d))", re.I)
+    matches, position = [], 0
+    while match := pattern.search(scope_text, position):
+        matches.append(match)
+        # Retain overlapping pairs in A to B to C, but never reparse the year
+        # suffix of an already consumed date label as a separate endpoint.
+        position = match.end("start")
+    pairs = set()
+    for match in matches:
+        start, end = (aliases.get(" ".join(match.group(name).split()).casefold(), set())
+                      for name in ("start", "end"))
+        if len(start) != 1 or len(end) != 1:
+            return True, None
+        pair = (next(iter(start)), next(iter(end)))
+        if pair[0] >= pair[1]:
+            return True, None
+        pairs.add(pair)
+    return bool(matches), next(iter(pairs)) if len(pairs) == 1 else None
+
+
 def chart_change_annotation(chart, index, *, scope_text: str = "") -> str:
     """Name a stated endpoint change, otherwise the latest comparable change.
 
@@ -41,14 +85,20 @@ def chart_change_annotation(chart, index, *, scope_text: str = "") -> str:
             return f"{mix.periods[0]}: {ranked[0][0]} has the largest share ({ranked[0][1]:,.1f}%)"
         if len(mix.periods) < 2:
             return ""
-        first_total = sum(row[0] for row in mix.values)
-        last_total = sum(row[-1] for row in mix.values)
+        representatives = [next(item for item in observations if item.period == period)
+                           for period in mix.periods]
+        has_range, stated_pair = _stated_period_pair(representatives, scope_text)
+        if has_range and stated_pair is None:
+            return ""
+        start, end = stated_pair if stated_pair is not None else (0, len(mix.periods) - 1)
+        first_total = sum(row[start] for row in mix.values)
+        last_total = sum(row[end] for row in mix.values)
         if first_total <= 0 or last_total <= 0:
             return ""
-        changes = [(category, row[-1] / last_total * 100 - row[0] / first_total * 100)
+        changes = [(category, row[end] / last_total * 100 - row[start] / first_total * 100)
                    for category, row in zip(mix.categories, mix.values)]
         category, change = max(changes, key=lambda part: abs(part[1]))
-        return f"{category} share, {mix.periods[0]} to {mix.periods[-1]}: {change:+,.1f} pp"
+        return f"{category} share, {mix.periods[start]} to {mix.periods[end]}: {change:+,.1f} pp"
     observations = [index.get(oid) for oid in chart.observation_ids if index.get(oid)]
     observations = [item for item in observations if item.value is not None and item.period
                     and item.validation_status == "valid" and item.evidence]
@@ -65,16 +115,11 @@ def chart_change_annotation(chart, index, *, scope_text: str = "") -> str:
     if len(ordered) < 2 or any(not are_observations_compatible(a, b)[0]
                                for a, b in zip(ordered, ordered[1:])):
         return ""
-    # Assurance markers are footnotes, not part of a period's identity. Titles
-    # may use the retained ISO date while an axis uses its fiscal-year label.
-    starts = {format_observation_period(ordered[0]).rstrip('*'), ordered[0].period, ordered[0].as_of_date}
-    ends = {format_observation_period(ordered[-1]).rstrip('*'), ordered[-1].period, ordered[-1].as_of_date}
-    stated_range = any(re.search(
-        rf"(?<!\w){re.escape(start)}\*?\s*(?:to|through|until|[-–—])\s*"
-        rf"{re.escape(end)}(?!\w)", scope_text, re.I)
-        for start in starts if start for end in ends if end)
-    first, last = ((ordered[0], ordered[-1]) if stated_range else
-                   (ordered[-2], ordered[-1]))
+    has_range, stated_pair = _stated_period_pair(ordered, scope_text)
+    if has_range and stated_pair is None:
+        return ""
+    start, end = stated_pair if stated_pair is not None else (len(ordered) - 2, len(ordered) - 1)
+    first, last = ordered[start], ordered[end]
     semantic = classify_metric(last.metric_original, unit=last.unit,
                                raw_unit=last.raw_unit, value=last.value)
     change = float(last.value) - float(first.value)

@@ -28,6 +28,16 @@ The responsibility split is:
 
 PDF contents are untrusted source material. Instructions embedded in a document are treated as data, never as commands.
 
+The v154 update preserves source row groups and repeated table-header boundaries,
+keeps descriptive year columns separate from monetary measures, and compacts
+multi-chart topics with complete evidence tables before page-budget selection.
+Chart change annotations honor explicitly selected comparison endpoints rather
+than substituting the latest interval. Source units remain distinct from chart
+display units, and planning prompts retain exact source period labels and avoid
+duplicated source definitions. Extraction and analysis cache contracts advance
+to `extraction-v21` and `analysis-v79`; older analyses require fresh extraction
+and analysis to receive the data corrections.
+
 The v153 update binds introduction repair-disposition evidence in Python through
 the exact finding and its verified source owner. Model-proposed quotations remain
 untrusted audit diagnostics; joining nonadjacent source sentences cannot replace

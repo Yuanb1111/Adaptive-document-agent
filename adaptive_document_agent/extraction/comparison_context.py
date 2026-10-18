@@ -49,15 +49,30 @@ def _caption_subject(table: ExtractedTable) -> str | None:
     return subject
 
 
+def _first_group_heading(table: ExtractedTable, first_label: str) -> str:
+    """Find the header tail after removing an exactly retained wrapped label.
+
+    The first numeric row can start on the preceding source line. That line is
+    still in raw_header_lines even though reconstruction already copied it into
+    the first row label. It must not hide the standalone heading before it.
+    A matching named total is still required by table_comparison_contexts.
+    """
+    lines = [_clean(line) for line in table.raw_header_lines if _clean(line)]
+    for count in range(1, len(lines)):
+        prefix = " ".join(lines[-count:])
+        if first_label.casefold().startswith(prefix.casefold() + " "):
+            return lines[-count - 1]
+    return lines[-1] if lines else ""
+
+
 def table_comparison_contexts(table: ExtractedTable) -> dict[int, tuple[str | None, str | None]]:
     """Map source row indexes to an evidenced (parent, table subject)."""
     headings = {_clean(line).casefold() for line in table.raw_body_lines}
     # The first group heading may be retained as the last header line instead
     # of a body row. It is a parent only if a matching named total bounds that
     # exact first group; a caption or familiar metric name is not enough.
-    header_tail = next((_clean(line) for line in reversed(table.raw_header_lines)
-                        if _clean(line)), "")
     labels = [_clean(row.cells[0] or "") if row.cells else "" for row in table.rows]
+    header_tail = _first_group_heading(table, labels[0] if labels else "")
     parents: dict[int, str] = {}
     previous_total = -1
     for end, label in enumerate(labels):

@@ -10,7 +10,7 @@ from adaptive_document_agent.models.table import ExtractedTable
 from adaptive_document_agent.utils.ids import stable_id
 from .source_geometry import page_geometry, rotate_box
 
-_VALUE=re.compile(r'^(?:[-+\d,.()%/]+|N/A|Nil|[—–-])$')
+_VALUE=re.compile(r'^(?:(?=[-+\d,.()%/]*\d)[-+\d,.()%/]+|N/A|Nil|[—–-])$')
 
 
 def value_words(line,left):
@@ -132,19 +132,88 @@ def _header(line,anchors,guides,left,right):
     return row,spans
 
 
+def _body_start(lines, anchors, left):
+    from .record_table_headers import reporting_period_row
+    body_start=next((i for i,l in enumerate(lines) if value_words(l,left)
+                     and _row_label(l,value_words(l,left),left)
+                     and not reporting_period_row([l.text])),len(lines))
+    if body_start==len(lines):
+        body_start=next((i for i,l in enumerate(lines) if len(value_words(l,left))==len(anchors)
+                         and not _year_header(value_words(l,left))
+                         and not reporting_period_row([l.text])),len(lines))
+    # Keep wrapped first labels/section headers as body, never column headings.
+    while (body_start and not reporting_period_row([lines[body_start-1].text])
+           and max(w.right for w in lines[body_start-1].words)<min(a for a,b,_ in anchors)-5):
+        body_start-=1
+    return body_start
+
+
+def _split_repeated_headers(region):
+    """Separate source grids when a later block repeats its column headings.
+
+    A page border can enclose several independent tables. Joining their rows
+    would make the first period and unit declarations govern later blocks.
+    Require multiple ordered literal header matches before a new data row;
+    ordinary row labels or a lone date cannot establish a new table.
+    """
+    left,top,right,bottom,lines=region
+    anchors=_anchors(lines,left)
+    if not anchors:
+        return [region]
+    first=_body_start(lines,anchors,left)
+    signature=lambda line: ' '.join(line.text.casefold().split())
+    headers=[signature(line) for line in lines[:first]]
+    cuts=[]
+    index=first+1
+    while index<len(lines):
+        line_key=signature(lines[index])
+        matches=[i for i,key in enumerate(headers) if key==line_key and re.search(r'[a-zA-Z\u3400-\u9fff]',key)]
+        if not matches:
+            index+=1
+            continue
+        following=next((i for i in range(index+1,min(len(lines),index+len(headers)+3))
+                        if value_words(lines[i],left) and _row_label(lines[i],value_words(lines[i],left),left)),None)
+        if following is None:
+            index+=1
+            continue
+        matched=[]
+        cursor=matches[0]
+        for line in lines[index:following]:
+            key=signature(line)
+            position=next((i for i in range(cursor,len(headers)) if headers[i]==key),None)
+            if position is not None:
+                matched.append(key)
+                cursor=position+1
+        if len(set(matched))>=2:
+            # A reporting-date caption can precede the repeated field names.
+            # Keep it with the new block instead of leaving its year among the
+            # previous block's numeric cells. Only adjacent complete date
+            # declarations qualify, including wrapped source lines.
+            from .record_table_headers import reporting_period_row
+            start=index
+            lower=cuts[-1]+1 if cuts else first+1
+            for count in range(1,min(3,index-lower)+1):
+                prefix=lines[index-count:index]
+                sequence=[*prefix,lines[index]]
+                if (all(0<=b.top-a.bottom<=35 for a,b in zip(sequence,sequence[1:]))
+                        and reporting_period_row([line.text for line in prefix])):
+                    start=index-count
+            cuts.append(start)
+            index=following+1
+        else:
+            index+=1
+    bounds=[0,*cuts,len(lines)]
+    return [(left,top if start==0 else lines[start].top,right,
+             bottom if end==len(lines) else lines[end].top,lines[start:end])
+            for start,end in zip(bounds,bounds[1:])]
+
+
 def _grid(lines,left,right,guides):
     anchors=_anchors(lines,left)
     if not anchors:
         return [],[],[]
     width=len(anchors)+1
-    body_start=next((i for i,l in enumerate(lines) if value_words(l,left)
-                     and _row_label(l,value_words(l,left),left)),len(lines))
-    if body_start==len(lines):
-        body_start=next((i for i,l in enumerate(lines) if len(value_words(l,left))==len(anchors)
-                         and not _year_header(value_words(l,left))),len(lines))
-    # Keep wrapped first labels/section headers as body, never column headings.
-    while body_start and max(w.right for w in lines[body_start-1].words)<min(a for a,b,_ in anchors)-5:
-        body_start-=1
+    body_start=_body_start(lines,anchors,left)
     headers,body,spans=[],[],[]
     for index,line in enumerate(lines):
         if index<body_start:
@@ -217,7 +286,8 @@ def _notes(lines,tables):
 def extract_ruled_source_tables(textpage,page,page_number):
     lines,rules,rotation=page_geometry(textpage,page)
     height=page.rect.width if rotation in (90,270) else page.rect.height
-    regions=table_regions(lines,rules,height)
+    regions=[part for region in table_regions(lines,rules,height)
+             for part in _split_repeated_headers(region)]
     guides=[]
     for drawing in page.get_drawings():
         box=rotate_box(tuple(drawing['rect']),page.rect.width,page.rect.height,rotation)

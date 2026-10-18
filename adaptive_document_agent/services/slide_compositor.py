@@ -214,7 +214,7 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
     """Paginate capacity failures without changing the planned evidence contract."""
     start = len(presentation.slides)
     try:
-        return _render_composed_slide(presentation, slide_plan, charts, result, index)
+        rendered = _render_composed_slide(presentation, slide_plan, charts, result, index)
     except _ChartCapacityError:
         # Roll back only pages created by this attempt, including any charts
         # already drawn before a later panel failed. Never leave partial pages.
@@ -231,8 +231,10 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
         if len(ordered) <= 1:
             raise
         split = max(1, (len(ordered) + 1) // 2)
-        return _paginate_chart_slide(presentation, slide_plan,
-                                     (ordered[:split], ordered[split:]), result, index)
+        rendered = _paginate_chart_slide(presentation, slide_plan,
+                                        (ordered[:split], ordered[split:]), result, index)
+    from .composition_pagination import compact_support_pages
+    return compact_support_pages(presentation, slide_plan, charts, result, index, rendered)
 
 
 def _paginate_chart_slide(presentation, slide_plan: PresentationSlide,
@@ -484,7 +486,8 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
             for group in evidence_groups(items):
                 seen_values = set()
                 for o in group:
-                    key = (o.period, o.value, o.audited_status, o.id if not o.period else None)
+                    key = (o.period, o.period_start, o.period_end, o.as_of_date,
+                           o.value, o.audited_status, o.id if not o.period else None)
                     if key not in seen_values:
                         seen_values.add(key)
                         displayed.append(o)
@@ -521,22 +524,19 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
             # Do not join unknown, conflicting or incompatible period groups.
             groups = evidence_groups(items)
             period_sets = [tuple(format_observation_period(o) for o in group) for group in groups]
-            same_periods = period_sets and all(p == period_sets[0] for p in period_sets)
-            union_dates = False
+            from .composition_pagination import matching_duration_ranges, sparse_period_columns
+            same_periods = (period_sets and all(p == period_sets[0] for p in period_sets)
+                            and matching_duration_ranges(groups))
+            sparse_periods = False
             period_columns = period_sets[0] if period_sets else ()
             if horizontal and len(groups) > 1 and not same_periods:
-                # Explicit resolved point dates can share a sparse grid. Empty
+                # Resolved dates or comparable durations can share a sparse grid. Empty
                 # intersections never supply a value, period or new comparison.
-                date_label = re.compile(r'^\d{1,2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4}\*?$')
-                if (all(date_label.fullmatch(p) for periods in period_sets for p in periods)
-                        and all(len(set(p)) == len(p) for p in period_sets)
-                        and len(set.intersection(*(set(p) for p in period_sets))) >= 2):
-                    from adaptive_document_agent.document_model import period_sort_key
-                    period_columns = tuple(dict.fromkeys(format_observation_period(o)
-                        for o in sorted(items, key=lambda o: period_sort_key(o.period))))
-                    union_dates = len(period_columns) <= 6
+                union = sparse_period_columns(groups)
+                if union:
+                    period_columns, sparse_periods = union, True
             if (horizontal and len(groups) > 1 and period_sets
-                    and (same_periods or union_dates)
+                    and (same_periods or sparse_periods)
                     and all(period_sets[0]) and len(set(period_sets[0])) == len(period_sets[0])
                     and len(period_sets[0]) <= 6):
                 cells = [["Metric", *period_columns]]
@@ -551,7 +551,7 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
                     values = [by_period.get(p, '—') for p in period_columns]
                     cells.append([name, *values])
                 widths, wrapped, heights = _period_table_layout(cells, rect.w, .48)
-                if sum(heights) + (.24 if union_dates else 0) <= rect.h:
+                if sum(heights) + (.24 if sparse_periods else 0) <= rect.h:
                     shape = owner.shapes.add_table(len(cells), len(widths), Inches(rect.x), Inches(rect.y), Inches(rect.w), Inches(sum(heights)))
                     shape.name = "table:" + ",".join(o.id for o in items)
                     for j, w in enumerate(widths):
@@ -564,15 +564,17 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
                             cell.text_frame.word_wrap = True
                             for p in cell.text_frame.paragraphs:
                                 p.font.name, p.font.size = FONT, Pt(14)
-                    if union_dates:
-                        _put_text(owner, '— = no retained source value for this metric and date.',
+                    if sparse_periods:
+                        _put_text(owner, '— = no retained source value for this metric and period.',
                                   Rect(rect.x, rect.y + sum(heights) + .04, rect.w, .20),
                                   size=FOOTNOTE_PT, color=MUTED)
                     return []
             # A short single-series support band shows ALL periods horizontally,
             # rather than losing intermediate changes or creating a near-empty continuation.
             if (horizontal and 1 < len(items) <= 6 and len(evidence_groups(items)) == 1
-                    and all(format_observation_period(o) for o in items)):
+                    and all(format_observation_period(o) for o in items)
+                    and len({format_observation_period(o) for o in items}) == len(items)
+                    and matching_duration_ranges([items])):
                 name = qualified_metric_name(items[0])
                 name = re.sub(r"(?i)^Adjusted for Adjusted\b", "Adjusted", name)
                 cells = [["Metric", *[format_observation_period(o) for o in items]], [name]]

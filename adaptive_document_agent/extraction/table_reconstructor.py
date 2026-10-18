@@ -7,7 +7,8 @@ from adaptive_document_agent.models.table import ExtractedTable
 from .column_roles import percentage_column
 
 _YEAR_OR_PERIOD_PATTERN = re.compile(
-    r"\b(?:19|20)\d{2}\b"
+    r"\b(?:19|20)\d{2}-\d{2}-\d{2}\b"
+    r"|\b(?:19|20)\d{2}\b"
     r"|(?:FY\s*)?(?:19|20)\d{2}"
     r"|(?:(?:1[0-2]|[1-9])M|Q[1-4]|1H|2H)\s*(?:19|20)?\d{2}"
     r"|(?:19|20)\d{2}\s*年(?:度)?"
@@ -107,6 +108,16 @@ class TableReconstructor:
         header_rows = raw[:num_headers]
         data_rows = raw[num_headers:]
 
+        from .record_table_headers import calendar_dimension_header, field_labels, reporting_period_row
+        reporting_periods = [period for row in header_rows if (period := reporting_period_row(row))]
+        record_period = reporting_periods[-1] if len(set(reporting_periods)) == 1 else None
+        if reporting_periods:
+            # This is an explicit table-wide date, even when PDF geometry split
+            # its words over several cells. Do not let its final year apply only
+            # to the rightmost fields or turn those fields into year columns.
+            header_rows = [row for row in header_rows if not reporting_period_row(row)]
+        source_labels = field_labels(header_rows, width)
+
         periods: list[str | None] = [None] * width
         if existing_periods:
             for i, p in enumerate(existing_periods[:width]):
@@ -114,6 +125,7 @@ class TableReconstructor:
                     periods[i] = p
 
         # 1. Period extraction and column-span propagation
+        has_column_periods = False
         for hr in header_rows:
             anchors: list[tuple[int, str]] = []
             for c in range(1, width):
@@ -122,6 +134,7 @@ class TableReconstructor:
                     m = _YEAR_OR_PERIOD_PATTERN.search(val)
                     if m:
                         anchors.append((c, m.group(0)))
+            has_column_periods = has_column_periods or bool(anchors)
 
             if len(anchors) >= 2 or (len(anchors) == 1 and not any(periods)):
                 for k, (start_col, p_val) in enumerate(anchors):
@@ -129,6 +142,16 @@ class TableReconstructor:
                     for c in range(start_col, next_start):
                         if periods[c] is None:
                             periods[c] = p_val
+
+        # A table-wide reporting date can fill a record layout with named
+        # fields. Explicit column dates and retained periods are stronger
+        # evidence: never replace them or spread a conflicting date into gaps.
+        record_fields = any(row and row[0] and any(cell for cell in row[1:]) for row in header_rows)
+        if (record_period and record_fields and not has_column_periods
+                and all(not period or period == record_period for period in periods[1:])):
+            periods = [None, *[period or record_period for period in periods[1:]]]
+        else:
+            record_period = None
 
         # 2. Column role / measure type classification
         col_types: list[str] = ["label"] + ["unknown"] * (width - 1)
@@ -153,7 +176,10 @@ class TableReconstructor:
             is_count = any(kw in combined_txt for kw in _SUB_ROLE_COUNT_KEYWORDS)
             is_amount = any(kw in combined_txt for kw in _SUB_ROLE_AMOUNT_KEYWORDS)
 
-            if is_pct:
+            if calendar_dimension_header(source_labels[c], col_data_cells):
+                col_types[c] = "dimension"
+                sub_labels[c] = source_labels[c]
+            elif is_pct:
                 col_types[c] = "percentage"
                 col_currs[c] = None
                 col_scales[c] = 1.0
@@ -200,7 +226,9 @@ class TableReconstructor:
         for c in range(1, width):
             p = periods[c]
             sub = sub_labels[c]
-            if p and sub:
+            if col_types[c] == "dimension" or record_period and source_labels[c]:
+                headers[c] = source_labels[c]
+            elif p and sub:
                 headers[c] = f"{p} {sub}"
             elif p:
                 headers[c] = p

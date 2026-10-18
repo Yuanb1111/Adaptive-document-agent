@@ -133,3 +133,29 @@ def test_exact_cell_replay_adds_scope_without_rewriting_source_facts():
     for field, value in [("raw_value", "12"), ("column_id", 2), ("table_id", "unrelated")]:
         mismatched = original.model_copy(update={field: value})
         assert restore_comparison_context([mismatched], [table])[0] is mismatched
+
+
+@pytest.mark.parametrize("parent,first_label,wrapped", [
+    ("Current", "Amounts due to counterparties non-trade", ["Amounts due to counterparties"]),
+    ("Rejected samples", "Specimens collected before noon", ["Specimens collected", "before"]),
+    ("Completed visits", "Follow-up appointments", ["Follow-up"]),
+])
+def test_wrapped_first_label_does_not_hide_the_preceding_literal_scope(parent, first_label, wrapped):
+    table = source_table(parent, first_label)
+    table.raw_header_lines.extend(wrapped)
+    before = deepcopy(table)
+    observations = ObservationExtractor()._table_observations(table)
+    grouped = [item for item in observations if item.row_id in {0, 1}]
+    assert len(grouped) == 4
+    assert all(item.parent_section == parent for item in grouped)
+    assert all(item.parent_section is None for item in observations if item.row_id >= 2)
+    stale = [item.model_copy(update={"parent_section": None, "dimensions": {}}) for item in grouped]
+    assert all(item.parent_section == parent for item in restore_comparison_context(stale, [table]))
+    assert table == before
+
+
+def test_unmatched_first_label_fragment_never_recovers_an_earlier_heading():
+    table = source_table()
+    table.raw_header_lines.append("Some unrelated text")
+    observations = ObservationExtractor()._table_observations(table)
+    assert all(item.parent_section is None for item in observations if item.row_id < 2)
