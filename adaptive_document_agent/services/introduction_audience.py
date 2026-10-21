@@ -55,6 +55,13 @@ def coverage_errors(verdict, meanings, pages):
         quote = normalize_quote(check.get('summary_quote', ''))
         if check.get('covered') is not True:
             errors.append('Missing central meaning: ' + meaning + '. ' + check.get('reason', ''))
+        elif check.get('paragraph_ids'):
+            from .visible_summary_paragraphs import visible_paragraphs
+            catalog = visible_paragraphs(pages)
+            ids = check['paragraph_ids']
+            if (len(ids) != len(set(ids)) or any(key not in catalog or verdict['part_id'] not in catalog[key]['part_ids'] for key in ids)
+                    or quote != normalize_quote(' '.join(catalog[key]['text'] for key in ids if key in catalog))):
+                errors.append('Central meaning has invalid current visible paragraph addresses: ' + meaning)
         elif not quote or quote not in actual:
             errors.append('Central meaning has no quoted visible paragraph bound to this part: ' + meaning)
     return errors

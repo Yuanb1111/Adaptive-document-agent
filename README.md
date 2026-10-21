@@ -1,5 +1,9 @@
 # Adaptive Document Intelligence Agent
 
+The [v157 visible coverage review update](docs/VISIBLE_COVERAGE_REVIEW_V157.md)
+binds reviewer-selected paragraph IDs to exact current copy and independently
+rechecks conflicting verdicts after cross-language quotation errors.
+
 The [v156 reading recovery and period-scope update](docs/READING_RECOVERY_V156.md)
 separates JSON repair from evidence correction, reuses verified reading batches,
 locates introduction failures, and preserves annual/interim source header groups.

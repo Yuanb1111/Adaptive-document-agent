@@ -504,10 +504,11 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
                      'qualifications remain accurate. Evaluate the union of all paragraphs bound to '
                      'each part, including supporting appendix paragraphs. '
                      + ('For EVERY required_meanings entry, return one coverage check with its zero-based '
-                        'meaning_index, covered, reason and summary_quote copied literally from the current '
-                        'visible paragraphs bound to that part. First compare each distinct required meaning '
+                        'meaning_index, covered, reason and paragraph_ids selected from that part\'s '
+                        'bound_visible_paragraphs. Leave summary_quote empty; Python binds the exact current '
+                        'visible text. First compare each distinct required meaning '
                         'against the full assigned paragraph union; do not substitute citations or series names '
-                        'for characteristics. Missing meaning requires covered=false, empty summary_quote and '
+                        'for characteristics. Missing meaning requires covered=false, empty paragraph_ids and summary_quote and '
                         'accepted=false. Accept a part only when ALL required meanings are actually covered. '
                         'The accepted required_meanings define audience scope; full source passages '
                         'provide evidence and necessary qualification context, not additional mandatory '
@@ -542,7 +543,8 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
                     SummaryCoverageReview if review.audience_part_ids is not None else
                         SummarySynthesisReview if draft_schema is SummarySynthesisDraft else CompactSummaryReview,
                     audit, cancelled=cancelled,
-                    validate=validate_response)
+                    validate=validate_response,
+                    coverage_pages=pages if review.audience_part_ids is not None else None)
                 if review.audience_part_ids is not None:
                     from .summary_coverage import required_meanings, coverage_errors
                     meanings = required_meanings(review)

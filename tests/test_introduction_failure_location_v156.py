@@ -42,3 +42,16 @@ def test_old_results_and_non_json_audits_keep_a_safe_generic_failure():
         severity='info', stage='presentation', message='Legacy diagnostics'))
     stage, details = introduction_failure_details(result, ValueError('Rejected evidence'))
     assert stage == 'introduction' and details['source_pages'] == []
+
+
+def test_editorial_no_progress_reports_the_actual_operation_and_source_pages():
+    from adaptive_document_agent.agent.introduction_failure import introduction_failure_details
+    result = source(13)
+    result.validation_warnings.append(ValidationIssue(code='company_introduction_summary_audit',
+        severity='info', stage='presentation', message=json.dumps({
+            'plan_audits': [dict(compact_semantic_review={'parts': [dict(part_id='condition', accepted=False)]}),
+                            dict(revision_failed=True, errors=['Content repair repeated the rejected draft'])],
+            'parts': [dict(id='condition', source_page=10)]})))
+    stage, details = introduction_failure_details(result, ValueError('No progress'))
+    assert stage == 'introduction_content_repair'
+    assert details['operation'] == 'SummarySynthesisRevision' and details['source_pages'] == [10]
