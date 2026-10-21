@@ -174,7 +174,16 @@ class PresentationPlanValidator:
                 for slide in analysis_slides
                 for cid in (*slide.chart_ids, *(c for b in slide.visual_blocks for c in b.chart_ids))
             }
-            if not any(cid in chart_by_id for cid in referenced_charts):
+            from adaptive_document_agent.services.presentation_source_cells import compact_source_table
+            complete_table = False
+            for slide in analysis_slides:
+                table_ids = {oid for block in slide.visual_blocks if block.role == 'table'
+                             for oid in block.observation_ids}
+                if (table_ids <= observation_by_id.keys()
+                        and compact_source_table([observation_by_id[oid] for oid in table_ids])
+                        and any(set(c.observation_ids) <= table_ids for c in result.charts)):
+                    complete_table = True
+            if not any(cid in chart_by_id for cid in referenced_charts) and not complete_table:
                 errors.append("the plan must reference at least one available chart in an analysis slide when charts exist")
         elif has_analytical_evidence:
             referenced_evidence = {

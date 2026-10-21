@@ -295,8 +295,14 @@ class BorderlessTableExtractor:
             matches = list(_PERIOD_TOKEN.finditer(lines[index]))
             years = [re.sub(r'^of', '', m.group().replace(" ", ""), flags=re.I) for m in matches]
             # A contiguous header tier, not dates scattered through prose.
-            if (len(years) >= (1 if allow_single else 2) and not lines[index][matches[-1].end():].strip()
-                    and all(not lines[index][a.end():b.start()].strip() for a,b in zip(matches,matches[1:]))):
+            # A literal year tier may carry attached source note markers. Keep
+            # the original header/coordinates, ignoring ONLY those markers in
+            # the syntactic tier test (never parentheses in a numeric body).
+            annotation = r'(?:\s|\(\d{1,2}\)|[*†‡])*'
+            if (len(years) >= (1 if allow_single else 2)
+                    and re.fullmatch(annotation, lines[index][matches[-1].end():])
+                    and all(re.fullmatch(annotation, lines[index][a.end():b.start()])
+                            for a,b in zip(matches,matches[1:]))):
                 years = [re.sub(r"^((?:19|20)\d{2})(H[12]|[12]H|Q[1-4])$", r"\2\1", y, flags=re.I) for y in years]
                 years = [re.sub(r"^H([12])", r"\1H", y, flags=re.I) for y in years]
                 return index, years

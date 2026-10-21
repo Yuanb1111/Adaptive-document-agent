@@ -191,8 +191,10 @@ class LLMGateway:
     def repair_structured_output(self, error: LLMStructuredOutputError, response_model: type[T], *,
                                  stage: str, cancelled: Event | None = None,
                                  request_metadata: dict[str, str | int] | None = None,
-                                 diagnostics: dict | None = None) -> T:
+                                 diagnostics: dict | None = None, max_tokens: int | None = None) -> T:
         """One format-only recovery, independent of a caller's semantic retries."""
+        if max_tokens is not None and (type(max_tokens) is not int or max_tokens < 1):
+            raise ValueError('max_tokens must be a positive integer')
         if error.response.usage and error.response.usage.finish_reason == 'length':
             raise error
         if diagnostics is not None:
@@ -200,12 +202,13 @@ class LLMGateway:
                                raw_response=error.response.text)
         return self._repair_structured(error.response.text, response_model, stage=stage,
             cancelled=cancelled, request_metadata=_request_metadata(request_metadata),
-            diagnostics=diagnostics, preserve_content=True)
+            diagnostics=diagnostics, preserve_content=True, max_tokens=max_tokens)
 
     def _repair_structured(self, invalid_text: str, response_model: type[T], *, stage: str,
                           request_metadata: dict[str, str | int] | None = None, cancelled: Event | None = None,
                           repair_policy: dict[str, Any] | None = None, model_name: str | None = None,
-                          diagnostics: dict | None = None, preserve_content: bool = False) -> T:
+                          diagnostics: dict | None = None, preserve_content: bool = False,
+                          max_tokens: int | None = None) -> T:
         model_name = model_name or self.settings.model_for(stage)
         if repair_policy is None:
             repair_policy = deepcopy(self.client.request_policy(stage=stage, operation="format_repair", model=model_name))
@@ -240,7 +243,7 @@ class LLMGateway:
                 response = self.client.generate_text(
                     repair_messages,
                     temperature=0,
-                    max_tokens=8_000 if stage == "presentation" else None,
+                    max_tokens=max_tokens if max_tokens is not None else 8_000 if stage == "presentation" else None,
                     model=model_name,
                 )
             self._record(response, stage=stage, status="format_repair", operation=response_model.__name__,

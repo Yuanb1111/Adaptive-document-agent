@@ -270,6 +270,21 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
     from adaptive_document_agent.document_model.period_semantic_validator import format_observation_period
     from pptx.util import Inches, Pt
 
+    # Apply the same complete source-table layout to cached plans. All selected
+    # observations remain visible; chart provenance stays in the original plan.
+    from .presentation_source_cells import compact_source_table
+    selected_ids = list(dict.fromkeys([
+        *(oid for b in slide_plan.visual_blocks if b.role in {'table', 'kpi'} for oid in b.observation_ids),
+        *(oid for c in charts for oid in c.observation_ids)]))
+    selected = [index.get(oid) for oid in selected_ids if index.get(oid)]
+    if charts and compact_source_table(selected):
+        from adaptive_document_agent.models import PresentationVisualBlock
+        table_blocks = [PresentationVisualBlock(role='table', observation_ids=selected_ids)]
+        table_blocks.extend(b for b in slide_plan.visual_blocks if b.role == 'commentary')
+        slide_plan = slide_plan.model_copy(update={'chart_ids': [], 'layout': 'data_overview',
+            'observation_ids': selected_ids, 'visual_blocks': table_blocks})
+        charts = []
+
     by_id = {c.id: c for c in charts}
     ordered = list(dict.fromkeys([cid for b in slide_plan.visual_blocks if b.role == "hero" for cid in b.chart_ids] + [c.id for c in charts]))
     charts = [by_id[cid] for cid in ordered]
@@ -315,6 +330,18 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
         display_message = source_fact_caption(display_message,
             [index.get(oid) for oid in chart.observation_ids if index.get(oid)], denominators)
     scoped_title = scoped_direction_title(slide_plan.title, charts, index)
+    if slide_plan.theme_id and result.presentation_topics and any(
+            t.id == slide_plan.theme_id for t in result.presentation_topics.topics):
+        from .presentation_section_titles import section_heading
+        heading = section_heading(result, slide_plan)
+        if heading:
+            if heading != scoped_title and scoped_title.strip() != display_message.strip():
+                # A chapter label changes layout, not the authored conclusion.
+                # Preserve a displaced directional title in readable body copy.
+                from .presentation_trajectory import _DIRECTION, _REVERSAL
+                if _DIRECTION.search(scoped_title) or _REVERSAL.search(scoped_title):
+                    text = '\n'.join(part for part in (scoped_title, text) if part)
+            scoped_title = heading
     from .composition_data import uses_composition_data
     from .presentation_labels import composition_heading, composition_message
     if len(charts) == 1 and uses_composition_data(charts[0]):
@@ -342,7 +369,8 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
     # Reuse the planner's section heading and place the claim in the subtitle
     # or commentary according to available space, without rewriting its meaning.
     from .presentation_labels import compact_section_heading
-    section = '' if neutral_prompt else compact_section_heading(slide_plan.section_title)
+    from .presentation_section_titles import section_heading
+    section = '' if neutral_prompt else compact_section_heading(section_heading(result, slide_plan, compact=True))
     title_lines = len(_lines(heading, 8.91, 32))
     if title_lines > 2 or (title_lines == 2 and section and section != heading
                            and len(_lines(section, 8.91, 32)) == 1):
@@ -542,6 +570,8 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
                     and all(period_sets[0]) and len(set(period_sets[0])) == len(period_sets[0])
                     and len(period_sets[0]) <= 6):
                 cells = [["Metric", *period_columns]]
+                has_literal_empty = False
+                unretained_cells = []
                 for group in groups:
                     name = qualified_metric_name(group[0])
                     by_period = {}
@@ -550,8 +580,18 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
                         value = format_metric_display_value(o.raw_value, o.value, semantic,
                             raw_unit=_display_source_unit(o), currency=o.currency, compact=True)
                         by_period[format_observation_period(o)] = signed_expense_display(o, value)
-                    values = [by_period.get(p, '—') for p in period_columns]
+                    from .presentation_source_cells import literal_empty_source_cell
+                    values = []
+                    for p in period_columns:
+                        literal = literal_empty_source_cell(group, p, result) if p not in by_period else None
+                        has_literal_empty = has_literal_empty or literal is not None
+                        values.append(by_period.get(p, literal or '—'))
+                        if p not in by_period and literal is None:
+                            unretained_cells.append((len(cells), len(values)))
                     cells.append([name, *values])
+                if has_literal_empty:
+                    for row, column in unretained_cells:
+                        cells[row][column] = 'Not retained'
                 widths, wrapped, heights = _period_table_layout(cells, rect.w, .48)
                 if sum(heights) + (.24 if sparse_periods else 0) <= rect.h:
                     shape = owner.shapes.add_table(len(cells), len(widths), Inches(rect.x), Inches(rect.y), Inches(rect.w), Inches(sum(heights)))
@@ -567,7 +607,8 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
                             for p in cell.text_frame.paragraphs:
                                 p.font.name, p.font.size = FONT, Pt(14)
                     if sparse_periods:
-                        _put_text(owner, '— = no retained source value for this metric and period.',
+                        _put_text(owner, ('Source dashes/N/A are reproduced literally, not zero. Not retained = no bound source cell.'
+                                         if has_literal_empty else '— = no retained source value for this metric and period.'),
                                   Rect(rect.x, rect.y + sum(heights) + .04, rect.w, .20),
                                   size=FOOTNOTE_PT, color=MUTED)
                     return []

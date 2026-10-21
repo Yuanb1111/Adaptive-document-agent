@@ -150,6 +150,18 @@ class PresentationPlanRecovery:
             observations = {oid: observation_by_id[oid] for oid in members if oid in observation_by_id}
             if len(observations) < 2:
                 continue
+            from adaptive_document_agent.services.presentation_source_cells import compact_source_table
+            if len(topic.series_ids) > 3 and compact_source_table(list(observations.values())):
+                pages = sorted({e.page for item in observations.values() for e in item.evidence})
+                themes.append(PresentationTheme(id=topic.id, title=topic.title, question=topic.question,
+                    rationale=topic.rationale, observation_ids=members, caveats=topic.caveats, source_pages=pages))
+                analysis_slides.append(PresentationSlide(id=f'topic_{topic.id}', slide_type='analysis',
+                    title=topic.title, section_id=topic.id, section_title=topic.title, theme_id=topic.id,
+                    slide_role='overview', layout='data_overview', message=topic.question,
+                    observation_ids=members, visual_blocks=[PresentationVisualBlock(role='table', observation_ids=members)],
+                    analytical_question=topic.question, selection_reason=topic.rationale,
+                    comparison_mode='parallel', source_pages=pages))
+                continue
             if len(topic.series_ids) > 3:
                 from adaptive_document_agent.services.presentation_matrix import topic_matrix_dimension
 

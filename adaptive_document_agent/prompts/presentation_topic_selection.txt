@@ -34,3 +34,9 @@ Those source qualifications and ratio definitions are rendered beside the select
 When selecting an exhaustive category or geographic breakdown, retain every source-declared top-level category or explicitly narrow the scope. Preserve literal exclusions and category definitions; familiar labels are not permission to assume their boundaries.
 
 A total's share of itself is a definitional 100%, rather than a changing category mix. Prefer the complete meaningful components and evidenced denominator; select the self-share only if you can explain a separate material analytical purpose. Keep important assumptions, matched-period counterpoints and adjusted-versus-reported outcomes when they change interpretation. Do not omit them merely to reduce the number of slides.
+Keep title a concise, neutral chapter heading naming the question's measures.
+Put directional conclusions and their periods in takeaway, not in the chapter title.
+Literal source_row_qualifications are displayed with their charts. Do not add a
+paraphrase of the same footnote to caveats; include only additional limitations
+or conditions. Never omit a qualifier that is not already present in that
+complete literal source note.

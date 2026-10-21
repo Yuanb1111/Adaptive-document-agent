@@ -19,6 +19,8 @@ def retain_valid_topics(selection, lookup, primary_pages, result, gateway, valid
     """
     from .topic_reference_binding import bind_topic_references
     bind_topic_references(selection, lookup, result)
+    from .topic_reference_repair import repair_unknown_references
+    repair_unknown_references(selection, lookup, result, gateway)
     counts = Counter(t.id for t in selection.topics)
     accepted, rejected = {}, []
 

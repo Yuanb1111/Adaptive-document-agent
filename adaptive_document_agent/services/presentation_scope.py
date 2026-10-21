@@ -58,8 +58,10 @@ def scope_items(result):
                             "Some source evidence is shown, but the original topic was not retained in full. "
                             "See the analysis audit for the remaining evidence scope.")
                         continue
-                add("Not covered: " + topic.get("title", "Selected topic"),
-                    "This topic was not retained as a validated finding; its source evidence and draft remain in the analysis audit.")
+                add("Analysis page unavailable: " + topic.get("title", "Selected topic"),
+                    "A complete analytical page for this question was not retained. "
+                    "Independently verified findings may still appear in the conclusion; "
+                    "the original topic draft and source scope remain in the analysis audit.")
     for note in plan.coverage_notes:
         if not _editorial_omission(note, result) and not _contradicted_by_retained_content(note, result):
             add("Coverage boundary", note)

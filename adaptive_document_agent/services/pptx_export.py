@@ -422,6 +422,9 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
     from .composition_data import uses_composition_data
     scoped_contents = []
     for entry in contents_slides:
+        if entry.slide_type == 'analysis':
+            from .presentation_section_titles import section_heading
+            entry = entry.model_copy(update={'section_title': section_heading(result, entry)})
         requests = _planned_chart_requests(entry)
         if entry.slide_type == "analysis" and len(requests) == 1:
             chart = chart_by_id.get(requests[0][0])

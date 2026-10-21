@@ -23,7 +23,7 @@ def test_complete_rationale_is_preserved_while_every_target_still_needs_its_sour
     updated, ledger = check_source_scope(document, ranges, client)
     assert ledger.notes[0] == rationale and len(ledger.notes[0]) == length
     assert len(updated) == 3 and len(ledger.checks) == 2
-    assert ledger.calls_used == ledger.max_calls == len(client.client.calls) == 3
+    assert ledger.calls_used == len(client.client.calls) == 3 and ledger.max_calls == 7
     assert all(check.status == 'checked_not_found' for check in ledger.checks)
     assert not ledger.full_source_review_complete
 

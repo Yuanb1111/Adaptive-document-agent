@@ -67,7 +67,7 @@ def test_two_checks_and_selection_are_hard_call_bound():
     doc,ranges=sample();gw=gateway([dict(targets=[target(5,5),target(7,8)],rationale='Check'),
         dict(found=False,finding='Not found on5',quotes=[]),dict(found=False,finding='Not found on7/8',quotes=[])])
     _,ledger=check_source_scope(doc,ranges,gw)
-    assert ledger.calls_used==ledger.max_calls==len(gw.client.calls)==3
+    assert ledger.calls_used==len(gw.client.calls)==3 and ledger.max_calls==7
     assert len({p for c in ledger.checks for p in c.pages})<=6
 
 

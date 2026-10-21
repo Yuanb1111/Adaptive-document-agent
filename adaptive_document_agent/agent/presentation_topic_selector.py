@@ -249,6 +249,8 @@ class PresentationTopicSelector:
         retained = retain_valid_topics(selection, lookup, primary_pages, result, self.gateway, self._validate)
         retained = review_topic_coverage(retained, result, lookup, primary_pages, payload,
                                          self.gateway, self._validate)
+        from .topic_caveat_review import reconcile_caveats
+        reconcile_caveats(retained, directory, result, self.gateway)
         prepare_topic_ratio_definitions(retained, lookup, result)
         return retained
 

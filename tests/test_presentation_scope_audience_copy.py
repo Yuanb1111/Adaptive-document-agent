@@ -24,8 +24,8 @@ def test_omitted_topic_keeps_subject_without_exposing_internal_validation_error(
 
     items = scope_items(result)
 
-    omitted = next(item for item in items if item.title == "Not covered: " + title)
-    assert "source evidence" in omitted.text
+    omitted = next(item for item in items if item.title == "Analysis page unavailable: " + title)
+    assert "Independently verified findings" in omitted.text
     visible = "\n".join(item.title + "\n" + item.text for item in items)
     assert "topic_private_id" not in visible
     assert "998877" not in visible

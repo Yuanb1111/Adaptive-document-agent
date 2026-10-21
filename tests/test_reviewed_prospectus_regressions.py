@@ -95,7 +95,7 @@ def test_scope_reflects_recovered_renderer_evidence_and_keeps_real_omissions():
             message=json.dumps({'phase':'initial','topic':topic.model_dump()})))
     result.presentation_export_trace=[{'observation_ids':[o.id for o in members]}]
     titles=[i.title for i in scope_items(result)]
-    assert 'Not covered: shown' not in titles and 'Not covered: missing' in titles
+    assert 'Analysis page unavailable: shown' not in titles and 'Analysis page unavailable: missing' in titles
     result.presentation_export_trace=[{'observation_ids':[members[0].id]}]
     assert 'Partially covered: shown' in [i.title for i in scope_items(result)]
 

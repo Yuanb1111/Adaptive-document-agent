@@ -128,7 +128,7 @@ def test_incompressible_merge_still_fails_closed_after_complete_delta_reviews(mo
     warning = result.validation_warnings[-1]
     audit = json.loads(warning.message)
     assert warning.code == 'presentation_topic_coverage_unresolved'
-    assert 'bounded merge budget' in audit['reason']
+    assert 'reduction capacity' in audit['reason']
     assert not audit['unreviewed_series_ids']
-    assert gateway.requested == candidates
-    assert final == selected and audit['merge'] is None
+    assert gateway.requested[:len(candidates)] == candidates
+    assert final == selected and audit['merge']['reductions']

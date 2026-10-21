@@ -74,6 +74,11 @@ def slide_context_notes(result, slide, charts, index, *, definitions=None):
         displayed_ids = set(slide.observation_ids)
         displayed_ids.update(oid for block in slide.visual_blocks for oid in block.observation_ids)
     displayed = [index.get(oid) for oid in displayed_ids if index.get(oid)]
+    if not charts and displayed:
+        from .source_row_qualifications import source_row_qualifications
+        source_notes = source_row_qualifications(displayed, result.document)
+        notes.extend(note['text'] for note in source_notes)
+        source_note_keys.update(_literal_note_key(note['text']) for note in source_notes)
     plan = result.presentation_plan
     if plan and slide.theme_id:
         first = next((page for page in plan.slides

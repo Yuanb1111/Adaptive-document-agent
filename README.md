@@ -1,5 +1,11 @@
 # Adaptive Document Intelligence Agent
 
+The [v158 coverage and presentation recovery update](docs/COVERAGE_RECOVERY_V158.md)
+reduces oversized coverage proposals with source-complete model reviews, repairs
+unknown references against the exact catalog, and retains supplementary-reading
+diagnostics. Annotated year tiers and subscript labels survive extraction; coherent
+source tables stay together. Restart and reanalyse the PDF to refresh extraction.
+
 The [v157 visible coverage review update](docs/VISIBLE_COVERAGE_REVIEW_V157.md)
 binds reviewer-selected paragraph IDs to exact current copy and independently
 rechecks conflicting verdicts after cross-language quotation errors.

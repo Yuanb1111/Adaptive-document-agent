@@ -32,14 +32,16 @@ class SourceCheck(BaseModel):
     status: Literal['unchecked', 'checked_found', 'checked_not_found', 'incomplete', 'failed'] = 'unchecked'
     finding: str = ''
     evidence_quotes: dict[int, list[str]] = Field(default_factory=dict)
+    attempts: list[dict] = Field(default_factory=list)
 
 
 class SourceCoverage(BaseModel):
-    version: str = 'source-coverage-v1'
+    version: str = 'source-coverage-v2'
     sections: list[SectionCoverage] = Field(default_factory=list)
     checks: list[SourceCheck] = Field(default_factory=list)
     calls_used: int = 0
-    max_calls: int = 3
+    max_calls: int = 7
+    selection_attempts: list[dict] = Field(default_factory=list)
     max_supplementary_pages: int = 6
     max_output_tokens_per_call: int = 2048
     notes: list[str] = Field(default_factory=list)

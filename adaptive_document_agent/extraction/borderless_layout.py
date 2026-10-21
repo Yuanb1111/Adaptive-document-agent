@@ -33,19 +33,39 @@ def source_lines(page: object, text: str, clean, *, words=None) -> list[SourceLi
         if words:
             groups: list[list[dict]] = []
             for word in sorted(words, key=lambda w: (w["top"], w["x0"])):
+                # Small subscript/superscript letters can sit on a separate
+                # baseline (e.g. a chemical formula). Attach only an adjacent,
+                # vertically overlapping glyph, preserving its literal text.
+                adjacent = [g for g in groups if re.fullmatch(r'[A-Za-z]', word['text'])
+                    and any(0 <= word['x0'] - w['x1'] <= 2
+                            and min(word['bottom'], w['bottom']) > max(word['top'], w['top'])
+                            and word['bottom'] - word['top'] < (w['bottom'] - w['top']) * .85
+                            for w in g)]
+                if len(adjacent) == 1:
+                    adjacent[0].append(word)
+                    continue
                 if not groups or abs(word["top"] - groups[-1][0]["top"]) > 3:
                     groups.append([])
                 groups[-1].append(word)
             result = []
             for group in groups:
                 pieces, spans, offset = [], [], 0
+                previous = None
                 for word in sorted(group, key=lambda w: w["x0"]):
                     token = clean(word["text"])
                     if not token:
                         continue
-                    pieces.append(token)
+                    join = (previous is not None and re.fullmatch(r'[A-Za-z]', token)
+                            and 0 <= word['x0'] - previous['x1'] <= 2
+                            and word['bottom'] - word['top'] < (previous['bottom'] - previous['top']) * .85)
+                    if join:
+                        offset -= 1
+                        pieces[-1] += token
+                    else:
+                        pieces.append(token)
                     spans.append((offset, offset+len(token), float(word["x0"]), float(word["x1"])))
                     offset += len(token)+1
+                    previous = word
                 result.append(SourceLine(" ".join(pieces), spans, min(w["top"] for w in group), max(w["bottom"] for w in group)))
             return result
     return [SourceLine(line) for line in text.splitlines()]

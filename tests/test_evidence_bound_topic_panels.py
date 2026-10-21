@@ -129,7 +129,7 @@ def test_parallel_panels_keep_conflict_guards(change):
     with pytest.raises(ValueError): validate_parallel_series([items])
 
 
-def test_more_than_three_valid_series_paginate_with_distinct_page_scope():
+def test_more_than_three_same_source_series_keep_all_records_in_one_table():
     result = _result()
     result.observations = []
     result.charts = []
@@ -153,11 +153,11 @@ def test_more_than_three_valid_series_paginate_with_distinct_page_scope():
     result.charts = ChartPlanner().plan([], [], DocumentIndex(result.observations), requested_series=list(lookup.values()), only_requested=True)
     plan = PresentationPlanRecovery().from_selected_topics(result)
     slides = [s for s in plan.slides if s.slide_type == 'analysis']
-    assert len([s for s in slides if s.chart_ids]) == 2
+    # Coherent same-source measures now share one complete editable table.
+    assert len(slides) == 1 and not slides[0].chart_ids
     assert {s.theme_id for s in slides} == {topic.id}
-    assert all(len(s.chart_ids) <= 3 and len(s.observation_ids) <= 40 for s in slides)
-    assert {cid for s in slides for cid in s.chart_ids} == {c.id for c in result.charts}
-    assert len({frozenset(s.chart_ids) for s in slides if s.chart_ids}) == 2
+    assert {oid for s in slides for b in s.visual_blocks for oid in b.observation_ids} == {o.id for o in result.observations}
+    assert len(slides[0].observation_ids) == len(result.observations)
     type(plan).model_validate(plan.model_dump())
 
 
@@ -321,8 +321,8 @@ def test_final_scope_lists_dropped_topics_without_audit_json_and_hides_restored_
     result.validation_warnings.append(ValidationIssue(code='presentation_topic_validation', stage='presentation',
         message=json.dumps({'phase': 'initial', 'error': 'Conflicting source cells.', 'topic': topic.model_dump()})))
     items = scope_items(result)
-    assert any('Not covered: Regional profitability' == i.title for i in items)
+    assert any('Analysis page unavailable: Regional profitability' == i.title for i in items)
     assert not any('series_ids' in i.text for i in items)
     result.presentation_plan.themes = [PresentationTheme(id=topic.id, title=topic.title,
         question=topic.question, rationale=topic.rationale)]
-    assert not any(i.title.startswith('Not covered:') for i in scope_items(result))
+    assert not any(i.title.startswith('Analysis page unavailable:') for i in scope_items(result))
