@@ -371,18 +371,8 @@ class PresentationPlanValidator:
                 for identifier in referenced_observation_ids:
                     item = observation_by_id.get(identifier)
                     if item:
-                        allowed_text_parts.extend(
-                            str(value)
-                            for value in (item.value, item.raw_value, item.period, item.entity, item.dimensions)
-                            if value is not None
-                        )
-                        if item.unit == "percent" or item.unit_family == "percentage":
-                            # Percent observations may retain a numeric raw cell
-                            # with '%' only in its header. Do not require the
-                            # model to drop the unit in audience-facing prose.
-                            allowed_text_parts.append(f"{item.value}%")
-                            if re.fullmatch(r"[+-]?[\d,.]+", item.raw_value.strip()):
-                                allowed_text_parts.append(item.raw_value + "%")
+                        from .presentation_numeric_evidence import observation_numeric_fields
+                        allowed_text_parts.extend(observation_numeric_fields(item, include_context=True))
                 for identifier in insight_ids:
                     item = insight_by_id.get(identifier)
                     if item:

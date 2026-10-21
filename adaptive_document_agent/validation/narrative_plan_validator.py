@@ -1,6 +1,7 @@
 """Validate thematic evidence boundaries without substituting Python for semantics."""
 
 from adaptive_document_agent.services.presentation_evidence import calculation_catalog
+from .presentation_numeric_evidence import observation_numeric_fields
 
 
 def expanded_observation_ids(owner, charts) -> set[str]:
@@ -47,17 +48,17 @@ def validate_narrative_plan(plan, result, calculations=None) -> list[str]:
         # three-digit group with a following date can make the number parser
         # consume the year as part of the amount.
         allowed_numbers = set().union(*(
-            PresentationPlanValidator._numbers(str(value))
+            PresentationPlanValidator._numbers(value)
             for oid in ids if oid in observations
-            for value in (observations[oid].raw_value, observations[oid].value, observations[oid].period)
-            if value is not None
+            for value in observation_numeric_fields(observations[oid])
         ))
         for insight_id in theme.insight_ids:
             if insight_id in insights:
                 allowed_numbers.update(PresentationPlanValidator._numbers(insights[insight_id].narrative))
         claimed = " ".join([theme.title, theme.question, theme.rationale, *theme.caveats])
-        if PresentationPlanValidator._numbers(claimed) - allowed_numbers:
-            errors.append(f"theme {theme.id} contains unsupported numeric claims")
+        unsupported = PresentationPlanValidator._numbers(claimed) - allowed_numbers
+        if unsupported:
+            errors.append(f"theme {theme.id} contains unsupported numeric claims: {sorted(unsupported)}")
         signature = (frozenset(ids), frozenset(theme.insight_ids))
         if signature in signatures:
             errors.append(f"theme {theme.id} duplicates another theme's evidence; keep distinct questions within one theme")

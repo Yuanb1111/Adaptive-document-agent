@@ -224,6 +224,7 @@ def prepare_presentation_claims(result: PipelineResult, plan: PresentationPlan |
     from .presentation_ratio_definitions import ratio_definitions, source_defined_possessive_share
     definitions = ratio_definitions(result)
     notes, replacements, restored_titles = [*closing_notes, *composition_notes], {}, defaultdict(set)
+    restored_labels = defaultdict(set)
     for slide in plan.slides:
         if slide.slide_type != "analysis":
             continue
@@ -328,14 +329,23 @@ def prepare_presentation_claims(result: PipelineResult, plan: PresentationPlan |
             slide.analytical_question = restoring.question
             slide.selection_reason = restoring.rationale
             restored_titles[narrowed_title].add(slide.title)
+            restored_labels[narrowed_title].add(restoring.title)
             notes.append(f"Slide {slide.id}: restored the selected takeaway after source-bound share validation")
+    header_replacements = {**replacements,
+        **{old: next(iter(labels)) for old, labels in restored_labels.items() if len(labels) == 1}}
     replacements.update({old: next(iter(titles)) for old, titles in restored_titles.items() if len(titles) == 1})
     for slide in plan.slides:
         slide.bullets = [replacements.get(text, text) for text in slide.bullets]
         if slide.section_title:
-            slide.section_title = replacements.get(slide.section_title, slide.section_title)
+            slide.section_title = header_replacements.get(slide.section_title, slide.section_title)
+        topic = topics.get(slide.theme_id)
+        if topic and topic.title != topic.takeaway and slide.section_title == topic.takeaway:
+            slide.section_title = topic.title
     for theme in plan.themes:
-        theme.title = replacements.get(theme.title, theme.title)
+        theme.title = header_replacements.get(theme.title, theme.title)
+        topic = topics.get(theme.id)
+        if topic and topic.title != topic.takeaway and theme.title == topic.takeaway:
+            theme.title = topic.title
     from .presentation_summary_claims import prepare_summary_claims
     notes.extend(prepare_summary_claims(plan, eligible, by_id, charts, totals, definitions))
     plan.editorial_notes = list(dict.fromkeys([*plan.editorial_notes, *notes]))

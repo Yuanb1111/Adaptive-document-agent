@@ -1,5 +1,9 @@
 # Adaptive Document Intelligence Agent
 
+The [v159 percentage validation fix](docs/PERCENTAGE_VALIDATION_V159.md)
+aligns theme and slide checks for explicitly typed source percentages, preserves
+concise topic headers after claim restoration, and records budget-stage errors.
+
 The [v158 coverage and presentation recovery update](docs/COVERAGE_RECOVERY_V158.md)
 reduces oversized coverage proposals with source-complete model reviews, repairs
 unknown references against the exact catalog, and retains supplementary-reading

@@ -655,6 +655,9 @@ class DocumentOrchestrator:
             except (ValueError, LLMResponseError, FinalBudgetBriefError) as exc:
                 final_result.pipeline_state = 'partial'
                 final_result.retry_from = 'reporting'
+                final_result.failed_stage = 'presentation_budget'
+                final_result.failure_details = dict(component='PresentationBudget',
+                    error_type=type(exc).__name__, message=str(exc))
                 final_result.validation_warnings.append(ValidationIssue(code='presentation_physical_budget_failed',
                     severity='warning',stage='presentation',message=str(exc)))
         if not is_complete(final_result):

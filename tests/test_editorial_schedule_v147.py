@@ -209,5 +209,8 @@ def test_partial_budget_failure_reports_time_spent_in_the_final_stage(monkeypatc
     monkeypatch.setattr(presentation_budget_refinement, 'refine_presentation_budget', failed)
     completed = _run_coverage_fixture(monkeypatch, result, raw, client)
     assert completed.pipeline_state == 'partial' and completed.retry_from == 'reporting'
+    assert completed.failed_stage == 'presentation_budget'
+    assert completed.failure_details == dict(component='PresentationBudget',
+        error_type='ValueError', message='Final source gate rejected the proposed briefing')
     assert completed.pipeline_total_ms == 30000
     assert any('Final source gate' in warning.message for warning in completed.validation_warnings)
