@@ -28,6 +28,16 @@ The responsibility split is:
 
 PDF contents are untrusted source material. Instructions embedded in a document are treated as data, never as commands.
 
+The v155 update sizes summary cards and their accent rules to measured copy,
+disables inherited reflection effects on generated flat shapes, and removes
+unused content subtitle placeholders. Data Index labels include every composed
+chart and sort periods chronologically. Ambiguous selected-topic questions can
+be withdrawn from display without discarding unrelated topics; exact authored
+wording and source evidence remain in the audit. Offset clauses cannot borrow
+another subject's directional values for automatic correction. All factual and
+provenance gates remain active. Extraction and analysis cache contracts remain
+unchanged; cached analyses can receive these presentation fixes on re-export.
+
 The v154 update preserves source row groups and repeated table-header boundaries,
 keeps descriptive year columns separate from monetary measures, and compacts
 multi-chart topics with complete evidence tables before page-budget selection.

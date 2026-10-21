@@ -325,8 +325,9 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
         display_message = composition_message(display_message, chart, values, totals)
     subtitle = "\n".join(part for part in (display_message, convention) if part)
     heading = scoped_title
-    if scoped_title in {'How do the reported values compare?', 'How do the cited measures compare?',
-                        'How do the reported values vary across the cited periods?'}:
+    neutral_prompt = scoped_title in {'How do the reported values compare?', 'How do the cited measures compare?',
+                                     'How do the reported values vary across the cited periods?'}
+    if neutral_prompt:
         measures = list(dict.fromkeys(readable_chart_heading(chart.title) for chart in charts))
         measured = ' and '.join(measures)
         section = slide_plan.section_title.strip()
@@ -341,7 +342,7 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
     # Reuse the planner's section heading and place the claim in the subtitle
     # or commentary according to available space, without rewriting its meaning.
     from .presentation_labels import compact_section_heading
-    section = compact_section_heading(slide_plan.section_title)
+    section = '' if neutral_prompt else compact_section_heading(slide_plan.section_title)
     title_lines = len(_lines(heading, 8.91, 32))
     if title_lines > 2 or (title_lines == 2 and section and section != heading
                            and len(_lines(section, 8.91, 32)) == 1):
@@ -363,7 +364,8 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
                 display_message if display_message and ("?" in scoped_title or (
                     display_message != slide_plan.message.strip() and '?' not in slide_plan.message)) else scoped_title,
                 convention) if part)
-        elif scoped_title.strip() != display_message.strip():
+        elif (not neutral_prompt and scoped_title.strip() != heading.strip()
+              and scoped_title.strip() != display_message.strip()):
             # Compact a two-line heading without overwriting the planner's
             # fuller analysis message. Preserve its separate title visibly too.
             text = "\n".join(part for part in (scoped_title, text) if part)

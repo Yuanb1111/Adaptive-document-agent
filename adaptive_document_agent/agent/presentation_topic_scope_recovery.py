@@ -24,6 +24,21 @@ def withheld_topic_ids(plan: PresentationPlan) -> set[str]:
     return identifiers
 
 
+def withheld_display_questions(plan: PresentationPlan) -> dict[str, str]:
+    """Keep a checked neutral prompt durable when its overview is later absent."""
+    questions = {}
+    for note in plan.editorial_notes:
+        if note.startswith(_WITHHELD_PREFIX):
+            try:
+                record = json.loads(note[len(_WITHHELD_PREFIX):])
+            except (TypeError, ValueError):
+                continue
+            if (isinstance(record, dict) and isinstance(record.get('topic_id'), str)
+                    and isinstance(record.get('display_question'), str)):
+                questions[record.get('topic_id')] = record['display_question']
+    return questions
+
+
 def recover_cached_topic_claims(plan: PresentationPlan, result: PipelineResult) -> list[str]:
     """Apply the compiler's ambiguity boundary to an already retained topic plan.
 
@@ -191,6 +206,7 @@ def recover_unscoped_topic_claims(plan: PresentationPlan, result: PipelineResult
         candidate.editorial_notes.append(_WITHHELD_PREFIX + json.dumps({
             "topic_id": slide.theme_id,
             "takeaway": topics[slide.theme_id].takeaway,
+            "question": slide.analytical_question,
             "errors": list(dict.fromkeys(errors_by_topic[slide.theme_id])),
             "withdrawn_summary_copy": [
                 {"slide_id": summary.id, "bullet_index": index, "text": summary.bullets[index],
@@ -200,6 +216,7 @@ def recover_unscoped_topic_claims(plan: PresentationPlan, result: PipelineResult
             ],
         }, ensure_ascii=False, sort_keys=True))
         slide.title = question
+        slide.message = question
         # These headings are also rendered by the contents, narrow-layout
         # fallback and appendix. A withdrawn takeaway cannot survive there as
         # an unchecked section label when the full question is too long.
@@ -226,6 +243,52 @@ def recover_unscoped_topic_claims(plan: PresentationPlan, result: PipelineResult
     notes.extend(align_redundant_slide_evidence(candidate, result.observations, result.charts))
     checked = ClaimValidator().validate_plan(candidate, result.observations, result.charts,
                                             insight_observation_ids=insight_inputs(result))
+    # An authored question can itself presuppose an unbound movement (for
+    # example, improvement "after deterioration" without comparison endpoints).
+    # Repeating it in the title and summary creates fresh errors and used to
+    # veto recovery for every other selected topic as well. Withdraw only that
+    # ambiguous question to a neutral display prompt; keep its exact original
+    # wording in the topic and audit, and retain all selected source records.
+    question_topics = set()
+    for issue in checked:
+        if issue.code != 'direction_scope_ambiguous':
+            continue
+        slide = next((s for s in candidate.slides if s.id == getattr(issue, 'slide_id', None)), None)
+        if slide is None:
+            continue
+        owner = slide.theme_id
+        if slide.id in summary_owners:
+            index = getattr(issue, 'bullet_index', None)
+            owner = (summary_owners[slide.id][index] if index is not None
+                     and 0 <= index < len(summary_owners[slide.id]) else None)
+        if owner in affected:
+            question_topics.add(owner)
+    if question_topics:
+        neutral = 'How do the cited measures compare?'
+        for slide in candidate.slides:
+            if slide.slide_type == 'analysis' and slide.theme_id in question_topics:
+                slide.title = slide.message = slide.section_title = slide.analytical_question = neutral
+            if slide.id in summary_owners:
+                for index, owner in enumerate(summary_owners[slide.id]):
+                    if owner in question_topics:
+                        slide.bullets[index] = neutral
+        for theme in candidate.themes:
+            if theme.id in question_topics:
+                theme.title = neutral
+        for owner in sorted(question_topics):
+            notes.append(f'Topic {owner}: withheld an ambiguously scoped question from display; '
+                         f'original question: {topics[owner].question}')
+        for index, note in enumerate(candidate.editorial_notes):
+            if note.startswith(_WITHHELD_PREFIX):
+                try:
+                    record = json.loads(note[len(_WITHHELD_PREFIX):])
+                except (TypeError, ValueError):
+                    continue
+                if isinstance(record, dict) and record.get('topic_id') in question_topics:
+                    record['display_question'] = neutral
+                    candidate.editorial_notes[index] = _WITHHELD_PREFIX + json.dumps(record, ensure_ascii=False, sort_keys=True)
+        checked = ClaimValidator().validate_plan(candidate, result.observations, result.charts,
+                                                insight_observation_ids=insight_inputs(result))
     key = lambda issue: (issue.code, issue.message, getattr(issue, "slide_id", None),
                          getattr(issue, "target_component", None), getattr(issue, "bullet_index", None))
     if len(checked) >= len(issues) or not {key(issue) for issue in checked} <= {key(issue) for issue in issues}:

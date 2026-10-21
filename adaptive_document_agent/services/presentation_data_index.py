@@ -10,18 +10,29 @@ def index_entries(result, index):
     if plan is None:
         return []
     by_id = {s.id: s for s in plan.slides if s.slide_type == 'analysis'}
+    charts = {chart.id: chart for chart in result.charts}
     scopes = {}
+    scope_titles = {}
     for trace in result.presentation_export_trace:
         selected = by_id.get(trace.get('planned_slide_id'))
         if selected is None:
             continue
         key = selected.theme_id or selected.id
-        entry = scopes.setdefault(key, {'topic': selected.section_title or selected.title,
+        # Fallback section labels can name only the first panel or category.
+        # The source index must name every chart actually bound to this scope.
+        titles = list(dict.fromkeys(charts[cid].title for cid in trace.get('chart_ids', [])
+                                   if cid in charts and charts[cid].title))
+        scope_titles[key] = list(dict.fromkeys([*scope_titles.get(key, []), *titles]))
+        topic = (selected.section_title or selected.title) if selected.theme_id else (
+            ' and '.join(scope_titles[key]) or selected.title or selected.section_title)
+        entry = scopes.setdefault(key, {'topic': topic,
                                        'slides': [], 'source_pages': [], 'observation_ids': []})
+        entry['topic'] = topic
         for field in ('slides', 'source_pages', 'observation_ids'):
             values = trace['slide_numbers'] if field == 'slides' else trace[field]
             entry[field] = list(dict.fromkeys([*entry[field], *values]))
     entries = []
+    from adaptive_document_agent.document_model import period_sort_key
     for entry in scopes.values():
         observations = [index.get(oid) for oid in entry['observation_ids'] if index.get(oid)]
         unique = lambda values: list(dict.fromkeys(v for v in values if v))
@@ -29,7 +40,7 @@ def index_entries(result, index):
             **entry,
             'metrics': unique(o.metric_original for o in observations),
             'units': unique(o.raw_unit or o.unit for o in observations),
-            'periods': unique(o.period for o in observations),
+            'periods': sorted(unique(o.period for o in observations), key=period_sort_key),
             'observation_ids': [o.id for o in observations],
             'observations': [o.model_dump(mode='json') for o in observations],
         })

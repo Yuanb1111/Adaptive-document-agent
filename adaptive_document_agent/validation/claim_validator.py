@@ -1476,6 +1476,20 @@ def _associate_clause_direction_spans(
     # one subject has no known alias. Do not lend that predicate to the other
     # metric. Preserve joint subjects such as 'volume and price increased'.
     direction_pattern = r"\b(?:" + "|".join(map(re.escape, _ALL_DIRECTIONAL_WORDS)) + r")\b"
+    # An offset relates independent subjects. A named metric on one side must
+    # never lend its values to an unrecognized subject on the other side.
+    # Otherwise "A offset B declines" can be silently rewritten to "increases"
+    # merely because A increased. Unknown source aliases remain unbound.
+    offset = re.search(r'\boffset(?:ting|s)?\b(?:\s+by\b)?', clause, re.I)
+    if offset:
+        associations = []
+        for start, text in ((0, clause[:offset.start()]), (offset.end(), clause[offset.end():])):
+            local = _associate_clause_direction_spans(text, metric_aliases_map, metric_values_map)
+            if not local:
+                local = [(ambiguous_metric, m[0], m.start(), m.end())
+                         for m in re.finditer(direction_pattern, text, re.I)]
+            associations.extend((metric, word, s + start, e + start) for metric, word, s, e in local)
+        return associations
     for boundary in predicate_conjunctions(clause):
         left, right = clause[:boundary.start()], clause[boundary.end():]
         if re.match(r"\s+(?:then|subsequently)\b", right, re.I):

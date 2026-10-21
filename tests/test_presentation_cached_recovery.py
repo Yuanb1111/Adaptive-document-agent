@@ -140,8 +140,15 @@ def test_takeaway_without_start_period_retains_same_question_and_chart_data():
     assert result.model_dump(include=set(raw)) == raw
 
 
-def test_question_that_also_lacks_temporal_bounds_cannot_hide_the_error():
+def test_question_that_also_lacks_temporal_bounds_is_withheld_and_audited():
     result = _selected(_result(), question="Did revenue increase through FY2025?",
                        takeaway="Revenue increased through FY2025.")
-    with pytest.raises(ValueError, match="explicit period"):
-        compile_topic_plan(result)
+    question = result.presentation_topics.topics[0].question
+    assert any(issue.code == 'direction_scope_ambiguous' for issue in
+               ClaimValidator().validate_slide(_slide(question, result.observations), result.observations))
+    plan = compile_topic_plan(result)
+    analysis = next(slide for slide in plan.slides if slide.slide_type == 'analysis')
+    assert analysis.title == 'How do the cited measures compare?'
+    assert not ClaimValidator().validate_plan(plan, result.observations, result.charts)
+    assert any(question in note for note in plan.editorial_notes)
+    assert result.presentation_topics.topics[0].question == question

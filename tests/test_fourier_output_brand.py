@@ -183,13 +183,13 @@ def test_long_claim_keeps_full_text_under_semantic_section_heading(claim, placem
     assert str(title.text_frame.paragraphs[0].font.color.rgb) == TEXT
     assert title.text_frame.paragraphs[0]._p.pPr.get("marL") == "0"
     assert title.text_frame.paragraphs[0]._p.pPr.get("indent") == "0"
-    subtitle = next(shape for shape in slide.placeholders if shape.placeholder_format.idx == 16)
+    subtitle = next((shape for shape in slide.placeholders if shape.placeholder_format.idx == 16), None)
     if placement == "subtitle":
         assert subtitle.text == claim
         assert subtitle.text_frame.paragraphs[0].font.size.pt == 18
         assert str(subtitle.text_frame.paragraphs[0].font.color.rgb) == PRIMARY
     else:
-        assert subtitle.text == ""
+        assert subtitle is None
         commentary = next(shape for shape in slide.shapes
                           if shape.has_text_frame and claim in shape.text)
         assert commentary.name.startswith("composed:text:")

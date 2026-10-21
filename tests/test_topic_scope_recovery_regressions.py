@@ -220,7 +220,6 @@ def test_public_export_keeps_recovered_question_and_editable_evidence(collision,
 
 
 @pytest.mark.parametrize("question", [
-    "Did loss for the year widen from FY2023 to FY2025?",
     "Did loss for the year reach 999999 from FY2023 to FY2025?",
 ])
 @pytest.mark.parametrize("entrypoint", ["compile", "fallback"])
@@ -239,7 +238,7 @@ def test_unsafe_question_cannot_be_used_as_a_validation_bypass(question, entrypo
 def test_failed_cached_recovery_stays_transactional_and_export_stays_blocked(local_render_stub):
     result = _synthetic_result("metric_alias")
     _stale_complete_cache(result)
-    result.presentation_topics.topics[0].question = "Did loss for the year widen from FY2023 to FY2025?"
+    result.presentation_topics.topics[0].question = "Did loss for the year reach 999999 from FY2023 to FY2025?"
     _analysis(result.presentation_plan).message = result.presentation_topics.topics[0].question
     _analysis(result.presentation_plan).analytical_question = result.presentation_topics.topics[0].question
     original = result.model_dump(include=_SOURCE_FIELDS)

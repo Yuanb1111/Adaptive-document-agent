@@ -2599,7 +2599,9 @@ def _style_content_header(slide: Any, title: str, subtitle: str) -> None:
                 p.font.bold = False
                 p.font.color.rgb = _rgb(FOURIER_PURPLE)
         else:
-            sub_ph.text = ""
+            # Empty placeholders still expose the layout's instructional copy
+            # in PowerPoint editing mode. Remove the unused instance entirely.
+            sub_ph.element.getparent().remove(sub_ph.element)
 
 
 def _text(
@@ -2673,6 +2675,15 @@ def _solid_shape(shape: Any, color: str) -> None:
     shape.fill.solid()
     shape.fill.fore_color.rgb = _rgb(color)
     shape.line.fill.background()
+    # Newly generated rectangles inherit the template's effectStyle index 2,
+    # which may be a reflection extending below their geometric bounds.
+    # Flat rules and fills must explicitly opt out of those theme effects.
+    from pptx.oxml.xmlchemy import OxmlElement
+    for effect in shape.element.xpath('./p:spPr/a:effectLst | ./p:spPr/a:effectDag'):
+        effect.getparent().remove(effect)
+    shape.element.spPr.append(OxmlElement('a:effectLst'))
+    for effect in shape.element.xpath('./p:style/a:effectRef'):
+        effect.set('idx', '0')
 
 
 def _background(slide: Any, color: str) -> None:

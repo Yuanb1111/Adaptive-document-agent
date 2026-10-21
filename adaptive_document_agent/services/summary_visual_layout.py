@@ -108,9 +108,13 @@ def _render_pair_panels(slide, items, top, width, capacity):
         plans.append((item, heading_height, parts, geometry))
     for index, (item, heading_height, parts, geometry) in enumerate(plans):
         x = .65 + index * (panel_width + gap)
-        _rule(slide, x, top, panel_width, capacity, WHITE)
+        # Capacity is a fit limit, not the height of a content card. Each
+        # independent item keeps its own measured copy and bottom padding.
+        panel_height = padding * 2 + heading_height + .10 + geometry[1]
+        _rule(slide, x, top, panel_width, panel_height, WHITE)
         slide.shapes[-1].name = 'summary:panel'
-        _rule(slide, x, top, .035, capacity, FOURIER_PURPLE)
+        _rule(slide, x, top, .035, panel_height, FOURIER_PURPLE)
+        slide.shapes[-1].name = 'summary:accent'
         y = top + padding
         heading = _text(slide, item.title, x + padding + .04, y, text_width, heading_height,
                         size=HEADING_PT, bold=True, color=FOURIER_PURPLE)
