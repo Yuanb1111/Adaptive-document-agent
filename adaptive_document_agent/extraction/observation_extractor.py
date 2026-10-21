@@ -60,11 +60,12 @@ class ObservationExtractor:
             return []
         output: list[Observation] = []
         dimension_columns = {index for index, role in enumerate(table.column_types) if role == "dimension"}
+        reference_columns = {index for index, role in enumerate(table.column_types) if role == "reference"}
         meaningful_header_list = [
             header
             for column, header in enumerate(table.headers[1:], 1)
             if self._meaningful_header(header)
-            and column not in dimension_columns
+            and column not in dimension_columns | reference_columns
         ]
         column_metric_mode = len(set(meaningful_header_list)) >= 2
         comparison_contexts = table_comparison_contexts(table)
@@ -84,7 +85,7 @@ class ObservationExtractor:
                 and column < len(table.headers)
             }
             numeric_columns = [column for column, raw in enumerate(row.cells[1:], start=1)
-                               if raw and parse_number(raw) and column not in dimension_columns]
+                               if raw and parse_number(raw) and column not in dimension_columns | reference_columns]
             # Generic words can be explicit scope headings (e.g. "Current" or
             # "Other"). They are insufficient standalone metrics, but must not
             # disappear from the identity of the following source rows.

@@ -15,6 +15,7 @@ from adaptive_document_agent.services.llm.exceptions import PrivacyViolationErro
 from .summary_read_binding import bind_reading, line_coverage, missing_ranges, reconcile_layout
 from .prompting import untrusted_document_message
 from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
+from .summary_read_request import reading_failure_kind, reading_request
 
 
 class ReadFact(BaseModel):
@@ -107,17 +108,29 @@ _RULES = (
 
 def _read_batch(gateway, result, blocks, cancelled: Event) -> ReadOutcome:
     from contextlib import nullcontext
+    from .summary_read_cache import ValidatedReadingBatch, cached_reading, reading_cache_key
+    if cancelled.is_set():
+        raise CancelledError('Summary reading cancelled')
+    key = reading_cache_key(gateway, result, blocks, _RULES)
+    cached = cached_reading(gateway, key, result, blocks)
+    if cached is not None:
+        if cancelled.is_set():
+            raise CancelledError('Summary reading cancelled')
+        return ReadOutcome(cached.parts, cached.audit)
     transaction = gateway.validated_cache_scope() if hasattr(gateway, 'validated_cache_scope') else nullcontext()
     with transaction:
         outcome = _read_batch_impl(gateway, result, blocks, cancelled)
         if outcome.error is not None and hasattr(gateway, 'discard_validation_cache'):
             gateway.discard_validation_cache()
+        if key is not None and outcome.error is None and not cancelled.is_set():
+            gateway.cache.set_model(key, ValidatedReadingBatch(parts=outcome.parts, audit=outcome.audit))
         return outcome
 
 
 def _read_batch_impl(gateway, result, blocks, cancelled: Event) -> ReadOutcome:
     started = perf_counter()
-    audit = {'block_ids': [b.id for b in blocks], 'attempts': []}
+    audit = {'block_ids': [b.id for b in blocks], 'source_pages': sorted({b.page for b in blocks}),
+             'operation': 'SummaryReadBatch', 'attempts': []}
     messages = [{'role': 'system', 'content': _RULES}, untrusted_document_message(json.dumps([
         {'block_id': b.id, 'page': b.page, 'char_start': b.char_start, 'char_end': b.char_end,
          'lines': [[i, line] for i, line in enumerate(b.text.splitlines(keepends=True), 1)]}
@@ -126,22 +139,10 @@ def _read_batch_impl(gateway, result, blocks, cancelled: Event) -> ReadOutcome:
         for attempt in range(2):
             if cancelled.is_set():
                 raise CancelledError('Summary reading cancelled')
-            try:
-                response = gateway.generate_structured(messages, SummaryReadBatch, stage='presentation',
-                                                       allow_repair=False, cancelled=cancelled)
-            except LLMStructuredOutputError as exc:
-                record = {'error': str(exc), 'validation_detail': str(exc.__cause__ or exc),
-                          'raw_response': exc.response.text}
-                audit['attempts'].append(record)
-                if attempt or (exc.response.usage and exc.response.usage.finish_reason == 'length'):
-                    raise
-                messages = messages[:2] + [untrusted_document_message(json.dumps(record, ensure_ascii=False)),
-                    {'role': 'user', 'content': 'Correct only these schema failures using the original source. '
-                     'Keep every subsection and all line coverage. Use compact facts with source line spans, '
-                     'not copied paragraphs. Do not manufacture missing facts.'}]
-                continue
-            record = {'response': response.model_dump(mode='json')}
+            record = {}
             audit['attempts'].append(record)
+            response = reading_request(gateway, messages, SummaryReadBatch, blocks, cancelled, record)
+            record['response'] = response.model_dump(mode='json')
             parts, unknown = bind_reading(response, blocks, result, record, literal_fallback=bool(attempt))
             parts = reconcile_layout(parts, blocks, record)
             probe = SummaryReview(document_id=result.document.document_id, document_sha256=result.document.sha256,
@@ -180,6 +181,7 @@ def _read_batch_impl(gateway, result, blocks, cancelled: Event) -> ReadOutcome:
         # Preserve failed requests, including privacy/adapter errors, before the
         # owner re-raises them. No provider fallback or semantic salvage occurs.
         audit['error'] = str(exc)
+        audit['failure_kind'] = reading_failure_kind(exc, audit)
         return ReadOutcome([], audit, exc)
     finally:
         audit['duration_ms'] = int((perf_counter() - started) * 1000)
@@ -191,15 +193,14 @@ def _read_missing(gateway, result, blocks, parts, ranges, source_messages, cance
     if cancelled.is_set():
         raise CancelledError('Summary reading cancelled')
     try:
-        response = gateway.generate_structured([
+        response = reading_request(gateway, [
             *source_messages,
             {'role': 'user', 'content': 'Read ONLY the unassigned inclusive line ranges below. '
              'The original blocks are context. Return parts that partition these ranges exactly once; '
              'do not return or modify any already assigned lines. Decide from the source whether '
              'each range is substantive content, a heading, or layout. Every substantive range '
              'still needs supported facts. Never assume a short line is a footer. '
-             + json.dumps(ranges)}], SummaryReadBatch, stage='presentation',
-            allow_repair=False, cancelled=cancelled)
+             + json.dumps(ranges)}], SummaryReadBatch, blocks, cancelled, record)
         record['response'] = response.model_dump(mode='json')
         # Reject modifications to accepted lines before binding or merging facts.
         if any(not any(p.block_id == r['block_id'] and

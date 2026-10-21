@@ -16,7 +16,7 @@ from adaptive_document_agent.utils.pipeline_version import ANALYSIS_VERSION
 from .base import LLMClient, LLMResponse
 from .config import LLMSettings, PrivacyMode
 from .exceptions import LLMResponseError, LLMTransportError, LLMStructuredOutputError, PrivacyViolationError
-from .structured import validate_structured_text
+from .structured import preserves_json_content, validate_structured_text
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -188,9 +188,24 @@ class LLMGateway:
             self.cache.set_model(f"llm-{key}", value)
         return value
 
+    def repair_structured_output(self, error: LLMStructuredOutputError, response_model: type[T], *,
+                                 stage: str, cancelled: Event | None = None,
+                                 request_metadata: dict[str, str | int] | None = None,
+                                 diagnostics: dict | None = None) -> T:
+        """One format-only recovery, independent of a caller's semantic retries."""
+        if error.response.usage and error.response.usage.finish_reason == 'length':
+            raise error
+        if diagnostics is not None:
+            diagnostics.update(error=str(error), validation_detail=str(error.__cause__ or error),
+                               raw_response=error.response.text)
+        return self._repair_structured(error.response.text, response_model, stage=stage,
+            cancelled=cancelled, request_metadata=_request_metadata(request_metadata),
+            diagnostics=diagnostics, preserve_content=True)
+
     def _repair_structured(self, invalid_text: str, response_model: type[T], *, stage: str,
                           request_metadata: dict[str, str | int] | None = None, cancelled: Event | None = None,
-                          repair_policy: dict[str, Any] | None = None, model_name: str | None = None) -> T:
+                          repair_policy: dict[str, Any] | None = None, model_name: str | None = None,
+                          diagnostics: dict | None = None, preserve_content: bool = False) -> T:
         model_name = model_name or self.settings.model_for(stage)
         if repair_policy is None:
             repair_policy = deepcopy(self.client.request_policy(stage=stage, operation="format_repair", model=model_name))
@@ -230,9 +245,14 @@ class LLMGateway:
                 )
             self._record(response, stage=stage, status="format_repair", operation=response_model.__name__,
                          request_metadata=request_metadata)
+            if diagnostics is not None:
+                diagnostics['repair_response'] = response.text
             if response.usage and response.usage.finish_reason == "length":
                 raise LLMResponseError("Format repair output was truncated; missing facts cannot be recovered by reformatting.")
-            return validate_structured_text(response.text, response_model)
+            value = validate_structured_text(response.text, response_model)
+            if preserve_content and not preserves_json_content(invalid_text, response.text):
+                raise LLMResponseError('Format repair changed content or structure; source re-reading is required.')
+            return value
         except LLMTransportError as exc:
             self._record_failure(exc, stage, operation=response_model.__name__, request_metadata=request_metadata)
             raise self._located_failure(exc, stage, response_model.__name__) from exc

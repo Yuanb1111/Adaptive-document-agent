@@ -122,6 +122,16 @@ def _header(line,anchors,guides,left,right):
             spans.append((column,covered[-1]))
             row[column]+=(' ' if row[column] else '')+text
         else:
+            # A complete date phrase can be wider than its one value column.
+            # Keep its words together only with unique center alignment. Word
+            # assignment would otherwise split 'As' into the adjacent year.
+            if re.fullmatch(r'(?i)As\s+(?:at|of)\s+(?:\d{1,2}\s+[A-Za-z]+|[A-Za-z]+\s+\d{1,2}),?', text):
+                gap=min((b-a for a,b in zip(centers,centers[1:])),default=0)
+                aligned=[c+1 for c,x in enumerate(centers) if gap>0 and abs(center-x)<gap*.45]
+                if len(aligned)==1:
+                    column=aligned[0]
+                    row[column]+=(' ' if row[column] else '')+text
+                    continue
             # Narrow adjacent headings may be separated by less than a word
             # gap. Use their body-column alignment, not the phrase's center.
             for word in group:

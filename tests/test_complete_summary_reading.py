@@ -245,23 +245,28 @@ def test_reader_rejects_gaps_overlaps_and_unbound_claims_and_retains_failed_audi
     assert 'IntroductionDraft' not in client.operations
 
 
-def test_reader_retries_one_schema_failure_with_original_source_and_keeps_diagnostics():
+def test_reader_repairs_one_format_failure_without_reinterpreting_source_and_keeps_diagnostics():
     from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
     class InvalidFirstRead(SummaryClient):
         failed = False
         def generate_structured(self, messages, response_model, **kwargs):
             if response_model is SummaryReadBatch and not self.failed:
                 self.failed = True
-                response = LLMResponse(text='{"parts": [{"facts": "invalid"}]}')
-                raise LLMStructuredOutputError('schema validation failed', response=response) from ValueError('facts must be a list')
+                value, response = super().generate_structured(messages, response_model, **kwargs)
+                self.repaired = value.model_dump_json()
+                response.text = self.repaired.replace('"quote_start_line":', 'quote_start_line":', 1)
+                raise LLMStructuredOutputError('schema validation failed', response=response) from ValueError('missing quote')
             return super().generate_structured(messages, response_model, **kwargs)
+        def generate_text(self, messages, **kwargs):
+            assert 'FORMAT ONLY' in messages[0]['content']
+            return LLMResponse(text=self.repaired)
     result = distinct_source(1)
     generate(result, InvalidFirstRead())
     review = result.presentation_plan.company.summary_review
     assert review.status == 'complete'
     attempts = review.read_audits[0]['attempts']
-    assert len(attempts) == 2 and attempts[0]['validation_detail'] == 'facts must be a list'
-    assert 'invalid' in attempts[0]['raw_response']
+    assert len(attempts) == 1 and attempts[0]['format_repair']['validation_detail'] == 'missing quote'
+    assert 'quote_start_line":' in attempts[0]['format_repair']['raw_response']
     assert all(f.source_pages == [part.source_page] and f.source_quote in part.source_text
                for part in review.parts for f in part.facts)
 

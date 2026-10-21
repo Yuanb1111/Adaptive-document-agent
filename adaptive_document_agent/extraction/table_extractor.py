@@ -174,6 +174,13 @@ class TableExtractor:
                 periods[column]=period
                 if old_period and labels[column].startswith(old_period):
                     labels[column]=((period or '')+labels[column][len(old_period):]).strip()
+        from .source_period_groups import REFERENCE_HEADER
+        for column in range(1, len(labels)):
+            reference = next((str(row[column]).strip() for row in literal.raw_header_cells
+                if column < len(row) and REFERENCE_HEADER.fullmatch(str(row[column] or '').strip())), None)
+            if reference:
+                labels[column], periods[column], types[column] = reference, None, 'reference'
+                currencies[column], scales[column] = None, None
         analytical=literal.model_copy(deep=True,update={'headers':labels,'column_periods':periods,'column_types':types,
             'column_currencies':currencies,'column_scales':scales,
             'rows':self._build_table_rows(literal.raw_cells,literal.page),

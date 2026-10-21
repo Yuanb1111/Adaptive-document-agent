@@ -7,6 +7,7 @@ from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputE
 from adaptive_document_agent.services.summary_validation import reading_errors
 from .prompting import untrusted_document_message
 from .summary_read_binding import bind_reading, line_coverage, missing_ranges, reconcile_layout
+from .summary_read_request import reading_request
 
 
 _COVERAGE = {'Summary parts skip or overlap supplied source lines',
@@ -73,7 +74,7 @@ def repair_rejected_parts(gateway, result, blocks, parts, response, previous,
         for targeted_attempt in range(2):
             if cancelled.is_set():
                 raise CancelledError('Summary reading cancelled')
-            replacement = gateway.generate_structured([
+            replacement = reading_request(gateway, [
                 *source_messages,
                 untrusted_document_message(json.dumps(current, ensure_ascii=False)),
                 {'role': 'user', 'content':
@@ -94,7 +95,7 @@ def repair_rejected_parts(gateway, result, blocks, parts, response, previous,
                  'it, leave facts empty and explain that limitation. Its literal owned passage will '
                  'be retained as internal evidence requiring the independent slide editor. '
                  'Do not hide substance as headings/layout to pass validation.'}],
-                SummaryReadBatch, stage='presentation', allow_repair=False, cancelled=cancelled)
+                SummaryReadBatch, blocks, cancelled, current)
             current['response'] = replacement.model_dump(mode='json')
             scoped = _owned_replacements(replacement, ranges, retained, lengths, current)
             replacement = replacement.model_copy(update={'parts': scoped})

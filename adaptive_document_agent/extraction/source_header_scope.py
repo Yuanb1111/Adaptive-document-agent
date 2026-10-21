@@ -9,6 +9,7 @@ import re
 from adaptive_document_agent.models import SourceEvidence, ValidationIssue
 from .column_roles import explicit_percentage
 from .numeric_parser import parse_number
+from .source_period_groups import REFERENCE_HEADER, qualified_source_periods
 
 
 _YEAR = r"(?:19|20)\d{2}"
@@ -42,10 +43,15 @@ def _role_tier(row):
 
 def scoped_source_headers(header, width, *, original_header=None, source_spans=(), body_rows=()):
     """Return safe semantic tiers, exact period overrides, and a quarantine reason."""
+    source = original_header if original_header is not None else header
+    for row, start, end in source_spans:
+        label = str(source[row][start] or '').strip()
+        if any(str(cell or '').strip() not in {'', label} for cell in source[row][start + 1:end + 1]):
+            return header, {}, 'overlapping source header spans contain conflicting literal labels'
     candidates = []
     for index, row in enumerate(header):
         cells = [(column, str(cell).strip()) for column, cell in enumerate(row[1:], 1)
-                 if cell and str(cell).strip()]
+                 if cell and str(cell).strip() and not REFERENCE_HEADER.fullmatch(str(cell).strip())]
         source_row=original_header[index] if original_header is not None else row
         source_ranges=sum(bool(cell and _PERIOD_CELL.fullmatch(str(cell).strip())
                                and len(_YEAR_TOKEN.findall(str(cell)))>1)
@@ -67,8 +73,12 @@ def scoped_source_headers(header, width, *, original_header=None, source_spans=(
         units = [row for row in header[:index] if _role_tier(row)]
         # Only literal cells or already expanded source-geometry spans establish
         # a period. A blank neighboring cell does not prove a shared year.
-        periods = dict(cells)
-        if any(column not in periods and any(column<len(row) and parse_number(row[column])
+        periods, ambiguity = qualified_source_periods(header[:index], dict(cells))
+        if ambiguity:
+            return header, {}, ambiguity
+        references = {column for row in header for column, cell in enumerate(row)
+                      if REFERENCE_HEADER.fullmatch(str(cell or '').strip())}
+        if any(column not in periods and column not in references and any(column<len(row) and parse_number(row[column])
                 for row in body_rows)
                for column in range(1,width)):
             return header, {}, "a numeric source column has no aligned period or measure header"

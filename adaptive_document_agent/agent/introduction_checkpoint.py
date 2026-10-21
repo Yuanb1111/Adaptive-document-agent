@@ -69,9 +69,12 @@ def failed_introduction_result(prepared, result, gateway, resources, timings, de
             raise RuntimeError('Failed introduction checkpoint unexpectedly succeeded')
     else:
         prepared.copy_audit(result)
+    from .introduction_failure import introduction_failure_details, introduction_failure_message
+    result.failed_stage, result.failure_details = introduction_failure_details(result, failure)
+    failure_message = introduction_failure_message(result.failed_stage, result.failure_details)
     result.validation_warnings.append(ValidationIssue(
         code='company_introduction_unavailable', severity='error', stage='presentation',
-        message='The independent company introduction could not be verified: ' + str(failure)[:500]))
+        message='The independent company introduction could not be verified. ' + failure_message))
     # Privacy/cancellation exceptions deliberately propagate, with no fallback.
     with record_timing(timings, 'background_drain'):
         resources.close()
@@ -88,5 +91,5 @@ def failed_introduction_result(prepared, result, gateway, resources, timings, de
     result.timings_ms = dict(timings)
     result.stage_details_ms = dict(details)
     result.pipeline_total_ms = int((perf_counter() - pipeline_started) * 1000)
-    notify('Company introduction failed; analysis diagnostics retained')
+    notify(failure_message)
     return result

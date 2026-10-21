@@ -52,6 +52,8 @@ _GROUPS = {
 }
 _IDENTITIES = {message: identity for identity, messages in _GROUPS.items() for message in messages}
 _BATCH_PREFIXES = {
+    'Company introduction reading failed': 'introduction_reading',
+    'Company introduction failed': 'introduction',
     'Budget proposal ': 'presentation_budget',
     'Understanding selected pages ': 'discovery',
     'Understood selected pages ': 'discovery',

@@ -49,6 +49,8 @@ class PipelineResult(BaseModel):
     pipeline_version: str | None = None
     pipeline_state: Literal['complete', 'partial'] = 'complete'
     retry_from: Literal['candidate_scoring', 'reporting'] | None = None
+    failed_stage: str | None = None
+    failure_details: dict[str, object] = Field(default_factory=dict)
     document: ParsedDocument
     profile: DocumentProfile
     observations: list[Observation] = Field(default_factory=list)

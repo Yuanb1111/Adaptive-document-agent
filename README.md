@@ -1,5 +1,10 @@
 # Adaptive Document Intelligence Agent
 
+The [v156 reading recovery and period-scope update](docs/READING_RECOVERY_V156.md)
+separates JSON repair from evidence correction, reuses verified reading batches,
+locates introduction failures, and preserves annual/interim source header groups.
+Restart the app and reanalyse the source PDF to use the new extraction contract.
+
 Adaptive Document Intelligence Agent is a production-minded Streamlit prototype for analysing an unfamiliar, data-rich PDF without asking the user to choose a document type first. It preserves page-level evidence, discovers what information is actually present, selects analyses supported by that evidence, performs calculations in deterministic Python, and produces a traceable report and presentation.
 
 The project currently processes one PDF synchronously. Its generic analysis pipeline works end to end, and the repository now also contains a stronger financial-document layer for normalized facts, period semantics, sign-aware claims, and presentation QA. OCR execution and pixel-backed chart interpretation remain extension points rather than bundled capabilities.

@@ -30,6 +30,11 @@ def render(st, result, *, diagnostics=None, key='analysis_json_download', export
 
 
 def render_incomplete(st, result, *, scope_key):
+    if result.failed_stage:
+        details = result.failure_details
+        pages = ', '.join(map(str, details.get('source_pages', [])))
+        location = f' · source pages {pages}' if pages else ''
+        st.error(f"Failed stage: {result.failed_stage}{location}. {details.get('message', '')}")
     st.warning('This analysis is incomplete. Download the retained data and diagnostics below. '
                'Use Retry analysis (reuse successful cache) to continue; PowerPoint remains blocked.')
     render(st, result, key='analysis_json_' + scope_key)
