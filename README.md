@@ -1,5 +1,10 @@
 # Adaptive Document Intelligence Agent
 
+The [v170 chart space and table pagination update](docs/PRESENTATION_LAYOUT_V170.md)
+gives single charts full width when their commentary fits a short bottom band.
+Exact-data tables keep small evidence groups together and balance unavoidable
+two-page splits without dropping rows or increasing the page count for balance.
+
 The [v169 presentation layout update](docs/PRESENTATION_LAYOUT_V169.md)
 places all Data Index pages before the final thank-you slide and gives narrow
 single-fact support tables a full-width metric heading. Source trace page numbers,

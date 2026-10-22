@@ -3,6 +3,37 @@
 import re
 
 
+def table_row_cut(heights, capacity, group_sizes, *, narrow=False):
+    """Keep fitting period groups intact and balance a two-page table.
+
+    Heights exclude the repeated header. Row order never changes. A narrow
+    support slot can defer a small group to the wider continuation; an oversized
+    group on a full page may still split so pagination always makes progress.
+    """
+    prefix = [0.0]
+    for height in heights:
+        prefix.append(prefix[-1] + height)
+    fitting = [i for i in range(len(prefix)) if prefix[i] <= capacity + 1e-6]
+    cut = max(fitting, default=0)
+    if cut == len(heights):
+        return cut
+    protected, start = set(), 0
+    for size in group_sizes:
+        end = start + size
+        if size <= 6 and (narrow or prefix[end] - prefix[start] <= capacity + 1e-6):
+            protected.update(range(start + 1, end))
+        start = end
+    allowed = [i for i in fitting if i not in protected]
+    cut = max(allowed, default=0)
+    if not narrow:
+        # Prefer balanced complete groups when all remaining rows fit on one
+        # more page. Do not create extra pages merely to equalize whitespace.
+        balanced = [i for i in allowed if i > 0 and prefix[-1] - prefix[i] <= capacity + 1e-6]
+        if balanced:
+            cut = min(balanced, key=lambda i: (abs(prefix[-1] - 2 * prefix[i]), -i))
+    return cut
+
+
 def unplotted_table_ids(ids, plotted, index):
     """Remove only complete exact series already visible in native charts."""
     from .presentation_evidence import evidence_groups

@@ -49,7 +49,8 @@ class CompositionGeometry:
 def compose_geometry(width: float, height: float, top: float, chart_count: int, *,
                      layout: str, has_support: bool, has_commentary: bool,
                      commentary_text: str = "", bottom_reserve: float = 0,
-                     chart_min_widths: list[float] | None = None) -> CompositionGeometry:
+                     chart_min_widths: list[float] | None = None,
+                     prefer_side_commentary: bool = False) -> CompositionGeometry:
     """Partition the content zone into non-overlapping slots with a common baseline."""
     left, total = 0.55, width - 1.1
     # Reserve the template's copyright/page-number band separately from sources.
@@ -93,9 +94,15 @@ def compose_geometry(width: float, height: float, top: float, chart_count: int, 
             # Preserve content with the established overflow/continuation path.
             return compose_geometry(width, height, support.y, chart_count,
                 layout="two_up", has_support=has_support, has_commentary=has_commentary,
-                commentary_text=commentary_text, bottom_reserve=bottom_reserve, chart_min_widths=chart_min_widths)
+                commentary_text=commentary_text, bottom_reserve=bottom_reserve, chart_min_widths=chart_min_widths,
+                prefer_side_commentary=prefer_side_commentary)
         return CompositionGeometry(charts, support, commentary, footer)
-    side = chart_count == 1 and (has_support or has_commentary)
+    # A short caption should not consume an otherwise empty side column.
+    # Keep longer prose beside the chart; a measured bottom band gives a short
+    # caption its complete copy while returning horizontal space to the plot.
+    short_caption = (not prefer_side_commentary and has_commentary and bool(commentary_text.strip())
+                     and len(_lines(commentary_text, total - .18, COMMENTARY_PT)) <= 2)
+    side = chart_count == 1 and (has_support or (has_commentary and not short_caption))
     if side:
         cw = (total - GUTTER) * 0.64
         charts = [Rect(left, top, cw, bottom - top)]
@@ -509,7 +516,10 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
         [index.get(oid) for oid in chart.total_observation_ids if index.get(oid)]) for chart in charts}
     geometry = compose_geometry(presentation.slide_width.inches, presentation.slide_height.inches, top, len(charts),
         layout=slide_plan.layout, has_support=bool(support), has_commentary=bool(text), commentary_text=text,
-        bottom_reserve=convention_h + context_h, chart_min_widths=[spaces[c.id][0] for c in charts])
+        bottom_reserve=convention_h + context_h, chart_min_widths=[spaces[c.id][0] for c in charts],
+        # A capacity retry must reclaim vertical plot space too. The complete
+        # displaced header goes beside the plot even if it is a short caption.
+        prefer_side_commentary=compact_header)
     if context_h:
         context = _put_text(slide, context_copy,
             Rect(.55, presentation.slide_height.inches - 1.02 - context_h - convention_h + .04,
@@ -744,7 +754,7 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
                 period_width += .05
             remaining_width = rect.w - period_width
             widths = (remaining_width * .625, period_width, remaining_width * .375)
-            rows, heights, shown = [], [0.4], []
+            rows, heights = [], [0.4]
             for o in items:
                 name = qualified_metric_name(o)
                 semantic = classify_metric(name, unit=o.unit, raw_unit=o.raw_unit, value=o.value)
@@ -754,18 +764,15 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
                 cells = (name, period_label, display)
                 cells = tuple("\n".join(_lines(v, w - .30, 14)) for v, w in zip(cells, widths))
                 row_h = max(0.4, max(len(v.splitlines()) for v in cells) * 0.24 + 0.14)
-                if sum(heights) + row_h > rect.h:
-                    break
                 rows.append(cells)
                 heights.append(row_h)
-                shown.append(o)
-            if len(items) - len(shown) == 1 and len(shown) >= 4 and not charts:
-                # Balance a full-width exact-data split instead of leaving one
-                # row on a separate continuation. Keep all source values intact.
-                keep = (len(items) + 1) // 2
-                rows, shown, heights = rows[:keep], shown[:keep], heights[:keep + 1]
+            from .composition_pagination import table_row_cut
+            narrow = rect.w < presentation.slide_width.inches - 1.11
+            keep = table_row_cut(heights[1:], rect.h - heights[0],
+                [len(group) for group in evidence_groups(items)], narrow=narrow)
+            shown, rows, heights = items[:keep], rows[:keep], heights[:keep + 1]
             if not shown:
-                if rect.h < 2:
+                if rect.h < 2 or narrow:
                     return items
                 raise ValueError("Exact-data row exceeds readable page capacity; shorten its display label without changing evidence.")
             shape = owner.shapes.add_table(len(shown) + 1, 3, Inches(rect.x), Inches(rect.y), Inches(rect.w), Inches(sum(heights)))
