@@ -73,7 +73,7 @@ def test_support_table_does_not_drop_the_category_from_a_parent_label():
         item.dimensions = dict(item.category_dimensions)
     before = result.model_dump_json()
     _, slides = _render(result)
-    labels = [cell.text.replace("\n", " ") for slide in slides for shape in slide.shapes if shape.has_table
+    labels = [' '.join(cell.text.split()) for slide in slides for shape in slide.shapes if shape.has_table
               for row in shape.table.rows for cell in row.cells]
     assert any("Trade and bills payables" in label for label in labels)
     assert not any(label == "Current liabilities" for label in labels)

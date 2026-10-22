@@ -3,6 +3,14 @@
 import re
 
 
+def unplotted_table_ids(ids, plotted, index):
+    """Remove only complete exact series already visible in native charts."""
+    from .presentation_evidence import evidence_groups
+    groups = evidence_groups([index.get(oid) for oid in ids if index.get(oid)])
+    repeated = {o.id for group in groups if {o.id for o in group} <= plotted for o in group}
+    return [oid for oid in ids if oid not in repeated]
+
+
 def matching_duration_ranges(groups):
     """A shared duration label must denote the same retained source interval.
 
@@ -83,6 +91,9 @@ def compact_support_pages(presentation, plan, charts, result, index, rendered):
     from .qa_reporter import CriticalQAError
 
     table_ids = list(dict.fromkeys(oid for block in table_blocks for oid in block.observation_ids))
+    table_ids = unplotted_table_ids(table_ids, {oid for c in charts for oid in c.observation_ids}, index)
+    if not table_ids:
+        return rendered
     chart_plan = plan.model_copy(update={
         'observation_ids': list(dict.fromkeys([*plan.observation_ids, *table_ids])),
         'visual_blocks': [block for block in plan.visual_blocks if block.role != 'table'],
@@ -94,7 +105,8 @@ def compact_support_pages(presentation, plan, charts, result, index, rendered):
     # same topic heading and only the explicitly selected supporting records.
     table_plan = plan.model_copy(update={
         'chart_ids': [], 'observation_ids': table_ids,
-        'visual_blocks': [block.model_copy(update={'chart_ids': [], 'insight_ids': []}) for block in table_blocks],
+        'visual_blocks': [block.model_copy(update={'chart_ids': [], 'insight_ids': [],
+            'observation_ids': [oid for oid in block.observation_ids if oid in table_ids]}) for block in table_blocks],
         'layout': 'data_overview', 'message': '', 'bullets': [],
         'bullet_observation_ids': [], 'insight_ids': [],
     })

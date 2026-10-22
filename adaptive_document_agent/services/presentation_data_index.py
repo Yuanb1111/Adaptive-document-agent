@@ -1,9 +1,6 @@
 """Native navigation to selected chart evidence, without duplicating raw tables."""
 import json
 
-from .text_capacity import wrap_copy
-
-
 def index_entries(result, index):
     """One entry per rendered analytical scope, retaining exact source metadata."""
     plan = result.presentation_plan
@@ -53,7 +50,6 @@ def render_data_index(presentation, result, index):
     from .pptx_export import _text, _source_footer, FOURIER_DARK, FOURIER_MUTED, FOURIER_PURPLE
     entries = index_entries(result, index)
     width = presentation.slide_width.inches - 1.1
-    widths = [width * f for f in (.30, .13, .39, .18)]
     headers = ['Chart / metric', 'Source unit', 'Source period', 'PDF pages']
     rows = []
     for entry in entries:
@@ -61,10 +57,11 @@ def render_data_index(presentation, result, index):
         # analytical topic names already used on chart pages.
         values = [entry['topic'], '; '.join(entry['units']) or '—',
                   '; '.join(entry['periods']) or '—', ', '.join(map(str, entry['source_pages'])) or '—']
-        heights = [len(wrap_copy(v, w - .16, 12)) * .22 + .12 for v, w in zip(values, widths)]
-        rows.append((values, max(.44, max(heights))))
+        rows.append(values)
     if not rows:
-        rows = [(['No selected quantitative charts', '—', '—', '—'], .44)]
+        rows = [['No selected quantitative charts', '—', '—', '—']]
+    from .data_index_layout import fit_columns, balanced_pages
+    widths, rows = fit_columns(rows, width)
     notes = json.dumps({'data_index': entries,
         'source_records': 'All raw observations and extraction evidence remain in the analysis JSON and data exports.'}, ensure_ascii=False)
     pages = []
@@ -78,20 +75,18 @@ def render_data_index(presentation, result, index):
             x += w
         return y + .45
 
-    y = heading(slide, top)
-    for values, height in rows:
-        if height > bottom - top - .45:
-            raise ValueError('A source-index entry exceeds readable page capacity; review its planned scope')
-        if y + height > bottom:
+    for position, batch in enumerate(balanced_pages(rows, bottom - top - .45)):
+        if position:
             slide.notes_slide.notes_text_frame.text = notes
             pages.append(slide)
             slide, top = _base(presentation, 'Data Index (continued)', 'Source references for the chart pages')
-            y = heading(slide, top)
-        x = .55
-        for text, w in zip(values, widths):
-            _text(slide, text, x + .08, y, w - .16, height, size=12, color=FOURIER_DARK).name = 'data_index:entry'
-            x += w
-        y += height + .10
+        y = heading(slide, top)
+        for values, height in batch:
+            x = .55
+            for text, w in zip(values, widths):
+                _text(slide, text, x + .08, y, w - .16, height, size=12, color=FOURIER_DARK).name = 'data_index:entry'
+                x += w
+            y += height + .10
     for page in [*pages, slide]:
         from .presentation_body_budget import DATA_INDEX_TAG
         page.element.cSld.set('name', DATA_INDEX_TAG)

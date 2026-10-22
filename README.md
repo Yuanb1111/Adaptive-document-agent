@@ -1,5 +1,10 @@
 # Adaptive Document Intelligence Agent
 
+The [v167 content-aware presentation layout fix](docs/PRESENTATION_LAYOUT_V167.md)
+reserves readable plot height, sizes short commentary to its actual copy, keeps
+small period comparisons together, and measures Data Index columns before
+pagination. Exact charted series no longer create duplicate support tables.
+
 The [v166 substantive source coverage review](docs/SOURCE_COVERAGE_COMPLETION_V166.md)
 completes bounded candidate decisions and independently checks supplementary
 sources against the final conclusions. Review results expire when their bound

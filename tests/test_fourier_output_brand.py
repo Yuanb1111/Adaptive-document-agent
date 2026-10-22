@@ -215,8 +215,11 @@ def test_long_selected_topic_heading_keeps_complete_claim_visible():
     snapshot = slide_plan.model_dump()
     deck = Presentation(BytesIO(build_presentation(result, BUNDLED_TEMPLATE_PATH)))
     slides = [s for s in deck.slides if s.name.startswith("composed_")]
-    assert any(shape.text == "Units shipped and Service hours" for s in slides for shape in s.shapes if shape.has_text_frame)
+    headers = [next(shape.text for shape in s.placeholders if shape.placeholder_format.idx == 15) for s in slides]
+    assert headers == ["Units shipped", "Service hours (continued)"]
+    assert all(shape.height.inches >= 1.8 for s in slides for shape in s.shapes if shape.has_chart)
     assert all(shape.text != "Reported measures" for s in slides for shape in s.shapes if shape.has_text_frame)
     visible = "\n".join(shape.text for s in slides for shape in s.shapes if shape.has_text_frame)
     assert claim in visible
+    assert visible.count(claim) == 1
     assert slide_plan.model_dump() == snapshot

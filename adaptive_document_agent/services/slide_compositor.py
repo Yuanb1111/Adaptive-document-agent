@@ -84,8 +84,8 @@ def compose_geometry(width: float, height: float, top: float, chart_count: int, 
         support = Rect(left, top, total, 1.02)
         top += 1.02 + GUTTER
         if has_commentary:
-            needed = len(_lines(commentary_text, total - .18, COMMENTARY_PT)) * COMMENTARY_LINE_PT / 72 + .23
-            band_h = max(.72, min(needed, bottom - top - GUTTER - 1.8))
+            needed = len(_lines(commentary_text, total - .18, COMMENTARY_PT)) * COMMENTARY_LINE_PT / 72 + .21
+            band_h = max(.45, min(needed, bottom - top - GUTTER - 1.8))
             commentary = Rect(left, bottom - band_h, total, band_h)
             chart_bottom = commentary.y - GUTTER
         charts = row_rects()
@@ -110,7 +110,7 @@ def compose_geometry(width: float, height: float, top: float, chart_count: int, 
             commentary = Rect(right, top, rw, bottom - top)
     else:
         if has_support or has_commentary:
-            band_h = 1.22
+            band_h = 1.22 if has_support else .45
             if has_commentary:
                 text_width = total * .52 - GUTTER if has_support else total
                 needed = len(_lines(commentary_text, text_width - .18, COMMENTARY_PT)) * COMMENTARY_LINE_PT / 72 + .23
@@ -266,9 +266,18 @@ def _paginate_chart_slide(presentation, slide_plan: PresentationSlide,
     blocks_to_keep = [block for block in slide_plan.visual_blocks if not (
         slide_plan.layout != 'kpi_band' and block.role in {'kpi', 'table'}
         and block.observation_ids and set(block.observation_ids) <= plotted)]
+    if (slide_plan.layout != 'kpi_band'
+            and not any(b.role == 'kpi' for b in slide_plan.visual_blocks)):
+        from .composition_pagination import unplotted_table_ids
+        blocks_to_keep = [b.model_copy(update={'observation_ids': unplotted_table_ids(b.observation_ids, plotted, index)})
+                          if b.role == 'table' else b for b in blocks_to_keep]
     retained_insights = list(dict.fromkeys([*slide_plan.insight_ids,
         *(iid for block in slide_plan.visual_blocks for iid in block.insight_ids)]))
     for part, group in enumerate(groups):
+        from .presentation_section_titles import section_heading
+        continuation_heading = section_heading(result, slide_plan) or slide_plan.title
+        if len(_lines(continuation_heading, 8.91, 32)) > 2:
+            continuation_heading = ' and '.join(dict.fromkeys(readable_chart_heading(c.title) for c in group))
         cids = {c.id for c in group}
         blocks = [b.model_copy(update={"chart_ids": [cid for cid in b.chart_ids if cid in cids],
                                       'insight_ids': [] if part else b.insight_ids})
@@ -276,8 +285,7 @@ def _paginate_chart_slide(presentation, slide_plan: PresentationSlide,
                   if any(cid in cids for cid in b.chart_ids) or (not part and not b.chart_ids)]
         physical = slide_plan.model_copy(update={
             "chart_ids": [c.id for c in group], "visual_blocks": blocks,
-            "title": (readable_chart_heading(group[0].title) + ' (continued)'
-                      if part and len(group) == 1 else slide_plan.title + (' (continued)' if part else '')),
+            "title": continuation_heading + ' (continued)' if part else slide_plan.title,
             'message': '' if part else slide_plan.message,
             "bullets": [] if part else slide_plan.bullets,
             "bullet_observation_ids": [] if part else slide_plan.bullet_observation_ids,
@@ -329,10 +337,14 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
     support = [index.get(oid) for oid in support_ids if index.get(oid)]
     if any(o.value is None or not o.evidence or o.validation_status not in {"valid", "partially_valid"} for o in support):
         raise ValueError("Supporting KPI/table evidence is incomplete or invalid.")
-    # A complete repeated table adds no evidence to a labelled native chart.
-    # Keep partially overlapping tables intact and retain all IDs in notes.
-    if support and set(support_ids) <= chart_obs and slide_plan.layout != 'kpi_band':
-        support = []
+    # Exact complete series already plotted need no second table. Never remove
+    # only some periods of a supporting series: that would fragment its scope.
+    # All original selected IDs remain in provenance and the native charts.
+    if (support and slide_plan.layout != 'kpi_band'
+            and not any(block.role == 'kpi' for block in slide_plan.visual_blocks)):
+        from .composition_pagination import unplotted_table_ids
+        retained = set(unplotted_table_ids(support_ids, chart_obs, index))
+        support = [o for o in support if o.id in retained]
     insight_ids = list(dict.fromkeys(slide_plan.insight_ids + [iid for b in slide_plan.visual_blocks for iid in b.insight_ids]))
     insight_map = {i.id: i for i in result.insights}
     visible_insights = [iid for b in slide_plan.visual_blocks if b.role == "commentary" for iid in b.insight_ids]
@@ -355,19 +367,23 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
     for chart in charts:
         display_message = source_fact_caption(display_message,
             [index.get(oid) for oid in chart.observation_ids if index.get(oid)], denominators)
-    scoped_title = scoped_direction_title(slide_plan.title, charts, index)
+    # A generated continuation repeats the reviewed section heading; it does
+    # not introduce a fresh directional claim needing a second body copy.
+    scoped_title = (slide_plan.title if preserve_charts and slide_plan.title.endswith(' (continued)')
+                    else scoped_direction_title(slide_plan.title, charts, index))
     if slide_plan.theme_id and result.presentation_topics and any(
             t.id == slide_plan.theme_id for t in result.presentation_topics.topics):
         from .presentation_section_titles import section_heading
         heading = section_heading(result, slide_plan)
         if heading:
-            if heading != scoped_title and scoped_title.strip() != display_message.strip():
+            if (heading != scoped_title.removesuffix(' (continued)')
+                    and scoped_title.strip() != display_message.strip()):
                 # A chapter label changes layout, not the authored conclusion.
                 # Preserve a displaced directional title in readable body copy.
                 from .presentation_trajectory import _DIRECTION, _REVERSAL
                 if _DIRECTION.search(scoped_title) or _REVERSAL.search(scoped_title):
                     text = '\n'.join(part for part in (scoped_title, text) if part)
-            scoped_title = heading
+            scoped_title = heading + (' (continued)' if slide_plan.title.endswith(' (continued)') else '')
     from .composition_data import uses_composition_data
     from .presentation_labels import composition_heading, composition_message
     if len(charts) == 1 and uses_composition_data(charts[0]):
@@ -411,7 +427,7 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
             measured if measured and len(_lines(measured, 8.91, 32)) <= 2 else "Reported measures")
         if len(charts) == 1 and uses_composition_data(charts[0]):
             heading = composition_heading(heading, charts[0], values, totals)
-        if slide_plan.title.endswith(" (continued)"):
+        if slide_plan.title.endswith(" (continued)") and not heading.endswith(' (continued)'):
             heading += " (continued)"
         if title_lines > 2:
             subtitle = "\n".join(part for part in (
@@ -514,7 +530,7 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
         totals = [index.get(oid) for oid in chart.total_observation_ids if index.get(oid)]
         from .presentation_chart_annotation import chart_change_annotation
         change = chart_change_annotation(chart, index,
-                                         scope_text=f"{slide_plan.title} {slide_plan.message}")
+                                         scope_text=f"{slide_plan.title} {slide_plan.message} {slide_plan.section_title}")
         change_lines = _lines(change, rect.w, 10) if change else []
         if len(change_lines) > 2:
             change, change_lines = "", []
@@ -677,6 +693,13 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
                             for p in cell.text_frame.paragraphs:
                                 p.font.name, p.font.size = FONT, Pt(14)
                     return []
+            # A short band must not peel off one period of a small complete
+            # series. The continuation can show the entire comparison.
+            if (rect.h < 2 and 1 < len(items) <= 6 and len(evidence_groups(items)) == 1
+                    and matching_duration_ranges([items])
+                    and all(format_observation_period(o) for o in items)
+                    and len({format_observation_period(o) for o in items}) == len(items)):
+                return items
             # Reserve enough period width for intact source labels. A narrow
             # support slot must not split a year token across physical lines.
             period_width = rect.w * .20

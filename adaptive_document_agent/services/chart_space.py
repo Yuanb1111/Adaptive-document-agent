@@ -21,7 +21,9 @@ def chart_space_requirements(plan, observations, totals):
     """Minimum width and inner plot height; outer boxes also contain axes/legend."""
     from .composition_data import composition_data, uses_composition_data
     if not uses_composition_data(plan):
-        return 2.4, 1.25, []
+        # Preserve a useful plotting area after heading, units and annotation.
+        # A technically non-overlapping strip is still too small to compare.
+        return 2.4, 1.8, []
     matrix = composition_data(plan, observations, totals)
     categories = matrix.categories
     width = max(3.2, min(5.6, 1.8 + len(categories) * .45 + max(map(len, categories), default=0) * .025))

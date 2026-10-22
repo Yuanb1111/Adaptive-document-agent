@@ -37,23 +37,25 @@ def _topic_fixture():
     return result_for(records, charts, plan)
 
 
-def test_complete_support_matrix_keeps_three_charts_together_without_orphan_rows():
+def test_charted_series_stay_in_charts_and_unplotted_support_has_no_orphan_rows():
     result = _topic_fixture()
     before = result.model_dump_json()
     deck = blank_deck()
     slides = render_composed_slide(deck, result.presentation_plan.slides[3], result.charts,
                                   result, DocumentIndex(result.observations))
     validate_composed_geometry(deck)
-    assert len(slides) == len(deck.slides) == 2
-    assert [sum(shape.has_chart for shape in slide.shapes) for slide in slides] == [3, 0]
+    assert len(slides) == len(deck.slides) == 1
+    assert [sum(shape.has_chart for shape in slide.shapes) for slide in slides] == [3]
     tables = [shape.table for slide in slides for shape in slide.shapes if shape.has_table]
     assert len(tables) == 1
     table = tables[0]
-    assert [table.cell(0, c).text for c in range(3)] == ['Metric', '6M2023*', '6M2024']
-    assert len(table.rows) == 5
+    assert [table.cell(0, c).text for c in range(3)] == ['Metric', 'Period', 'Value']
+    assert len(table.rows) == 2
     missing_row = next(row for row in table.rows if row.cells[0].text == 'Second disclosed adjustment')
-    assert missing_row.cells[1].text == '—'
-    assert any('no retained source value' in shape.text for shape in slides[1].shapes if shape.has_text_frame)
+    assert missing_row.cells[1].text == '6M2024'
+    assert '54' in missing_row.cells[2].text
+    assert [list(s.chart.series[0].values) for s in slides[0].shapes if s.has_chart] == [
+        [23, 24], [33, 34], [43, 44]]
     notes = [json.loads(slide.notes_slide.notes_text_frame.text) for slide in slides]
     assert {item['id'] for note in notes for item in note['observations']} == {item.id for item in result.observations}
     assert result.model_dump_json() == before
