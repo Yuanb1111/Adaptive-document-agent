@@ -801,6 +801,8 @@ PDF reports use ReportLab independently of PowerPoint rendering. Noto CJK's Post
 
 Run `PPTX_QA_LIBREOFFICE_INTEGRATION=1 python -m pytest -ra` on Linux with `packages.txt` dependencies installed. `.github/workflows/rendering-linux.yml` runs this deployment test (offline socket probe, actual chart rendering, and application-template export) alongside the full suite on pushes/PRs. Windows unit-test success alone does **not** certify Streamlit Cloud readiness; check the Linux job and the app's startup result after deployment.
 
+CI bounds each APT index refresh to 2 minutes and package download to 5 minutes, with connection timeouts and limited retries. If the hosted runner's Azure mirror is unavailable or too slow, it retries through the Ubuntu archive while retaining downloaded packages; package installation starts only after downloading succeeds. System and Python dependency installation have separate 20/10-minute limits, pip downloads are cached by Python version and both requirements files, and the full suite retains a 15-minute limit within a 60-minute job budget. Both Python matrix jobs run to completion independently. A release is CI-verified only when both Python 3.11 and 3.12 jobs pass for the exact pushed commit.
+
 This gate does not certify visual taste, exact glyph clipping, PowerPoint/Google Slides rendering parity, or live-model analytical quality. Those still require representative-document and human visual review. There is no document-type or issuer-specific repair rule.
 
 ## Latency and safe reuse
