@@ -151,7 +151,13 @@ def _narrow(slide, replacements, selected=()):
                         and not _RANK.search(authored_question)
                         and not any(share_motion(authored_question)) else "")
     title = slide.section_title.strip()
-    if title and (_RANK.search(title) or _SHARE.search(title)):
+    # Withdrawing a comparison must not delete another selected measure merely
+    # because it shares a comma-delimited heading with the rejected clause.
+    # The authored neutral question retains scope without asserting direction.
+    retained_question = bool(neutral_question and _SHARE.search(neutral_question))
+    if retained_question:
+        title = neutral_question
+    elif title and (_RANK.search(title) or _SHARE.search(title)):
         # A selected topic can name several measures even when one comparative
         # claim cannot be bound. Keep the independently named measures visible.
         parts = [re.sub(r"(?i)^and\s+", "", part.strip()) for part in title.split(",")]
@@ -174,7 +180,9 @@ def _narrow(slide, replacements, selected=()):
     if slide.section_title:
         replacements[slide.section_title] = slide.title
     slide.section_title = slide.title
-    if _RANK.search(slide.message) or _SHARE.search(slide.message):
+    if retained_question:
+        slide.message = neutral_question
+    elif _RANK.search(slide.message) or _SHARE.search(slide.message):
         # Keep independent qualifications even when the comparative sentence
         # has to go. Raw semantic decisions remain in presentation_topics.
         clauses = re.split(r"(?<=[.!?])\s+|;\s*", slide.message)

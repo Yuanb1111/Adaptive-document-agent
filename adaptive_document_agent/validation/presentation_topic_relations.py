@@ -8,7 +8,8 @@ from dataclasses import dataclass
 import math
 import re
 
-from adaptive_document_agent.document_model.topic_matcher import is_positive_topic_mismatch
+from adaptive_document_agent.document_model.topic_matcher import is_positive_topic_mismatch, metrics_match_topic
+from .narrative_plan_validator import expanded_observation_ids
 
 
 def _normal(text):
@@ -45,6 +46,7 @@ class TopicRelationValidator:
         self.observations = {o.id: o for o in result.observations}
         self.topics = {t.id: t for t in result.presentation_topics.topics} if result.presentation_topics else {}
         self.themes = {t.id: t for t in result.presentation_plan.themes} if result.presentation_plan else {}
+        self.charts = {c.id: c for c in result.charts}
         self.pages = {p.page_number: p for p in result.document.pages}
         self._lookup = None
 
@@ -61,14 +63,25 @@ class TopicRelationValidator:
         topic, theme = self.topics.get(slide.theme_id), self.themes.get(slide.theme_id)
         if not topic or not theme or not self._valid(observation):
             return None
-        declared = " ".join((topic.question, topic.rationale, topic.takeaway))
-        if observation.id not in theme.observation_ids or not _names(observation, declared):
+        if (observation.id not in expanded_observation_ids(theme, self.charts)
+                or observation.id not in expanded_observation_ids(slide, self.charts)):
             return None
         if self._lookup is None:
             from adaptive_document_agent.agent.presentation_topic_selector import series_directory
             _, self._lookup = series_directory(self.result)
         selected = {o.id for sid in topic.series_ids for o in self._lookup.get(sid, [])}
         if observation.id not in selected:
+            return None
+        # Parallel panels can intentionally answer a model-selected question
+        # with different measures/units. This is scope ownership, not proof of
+        # a ratio, arithmetic relationship, direction or causality. Chart-level
+        # claims and units still pass their independent validators.
+        if (slide.comparison_mode == "parallel"
+                and metrics_match_topic(observation, "", topic.title, topic.question)):
+            return SourceTopicRelation("selected_topic_scope", (observation.id,),
+                                       tuple(sorted({e.page for e in observation.evidence})))
+        declared = " ".join((topic.question, topic.rationale, topic.takeaway))
+        if observation.id not in theme.observation_ids or not _names(observation, declared):
             return None
         anchors = [self.observations[oid] for oid in theme.observation_ids
                    if oid in selected and oid in self.observations

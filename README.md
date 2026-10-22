@@ -1,5 +1,10 @@
 # Adaptive Document Intelligence Agent
 
+The [v160 retained topic scope fix](docs/RETAINED_TOPIC_SCOPE_V160.md)
+keeps ratio phrases intact across multiple share claims, preserves complete neutral
+questions during claim recovery, and validates parallel panels against their
+retained model-selected scope and exact evidence ownership.
+
 The [v159 percentage validation fix](docs/PERCENTAGE_VALIDATION_V159.md)
 aligns theme and slide checks for explicitly typed source percentages, preserves
 concise topic headers after claim restoration, and records budget-stage errors.

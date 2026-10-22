@@ -117,7 +117,8 @@ def share_claims(selected, text):
     separators = [m for m in re.finditer(r"[,;!?]|(?<!\d)\.(?!\d)|\b(?:while|whereas|and|but|as)\b", text, re.I)
                   if not any(start <= m.start() and m.end() <= end for start, end, _ in mentions)
                   and (m.group().casefold() != "as" or (
-                      SHARE_WORD.search(text[:m.start()]) and SHARE_WORD.search(text[m.end():])
+                      not re.match(r"\s+(?:(?:a|the)\s+)?(?:share|proportion)\s+of\b", text[m.end():], re.I)
+                      and SHARE_WORD.search(text[:m.start()]) and SHARE_WORD.search(text[m.end():])
                       and any(start >= m.end() for start, _, _ in mentions)))]
     bounds = [0, *[position for m in separators for position in (m.start(), m.end())], len(text)]
     claims, previous, previous_bare, previous_compound = [], "", False, False
