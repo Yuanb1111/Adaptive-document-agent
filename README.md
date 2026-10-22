@@ -1,5 +1,10 @@
 # Adaptive Document Intelligence Agent
 
+The [v161 explicit inclusion overlap fix](docs/EXPLICIT_INCLUSION_OVERLAP_V161.md)
+coalesces an exact duplicate addition only when the model also explicitly selected
+the same eligible omitted part. Original responses and evidence remain in the audit;
+independent semantic review still decides whether the corrected selection is accepted.
+
 The [v160 retained topic scope fix](docs/RETAINED_TOPIC_SCOPE_V160.md)
 keeps ratio phrases intact across multiple share claims, preserves complete neutral
 questions during claim recovery, and validates parallel panels against their

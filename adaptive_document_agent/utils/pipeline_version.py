@@ -1,6 +1,6 @@
 """Loaded code contract shared by session, extraction and export caches."""
 
-PIPELINE_VERSION = "2026-10-22-retained-topic-scope-v160"
+PIPELINE_VERSION = "2026-10-22-explicit-inclusion-overlap-v161"
 # Bump only when the corresponding evidence/analysis contract changes.
 EXTRACTION_VERSION = "extraction-v23"
-ANALYSIS_VERSION = "analysis-v84"
+ANALYSIS_VERSION = "analysis-v85"

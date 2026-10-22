@@ -122,12 +122,6 @@ def apply_meaning_resolution(selection, response, findings, source):
         edits[edit.meaning_id] = edit.required_meanings
         if [meaning.meaning for meaning in edit.required_meanings] != [original['meaning']]:
             changed.add(edit.meaning_id)
-    additions = {}
-    for addition in response.additions:
-        if (addition.part_id not in included_parts or addition.part_id in additions
-                or not addition.required_meanings):
-            raise ValueError('Meaning resolution addition must identify each affected included part at most once')
-        additions[addition.part_id] = addition.required_meanings
     inclusions = {}
     for inclusion in response.inclusions:
         if (inclusion.part_id not in omitted_parts or inclusion.part_id in inclusions
@@ -135,6 +129,22 @@ def apply_meaning_resolution(selection, response, findings, source):
                 or not inclusion.required_meanings):
             raise ValueError('Meaning resolution inclusion requires one exact identified omitted part and an explicit reason')
         inclusions[inclusion.part_id] = inclusion
+    additions = {}
+    seen_additions = set()
+    for addition in response.additions:
+        if addition.part_id in seen_additions or not addition.required_meanings:
+            raise ValueError('Meaning resolution addition must identify each affected included part at most once')
+        seen_additions.add(addition.part_id)
+        if addition.part_id in included_parts:
+            additions[addition.part_id] = addition.required_meanings
+        elif (addition.part_id in inclusions
+                and addition.required_meanings == inclusions[addition.part_id].required_meanings):
+            # Exact duplicate transport only. The model already explicitly chose
+            # this eligible omitted part, with its own reason and full wording.
+            # Its inclusion is applied once and still requires semantic review.
+            continue
+        else:
+            raise ValueError('Meaning resolution addition requires an affected included part or an exact copy of its explicit inclusion')
     resolutions = _exact_dispositions(response, expected)
     for identifier, entry in resolutions.items():
         finding = expected[identifier]
@@ -215,7 +225,8 @@ def resolve_meaning_findings(gateway, source, selection, values, verdict, review
         'qualification, correcting unsupported stronger wording to its own source scope. '
         'Return edits ONLY for exact current meaning IDs named by meaning findings; every other '
         'existing meaning is mechanically protected. An included_part finding permits only owned '
-        'additions, not rewriting existing copy. For an omitted_part finding, an explicit inclusion '
+        'additions, not rewriting existing copy. Additions target currently included parts only. '
+        'Never repeat an inclusion in additions. For an omitted_part finding, an explicit inclusion '
         'may select ONLY its exact eligible_inclusions part_id, with include=true, a substantive '
         'source-aware reason and nonempty required_meanings. An omission cannot be corrected by '
         'placing its assertions in another source part. All existing include/omit choices and reasons '
@@ -244,6 +255,8 @@ def resolve_meaning_findings(gateway, source, selection, values, verdict, review
                       error_type=type(exc).__name__, error=str(exc))
         raise
     record.update(status='protocol_validated', semantic_approval=False,
+                  coalesced_inclusion_addition_part_ids=[addition.part_id for addition in response.additions
+                      if any(inclusion.part_id == addition.part_id for inclusion in response.inclusions)],
                   changed=draft != selection, decisions_after=draft.model_dump(mode='json')['decisions'])
     return draft, dict(findings=findings, finding_dispositions=record['bound_finding_dispositions'],
         inclusions=record['response']['inclusions'],

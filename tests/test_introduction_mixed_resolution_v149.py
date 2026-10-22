@@ -124,7 +124,8 @@ def test_response_cannot_implicitly_replace_protected_decisions():
 
 
 @pytest.mark.parametrize('final_acceptance', [True, False])
-def test_first_review_mixed_findings_use_targeted_repair_and_still_require_fresh_acceptance(final_acceptance):
+@pytest.mark.parametrize('mirrored_inclusion', [False, True])
+def test_first_review_mixed_findings_use_targeted_repair_and_still_require_fresh_acceptance(final_acceptance, mirrored_inclusion):
     result, _, _ = fixture(4)
     reading, _, selection, rejected, response = mixed_fixture()
     calls, reviews = [], []
@@ -141,6 +142,11 @@ def test_first_review_mixed_findings_use_targeted_repair_and_still_require_fresh
                 if self.resolutions == 1:
                     assert payload['eligible_inclusions'] == [dict(part_id='part-1', current_reason='Later context.')]
                     authored = response.model_copy(deep=True)
+                    if mirrored_inclusion:
+                        from adaptive_document_agent.agent.introduction_meaning_resolution import MeaningResolutionAddition
+                        inclusion = authored.inclusions[0]
+                        authored.additions.append(MeaningResolutionAddition(part_id=inclusion.part_id,
+                            required_meanings=deepcopy(inclusion.required_meanings)))
                     if not final_acceptance:
                         authored.edits[0].required_meanings[0].meaning = 'The system schedules appointments efficiently.'
                     return schema.model_validate(authored.model_dump())
