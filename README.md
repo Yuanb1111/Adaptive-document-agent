@@ -1,5 +1,10 @@
 # Adaptive Document Intelligence Agent
 
+The [v162 caveat support scope fix](docs/CAVEAT_SUPPORT_SCOPE_V162.md)
+recognizes a selected supporting measure named in a model-authored caveat only
+when the existing source-definition or subtotal checks independently prove its
+relationship to the slide's subject.
+
 The [v161 explicit inclusion overlap fix](docs/EXPLICIT_INCLUSION_OVERLAP_V161.md)
 coalesces an exact duplicate addition only when the model also explicitly selected
 the same eligible omitted part. Original responses and evidence remain in the audit;

@@ -80,7 +80,10 @@ class TopicRelationValidator:
                 and metrics_match_topic(observation, "", topic.title, topic.question)):
             return SourceTopicRelation("selected_topic_scope", (observation.id,),
                                        tuple(sorted({e.page for e in observation.evidence})))
-        declared = " ".join((topic.question, topic.rationale, topic.takeaway))
+        # Model-authored caveats can name a deliberately selected supporting
+        # measure (for example one missing a comparative). They declare scope
+        # only: the same source definition/subtotal proof below is still needed.
+        declared = " ".join((topic.question, topic.rationale, topic.takeaway, *topic.caveats))
         if observation.id not in theme.observation_ids or not _names(observation, declared):
             return None
         anchors = [self.observations[oid] for oid in theme.observation_ids
