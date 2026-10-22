@@ -173,15 +173,6 @@ def _generate_summary_batch(gateway, result, pages, response_model, *, scope_ran
             untrusted_document_message(json.dumps(payload, ensure_ascii=False))]
         from .report_requirements import instruction_messages
         messages[1:1] = instruction_messages(result.profile, purpose='introductory content selection and detail')
-        requirements = result.profile.report_requirements
-        from adaptive_document_agent.services.report_language import original_language
-        languages = {r.language for r in requirements.items if r.kind == 'output_language'
-                     and r.resolution == 'resolved' and r.language_scope in {'body', 'all'}
-                     and not original_language(r.language)} if requirements else set()
-        if len(languages) == 1:
-            messages.insert(1, {'role': 'user', 'content': 'Write introductory titles, labels and item text in '
-                + next(iter(languages)) + '. Preserve exact source numeric spellings, currency/scale labels, '
-                'technical names and qualification. Part IDs and source references stay unchanged.'})
         # Repair retains every original instruction and the source payload.
         initial_messages = list(messages)
         for attempt in range(2):

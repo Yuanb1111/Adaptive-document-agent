@@ -30,6 +30,14 @@ def protect_quantities(text: str, language: str) -> tuple[str, dict[str, str]]:
                 # source sign/parentheses. No currency or scale conversion.
                 value = (currency + (match['open'] or '') + (match['sign'] or '')
                          + match['value'] + unit + (')' if match['open'] else ''))
+        elif language.strip().casefold() in {'english', 'en', 'en-us', 'en-gb', '英文'}:
+            from .brief_table_evidence import canonical_quantity
+            currency, _, unit = canonical_quantity(match['prefix'] or match['suffix'], match['value'], match['unit'])
+            currency = {'rmb': 'RMB', 'usd': 'USD', 'us$': 'USD', 'hkd': 'HKD',
+                        'hk$': 'HKD', 'eur': 'EUR', '€': 'EUR'}.get(currency)
+            if currency and unit in {'million', 'thousand', 'billion', 'trillion'}:
+                value = (currency + ' ' + (match['open'] or '') + (match['sign'] or '')
+                         + match['value'] + ' ' + unit + (')' if match['open'] else ''))
         atoms[token] = value
         return token
     return _MONEY_QUANTITY.sub(replace, display_text(text)), atoms

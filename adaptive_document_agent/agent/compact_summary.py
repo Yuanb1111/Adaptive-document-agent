@@ -214,8 +214,6 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
     if (review.audience_part_ids is not None
             or resolved_limits(requirements, section='introduction')):
         appendix_allowed = False
-    languages = {r.language for r in requirements.items if r.kind=='output_language'
-                 and r.resolution=='resolved' and r.language_scope in {'body','all'}} if requirements else set()
     from .summary_audience_scope import author_paragraph_guidance
     messages = [{'role':'system','content':
         'Write a complete, concise introduction in THREE TO FIVE logical content groups (maximum five). '
@@ -272,9 +270,6 @@ def generate_compact_summary(gateway,result,review,company,*,cancelled=None,
         'For a non-company source explain the document subject and scope without inventing a company.'},
         untrusted_document_message(json.dumps(payload,ensure_ascii=False))]
     messages[0]['content'] = with_presentation_limits(messages[0]['content'])
-    if len(languages)==1:
-        messages.insert(1,{'role':'user','content':'Write every title, label and paragraph in '+next(iter(languages))+
-                          '. Preserve literal proper names and fiscal labels. Translate all prose and unit words faithfully.'})
     from .report_requirements import instruction_messages
     messages[1:1] = instruction_messages(result.profile, purpose='complete introductory synthesis')
     if review.max_intro_slides is not None:

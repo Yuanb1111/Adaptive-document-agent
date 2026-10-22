@@ -1,5 +1,10 @@
 # Adaptive Document Intelligence Agent
 
+The [v164 unified presentation language fix](docs/UNIFIED_PRESENTATION_LANGUAGE_V164.md)
+gives explicit output-language instructions priority, otherwise follows the source
+language, and checks the actual exported display copy. Translated introductions
+reflow before layout; official alternate-language names require source evidence.
+
 The [v163 final claim revalidation fix](docs/FINAL_CLAIM_REVALIDATION_V163.md)
 aligns proven equal-coverage source copies in one pass and validates claims after
 all cross-slide repairs, so export uses the final evidence rather than stale

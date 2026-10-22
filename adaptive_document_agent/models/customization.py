@@ -50,6 +50,10 @@ class ReportRequirements(BaseModel):
     interpretation_error: str = ''
     # Only exact source -> display wording. Never modify analytical facts.
     copy_translations: dict[str, str] = Field(default_factory=dict)
+    # Resolved display policy, separate from the user's original instructions.
+    translation_language: str = ''
+    translation_language_origin: str = ''
+    translation_context_fingerprint: str = ''
     # Introduction claims are reviewed whole, then paginated for display.
     # Exact page/item locators avoid collisions between repeated fragments.
     summary_copy_translations: dict[str, str] = Field(default_factory=dict)

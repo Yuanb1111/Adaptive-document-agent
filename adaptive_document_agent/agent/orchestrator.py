@@ -673,20 +673,21 @@ class DocumentOrchestrator:
             notify('Analysis incomplete; diagnostics and retry checkpoint retained')
             return final_result
         notify("Complete")
-        if profile.report_requirements:
-            from .requirements_review import review_content_requirements
-            from .report_localization import prepare_report_language
-            from adaptive_document_agent.services.customization_checks import check_requirements
-            notify('Checking requested report customizations')
-            with record_timing(timings, 'customization_review'):
+        from .report_localization import prepare_report_language
+        from adaptive_document_agent.services.customization_checks import check_requirements
+        with record_timing(timings, 'customization_review'):
+            if profile.report_requirements:
+                from .requirements_review import review_content_requirements
+                notify('Checking requested report customizations')
                 with record_timing(final_result.stage_details_ms, 'content_requirement_review'):
                     review_content_requirements(self.gateway, final_result)
-                with record_timing(final_result.stage_details_ms, 'report_localization'):
-                    prepare_report_language(self.gateway, final_result, progress=notify)
-                notify('Verifying requested report coverage')
+            # Source-language fallback applies even without custom instructions.
+            with record_timing(final_result.stage_details_ms, 'report_localization'):
+                prepare_report_language(self.gateway, final_result, progress=notify)
+            if final_result.profile.report_requirements:
                 with record_timing(final_result.stage_details_ms, 'customization_checks'):
                     check_requirements(final_result)
-            final_result.llm_usage = list(self.gateway.usage) if self.gateway else []
+        final_result.llm_usage = list(self.gateway.usage) if self.gateway else []
         # Pydantic copies input dictionaries. Timings recorded after constructing
         # the result must be explicitly synchronized, including the 90% phase.
         final_result.timings_ms = dict(timings)

@@ -252,7 +252,7 @@ def test_editorial_batches_run_concurrently_and_merge_in_source_order(monkeypatc
     assert [p.source_page for p in review.parts if p.role == 'content'] == [1,1,2,2]
 
 
-def test_failed_translation_requests_are_timed_and_already_chinese_copy_is_immutable(monkeypatch):
+def test_failed_translation_requests_do_not_self_certify_already_chinese_copy(monkeypatch):
     from adaptive_document_agent.services import pptx_export
     result = result_for(['Source prose.'])
     result.profile.report_requirements = ReportRequirements(items=[ReportRequirement(id='zh',
@@ -263,10 +263,10 @@ def test_failed_translation_requests_are_timed_and_already_chinese_copy_is_immut
     monkeypatch.setattr(pptx_export, 'presentation_for_copy', lambda _: deck)
     g, client = gateway(['invalid JSON', 'invalid JSON'])
     prepare_report_language(g, result)
-    assert result.profile.report_requirements.copy_translations == {'收入为100千元。': '收入为100千元。'}
+    assert result.profile.report_requirements.copy_translations == {}
     assert len(client.calls) == 2 and 'localization_translation_requests' in result.stage_details_ms
     audit = json.loads(next(w.message for w in result.validation_warnings if w.code=='report_localization_audit'))
-    assert audit['unchanged_target_language_count'] == 1 and audit['failed_ids']
+    assert audit['unchanged_target_language_count'] == 0 and audit['failed_ids']
 
 
 def test_one_invalid_protected_quantity_does_not_displace_verified_translation():

@@ -2,7 +2,7 @@
 from .fourier_brand import PRIMARY, WHITE
 
 
-def verify_source_footer(slide,pages):
+def verify_source_footer(slide,pages,translations=None):
     """Verify literal physical page references, including packed table pages."""
     import re
     from .pptx_export import _source_footer
@@ -10,7 +10,13 @@ def verify_source_footer(slide,pages):
     chinese=re.sub(r'Source: Document disclosures \(p\. ([\d, -]+)\)',
                    lambda m:'来源：文件披露（PDF 第 '+m[1]+' 页）',original)
     actual=[s.text for s in slide.shapes if s.has_text_frame and s.name=='customization:source_footer']
-    if len(actual)!=1 or actual[0] not in {original,chinese}:
+    allowed = {original, chinese}
+    translated = (translations or {}).get(original)
+    if translated:
+        from .report_language import translation_errors
+        if not translation_errors(original, translated):
+            allowed.add(translated)
+    if len(actual)!=1 or actual[0] not in allowed:
         raise ValueError('Requested source page footer was omitted or changed')
 
 
@@ -49,8 +55,14 @@ def citation_errors(presentation, result):
         if not 1 <= n <= len(presentation.slides):
             errors.append(f'Source mapping refers to absent slide {n}')
             continue
+        mapping = result.profile.report_requirements.copy_translations if result.profile.report_requirements else {}
+        from .report_language import translation_errors
+        translated_footers = {value for key, value in mapping.items()
+                              if key.startswith('Source: Document disclosures (p. ')
+                              and not translation_errors(key, value)}
         footers = [sh.text for sh in presentation.slides[n-1].shapes if sh.has_text_frame
-                   and sh.text.strip().startswith(('Source: Document disclosures (p. ', '来源：文件披露（PDF 第 '))]
+                   and (sh.text.strip().startswith(('Source: Document disclosures (p. ', '来源：文件披露（PDF 第 '))
+                        or sh.text in translated_footers)]
         if not footers:
             errors.append(f'Slide {n}: source page footer missing')
         else:

@@ -151,6 +151,24 @@ def render_profile(presentation: Any, title: str, items: list[BriefItem], *, not
         structured = render_structured_profile_group(presentation, title, items, notes=notes)
         if structured is not None:
             return [structured]
+        if len(items) > 1:
+            # Translation can change the best physical grouping. Try complete
+            # contiguous item groups before the ordinary paragraph paginator;
+            # every item and its evidence binding retain their original order.
+            pages, start = [], 0
+            while start < len(items):
+                page_title = title + (' (continued)' if pages else '')
+                for end in range(len(items), start, -1):
+                    group = render_structured_profile_group(
+                        presentation, page_title, items[start:end], notes=notes)
+                    if group is not None:
+                        pages.append(group)
+                        start = end
+                        break
+                else:
+                    pages.extend(render_profile(presentation, page_title, [items[start]], notes=notes))
+                    start += 1
+            return pages
     compact_items = [item for item in items if item.text.strip() and not is_technical_copy(item.text)]
     if 3 <= len(compact_items) <= 4:
         compact_page = _render_profile_grid(presentation, title, compact_items, notes)

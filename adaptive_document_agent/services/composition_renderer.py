@@ -44,14 +44,8 @@ def _style_labels(labels, *, share, doughnut, compact, color):
 def _minimum_label_share(bounds, categories, *, compact):
     """Reserve legend and axis space before estimating stacked label fit."""
     font = 10 if compact else 11
-    width = max(1, bounds[2] * 72 - 24)
-    rows, occupied = 1, 0
-    for category in categories:
-        item = len(category) * font * .52 + 18
-        if occupied and occupied + item > width:
-            rows, occupied = rows + 1, 0
-        occupied += item
-    plot_height = max(font * 1.4, bounds[3] * 72 - 30 - rows * font * 1.5)
+    from .chart_space import composition_plot_height
+    plot_height = max(font * 1.4, composition_plot_height(bounds, categories, compact=compact) * 72)
     return max(.06, font * 1.4 / plot_height)
 
 

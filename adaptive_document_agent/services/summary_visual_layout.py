@@ -15,14 +15,14 @@ from .presentation_brief import BODY_PT, HEADING_PT, LINE_HEIGHT_FACTOR, BriefIt
 
 def summary_brief_items(result, page):
     """Reuse approved/localized copy and carry optional writer-selected structure."""
-    from .localized_summary_copy import summary_item_copy
+    from .localized_summary_copy import summary_item_copy, localized_label
     items = []
     for index, item in enumerate(page.items):
         text = summary_item_copy(result, page, index)
         # Anchors address the exact writer copy. A translation has its own
         # reviewed wording, so it can only receive mechanical paragraph breaks.
         display = item.display if text == item.text and item.display else SummaryDisplay()
-        items.append(BriefItem(item.label, text, item.source_pages, display=display))
+        items.append(BriefItem(localized_label(result, item.label), text, item.source_pages, display=display))
     return items
 
 
@@ -132,6 +132,42 @@ def _render_pair_panels(slide, items, top, width, capacity):
     return True
 
 
+def _render_pair_columns(slide, items, top, width, capacity):
+    """Fit unequal complete sections without shrinking or rewriting their copy."""
+    from .pptx_export import _text, FOURIER_DARK, FOURIER_PURPLE
+    gap = .44
+    for ratio in (.5, .55, .6, .625, .65, .45, .4, .375, .35):
+        widths = ((width - gap) * ratio, (width - gap) * (1 - ratio))
+        plans = []
+        for item, column_width in zip(items, widths):
+            heading = _heading_height(item.title, column_width)
+            parts = display_segments(item.text, item.display)
+            geometry = _column_geometry(parts, column_width, capacity - heading - .08)
+            if geometry is None:
+                break
+            plans.append((item, column_width, heading, parts, geometry))
+        if len(plans) == 2:
+            break
+    else:
+        return False
+    x = .65
+    for item, column_width, heading_height, parts, geometry in plans:
+        heading = _text(slide, item.title, x, top, column_width, heading_height,
+                        size=HEADING_PT, bold=True, color=FOURIER_PURPLE)
+        heading.name = 'brief:heading'
+        heading.text_frame.paragraphs[0].line_spacing = Pt(HEADING_PT * LINE_HEIGHT_FACTOR)
+        y = top + heading_height + .08
+        heights, _, gap_y = geometry
+        for text, height in zip(parts, heights):
+            body = _text(slide, text, x, y, column_width, height, size=BODY_PT, color=FOURIER_DARK)
+            body.name = 'brief:body'
+            for paragraph in body.text_frame.paragraphs:
+                paragraph.line_spacing = Pt(BODY_PT * LINE_HEIGHT_FACTOR)
+            y += height + gap_y
+        x += column_width + gap
+    return True
+
+
 def render_structured_profile_group(presentation, title, items, *, notes=''):
     """Keep each item's supported structure local within a multi-item page.
 
@@ -147,7 +183,8 @@ def render_structured_profile_group(presentation, title, items, *, notes=''):
     slide, top = _base(presentation, title, '')
     width = presentation.slide_width.inches - 1.3
     capacity = presentation.slide_height.inches - 1.28 - top
-    if len(items) == 2 and _render_pair_panels(slide, items, top, width, capacity):
+    if len(items) == 2 and (_render_pair_panels(slide, items, top, width, capacity)
+                           or _render_pair_columns(slide, items, top, width, capacity)):
         pages = sorted({page for item in items for page in item.pages})
         _text(slide, _source_footer(pages), .55, presentation.slide_height.inches - .82,
               presentation.slide_width.inches - 1.1, .20, size=9, color=FOURIER_MUTED)

@@ -77,7 +77,8 @@ def test_only_analytical_focus_reaches_scoring_and_full_requirements_stay_in_res
         ReportRequirement(id='detail',kind='content_detail',request_quote='全部表格',description='Complete appendix'),
         ReportRequirement(id='focus',kind='analysis_focus',request_quote='重点现金流',description='Cash flow focus')])
     messages=instruction_messages(profile,purpose='analysis prioritization')
-    assert '重点现金流' in messages[0]['content'] and '中文正文' not in messages[0]['content'] and '全部表格' not in messages[0]['content']
+    assert 'Use chinese consistently' in messages[0]['content']
+    assert '重点现金流' in messages[1]['content'] and '中文正文' not in messages[1]['content'] and '全部表格' not in messages[1]['content']
     assert len(profile.report_requirements.items)==3
 
 

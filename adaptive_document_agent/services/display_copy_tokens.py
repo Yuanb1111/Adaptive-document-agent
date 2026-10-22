@@ -14,6 +14,14 @@ def display_text(text):
     return re.sub(r'_x000[bB]_', '\n', text).replace('\v', '\n')
 
 
+def language_copy_key(text):
+    """Only native whitespace and existing preflight unit spelling equivalents."""
+    text = re.sub(r"(?i)\b(rmb|cny|hkd|usd)(?:in)?(thousands?|'000)\b", r"\1 '000", display_text(text))
+    text = re.sub(r"(?i)\b(rmb|cny|hkd|usd)(?:in)?(millions?)\b", r"\1 million", text)
+    text = re.sub(r"(?i)\b(rmb|cny|hkd|usd)(?:in)?(billions?)\b", r"\1 billion", text)
+    return ' '.join(text.split())
+
+
 def compact_display_periods(text):
     """Shorten only equivalent explicit date/period labels for narrow boxes."""
     text = display_text(text)
@@ -148,6 +156,10 @@ def copy_tokens(text):
     from .executive_brief import _quantities
     from .brief_table_evidence import canonical_quantity
     quantity_text = re.sub(r'(?i)\b(million|billion|trillion|thousand)s\b',r'\1',text)
+    # Explicit metres per second are physical units, never a bare million
+    # suffix. Keep the coefficient in the numeric check above; semantic review
+    # still verifies the complete physical-unit translation.
+    quantity_text = re.sub(r'(?<=\d)\s*m\s*/\s*s\b', ' metres per second', quantity_text)
     quantity_text = re.sub(r'(?i)([+\-]?\d[\d,.]*)\s+(RMB|USD|HKD|EUR|GBP)\s+(million|billion|trillion|thousand)\b',
                            r'\2 \1 \3',quantity_text)
     quantities = frozenset(canonical_quantity(c,v,u) for c,v,u in _quantities(quantity_text) if c or u)

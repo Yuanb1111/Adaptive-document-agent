@@ -132,10 +132,12 @@ def check_requirements(result, presentation=None, *, export_verified=False):
 
 
 def mark_customization_export_verified(result, payload):
+    from io import BytesIO
+    from pptx import Presentation
+    from .presentation_language import require_consistent_language
+    presentation = Presentation(BytesIO(payload))
+    require_consistent_language(presentation, result)
     if result.profile.report_requirements:
-        from io import BytesIO
-        from pptx import Presentation
-        presentation = Presentation(BytesIO(payload))
         check_requirements(result, presentation, export_verified=True)
         from .slide_budgets import require_exported_budgets
         require_exported_budgets(presentation, result)

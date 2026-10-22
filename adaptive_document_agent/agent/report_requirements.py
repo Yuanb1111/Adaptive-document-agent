@@ -98,18 +98,20 @@ def validate_requirements(requirements, document, instruction):
 
 def instruction_messages(profile, *, purpose='report'):
     """Trusted user instructions are separate from PDF-derived payloads."""
+    from adaptive_document_agent.services.presentation_language import language_messages
+    language = language_messages(profile)
     requirements = profile.report_requirements
     if not requirements:
-        return []
+        return language
     items = [r.model_dump(mode='json') for r in requirements.items
              if r.resolution == 'resolved' and r.kind in {'analysis_focus', 'content_detail', 'slide_limit'}]
     if purpose == 'analysis prioritization':
         items = [r.model_dump(mode='json') for r in requirements.items
                  if r.resolution == 'resolved' and r.kind == 'analysis_focus']
-    return [{'role': 'user', 'content': 'Execute these interpreted user report requirements for '
+    return language + ([{'role': 'user', 'content': 'Execute these interpreted user report requirements for '
              + purpose + '. Never invent evidence, weaken source validation or suppress caveats. '
              'Whole-section table requests are handled independently by the appendix exporter.\n'
-             + json.dumps(items, ensure_ascii=False)}] if items else []
+             + json.dumps(items, ensure_ascii=False)}] if items else [])
 
 
 def appendix_pages(requirements):

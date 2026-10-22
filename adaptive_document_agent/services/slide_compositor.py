@@ -22,6 +22,10 @@ COMMENTARY_LINE_PT = 20
 class _ChartCapacityError(ValueError):
     """Readable chart geometry needs fewer panels on the physical page."""
 
+    def __init__(self, message, chart_id=None):
+        super().__init__(message)
+        self.chart_id = chart_id
+
 
 @dataclass(frozen=True)
 class Rect:
@@ -44,7 +48,8 @@ class CompositionGeometry:
 
 def compose_geometry(width: float, height: float, top: float, chart_count: int, *,
                      layout: str, has_support: bool, has_commentary: bool,
-                     commentary_text: str = "", bottom_reserve: float = 0) -> CompositionGeometry:
+                     commentary_text: str = "", bottom_reserve: float = 0,
+                     chart_min_widths: list[float] | None = None) -> CompositionGeometry:
     """Partition the content zone into non-overlapping slots with a common baseline."""
     left, total = 0.55, width - 1.1
     # Reserve the template's copyright/page-number band separately from sources.
@@ -52,6 +57,17 @@ def compose_geometry(width: float, height: float, top: float, chart_count: int, 
     footer = Rect(left, height - 0.82, total, 0.20)
     support = commentary = None
     chart_bottom = bottom
+    def row_rects():
+        available = total - GUTTER * (chart_count - 1)
+        minimums = chart_min_widths or [2.4] * chart_count
+        if len(minimums) != chart_count or sum(minimums) > available + 1e-6:
+            raise _ChartCapacityError('Chart labels need more horizontal space; paginate the charts.')
+        spare = (available - sum(minimums)) / chart_count
+        x, rectangles = left, []
+        for minimum in minimums:
+            rectangles.append(Rect(x, top, minimum + spare, chart_bottom - top))
+            x += minimum + spare + GUTTER
+        return rectangles
     if chart_count == 0:
         if has_support and layout == "kpi_band":
             support = Rect(left, top, total, 1.02)
@@ -72,13 +88,12 @@ def compose_geometry(width: float, height: float, top: float, chart_count: int, 
             band_h = max(.72, min(needed, bottom - top - GUTTER - 1.8))
             commentary = Rect(left, bottom - band_h, total, band_h)
             chart_bottom = commentary.y - GUTTER
-        cw = (total - GUTTER * (chart_count - 1)) / chart_count
-        charts = [Rect(left + i * (cw + GUTTER), top, cw, chart_bottom - top) for i in range(chart_count)]
+        charts = row_rects()
         if any(r.h < 1.8 - 1e-6 or r.w < 2.4 for r in charts):
             # Preserve content with the established overflow/continuation path.
             return compose_geometry(width, height, support.y, chart_count,
                 layout="two_up", has_support=has_support, has_commentary=has_commentary,
-                commentary_text=commentary_text, bottom_reserve=bottom_reserve)
+                commentary_text=commentary_text, bottom_reserve=bottom_reserve, chart_min_widths=chart_min_widths)
         return CompositionGeometry(charts, support, commentary, footer)
     side = chart_count == 1 and (has_support or has_commentary)
     if side:
@@ -119,8 +134,7 @@ def compose_geometry(width: float, height: float, top: float, chart_count: int, 
                       Rect(left + hero_w + GUTTER, top, total - hero_w - GUTTER, rh),
                       Rect(left + hero_w + GUTTER, top + rh + GUTTER, total - hero_w - GUTTER, rh)]
         else:
-            cw = (total - GUTTER * (chart_count - 1)) / max(chart_count, 1)
-            charts = [Rect(left + i * (cw + GUTTER), top, cw, chart_bottom - top) for i in range(chart_count)]
+            charts = row_rects()
     if any(r.h < 1.4 or r.w < 2.4 for r in charts):
         raise _ChartCapacityError("Slide composition cannot fit readable charts; split the evidence into additional pages.")
     return CompositionGeometry(charts, support, commentary, footer)
@@ -210,12 +224,13 @@ def _split_header_subtitle(subtitle: str) -> tuple[str, str]:
 
 
 def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: list[ChartPlan],
-                          result: PipelineResult, index) -> list:
+                          result: PipelineResult, index, *, preserve_charts=False) -> list:
     """Paginate capacity failures without changing the planned evidence contract."""
     start = len(presentation.slides)
     try:
-        rendered = _render_composed_slide(presentation, slide_plan, charts, result, index)
-    except _ChartCapacityError:
+        rendered = _render_composed_slide(presentation, slide_plan, charts, result, index,
+                                          preserve_charts=preserve_charts)
+    except _ChartCapacityError as exc:
         # Roll back only pages created by this attempt, including any charts
         # already drawn before a later panel failed. Never leave partial pages.
         for slide_id in list(presentation.slides._sldIdLst)[start:]:
@@ -231,6 +246,11 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
         if len(ordered) <= 1:
             raise
         split = max(1, (len(ordered) + 1) // 2)
+        if exc.chart_id in ordered_ids:
+            # Isolate a space-hungry leading chart instead of repeatedly
+            # forcing it into the same undersized row. Keep evidence order.
+            position = [c.id for c in ordered].index(exc.chart_id)
+            split = max(1, position)
         rendered = _paginate_chart_slide(presentation, slide_plan,
                                         (ordered[:split], ordered[split:]), result, index)
     from .composition_pagination import compact_support_pages
@@ -242,11 +262,17 @@ def _paginate_chart_slide(presentation, slide_plan: PresentationSlide,
                           result: PipelineResult, index) -> list:
     """Keep support/commentary once and retain every selected chart in order."""
     rendered = []
+    plotted = {oid for group in groups for chart in group for oid in chart.observation_ids}
+    blocks_to_keep = [block for block in slide_plan.visual_blocks if not (
+        slide_plan.layout != 'kpi_band' and block.role in {'kpi', 'table'}
+        and block.observation_ids and set(block.observation_ids) <= plotted)]
+    retained_insights = list(dict.fromkeys([*slide_plan.insight_ids,
+        *(iid for block in slide_plan.visual_blocks for iid in block.insight_ids)]))
     for part, group in enumerate(groups):
         cids = {c.id for c in group}
         blocks = [b.model_copy(update={"chart_ids": [cid for cid in b.chart_ids if cid in cids],
                                       'insight_ids': [] if part else b.insight_ids})
-                  for b in slide_plan.visual_blocks
+                  for b in blocks_to_keep
                   if any(cid in cids for cid in b.chart_ids) or (not part and not b.chart_ids)]
         physical = slide_plan.model_copy(update={
             "chart_ids": [c.id for c in group], "visual_blocks": blocks,
@@ -255,15 +281,15 @@ def _paginate_chart_slide(presentation, slide_plan: PresentationSlide,
             'message': '' if part else slide_plan.message,
             "bullets": [] if part else slide_plan.bullets,
             "bullet_observation_ids": [] if part else slide_plan.bullet_observation_ids,
-            "insight_ids": [] if part else slide_plan.insight_ids,
+            "insight_ids": [] if part else retained_insights,
             "observation_ids": [] if part else slide_plan.observation_ids,
             "layout": "two_up" if len(group) > 1 else 'single' if part else "chart_plus_commentary"})
-        rendered.extend(render_composed_slide(presentation, physical, group, result, index))
+        rendered.extend(render_composed_slide(presentation, physical, group, result, index, preserve_charts=True))
     return rendered
 
 
 def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: list[ChartPlan],
-                           result: PipelineResult, index) -> list:
+                           result: PipelineResult, index, *, preserve_charts=False) -> list:
     """Render all requested charts, explicit KPI/table facts and retained commentary."""
     from .pptx_export import _add_native_chart, _source_footer, _unit_label, _display_source_unit
     from adaptive_document_agent.document_model.metric_semantic_classifier import classify_metric, format_metric_display_value
@@ -277,7 +303,7 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
         *(oid for b in slide_plan.visual_blocks if b.role in {'table', 'kpi'} for oid in b.observation_ids),
         *(oid for c in charts for oid in c.observation_ids)]))
     selected = [index.get(oid) for oid in selected_ids if index.get(oid)]
-    if charts and compact_source_table(selected):
+    if charts and not preserve_charts and compact_source_table(selected):
         from adaptive_document_agent.models import PresentationVisualBlock
         table_blocks = [PresentationVisualBlock(role='table', observation_ids=selected_ids)]
         table_blocks.extend(b for b in slide_plan.visual_blocks if b.role == 'commentary')
@@ -432,9 +458,13 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
     if corroborating:
         note_record["corroborating_evidence"] = corroborating
     slide.notes_slide.notes_text_frame.text = json.dumps(note_record, ensure_ascii=False, indent=2)
+    from .chart_space import chart_space_requirements, composition_plot_height
+    spaces = {chart.id: chart_space_requirements(chart,
+        [index.get(oid) for oid in chart.observation_ids if index.get(oid)],
+        [index.get(oid) for oid in chart.total_observation_ids if index.get(oid)]) for chart in charts}
     geometry = compose_geometry(presentation.slide_width.inches, presentation.slide_height.inches, top, len(charts),
         layout=slide_plan.layout, has_support=bool(support), has_commentary=bool(text), commentary_text=text,
-        bottom_reserve=convention_h + context_h)
+        bottom_reserve=convention_h + context_h, chart_min_widths=[spaces[c.id][0] for c in charts])
     if context_h:
         context = _put_text(slide, context_copy,
             Rect(.55, presentation.slide_height.inches - 1.02 - context_h - convention_h + .04,
@@ -493,6 +523,12 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
         bounds = (rect.x, rect.y + chart_offset, rect.w, rect.h - chart_offset)
         if bounds[3] < 1.25:
             raise _ChartCapacityError(f"Chart labels cannot fit on slide {slide_plan.id}: {chart.id}; split the planned charts into additional slides.")
+        minimum_width, minimum_height, categories = spaces[chart.id]
+        plot_height = (composition_plot_height(bounds, categories, compact=rect.w < 4.5)
+                       if categories else bounds[3])
+        if rect.w + 1e-6 < minimum_width or plot_height + 1e-6 < minimum_height:
+            raise _ChartCapacityError(
+                f'Chart plot area is too small after labels and legend: {chart.id}', chart.id)
         scale, scale_label = _add_native_chart(slide, chart, values, bounds, compact=rect.w < 4.5, totals=totals)
         unit = "Share (%)" if chart.chart_type == "stacked_percent" else _unit_label(values, scale_label)
         if chart.chart_type in {"doughnut", "pie"}:

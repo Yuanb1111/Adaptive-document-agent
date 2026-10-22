@@ -271,7 +271,8 @@ def verify_requested_tables(presentation, result):
             continue
         metadata = json.loads(slide.notes_slide.notes_text_frame.text)['CUSTOM_SOURCE_TABLES_V1']
         from .customization_presentation_checks import verify_source_footer
-        verify_source_footer(slide,{source_pages[r['table_id']] for r in metadata if r['table_id'] in source_pages})
+        verify_source_footer(slide,{source_pages[r['table_id']] for r in metadata if r['table_id'] in source_pages},
+                             result.profile.report_requirements.copy_translations if result.profile.report_requirements else {})
         by_name = {s.name: s for s in shapes}
         for record in metadata:
             identifier = record['table_id']

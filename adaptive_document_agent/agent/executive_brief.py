@@ -186,16 +186,6 @@ class ExecutiveBriefWriter:
                     untrusted_document_message(json.dumps(payload, ensure_ascii=False))]
         from .report_requirements import instruction_messages
         messages[1:1] = instruction_messages(result.profile, purpose='executive briefing')
-        from adaptive_document_agent.services.report_language import original_language
-        requirements=result.profile.report_requirements
-        languages={r.language for r in requirements.items if r.kind=='output_language'
-                   and r.resolution=='resolved' and r.language_scope in {'body','all'}
-                   and not original_language(r.language)} if requirements else set()
-        if len(languages)==1:
-            messages.insert(1,{'role':'user','content':'Write briefing titles, labels and prose in '+next(iter(languages))+
-                '. Keep evidence quotes literal. Faithful translated currency/unit labels are allowed, '
-                'but exact coefficients, signs, periods and unit denominators must remain unchanged. '
-                'Distinguish debt/borrowings from total liabilities. Do not rescale or round numbers.'})
         from .brief_meaning_review import meaning_validator
         brief = generate_with_item_repair(self.gateway, messages, result=result, excerpts=excerpts,
                                          topics=included_topics, source_context=payload, evidence_catalog=blocks,

@@ -163,6 +163,8 @@ def build_presentation(result: PipelineResult, template_path: str | Path | None 
     validate_composed_geometry(presentation)
     from .presentation_brand_qa import validate_generated_brand
     validate_generated_brand(presentation)
+    from .presentation_language import require_consistent_language
+    require_consistent_language(presentation, result)
     stream = io.BytesIO()
     presentation.save(stream)
     return stream.getvalue()
@@ -176,6 +178,9 @@ def presentation_for_copy(result: PipelineResult):
     The normal build still runs every evidence, table and export gate.
     """
     draft = result.model_copy(deep=True)
+    if draft.profile.report_requirements is None:
+        from adaptive_document_agent.models.customization import ReportRequirements
+        draft.profile.report_requirements = ReportRequirements()
     draft.profile.report_requirements.copy_translations = {}
     draft.profile.report_requirements.summary_copy_translations = {}
     presentation = _compose_presentation(draft, source_tables=False, validate_plan=False)
@@ -433,7 +438,11 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
                     [index.get(oid) for oid in chart.observation_ids if index.get(oid)],
                     [index.get(oid) for oid in chart.total_observation_ids if index.get(oid)])
                 entry = entry.model_copy(update={"section_title": heading})
-        scoped_contents.append(entry)
+        from .localized_summary_copy import localized_label
+        scoped_contents.append(entry.model_copy(update={
+            'title': localized_label(result, entry.title),
+            'section_title': localized_label(result, entry.section_title),
+        }))
     _add_planned_contents(presentation, scoped_contents, include_key_figures=bool(key_figures),
                           include_value_chain=value_chain)
     company_start = len(presentation.slides)
@@ -754,19 +763,21 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
             if page.placement != placement:
                 continue
             from .summary_visual_layout import summary_brief_items
+            from .localized_summary_copy import localized_label
             items = summary_brief_items(result, page)
+            title = localized_label(result, page.title)
             notes = page.model_dump_json()
             if index == 0:
                 notes += '\n\nComplete Summary reading and decisions:\n' + (
                     plan.company.summary_review.model_dump_json())
             source_visual = getattr(presentation, '_ada_source_visual', None)
             if page.compact or plan.company.summary_review.max_intro_slides is not None:
-                rendered = render_profile(presentation,page.title,items,notes=notes)
+                rendered = render_profile(presentation,title,items,notes=notes)
             elif index == 0 and source_visual:
                 from .presentation_source_visual import render_profile_with_source
-                rendered = render_profile_with_source(presentation, page.title, items, source_visual, notes=notes)
+                rendered = render_profile_with_source(presentation, title, items, source_visual, notes=notes)
             else:
-                rendered = render_profile(presentation, page.title, items, notes=notes)
+                rendered = render_profile(presentation, title, items, notes=notes)
             from .summary_export import bind_summary_pages
             bind_summary_pages(rendered, page, texts=[item.text for item in items])
             for slide in rendered:
@@ -1347,6 +1358,9 @@ def _add_cover(
         "company_identity": {"name": company_name, "source_pages": identity_pages},
     }
     notes = json.dumps(note_data, ensure_ascii=False, indent=2)
+    from .localized_summary_copy import localized_label
+    clean_title = localized_label(result, clean_title)
+    clean_purpose = localized_label(result, clean_purpose)
     if getattr(presentation, "_ada_artwork", None):
         from .presentation_artwork import add_picture_cover
         slide = add_picture_cover(presentation, clean_title, clean_purpose, presentation._ada_artwork)

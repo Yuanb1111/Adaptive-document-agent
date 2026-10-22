@@ -14,9 +14,8 @@ def text_frames(presentation):
     for slide in presentation.slides:
         for shape in slide.shapes:
             if shape.has_text_frame:
-                if (shape.name in {'customization:table_label', 'customization:source_section', 'customization:source_footer'}
-                        or shape.name.startswith('customization:source_footnote:')
-                        or shape.text.lstrip().lower().startswith(('source:','来源：'))):
+                if (shape.name in {'customization:source_section', 'customization:table_label'}
+                        or shape.name.startswith('customization:source_footnote:')):
                     continue
                 yield shape.text_frame, shape.width.inches, shape.height.inches
             elif shape.has_table and not shape.name.startswith('customization:source_table:'):
@@ -135,8 +134,9 @@ def apply_report_language(presentation, result):
     if not requirements or not requirements.copy_translations:
         return
     mapping = {display_text(k): display_text(v) for k,v in requirements.copy_translations.items()}
-    chinese = any(r.kind=='output_language' and r.resolution=='resolved' and r.language_scope in {'body','all'}
-                  and re.search(r'(?i)中文|chinese|^zh(?:-|$)',r.language) for r in requirements.items)
+    from .presentation_language import resolve_language
+    chinese = resolve_language(result.profile).language == 'chinese'
+    checked_values = set(mapping.values())
     # Native chart wrapping may happen after inventory capture. Rebind only
     # whitespace-equivalent, unambiguous strings; never use fuzzy matching.
     wrapped = {}
@@ -149,14 +149,16 @@ def apply_report_language(presentation, result):
         values = wrapped.get(' '.join(source.split()), set())
         if len(values) == 1:
             return next(iter(values))
-        if chinese and source.endswith(' (continued)'):
+        if source.endswith(' (continued)'):
             base = source.removesuffix(' (continued)')
-            if base in mapping:
-                return mapping[base] + '（续）'
+            checked = mapping.get(base, base if base in checked_values else None)
+            marker = mapping.get('(continued)', '（续）' if chinese else None)
+            if checked is not None and marker is not None:
+                return checked + (' ' if not chinese else '') + marker
         if heading:
             match = re.fullmatch(r'(\d{2}\s+)(.+)', source, flags=re.S)
-            if match and match[2] in mapping:
-                return match[1] + mapping[match[2]]
+            if match and (match[2] in mapping or match[2] in checked_values):
+                return match[1] + mapping.get(match[2], match[2])
         return None
     for frame, width, height in text_frames(presentation):
         source = display_text(frame.text)
@@ -197,7 +199,8 @@ def apply_report_language(presentation, result):
             if translation_errors(source, translated):
                 raise ValueError('Localized chart label changed source numbers or units')
             element.text = translated
-    localize_source_wrappers(presentation, result)
+    # Source wrapper prose participates in the same reviewed inventory. Literal
+    # source table cells and footnotes remain evidence, outside display prose.
 
 
 def localize_source_wrappers(presentation, result):

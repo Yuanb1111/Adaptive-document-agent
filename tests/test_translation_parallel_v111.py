@@ -13,7 +13,7 @@ def test_parallel_translation_merges_complete_ids_and_batch_times_on_owner(monke
         id='language',kind='output_language',request_quote='正文中文',description='Chinese prose',language='Chinese')])
     strings=[f'Claim {i}' for i in range(96)]
     from adaptive_document_agent.services import pptx_export,report_language,localized_summary_copy
-    monkeypatch.setattr(pptx_export,'presentation_for_copy',lambda _:SimpleNamespace())
+    monkeypatch.setattr(pptx_export,'presentation_for_copy',lambda _:SimpleNamespace(slides=[]))
     monkeypatch.setattr(report_language,'audience_copy',lambda _:strings)
     monkeypatch.setattr(report_language,'copy_limits',lambda _:{s:100 for s in strings})
     monkeypatch.setattr(report_language,'copy_fit_errors',lambda *_:[])

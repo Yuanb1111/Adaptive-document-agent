@@ -61,6 +61,12 @@ def summary_item_copy(result, page, index: int) -> str:
             if requirements else page.items[index].text)
 
 
+def localized_label(result, text):
+    """Choose checked labels before native geometry is calculated."""
+    requirements = result.profile.report_requirements
+    return requirements.copy_translations.get(text, text) if requirements else text
+
+
 def verify_summary_translations(result) -> None:
     requirements = result.profile.report_requirements
     if not requirements or not requirements.summary_copy_translations:
