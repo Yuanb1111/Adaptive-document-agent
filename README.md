@@ -1,5 +1,10 @@
 # Adaptive Document Intelligence Agent
 
+The [v171 chart-pair support layout](docs/PRESENTATION_LAYOUT_V171.md)
+tries a complete side table before splitting a chart pair across pages. It keeps
+the original leading caption, checks readable plot dimensions, and discards
+overflowing candidates without leaving partial charts or table fragments.
+
 The [v170 chart space and table pagination update](docs/PRESENTATION_LAYOUT_V170.md)
 gives single charts full width when their commentary fits a short bottom band.
 Exact-data tables keep small evidence groups together and balance unavoidable

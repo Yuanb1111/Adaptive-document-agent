@@ -50,7 +50,8 @@ def compose_geometry(width: float, height: float, top: float, chart_count: int, 
                      layout: str, has_support: bool, has_commentary: bool,
                      commentary_text: str = "", bottom_reserve: float = 0,
                      chart_min_widths: list[float] | None = None,
-                     prefer_side_commentary: bool = False) -> CompositionGeometry:
+                     prefer_side_commentary: bool = False,
+                     support_sidebar: bool = False) -> CompositionGeometry:
     """Partition the content zone into non-overlapping slots with a common baseline."""
     left, total = 0.55, width - 1.1
     # Reserve the template's copyright/page-number band separately from sources.
@@ -81,6 +82,25 @@ def compose_geometry(width: float, height: float, top: float, chart_count: int, 
         elif has_commentary:
             commentary = Rect(left, top, total, bottom - top)
         return CompositionGeometry([], support, commentary, footer)
+    if support_sidebar and chart_count == 2 and has_support:
+        # A complete small table can use vertical space beside a chart pair
+        # instead of forcing both plots above a fixed-height support band.
+        side_w = max(3.0, total * .28)
+        chart_w = total - side_w - GUTTER
+        minimums = chart_min_widths or [2.4, 2.4]
+        spare = chart_w - GUTTER - sum(minimums)
+        if len(minimums) != 2 or spare < -1e-6:
+            raise _ChartCapacityError('The chart pair cannot fit beside its support table.')
+        widths = [w + spare / 2 for w in minimums]
+        charts = [Rect(left, top, widths[0], bottom - top),
+                  Rect(left + widths[0] + GUTTER, top, widths[1], bottom - top)]
+        right = left + chart_w + GUTTER
+        support_h = (bottom - top) * .55 if has_commentary else bottom - top
+        support = Rect(right, top, side_w, support_h)
+        if has_commentary:
+            commentary = Rect(right, top + support_h + GUTTER, side_w,
+                              bottom - top - support_h - GUTTER)
+        return CompositionGeometry(charts, support, commentary, footer)
     if layout == "kpi_band" and has_support:
         support = Rect(left, top, total, 1.02)
         top += 1.02 + GUTTER
@@ -257,6 +277,22 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
                     presentation.part.drop_rel(slide_id.rId)
                     presentation.slides._sldIdLst.remove(slide_id)
                 raise
+        if (len(charts) == 2 and any(b.role == 'table' for b in slide_plan.visual_blocks)
+                and not any(b.role == 'kpi' for b in slide_plan.visual_blocks)):
+            from .qa_reporter import CriticalQAError
+            try:
+                candidate = _render_composed_slide(presentation, slide_plan, charts, result, index,
+                    preserve_charts=preserve_charts, support_sidebar=True)
+                validate_composed_geometry(presentation)
+                if len(candidate) == 1:
+                    return candidate
+            except (_ChartCapacityError, CriticalQAError):
+                pass
+            # Reject an overflowing candidate as a unit. The ordinary split
+            # below must never inherit its partial charts or table fragments.
+            for slide_id in list(presentation.slides._sldIdLst)[start:]:
+                presentation.part.drop_rel(slide_id.rId)
+                presentation.slides._sldIdLst.remove(slide_id)
         ordered_ids = list(dict.fromkeys(
             [cid for b in slide_plan.visual_blocks if b.role == "hero" for cid in b.chart_ids]
             + [c.id for c in charts]))
@@ -317,7 +353,7 @@ def _paginate_chart_slide(presentation, slide_plan: PresentationSlide,
 
 def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: list[ChartPlan],
                            result: PipelineResult, index, *, preserve_charts=False,
-                           compact_header=False) -> list:
+                          compact_header=False, support_sidebar=False) -> list:
     """Render all requested charts, explicit KPI/table facts and retained commentary."""
     from .pptx_export import _add_native_chart, _source_footer, _unit_label, _display_source_unit
     from adaptive_document_agent.document_model.metric_semantic_classifier import classify_metric, format_metric_display_value
@@ -382,7 +418,11 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
     denominators = getattr(presentation, '_ada_denominators', None)
     if denominators is None:
         denominators = source_total_denominators(result)
-    display_message = supported_subtitle(slide_plan, charts, index, denominators=denominators)
+    # The sidebar candidate replaces a two-page split. Keep the leading
+    # panel's caption from that split rather than selecting a different
+    # analytical caption merely because both charts now fit together.
+    caption_charts = charts[:1] if support_sidebar else charts
+    display_message = supported_subtitle(slide_plan, caption_charts, index, denominators=denominators)
     from .presentation_labels import source_fact_caption
     for chart in charts:
         display_message = source_fact_caption(display_message,
@@ -519,7 +559,7 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
         bottom_reserve=convention_h + context_h, chart_min_widths=[spaces[c.id][0] for c in charts],
         # A capacity retry must reclaim vertical plot space too. The complete
         # displaced header goes beside the plot even if it is a short caption.
-        prefer_side_commentary=compact_header)
+        prefer_side_commentary=compact_header, support_sidebar=support_sidebar)
     if context_h:
         context = _put_text(slide, context_copy,
             Rect(.55, presentation.slide_height.inches - 1.02 - context_h - convention_h + .04,

@@ -34,9 +34,9 @@ def test_expense_convention_does_not_split_a_small_support_series():
     original = [o.model_dump() for o in observations]
     output = Presentation(BytesIO(build_presentation(result)))
     slides = [s for s in output.slides if s.name.startswith("composed_")]
-    assert len(slides) == 2
-    # Larger readable plots may need a continuation; the support series must
-    # still stay complete on one page, with its sign convention below it.
+    assert len(slides) == 1
+    # The measured side table now keeps this complete comparison together,
+    # with readable plots and the full sign convention below the evidence.
     slide = next(s for s in slides if any(shape.has_table for shape in s.shapes))
     chart_shapes = [shape for s in slides for shape in s.shapes if shape.has_chart]
     assert len(chart_shapes) == 2
