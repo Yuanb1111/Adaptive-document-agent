@@ -652,6 +652,17 @@ class DocumentOrchestrator:
                     if deferred_brief:
                         from .brief_budget_schedule import complete_deferred_brief
                         complete_deferred_brief(self.gateway, final_result, progress=notify)
+                if final_result.executive_brief is not None:
+                    from .source_integration_review import review_supplementary_sources
+                    original_brief = final_result.executive_brief
+                    with record_timing(final_result.stage_details_ms, 'source_integration_review'):
+                        final_result.executive_brief = review_supplementary_sources(
+                            self.gateway, final_result, original_brief, progress=notify)
+                    if final_result.executive_brief != original_brief:
+                        from .presentation_budget_refinement import measure
+                        from adaptive_document_agent.services.slide_budgets import require_exported_budgets
+                        deck, _ = measure(final_result)
+                        require_exported_budgets(deck, final_result)
             except (ValueError, LLMResponseError, FinalBudgetBriefError) as exc:
                 final_result.pipeline_state = 'partial'
                 final_result.retry_from = 'reporting'

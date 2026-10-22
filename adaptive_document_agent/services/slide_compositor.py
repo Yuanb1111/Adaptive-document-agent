@@ -677,6 +677,15 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
                             for p in cell.text_frame.paragraphs:
                                 p.font.name, p.font.size = FONT, Pt(14)
                     return []
+            # Reserve enough period width for intact source labels. A narrow
+            # support slot must not split a year token across physical lines.
+            period_width = rect.w * .20
+            period_tokens = [token for o in items for token in format_observation_period(o).split()]
+            while period_width < min(2.0, rect.w * .35) and any(
+                    len(_lines(token, period_width - .30, 14)) > 1 for token in period_tokens):
+                period_width += .05
+            remaining_width = rect.w - period_width
+            widths = (remaining_width * .625, period_width, remaining_width * .375)
             rows, heights, shown = [], [0.4], []
             for o in items:
                 name = qualified_metric_name(o)
@@ -688,7 +697,7 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
                     column = next((e.column_label for e in o.evidence if e.column_label), "")
                     period_label = "Unspecified" + (f" ({column})" if column else "")
                 cells = (name, period_label, display)
-                cells = tuple("\n".join(_lines(v, rect.w * w - .30, 14)) for v, w in zip(cells, (.50, .20, .30)))
+                cells = tuple("\n".join(_lines(v, w - .30, 14)) for v, w in zip(cells, widths))
                 row_h = max(0.4, max(len(v.splitlines()) for v in cells) * 0.24 + 0.14)
                 if sum(heights) + row_h > rect.h:
                     break
@@ -707,9 +716,8 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
             shape = owner.shapes.add_table(len(shown) + 1, 3, Inches(rect.x), Inches(rect.y), Inches(rect.w), Inches(sum(heights)))
             shape.name = "table:" + ",".join(o.id for o in shown)
             table_obj = shape.table
-            table_obj.columns[0].width = Inches(rect.w * 0.50)
-            table_obj.columns[1].width = Inches(rect.w * 0.20)
-            table_obj.columns[2].width = Inches(rect.w * 0.30)
+            for column, width in zip(table_obj.columns, widths):
+                column.width = Inches(width)
             for j, label in enumerate(("Metric", "Period", "Value")):
                 table_obj.cell(0, j).text = label
             for i, cells in enumerate(rows, 1):

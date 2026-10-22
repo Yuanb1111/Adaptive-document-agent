@@ -33,25 +33,28 @@ def reduce_proposals(compact, original, proposed, decisions, handles, *, request
                 raise ValueError('A complete coverage proposal exceeds the reduction context budget.')
             groups.append(group)
         kept = []
-        for group in groups:
+        for position, group in enumerate(groups):
+            remaining = [sid for later in groups[position:] for sid in later]
+            # Earlier decisions may already make the complete merge fit. The
+            # remaining proposals were reviewed in the first pass; they need
+            # no additional omission merely to meet a per-batch percentage.
+            if size([*kept, *remaining]) <= characters:
+                return [*kept, *remaining]
             context = delta_context(compact, original, group)
             context['hierarchical_reduction'] = dict(level=level + 1,
                 purpose='Select the most material complementary evidence for one bounded audience report.',
                 source_scope='All requested points and qualifications are supplied; other groups are deferred.',
+                target_merge_context_characters=characters,
+                current_merge_context_characters=size([*kept, *remaining]),
                 target_retained_context_characters=max(1, len(encode(context)) // 2))
             entry = dict(level=level + 1, series_ids=group, context_characters=len(encode(context)))
             audit.setdefault('reductions', []).append(entry)
 
             def validate(reply):
                 local = _decisions(reply, group)
-                selected = [sid for sid in group if local[sid].decision == 'include']
-                # A bounded reduction must actually reduce its complete fact
-                # representation. Failed reduction is not an omission verdict.
-                if len(encode(delta_context(compact, original, selected))) > max(
-                        len(encode(delta_context(compact, original, []))),
-                        int(len(encode(context)) * .65)):
-                    raise ValueError('Proposed inclusions still exceed this reduction capacity; '
-                                     'make source-aware importance decisions within the audience budget.')
+                # Importance is a semantic decision. Fixed context overhead
+                # can make a small batch unable to meet a local shrink ratio.
+                # Enforce the actual complete merge capacity after the level.
                 return local
 
             local = request(context, TopicCoverageDelta, entry, validate)

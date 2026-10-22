@@ -70,7 +70,12 @@ def _decisions(response, requested):
     local = {decision.series_id: decision for decision in response.coverage_decisions}
     if (len(local) != len(response.coverage_decisions) or set(local) != set(requested)
             or any(not decision.reason.strip() for decision in local.values())):
-        raise ValueError('Coverage delta must decide each requested series exactly once with a nonempty reason.')
+        duplicates = sorted({d.series_id for d in response.coverage_decisions
+                             if sum(other.series_id == d.series_id for other in response.coverage_decisions) > 1})
+        raise ValueError('Coverage delta must decide each requested series exactly once with a nonempty reason. '
+            + json.dumps(dict(missing=sorted(set(requested) - set(local)),
+                              unexpected=sorted(set(local) - set(requested)), duplicates=duplicates,
+                              empty_reasons=[sid for sid, d in local.items() if not d.reason.strip()])))
     return local
 
 
@@ -122,8 +127,19 @@ def _merge(reviewed, original, provisional, lookup, primary_pages, validate):
     from .topic_reference_binding import bind_topic_references
     bind_topic_references(reviewed, lookup)
     revised = PresentationTopicSelection(topics=reviewed.topics, omissions=reviewed.omissions)
-    validate(revised, lookup, primary_pages=primary_pages)
-    local = _decisions(reviewed, provisional)
+    errors = []
+    try:
+        local = _decisions(reviewed, provisional)
+    except ValueError as exc:
+        errors.append(str(exc))
+    try:
+        validate(revised, lookup, primary_pages=primary_pages)
+    except ValueError as exc:
+        errors.append(str(exc))
+    if errors:
+        # Report independent schema/binding and source errors together. The
+        # single bounded correction must not discover them one at a time.
+        raise ValueError('\n'.join(errors))
     old = {sid for topic in original.topics for sid in topic.series_ids}
     selected_ids = {sid for topic in revised.topics for sid in topic.series_ids}
     if selected_ids - old - set(provisional):
@@ -244,7 +260,10 @@ def review_deltas(selection, candidates, lookup, primary_pages, payload, gateway
                 'and all retained source qualifications before selecting. Independently assess the '
                 'provisional additions against the complete original and included facts now supplied. '
                 'Return the complete model-authored topics and exactly one coverage_decision for each '
-                'provisional series. Retain every original accepted source observation. Regroup related '
+                'provisional series listed in series_requiring_coverage_decision, and NO others. '
+                'selectable_series_ids also includes previously accepted series: retain those in topics '
+                'but do NOT add coverage_decisions for them. The ledger is a delta, not the selected set. '
+                'Retain every original accepted source observation. Regroup related '
                 'questions when appropriate; do not add a topic for every included series. Reject a '
                 'provisional addition only with an explicit importance or source-based reason. Every '
                 'included fact must actually appear in the returned series_ids with its entire scope. '

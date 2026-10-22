@@ -36,8 +36,13 @@ def source_check_context(result):
 def uncited_source_checks(result, brief):
     """Literal referencing is an audit signal, never proof of semantic coverage."""
     records, _ = source_check_context(result)
+    from .source_integration_review import resolved_source_check_ids
+    resolved = resolved_source_check_ids(result, brief)
+    reviewed = any(w.code in {'source_integration_review', 'source_integration_unresolved'}
+                   for w in result.validation_warnings)
     return [record for record in records if record['status'] == 'checked_found'
-            and (not record['context_complete'] or not record['evidence']
+            and record['section_id'] not in resolved
+            and (reviewed or not record['context_complete'] or not record['evidence']
                  or not any(q['page'] == cited.page
                             and normalize_quote(q['text']) in normalize_quote(cited.text)
                             for q in record['evidence'] for item in brief.items for cited in item.evidence))]

@@ -1,5 +1,10 @@
 # Adaptive Document Intelligence Agent
 
+The [v166 substantive source coverage review](docs/SOURCE_COVERAGE_COMPLETION_V166.md)
+completes bounded candidate decisions and independently checks supplementary
+sources against the final conclusions. Review results expire when their bound
+evidence changes; a literal citation cannot override a rejected semantic review.
+
 The [v165 chart units and source scope fix](docs/PRESENTATION_UNITS_SOURCE_SCOPE_V165.md)
 keeps raw table unit lines out of percentage-chart subjects and presents source
 limitations on a dedicated page, with exact review records retained in notes.

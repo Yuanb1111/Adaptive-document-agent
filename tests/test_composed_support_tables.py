@@ -93,6 +93,8 @@ def test_table_layout_does_not_pivot_incompatible_period_bases_into_one_series()
                for table in tables)
     cells = [cell.text.replace("\n", "") for table in tables for row in table.rows for cell in row.cells]
     assert "6M2023" in cells
+    assert all('\n' not in table.cell(row, 1).text
+               for table in tables for row in range(1, len(table.rows)))
     assert support == before
 
 

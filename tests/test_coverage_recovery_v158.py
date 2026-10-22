@@ -35,11 +35,13 @@ def test_oversized_proposals_reduce_with_complete_facts_and_keep_original(monkey
             if schema is TopicCoverageDelta:
                 requested.extend(wanted)
                 return decisions(schema, wanted, wanted)
-            return schema(topics=selected.topics, coverage_decisions=[])
+            return schema(topics=selected.topics, coverage_decisions=[
+                d.model_dump() for d in decisions(TopicCoverageDelta, wanted).coverage_decisions])
     final = review_topic_coverage(selected, result, lookup, set(), raw, Gateway(), PresentationTopicSelector._validate)
     audit = json.loads(result.validation_warnings[-1].message)
     assert result.validation_warnings[-1].code == 'presentation_topic_coverage_review'
-    assert requested == reduced == ids and final.topics == selected.topics and selected == before
+    assert requested == ids and set(reduced) <= set(ids) and reduced
+    assert final.topics == selected.topics and selected == before
     assert audit['merge']['reductions'] and audit['calls_used'] <= module.MAX_REVIEW_CALLS
     assert len(audit['review']['coverage_decisions']) == len(ids)
     assert all(d['decision'] == 'omit' and d['reason'] for d in audit['review']['coverage_decisions'])

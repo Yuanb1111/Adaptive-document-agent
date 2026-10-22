@@ -197,10 +197,16 @@ def coverage_review_pending(result: PipelineResult) -> bool:
     """A historical failed review clears only after successful or full coverage."""
     latest = next((issue for issue in reversed(result.validation_warnings)
         if issue.code in {"presentation_topic_coverage_review", "presentation_topic_coverage_unresolved"}), None)
-    if latest is None or latest.code != "presentation_topic_coverage_unresolved":
+    if latest is None:
         return False
     from .presentation_topic_selector import series_directory
     _, lookup = series_directory(result)
+    if latest.code == 'presentation_topic_coverage_review':
+        audit = json.loads(latest.message)
+        if 'source_fingerprint' not in audit:
+            return False  # Preserve legacy checkpoint semantics.
+        from .coverage_review_binding import completed_review_is_current
+        return not completed_review_is_current(result, audit, lookup)
     selected = {sid for topic in (result.presentation_topics.topics if result.presentation_topics else [])
                 for sid in topic.series_ids}
     represented = [item for sid in selected if sid in lookup for item in lookup[sid]]
@@ -268,9 +274,10 @@ def review_topic_coverage(
             'Do not expand the story into an exhaustive series catalogue or discard material caveats.'})
 
     def record(code, severity, details):
+        from .coverage_review_binding import source_fingerprint
         result.validation_warnings.append(ValidationIssue(code=code, severity=severity,
             stage="presentation", related_ids=candidates,
-            message=json.dumps({**audit, **details}, ensure_ascii=False)))
+            message=json.dumps({**audit, **details, 'source_fingerprint': source_fingerprint(lookup)}, ensure_ascii=False)))
 
     if len(encoded) > MAX_REVIEW_CHARACTERS or len(candidates) > MAX_REVIEW_DECISIONS:
         return _review_bounded(selection, candidates, lookup, primary_pages,
