@@ -114,6 +114,9 @@ class DocumentOrchestrator:
                     raise ValueError('Retry presentation budget differs from the saved request; start a new analysis.')
             requirements = profile.report_requirements
             analysis_focus = profile.analysis_focus
+            from .source_coverage import retry_failed_source_checks
+            with record_timing(details, 'retry_source_checks'):
+                retry_failed_source_checks(document, profile, self.gateway, progress=notify)
             observations = [o.model_copy(deep=True) for o in resume.observations]
             extractor = ObservationExtractor()
             index = DocumentModelBuilder().build(observations)

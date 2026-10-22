@@ -3,7 +3,7 @@ import re
 from datetime import date
 
 from adaptive_document_agent.extraction.period_header_geometry import month_count
-from .brief_audit_scope import _DURATION, _MONTHS, _PERIOD, _period_keys, source_audit_scope
+from .brief_audit_scope import _DURATION, _PERIOD, _calendar_date, _period_keys, source_audit_scope
 
 _RELATIVE_YEAR = re.compile(r'\b(?:a year earlier|one year earlier|the prior[- ]year period|'
                             r'the previous[- ]year period|the same period (?:a year earlier|last year)|'
@@ -54,11 +54,8 @@ def _flow_identity(match):
     if not match['flow']:
         return None
     duration = re.match(rf'({_DURATION})\s+months?', match[0], re.I)
-    closing = re.search(r'([A-Za-z]+)\s+(\d{1,2}),?\s+((?:19|20)\d{2})$', match[0])
-    try:
-        day = date(int(closing[3]), [m.casefold() for m in _MONTHS].index(closing[1].casefold()) + 1,
-                   int(closing[2]))
-    except (ValueError, TypeError):
+    day = _calendar_date(re.split(r'\bended\s+', match[0], flags=re.I)[-1])
+    if day is None:
         return None
     return month_count(duration[1]), day.isoformat()
 

@@ -12,7 +12,7 @@ _MONTHS = "January February March April May June July August September October N
 _MONTH = "(?:" + "|".join(_MONTHS) + ")"
 _YEAR = r"(?:19|20)\d{2}"
 _DURATION = "(?:" + "|".join(MONTH_COUNTS) + r"|1[0-2]|[1-9])"
-_CALENDAR_DATE = rf"{_MONTH}\s+\d{{1,2}},?\s+{_YEAR}"
+_CALENDAR_DATE = rf"(?:{_MONTH}\s+\d{{1,2}},?|\d{{1,2}}\s+{_MONTH})\s+{_YEAR}"
 _PERIOD = re.compile(
     rf"(?P<flow>{_DURATION}\s+months?\s+ended\s+{_CALENDAR_DATE})"
     rf"|(?P<label>(?:FY|[1-9]M|1[0-2]M|[12]H|H[12]|Q[1-4])\s*{_YEAR})"
@@ -151,15 +151,34 @@ def source_audit_scope(item, result):
     return inventory
 
 
+def _calendar_date(value):
+    """Parse complete English dates without reducing an invalid date to its year."""
+    parts = re.fullmatch(rf'({_MONTH})\s+(\d{{1,2}}),?\s+({_YEAR})', value, re.I)
+    if parts:
+        month, day, year = parts.groups()
+    else:
+        parts = re.fullmatch(rf'(\d{{1,2}})\s+({_MONTH})\s+({_YEAR})', value, re.I)
+        if not parts:
+            return None
+        day, month, year = parts.groups()
+    try:
+        return date(int(year), [m.casefold() for m in _MONTHS].index(month.casefold()) + 1, int(day))
+    except ValueError:
+        return None
+
+
 def _period_keys(match, columns):
     value = match[0]
     if match['flow']:
         duration = re.match(rf'({_DURATION})\s+months?', value, re.I)
         months, year = month_count(duration[1]), value[-4:]
+        closing = _calendar_date(re.split(r'\bended\s+', value, flags=re.I)[-1])
+        if closing is None:
+            return set()
         keys = {f'{months}M{year}'}
-        if months == 6 and re.search(r'June\s+30,?\s+\d{4}$', value, re.I):
+        if months == 6 and (closing.month, closing.day) == (6, 30):
             keys.update((f'1H{year}', f'H1{year}'))
-        elif months == 6 and re.search(r'December\s+31,?\s+\d{4}$', value, re.I):
+        elif months == 6 and (closing.month, closing.day) == (12, 31):
             keys.update((f'2H{year}', f'H2{year}'))
         return keys
     if match['label']:
@@ -179,12 +198,10 @@ def _period_keys(match, columns):
         second = re.fullmatch(r'(?:2H|H2)(\d{4})', label)
         return {label, f'2H{second[1]}', f'H2{second[1]}'} if second else {label}
     if match['date']:
-        parts = re.fullmatch(rf'({_MONTH})\s+(\d{{1,2}}),?\s+({_YEAR})', value, re.I)
-        try:
-            key = date(int(parts[3]), [m.casefold() for m in _MONTHS].index(parts[1].casefold()) + 1,
-                       int(parts[2])).isoformat()
-        except ValueError:
+        parsed = _calendar_date(value)
+        if parsed is None:
             return set()
+        key = parsed.isoformat()
     elif match['iso']:
         key = value
     else:

@@ -237,7 +237,19 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
             presentation.part.drop_rel(slide_id.rId)
             presentation.slides._sldIdLst.remove(slide_id)
         if len(charts) <= 1:
-            raise
+            if not charts:
+                raise
+            # Splitting panels cannot rescue a single chart beneath a long
+            # heading/question. Try one measured header reflow, keeping the
+            # full copy in commentary and every source qualification visible.
+            try:
+                return _render_composed_slide(presentation, slide_plan, charts, result, index,
+                    preserve_charts=preserve_charts, compact_header=True)
+            except Exception:
+                for slide_id in list(presentation.slides._sldIdLst)[start:]:
+                    presentation.part.drop_rel(slide_id.rId)
+                    presentation.slides._sldIdLst.remove(slide_id)
+                raise
         ordered_ids = list(dict.fromkeys(
             [cid for b in slide_plan.visual_blocks if b.role == "hero" for cid in b.chart_ids]
             + [c.id for c in charts]))
@@ -297,7 +309,8 @@ def _paginate_chart_slide(presentation, slide_plan: PresentationSlide,
 
 
 def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: list[ChartPlan],
-                           result: PipelineResult, index, *, preserve_charts=False) -> list:
+                           result: PipelineResult, index, *, preserve_charts=False,
+                           compact_header=False) -> list:
     """Render all requested charts, explicit KPI/table facts and retained commentary."""
     from .pptx_export import _add_native_chart, _source_footer, _unit_label, _display_source_unit
     from adaptive_document_agent.document_model.metric_semantic_classifier import classify_metric, format_metric_display_value
@@ -452,6 +465,22 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
     context_copy = "\n".join(context_notes)
     context_h = (len(_lines(context_copy, presentation.slide_width.inches - 1.1, 11))
                  * 14 / 72 + .12) if context_copy else 0
+    if compact_header and len(charts) == 1:
+        # Use the existing source-bound panel label as the compact heading;
+        # moving authored copy is a geometry change, never a semantic rewrite.
+        chart = charts[0]
+        values = [index.get(oid) for oid in chart.observation_ids if index.get(oid)]
+        panel_heading = readable_chart_heading(qualify_heading(chart.title, values),
+                                               composition=uses_composition_data(chart))
+        if uses_composition_data(chart):
+            totals = [index.get(oid) for oid in chart.total_observation_ids if index.get(oid)]
+            panel_heading = composition_heading(panel_heading, chart, values, totals)
+        from .presentation_labels import source_share_heading
+        panel_heading = source_share_heading(panel_heading, values, denominators)
+        if len(_lines(panel_heading, 8.91, 32)) <= 2:
+            moved = [part for part in (heading, subtitle, text) if part and part != panel_heading]
+            text = '\n'.join(dict.fromkeys(moved))
+            heading, subtitle = panel_heading, ''
     page_title = heading
     slide, top = _base(presentation, page_title, subtitle)
     slide.name = f"composed_{slide_plan.layout}"

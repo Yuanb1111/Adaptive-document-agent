@@ -1,5 +1,10 @@
 # Adaptive Document Intelligence Agent
 
+The [v168 report source and chart recovery](docs/SINGLE_CHART_HEADER_REFLOW_V168.md)
+retries unfinished supplementary source reads during report recovery and binds
+day-first dates to their exact source columns. Long chart headings can reflow
+beside an isolated chart while retaining the complete source qualifications.
+
 The [v167 content-aware presentation layout fix](docs/PRESENTATION_LAYOUT_V167.md)
 reserves readable plot height, sizes short commentary to its actual copy, keeps
 small period comparisons together, and measures Data Index columns before

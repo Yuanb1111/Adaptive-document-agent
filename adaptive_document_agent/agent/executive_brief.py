@@ -137,11 +137,15 @@ class ExecutiveBriefWriter:
         included_topics = [(title, [page for page in source_pages if page in excerpts])
                            for title, source_pages in topic_pages]
         included_topics = [(title, source_pages) for title, source_pages in included_topics if source_pages]
+        # Independent source integration may discover a material qualification.
+        # Reserve bounded capacity before selecting/locking the initial findings.
+        maximum_findings = 7 - min(4, len(source_checks))
         payload = {'document_context': document_context,
                    'user_focus': result.profile.analysis_focus,
                    'analysis_scope': result.profile.analysis_page_ranges,
                    'output_limits': {
-                       'maximum_findings': 7,
+                       'maximum_findings': maximum_findings,
+                       'reserved_source_findings': 7 - maximum_findings,
                        'label_characters': ExecutiveBriefItem.model_json_schema()['properties']['label']['maxLength'],
                        'text_characters': ExecutiveBriefItem.model_json_schema()['properties']['text']['maxLength'],
                        'quote_characters': BriefQuote.model_json_schema()['properties']['text']['maxLength'],
@@ -162,7 +166,9 @@ class ExecutiveBriefWriter:
         payload['source_native_quantity_options'] = _source_quantity_options(result,excerpts,blocks)
         messages = [{'role': 'system', 'content': load_prompt('executive_brief.txt') +
                      '\nPrefer evidence entries {"ref":"block_id"} from evidence_blocks. '
-                     'Return at most seven material findings. Detailed introduction coverage '
+                     f'Return at most {maximum_findings} material findings, reserving the remaining '
+                     'brief capacity for independently reviewed supplementary qualifications. '
+                     'Select the material lead and counterpoints using the complete supplied evidence. Detailed introduction coverage '
                      'and source-table appendices belong to separate sections, not this briefing. '
                      'The application fills their exact page and original text. Cite the blocks '
                      'containing the source row AND its year/period headers, currency, scale, '
