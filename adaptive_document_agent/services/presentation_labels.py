@@ -84,7 +84,7 @@ def readable_chart_heading(title: str, *, composition: bool = False) -> str:
 def _composition_scope(chart, observations, totals):
     """Resolve only explicit component labels from a validated plotted matrix."""
     from .composition_data import composition_data
-    from .source_row_composition import source_row_views
+    from .source_row_composition import source_row_views, source_row_heading
 
     data = composition_data(chart, observations, totals)
     views = source_row_views(observations, chart.composition_table_id) if chart.composition_table_id else observations
@@ -99,7 +99,7 @@ def _composition_scope(chart, observations, totals):
     # one component. Only labels that identify exactly one part are mechanical.
     components = {label: next(iter(categories)) for label, categories in aliases.items()
                   if label and len(categories) == 1}
-    heading = chart.title
+    heading = source_row_heading(chart.title, chart, observations)
     if not heading.strip() or _composition_inventory(heading, components, data.categories, single=True):
         measures = {view.metric_original for view in views}
         heading = next(iter(measures)) + " composition" if len(measures) == 1 else "Category composition"
@@ -135,6 +135,8 @@ def composition_heading(title, chart, observations, totals=()):
     Authored takeaways are preserved verbatim. No denominator or subject is
     inferred from surrounding table prose; the chart's own title is preferred.
     """
+    from .source_row_composition import source_row_heading
+    title = source_row_heading(title, chart, observations)
     heading, components, categories = _composition_scope(chart, observations, totals)
     return heading if (_composition_inventory(title, components, categories, single=True)
                        or title.strip().casefold() in {'reported measure', 'reported measures'}) else title

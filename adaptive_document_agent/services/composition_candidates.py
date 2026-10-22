@@ -66,9 +66,9 @@ def reported_composition_charts(index, *, maximum=3):
         totals = [o for o in views if is_aggregate_category(o.category_dimensions[SOURCE_ROW])]
         parts = [o for o in views if o not in totals]
         kind = "stacked_percent" if len({o.period for o in parts}) > 1 else "doughnut"
-        contexts = {index.get(o.id).dimensions.get("table_context") for o in views}
-        context = next(iter(contexts)) if len(contexts) == 1 else None
-        title = f"{context} — {key[1]}" if context and context != key[0] else f"{key[1]} composition"
+        # Extracted table context may be a unit line spanning unrelated
+        # columns. Only the explicit plotted column identifies this measure.
+        title = f"{key[1]} composition"
         plan = ChartPlan(
             id=stable_id("composition", *key), title=title,
             chart_type=kind, available_chart_types=[kind, "table"],

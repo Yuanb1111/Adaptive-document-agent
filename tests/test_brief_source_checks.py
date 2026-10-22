@@ -38,7 +38,8 @@ def test_uncited_found_check_names_question_impact_and_source_in_warning_and_clo
     assert 'cancellation' in warning.message and 'certainty of future demand' in warning.message
     slides = render_closing(blank_deck(), result, PresentationSlide(id='closing', slide_type='risks', title='Conclusions'))
     text = ' '.join(shape.text for slide in slides for shape in slide.shapes if shape.has_text_frame)
-    assert 'Source coverage limit' in text and 'cited pages' in text
+    assert 'Supplementary sources' in text and 'cited pages' in text
+    assert 'has not been incorporated' not in text
     assert 'Check cancellation conditions' not in text and 'Changes certainty of future demand' not in text
     notes = ' '.join(slide.notes_slide.notes_text_frame.text for slide in slides)
     assert 'Check cancellation conditions' in notes and 'Changes certainty of future demand' in notes
@@ -61,7 +62,7 @@ def test_failed_source_check_stays_visible_after_other_checked_evidence_is_cited
     slides = render_closing(blank_deck(), result,
         PresentationSlide(id='closing', slide_type='risks', title='Conclusions'))
     text = ' '.join(shape.text for slide in slides for shape in slide.shapes if shape.has_text_frame)
-    assert 'Source review incomplete' in text and 'p. 5' in text
+    assert 'Source review limits' in text and 'p. 5' in text
     assert 'Original internal' not in text and 'Transport failed' not in text
     assert 'Original internal question' in slides[0].notes_slide.notes_text_frame.text
 

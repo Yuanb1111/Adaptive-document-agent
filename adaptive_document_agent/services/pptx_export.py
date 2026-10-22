@@ -395,9 +395,9 @@ def _build_planned_presentation(presentation: Any, result: PipelineResult) -> No
     contents_slides = [slide for slide in plan.slides
                        if not (omit_summary and slide.slide_type == "executive_summary")]
     if result.executive_brief is not None:
-        from .presentation_closing import editorial_closing_items
+        from .presentation_closing import editorial_closing_items, SCOPE_TITLE
         has_review_status = bool(editorial_closing_items(result))
-        contents_slides = [s.model_copy(update={'section_title': 'Review status', 'title': 'Review status'})
+        contents_slides = [s.model_copy(update={'section_title': SCOPE_TITLE, 'title': SCOPE_TITLE})
                           if s.slide_type == 'risks' else s for s in contents_slides
                           if s.slide_type != 'risks' or has_review_status]
     if final_summary:

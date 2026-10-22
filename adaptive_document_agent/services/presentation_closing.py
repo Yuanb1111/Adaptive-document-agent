@@ -7,6 +7,8 @@ import json
 
 from .presentation_brief import BriefItem, _item_height, _split_profile_item, render_profile
 
+SCOPE_TITLE = 'Scope and limitations'
+
 
 def editorial_closing_items(result):
     """Only unresolved checks add information after the validated summary."""
@@ -16,20 +18,26 @@ def editorial_closing_items(result):
     # Scope-selection questions and reviewer deliberations belong to the
     # exported audit, not audience conclusions. Keep a concrete visible limit
     # and the affected source pages without presenting the question as fact.
-    items = [BriefItem('Source coverage limit',
-        'Additional source evidence has not been incorporated into these conclusions. '
-        'Review the cited pages before relying on the summary as a complete assessment.',
-        check['pages']) for check in uncited_source_checks(result, result.executive_brief)]
+    uncited = uncited_source_checks(result, result.executive_brief)
+    # Missing literal quotes are a traceability signal, not a semantic finding
+    # that material evidence was omitted. Combine the signal without upgrading
+    # it to an analytical claim or repeating the same warning for each check.
+    items = [BriefItem('Supplementary sources',
+        'The summary does not directly cite all supplementary source excerpts. '
+        'Consult the cited pages for additional context when interpreting the conclusions.',
+        sorted({page for check in uncited for page in check['pages']}))] if uncited else []
     coverage = result.profile.source_coverage
     pending = [check for check in coverage.checks if check.status in {'unchecked', 'incomplete', 'failed'}] if coverage else []
     if pending:
-        items.append(BriefItem('Source review incomplete',
+        items.append(BriefItem('Source review limits',
             'Some supplementary source pages could not be fully reviewed. '
             'These conclusions may omit material context from the cited pages.',
             sorted({page for check in pending for page in check.pages})))
     if coverage_review_pending(result):
-        items.append(BriefItem('Coverage review incomplete',
-            'Material omissions may remain; complete review before final use.', []))
+        items.append(BriefItem('Unassessed information',
+            'Some extracted information outside the selected topics has not been assessed '
+            'for its effect on the conclusions. This presentation should not be treated '
+            'as a complete assessment of the document.', []))
     return items
 
 
@@ -49,11 +57,16 @@ def render_closing(presentation, result, plan):
                             'source_review_checks': ([check.model_dump(mode='json')
                                 for check in result.profile.source_coverage.checks]
                                 if result.profile.source_coverage else []),
+                            'topic_coverage_checks': [issue.model_dump(mode='json')
+                                for issue in result.validation_warnings if issue.code in {
+                                    'presentation_topic_coverage_review', 'presentation_topic_coverage_unresolved'}],
                             'superseded_closing_plan': plan.model_dump(mode='json')}, ensure_ascii=False)
         if findings:
-            slides = render_complete_summary(presentation, 'Review status', findings, notes=notes)
+            slides = render_complete_summary(presentation, SCOPE_TITLE, findings, notes=notes)
             for slide in slides:
-                slide._ada_review_status = True
+                # Persist the semantic role across save/reload. Scope limits
+                # belong together, never in an unrelated introduction margin.
+                slide.element.cSld.set('name', 'ada:scope_limits')
             return slides
         if len(presentation.slides):
             presentation.slides[-1].notes_slide.notes_text_frame.text += '\n\n' + notes

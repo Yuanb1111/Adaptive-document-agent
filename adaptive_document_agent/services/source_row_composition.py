@@ -6,6 +6,29 @@ import re
 SOURCE_ROW = "source_row"
 
 
+def source_row_heading(title, chart, observations):
+    """Repair only legacy mechanically prefixed source-column captions.
+
+    Table context is retained as evidence metadata, not promoted to a chart
+    subject. Authored headings and qualifications are never substring-stripped.
+    """
+    if not chart.composition_table_id or not observations:
+        return title
+    views = source_row_views(observations, chart.composition_table_id)
+    contexts = {item.dimensions.get('table_context') for item in observations}
+    columns = {item.metric_original for item in views}
+    if len(contexts) != 1 or not next(iter(contexts)) or len(columns) != 1:
+        return title
+    context, column = next(iter(contexts)), next(iter(columns))
+    base = f'{context} — {column}'
+    normalize = lambda text: ' '.join(text.casefold().split())
+    suffixes = ['', *(f' ({period})' for period in {item.period for item in observations} if period)]
+    for suffix in suffixes:
+        if normalize(title) == normalize(base + suffix):
+            return f'{column} composition{suffix}'
+    return title
+
+
 def source_row_views(observations, table_id):
     """Project table labels for validation/rendering without editing raw facts."""
     views = []

@@ -19,7 +19,7 @@ def _title(slide):
 
 
 def _sparse(slide, page_height=7.5):
-    if slide.element.cSld.get('name') == 'ada:conclusion':
+    if slide.element.cSld.get('name') in {'ada:conclusion', 'ada:scope_limits'}:
         return False
     if any(properties.get('descr', '').startswith('ADA_SUMMARY_ITEM_V2:')
            for shape in slide.shapes for properties in shape.element.xpath('.//p:cNvPr')):
@@ -65,7 +65,8 @@ def fold_sparse_text_pages(presentation, result=None):
     original_ids = [s.slide_id for s in slides]
     destinations = {identifier: identifier for identifier in original_ids}
     sparse = [s for s in slides if _sparse(s, presentation.slide_height.inches)]
-    targets = [s for s in slides if s not in sparse and (
+    targets = [s for s in slides if s not in sparse
+               and s.element.cSld.get('name') != 'ada:scope_limits' and (
         _bodies(s) or any(shape.has_chart or shape.has_table for shape in s.shapes))]
     if not targets:
         return []

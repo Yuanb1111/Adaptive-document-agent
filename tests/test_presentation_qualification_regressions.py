@@ -119,5 +119,6 @@ def test_incomplete_coverage_remains_visible_in_the_delivered_deck(monkeypatch):
     r.executive_brief = ExecutiveBrief.model_validate(payload(source))
     slides = render_closing(deck(), r, PresentationSlide(id='closing', slide_type='risks', title='Closing'))
     visible = '\n'.join(s.text for p in slides for s in p.shapes if s.has_text_frame)
-    assert 'Coverage review incomplete' in visible
-    assert 'Material omissions may remain' in visible
+    assert 'Unassessed information' in visible
+    assert 'not been assessed for its effect on the conclusions' in visible
+    assert 'should not be treated as a complete assessment' in visible

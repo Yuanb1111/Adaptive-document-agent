@@ -1,5 +1,9 @@
 # Adaptive Document Intelligence Agent
 
+The [v165 chart units and source scope fix](docs/PRESENTATION_UNITS_SOURCE_SCOPE_V165.md)
+keeps raw table unit lines out of percentage-chart subjects and presents source
+limitations on a dedicated page, with exact review records retained in notes.
+
 The [v164 unified presentation language fix](docs/UNIFIED_PRESENTATION_LANGUAGE_V164.md)
 gives explicit output-language instructions priority, otherwise follows the source
 language, and checks the actual exported display copy. Translated introductions
