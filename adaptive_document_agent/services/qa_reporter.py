@@ -428,46 +428,6 @@ def run_comprehensive_qa(result: PipelineResult, auto_repair: bool = True) -> QA
             for ei in evidence_issues:
                 report.warnings.append(ei)
 
-        # Revalidation pass
-        validator = ClaimValidator()
-        claim_issues = validator.validate_plan(result.presentation_plan, result.observations, result.charts,
-            insight_observation_ids=insight_inputs(result) if result.insights else None)
-        reported_claim_transitions: set[tuple[str, str, str, str]] = set()
-        for issue in claim_issues:
-            if issue.code == "directional_contradiction":
-                # A single underlying contradiction can appear in a slide title,
-                # message, and bullets.  QA reports the root issue once per
-                # slide, metric, and period transition while the structured
-                # validator remains component-aware for automatic repairs.
-                transition_key = (
-                    str(getattr(issue, "slide_id", "")),
-                    str(getattr(issue, "metric_name", "")).strip().casefold(),
-                    str(getattr(issue, "start_period", "")),
-                    str(getattr(issue, "end_period", "")),
-                )
-                if transition_key in reported_claim_transitions:
-                    continue
-                reported_claim_transitions.add(transition_key)
-                report.critical_errors.append(
-                    QAItem(
-                        code="directional_contradiction",
-                        severity="CRITICAL",
-                        message=issue.message,
-                        slide_id=getattr(issue, "slide_id", None) or None,
-                        related_ids=issue.related_ids,
-                    )
-                )
-            else:
-                target = report.critical_errors if issue.severity == "error" else report.warnings
-                target.append(
-                    QAItem(
-                        code=issue.code,
-                        severity="CRITICAL" if issue.severity == "error" else "WARNING",
-                        message=issue.message,
-                        related_ids=issue.related_ids,
-                    )
-                )
-
     # 5. Check chart mismatches
     if result.presentation_plan:
         # Imported lazily to avoid making the QA model layer depend on PPTX at
@@ -597,6 +557,49 @@ def run_comprehensive_qa(result: PipelineResult, auto_repair: bool = True) -> QA
 
         cross_issues = CrossSlideValidator(result.presentation_plan, result.observations, result.charts,
             insight_observation_ids=insight_inputs(result) if result.insights else None).validate_and_repair(auto_repair=auto_repair)
+
+        # Final read-only claim pass: cross-slide repairs can change both
+        # wording and source references after the initial claim repair. The
+        # export decision must describe the final plan, not an intermediate one.
+        validator = ClaimValidator()
+        claim_issues = validator.validate_plan(result.presentation_plan, result.observations, result.charts,
+            insight_observation_ids=insight_inputs(result) if result.insights else None)
+        reported_claim_transitions: set[tuple[str, str, str, str]] = set()
+        for issue in claim_issues:
+            if issue.code == "directional_contradiction":
+                # A single underlying contradiction can appear in a slide title,
+                # message, and bullets.  QA reports the root issue once per
+                # slide, metric, and period transition while the structured
+                # validator remains component-aware for automatic repairs.
+                transition_key = (
+                    str(getattr(issue, "slide_id", "")),
+                    str(getattr(issue, "metric_name", "")).strip().casefold(),
+                    str(getattr(issue, "start_period", "")),
+                    str(getattr(issue, "end_period", "")),
+                )
+                if transition_key in reported_claim_transitions:
+                    continue
+                reported_claim_transitions.add(transition_key)
+                report.critical_errors.append(
+                    QAItem(
+                        code="directional_contradiction",
+                        severity="CRITICAL",
+                        message=issue.message,
+                        slide_id=getattr(issue, "slide_id", None) or None,
+                        related_ids=issue.related_ids,
+                    )
+                )
+            else:
+                target = report.critical_errors if issue.severity == "error" else report.warnings
+                target.append(
+                    QAItem(
+                        code=issue.code,
+                        severity="CRITICAL" if issue.severity == "error" else "WARNING",
+                        message=issue.message,
+                        related_ids=issue.related_ids,
+                    )
+                )
+
         for issue in cross_issues:
             if issue.severity == "CRITICAL":
                 if not any(old.message == issue.message and old.slide_id == issue.slide_id for old in report.critical_errors):

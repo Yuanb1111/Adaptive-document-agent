@@ -119,7 +119,7 @@ def align_redundant_slide_evidence(
             ):
                 continue
             direct_periods = {item.period for item in direct}
-            candidates: list[tuple[int, dict[str, str]]] = []
+            candidates: list[tuple[int, tuple[str, str], dict[str, str]]] = []
             for (peer_metric, peer_context), series in direct_series.items():
                 peer_periods = {item.period for item in series}
                 if peer_metric != metric or peer_context == context or not direct_periods <= peer_periods:
@@ -135,15 +135,23 @@ def align_redundant_slide_evidence(
                         break
                     matches[item.id] = peers[0].id
                 if len(matches) == len(direct):
-                    candidates.append((len(peer_periods), matches))
+                    candidates.append((len(peer_periods), peer_context, matches))
             if candidates:
                 # An exact-value source with additional reported periods is a
                 # better coherent reference than another duplicate with only
-                # equal coverage. Equal best candidates remain ambiguous.
-                most_periods = max(count for count, _ in candidates)
-                best = [matches for count, matches in candidates if count == most_periods]
+                # equal coverage. Competing larger supersets remain ambiguous.
+                most_periods = max(count for count, _, _ in candidates)
+                best = [(peer_context, matches) for count, peer_context, matches in candidates
+                        if count == most_periods]
+                # All equal-coverage candidates match every retained fact.
+                # Choose the same lowest provenance key for three or more
+                # copies, instead of requiring another repair pass per copy.
+                # Competing larger supersets may differ in their extra facts
+                # and must remain ambiguous.
+                if most_periods == len(direct_periods):
+                    best = [min(best, key=lambda candidate: candidate[0])]
                 if len(best) == 1:
-                    replacements.update(best[0])
+                    replacements.update(best[0][1])
 
         if not replacements:
             continue

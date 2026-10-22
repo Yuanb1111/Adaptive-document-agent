@@ -1,6 +1,6 @@
 """Loaded code contract shared by session, extraction and export caches."""
 
-PIPELINE_VERSION = "2026-10-22-caveat-support-scope-v162"
+PIPELINE_VERSION = "2026-10-22-final-claim-revalidation-v163"
 # Bump only when the corresponding evidence/analysis contract changes.
 EXTRACTION_VERSION = "extraction-v23"
-ANALYSIS_VERSION = "analysis-v86"
+ANALYSIS_VERSION = "analysis-v87"

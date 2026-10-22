@@ -1,5 +1,10 @@
 # Adaptive Document Intelligence Agent
 
+The [v163 final claim revalidation fix](docs/FINAL_CLAIM_REVALIDATION_V163.md)
+aligns proven equal-coverage source copies in one pass and validates claims after
+all cross-slide repairs, so export uses the final evidence rather than stale
+intermediate errors.
+
 The [v162 caveat support scope fix](docs/CAVEAT_SUPPORT_SCOPE_V162.md)
 recognizes a selected supporting measure named in a model-authored caveat only
 when the existing source-definition or subtotal checks independently prove its
