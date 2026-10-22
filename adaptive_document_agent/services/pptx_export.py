@@ -145,7 +145,12 @@ def build_presentation(result: PipelineResult, template_path: str | Path | None 
     require_verified_introduction(result)
     if result.pipeline_state == 'partial':
         raise ValueError('PowerPoint requires a completed analysis. Retain diagnostics and retry the incomplete stage.')
+    from .pipeline_completion import require_source_integration
+    require_source_integration(result)
     presentation = _compose_presentation(result, template_path, artwork=artwork, source_pdf=source_pdf)
+    # Cached scope preparation during composition may update selected topics.
+    # The rendered context must still match its independently approved review.
+    require_source_integration(result)
     from .requested_tables import verify_requested_tables
     from .summary_export import verify_summary_export
     verify_summary_export(presentation, result)

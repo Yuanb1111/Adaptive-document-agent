@@ -103,7 +103,7 @@ def _reported_delta(text, expected):
 
 def reported_delta_errors(comparison, item, *, pages=None):
     errors = []
-    if comparison.claim not in item.text:
+    if not any(comparison.claim in text for text in (item.label, item.text)):
         errors.append('Comparison does not bind an exact audience claim')
     if (comparison.start_value or comparison.end_value or comparison.start_ref or comparison.end_ref
             or comparison.start_context or comparison.end_context or comparison.absolute_magnitude):

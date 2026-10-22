@@ -1,5 +1,12 @@
 # Adaptive Document Intelligence Agent
 
+The [v173 dense-composition capacity recovery](docs/DENSE_COMPOSITION_CAPACITY_V173.md)
+gives a single chart full width after ordinary pagination and header reflow
+cannot fit its legend. Source qualifications stay on the chart page; complete
+supporting facts and commentary continue without weakening readability checks.
+Supplementary source review also retries proven output truncation with bounded
+capacity, and incomplete or stale review blocks completion and PowerPoint export.
+
 The [v172 standalone-table readability update](docs/PRESENTATION_LAYOUT_V172.md)
 uses spare page space for larger table text and rows when the complete table
 still fits. Dense tables and their continuations retain consistent typography

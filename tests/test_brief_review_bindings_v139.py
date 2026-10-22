@@ -50,7 +50,7 @@ def test_exact_binding_correction_keeps_audience_sources_and_unchanged_items_mem
     assert brief.model_dump_json() == before
     assert len(gateway.calls) == 2
     assert '"index": 1' not in gateway.calls[1][1]['content']
-    assert 'label, paraphrase' in gateway.calls[1][-1]['content']
+    assert 'item.label or item.text' in gateway.calls[1][-1]['content']
     audit = json.loads(next(w.message for w in result.validation_warnings
                            if w.code == 'executive_brief_binding_audit'))
     assert audit['original'][0]['comparisons'][0]['claim'] == original['items'][0]['comparisons'][0]['claim']

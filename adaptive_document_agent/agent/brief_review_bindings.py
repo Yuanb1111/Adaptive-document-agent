@@ -9,7 +9,8 @@ from .prompting import untrusted_document_message
 def correct_review_bindings(gateway, response, *, brief, pending, messages, result=None, cancelled=None):
     """Re-review only malformed exact-text bindings, never edit audience/source copy."""
     invalid = {row.index: row for row in response.items
-               if any(comparison.claim not in brief.items[row.index].text
+               if any(not any(comparison.claim in text for text in (
+                          brief.items[row.index].label, brief.items[row.index].text))
                       for comparison in row.comparisons)}
     if not invalid:
         return response, {}
@@ -20,11 +21,11 @@ def correct_review_bindings(gateway, response, *, brief, pending, messages, resu
     correction_messages = [messages[0], untrusted_document_message(json.dumps(requested, ensure_ascii=False)),
         untrusted_document_message(json.dumps(record['original'], ensure_ascii=False)),
         {'role': 'user', 'content':
-         'The reviewer comparisons above do not bind exact substrings of the supplied item.text. '
+         'The reviewer comparisons above do not bind exact substrings of the supplied item.label or item.text. '
          'Perform one binding correction for every supplied index, against the SAME immutable '
          'audience text and literal evidence. Copy each comparison.claim as one contiguous exact '
-         'substring of item.text, including intervening period words and punctuation. A label, '
-         'paraphrase, reordered sentence or ellipsis is not an exact body-text binding. '
+         'substring of either item.label or item.text, including intervening period words and punctuation. '
+         'Never join the two fields. A paraphrase, reordered sentence or ellipsis is not an exact binding. '
          'Keep the same comparison count and order, numeric_comparison, every endpoint, direction, '
          'magnitude, measure basis, duration and source reference/context exactly unchanged. '
          'Do not drop comparisons, change their subjects, erase obligations or change a rejected '

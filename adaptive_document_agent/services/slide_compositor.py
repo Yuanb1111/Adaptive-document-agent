@@ -266,17 +266,20 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
         if len(charts) <= 1:
             if not charts:
                 raise
-            # Splitting panels cannot rescue a single chart beneath a long
-            # heading/question. Try one measured header reflow, keeping the
-            # full copy in commentary and every source qualification visible.
-            try:
-                return _render_composed_slide(presentation, slide_plan, charts, result, index,
-                    preserve_charts=preserve_charts, compact_header=True)
-            except Exception:
-                for slide_id in list(presentation.slides._sldIdLst)[start:]:
-                    presentation.part.drop_rel(slide_id.rId)
-                    presentation.slides._sldIdLst.remove(slide_id)
-                raise
+            # A wide legend can still fail after header reflow. Finally give
+            # the chart the whole content zone and continue the complete
+            # support/copy, retaining source qualifications on the chart page.
+            for full_width_chart in (False, True):
+                try:
+                    return _render_composed_slide(presentation, slide_plan, charts, result, index,
+                        preserve_charts=preserve_charts, compact_header=True,
+                        full_width_chart=full_width_chart)
+                except Exception as retry_error:
+                    for slide_id in list(presentation.slides._sldIdLst)[start:]:
+                        presentation.part.drop_rel(slide_id.rId)
+                        presentation.slides._sldIdLst.remove(slide_id)
+                    if not isinstance(retry_error, _ChartCapacityError) or full_width_chart:
+                        raise
         if (len(charts) == 2 and any(b.role == 'table' for b in slide_plan.visual_blocks)
                 and not any(b.role == 'kpi' for b in slide_plan.visual_blocks)):
             from .qa_reporter import CriticalQAError
@@ -353,7 +356,7 @@ def _paginate_chart_slide(presentation, slide_plan: PresentationSlide,
 
 def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: list[ChartPlan],
                            result: PipelineResult, index, *, preserve_charts=False,
-                          compact_header=False, support_sidebar=False) -> list:
+                          compact_header=False, support_sidebar=False, full_width_chart=False) -> list:
     """Render all requested charts, explicit KPI/table facts and retained commentary."""
     from .pptx_export import _add_native_chart, _source_footer, _unit_label, _display_source_unit
     from adaptive_document_agent.document_model.metric_semantic_classifier import classify_metric, format_metric_display_value
@@ -555,7 +558,8 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
         [index.get(oid) for oid in chart.observation_ids if index.get(oid)],
         [index.get(oid) for oid in chart.total_observation_ids if index.get(oid)]) for chart in charts}
     geometry = compose_geometry(presentation.slide_width.inches, presentation.slide_height.inches, top, len(charts),
-        layout=slide_plan.layout, has_support=bool(support), has_commentary=bool(text), commentary_text=text,
+        layout=slide_plan.layout, has_support=bool(support) and not full_width_chart,
+        has_commentary=bool(text) and not full_width_chart, commentary_text=text,
         bottom_reserve=convention_h + context_h, chart_min_widths=[spaces[c.id][0] for c in charts],
         # A capacity retry must reclaim vertical plot space too. The complete
         # displaced header goes beside the plot even if it is a short caption.
@@ -587,8 +591,13 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
         heading = source_share_heading(heading, values, denominators)
         heading = re.sub(r"(?i)^Adjusted for Adjusted\b", "Adjusted", heading)
         headings.append(re.sub(r"(?i)\b(margin|ratio|share)\s+\1\b", r"\1", heading))
-    shared_heading_h = max([.28] + [len(_lines(t, r.w, CHART_TITLE_PT)) * CHART_TITLE_PT / 72 * 1.22
-                                      for t, r in zip(headings, geometry.charts)])
+    # The compact page title already names a single chart. On the final
+    # full-width retry, do not repeat that same heading above the plot.
+    repeated_heading = (full_width_chart and len(headings) == 1
+                        and headings[0].strip().casefold() == page_title.strip().casefold())
+    shared_heading_h = 0 if repeated_heading else max([.28] + [
+        len(_lines(t, r.w, CHART_TITLE_PT)) * CHART_TITLE_PT / 72 * 1.22
+        for t, r in zip(headings, geometry.charts)])
     for chart, rect, title in zip(charts, geometry.charts, headings):
         values = [index.get(oid) for oid in chart.observation_ids if index.get(oid)]
         qualified = {display_metric_name(o) for o in values}
@@ -605,16 +614,22 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
         if len(title_lines) > 3:
             raise _ChartCapacityError(f"Chart title exceeds readable capacity: {chart.id}")
         heading_h = shared_heading_h
-        _put_text(slide, title, Rect(rect.x, rect.y, rect.w, heading_h), size=CHART_TITLE_PT)
+        if heading_h:
+            _put_text(slide, title, Rect(rect.x, rect.y, rect.w, heading_h), size=CHART_TITLE_PT)
         totals = [index.get(oid) for oid in chart.total_observation_ids if index.get(oid)]
         from .presentation_chart_annotation import chart_change_annotation
         change = chart_change_annotation(chart, index,
                                          scope_text=f"{slide_plan.title} {slide_plan.message} {slide_plan.section_title}")
-        change_lines = _lines(change, rect.w, 10) if change else []
+        inline_change = full_width_chart and chart.chart_type == 'stacked_percent' and bool(change)
+        change_width = rect.w - 1.6 if inline_change else rect.w
+        change_lines = _lines(change, change_width, 10) if change else []
         if len(change_lines) > 2:
             change, change_lines = "", []
         change_h = len(change_lines) * .17
-        chart_offset = heading_h + .22 + (change_h + .06 if change else 0)
+        # The fixed Share (%) unit and the complete change annotation fit on
+        # one row in a full-width composition; do not stack two thin bands.
+        chart_offset = (heading_h + max(.20, change_h) + .06 if inline_change
+                        else heading_h + .22 + (change_h + .06 if change else 0))
         bounds = (rect.x, rect.y + chart_offset, rect.w, rect.h - chart_offset)
         if bounds[3] < 1.25:
             raise _ChartCapacityError(f"Chart labels cannot fit on slide {slide_plan.id}: {chart.id}; split the planned charts into additional slides.")
@@ -628,9 +643,11 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
         unit = "Share (%)" if chart.chart_type == "stacked_percent" else _unit_label(values, scale_label)
         if chart.chart_type in {"doughnut", "pie"}:
             unit = f"{values[0].period} | {unit}"
-        _put_text(slide, unit, Rect(rect.x, rect.y + heading_h, rect.w, 0.20), size=FOOTNOTE_PT, color=MUTED)
+        _put_text(slide, unit, Rect(rect.x, rect.y + heading_h, 1.4 if inline_change else rect.w, 0.20),
+                  size=FOOTNOTE_PT, color=MUTED)
         if change:
-            _put_text(slide, change, Rect(rect.x, rect.y + heading_h + .22, rect.w, change_h),
+            _put_text(slide, change, Rect(rect.x + (1.6 if inline_change else 0),
+                      rect.y + heading_h + (0 if inline_change else .22), change_width, change_h),
                       size=10, bold=True, color=PURPLE).name = f"annotation:{chart.id}"
         list(s for s in slide.shapes if s.has_chart)[-1].name = f"chart:{chart.id}"
 
@@ -860,7 +877,9 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
     table_ids = {oid for b in slide_plan.visual_blocks if b.role == "table" for oid in b.observation_ids}
     kpi_ids = {oid for b in slide_plan.visual_blocks if b.role == "kpi" for oid in b.observation_ids}
     support_start = len(slide.shapes)
-    if support and table_ids and kpi_ids:
+    if full_width_chart:
+        overflow = support
+    elif support and table_ids and kpi_ids:
         kpis = [o for o in support if o.id in kpi_ids]
         rows = [o for o in support if o.id in table_ids or o.id not in kpi_ids]
         rect = geometry.support
@@ -884,7 +903,7 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
         new_top = min(commentary_rect.y, used_bottom + GUTTER)
         commentary_rect = Rect(commentary_rect.x, new_top, commentary_rect.w,
                                commentary_rect.y + commentary_rect.h - new_top)
-    remaining = _put_commentary(slide, text, commentary_rect) if text else ""
+    remaining = text if full_width_chart else _put_commentary(slide, text, commentary_rect) if text else ""
     visible_observations = support + [index.get(oid) for oid in chart_obs if index.get(oid)]
     footnote = _source_footer(pages)
     if any("*" in format_observation_period(o) for o in visible_observations):
