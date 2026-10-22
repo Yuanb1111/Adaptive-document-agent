@@ -585,6 +585,12 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
         list(s for s in slide.shapes if s.has_chart)[-1].name = f"chart:{chart.id}"
 
     def draw_support(owner, items, rect, table=False):
+        def support_period(item):
+            period = format_observation_period(item)
+            if period:
+                return period
+            column = next((e.column_label for e in item.evidence if e.column_label), '')
+            return 'Unspecified' + (f' ({column})' if column else '')
         # Keep a compact period series together. If stacked KPI cards do not
         # fit, use a readable complete table in the SAME slot before paginating.
         horizontal = rect.w > 5.5
@@ -604,7 +610,7 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
                         displayed.append(o)
             items = displayed
         compact_rows = ((not table and len(items) > capacity)
-                        or (table and not horizontal and len(items) > 1))
+                        or (table and not horizontal and items))
         if compact_rows and len(evidence_groups(items)) == 1:
             name = qualified_metric_name(items[0])
             title_h = len(_lines(name, rect.w, 14)) * .24 + .12
@@ -613,7 +619,7 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
                 semantic = classify_metric(name, unit=o.unit, raw_unit=o.raw_unit, value=o.value)
                 value = format_metric_display_value(o.raw_value, o.value, semantic, raw_unit=_display_source_unit(o), currency=o.currency, compact=True)
                 value = signed_expense_display(o, value)
-                period = format_observation_period(o)
+                period = support_period(o)
                 height = max(.38, max(len(_lines(period, rect.w * .50 - .15, 14)), len(_lines(value, rect.w * .50 - .15, 14))) * .24 + .12)
                 rows.append((period, value, height))
             if title_h + sum(row[2] for row in rows) <= rect.h:
@@ -732,7 +738,7 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
             # Reserve enough period width for intact source labels. A narrow
             # support slot must not split a year token across physical lines.
             period_width = rect.w * .20
-            period_tokens = [token for o in items for token in format_observation_period(o).split()]
+            period_tokens = [token for o in items for token in support_period(o).split()]
             while period_width < min(2.0, rect.w * .35) and any(
                     len(_lines(token, period_width - .30, 14)) > 1 for token in period_tokens):
                 period_width += .05
@@ -744,10 +750,7 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
                 semantic = classify_metric(name, unit=o.unit, raw_unit=o.raw_unit, value=o.value)
                 display = format_metric_display_value(o.raw_value, o.value, semantic, raw_unit=_display_source_unit(o), currency=o.currency, compact=True)
                 display = signed_expense_display(o, display)
-                period_label = format_observation_period(o)
-                if not period_label:
-                    column = next((e.column_label for e in o.evidence if e.column_label), "")
-                    period_label = "Unspecified" + (f" ({column})" if column else "")
+                period_label = support_period(o)
                 cells = (name, period_label, display)
                 cells = tuple("\n".join(_lines(v, w - .30, 14)) for v, w in zip(cells, widths))
                 row_h = max(0.4, max(len(v.splitlines()) for v in cells) * 0.24 + 0.14)

@@ -201,11 +201,11 @@ def test_standard_deck_order_and_thank_you_slide() -> None:
     assert "THANK YOU" not in contents_text
 
     from adaptive_document_agent.services.presentation_roles import is_closing_slide
-    body_slides = [s for s in deck.slides if s.element.cSld.get('name') != 'ada:data-index']
-    thank_you_slide = body_slides[-1]
+    thank_you_slide = deck.slides[-1]
     assert is_closing_slide(thank_you_slide)
     index_start = next(i for i, s in enumerate(deck.slides) if s.element.cSld.get('name') == 'ada:data-index')
-    assert all(s.element.cSld.get('name') == 'ada:data-index' for s in list(deck.slides)[index_start:])
+    assert index_start < len(deck.slides) - 1
+    assert all(s.element.cSld.get('name') == 'ada:data-index' for s in list(deck.slides)[index_start:-1])
     ty_text = " ".join(s.text for s in thank_you_slide.shapes if s.has_text_frame)
     assert "THANK YOU" in ty_text
 

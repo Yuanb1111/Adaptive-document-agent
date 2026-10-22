@@ -1,5 +1,10 @@
 # Adaptive Document Intelligence Agent
 
+The [v169 presentation layout update](docs/PRESENTATION_LAYOUT_V169.md)
+places all Data Index pages before the final thank-you slide and gives narrow
+single-fact support tables a full-width metric heading. Source trace page numbers,
+complete labels, units, values and period qualifications remain intact.
+
 The [v168 report source and chart recovery](docs/SINGLE_CHART_HEADER_REFLOW_V168.md)
 retries unfinished supplementary source reads during report recovery and binds
 day-first dates to their exact source columns. Long chart headings can reflow

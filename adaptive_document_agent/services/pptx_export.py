@@ -261,10 +261,11 @@ def _compose_presentation(result, template_path=None, *, artwork=None, source_pd
         for slide in presentation.slides:
             if slide.slide_id not in existing_ids:
                 slide.element.cSld.set('name', 'ada:data-index')
-    _add_thank_you_slide(presentation)
-
     from .presentation_body_budget import place_data_index_after_body, slide_counts
     place_data_index_after_body(presentation, result)
+    # Source indexes follow the evidence body, while the official closing
+    # artwork remains the final slide. Number only after this order is final.
+    _add_thank_you_slide(presentation)
     result.presentation_slide_counts = slide_counts(presentation, result)
     _number_slides(presentation)
     from .report_language import apply_report_language
