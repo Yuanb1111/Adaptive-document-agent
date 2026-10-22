@@ -1,5 +1,10 @@
 # Adaptive Document Intelligence Agent
 
+The [v172 standalone-table readability update](docs/PRESENTATION_LAYOUT_V172.md)
+uses spare page space for larger table text and rows when the complete table
+still fits. Dense tables and their continuations retain consistent typography
+and the existing evidence-preserving pagination.
+
 The [v171 chart-pair support layout](docs/PRESENTATION_LAYOUT_V171.md)
 tries a complete side table before splitting a chart pair across pages. It keeps
 the original leading caption, checks readable plot dimensions, and discards

@@ -794,20 +794,22 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
                 period_width += .05
             remaining_width = rect.w - period_width
             widths = (remaining_width * .625, period_width, remaining_width * .375)
-            rows, heights = [], [0.4]
+            cells = []
             for o in items:
                 name = qualified_metric_name(o)
                 semantic = classify_metric(name, unit=o.unit, raw_unit=o.raw_unit, value=o.value)
                 display = format_metric_display_value(o.raw_value, o.value, semantic, raw_unit=_display_source_unit(o), currency=o.currency, compact=True)
                 display = signed_expense_display(o, display)
                 period_label = support_period(o)
-                cells = (name, period_label, display)
-                cells = tuple("\n".join(_lines(v, w - .30, 14)) for v, w in zip(cells, widths))
-                row_h = max(0.4, max(len(v.splitlines()) for v in cells) * 0.24 + 0.14)
-                rows.append(cells)
-                heights.append(row_h)
+                cells.append((name, period_label, display))
             from .composition_pagination import table_row_cut
             narrow = rect.w < presentation.slide_width.inches - 1.11
+            from .table_typography import exact_table_layout
+            # A standalone full-width table may use spare space for readability.
+            # Continuations retain the first page's base size, so a long table
+            # cannot end in an arbitrarily enlarged final fragment.
+            font_size, rows, heights = exact_table_layout(cells, widths, rect.h,
+                enlarge=owner is slide and not charts and not text and not narrow)
             keep = table_row_cut(heights[1:], rect.h - heights[0],
                 [len(group) for group in evidence_groups(items)], narrow=narrow)
             shown, rows, heights = items[:keep], rows[:keep], heights[:keep + 1]
@@ -831,7 +833,7 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
                     cell.text_frame.word_wrap = True
                     for p in cell.text_frame.paragraphs:
                         p.font.name = FONT
-                        p.font.size = Pt(14)
+                        p.font.size = Pt(font_size)
             return items[len(shown):]
         shown = items[:capacity]
         for i, o in enumerate(shown):
