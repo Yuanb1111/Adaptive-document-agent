@@ -4,7 +4,9 @@ import json
 
 import pytest
 
-from adaptive_document_agent.agent.source_integration_review import review_supplementary_sources, resolved_source_check_ids
+from adaptive_document_agent.agent.source_integration_review import (
+    SOURCE_OUTPUT_TOKEN_LIMITS, review_supplementary_sources, resolved_source_check_ids,
+)
 from adaptive_document_agent.agent.report_audit_scope import _context, _review_batch
 from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError, LLMTransportError, PrivacyViolationError
 from tests.test_budget_output_v145 import gateway, response
@@ -35,7 +37,9 @@ def test_overlong_or_missing_field_is_corrected_with_complete_original_context(r
     feedback = json.loads(retry[-2]['content'].split('\n', 1)[1].rsplit('\n', 1)[0])
     assert feedback['raw_response'] == raw
     assert feedback['schema_errors'][0]['loc'] == (['additions', 0, 'text'] if role == 'draft' else ['verdicts', 0, 'reason'])
-    assert all(r[1]['max_tokens'] == 8192 for r in client.requests)
+    # Format correction stays on the initial capacity; only length exhaustion
+    # can consume the larger capacity retry tested separately.
+    assert all(r[1]['max_tokens'] == SOURCE_OUTPUT_TOKEN_LIMITS[0] for r in client.requests)
     assert result.executive_brief.items[0] == original.items[0]
     assert result.executive_brief.items[1:] == draft.additions
     assert resolved_source_check_ids(result, result.executive_brief) == {'contracts'}
