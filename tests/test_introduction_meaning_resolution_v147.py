@@ -77,7 +77,8 @@ def test_targeted_atomic_split_retains_qualifiers_and_protects_other_copy():
 
 
 @pytest.mark.parametrize('final_acceptance', [True, False])
-def test_only_final_fresh_full_source_review_can_accept_a_union_disposition(final_acceptance):
+@pytest.mark.parametrize('echo_protected_meaning', [True, False])
+def test_only_final_fresh_full_source_review_can_accept_a_union_disposition(final_acceptance, echo_protected_meaning):
     result, reading, source, selection, _, _ = resolution_fixture()
     calls, reviews = [], []
     class Client:
@@ -93,7 +94,9 @@ def test_only_final_fresh_full_source_review_can_accept_a_union_disposition(fina
                 return schema(edits=[dict(meaning_id='meaning-0', required_meanings=[dict(
                     meaning='The system schedules appointments.'), dict(meaning='Staff training is required before delivery.')])])
             if schema.__name__ == 'IntroductionMeaningResolution':
-                return schema(finding_dispositions=[dict(finding_id='finding-0', classification='already_covered',
+                return schema(edits=[dict(meaning_id='part-0:meaning-2', required_meanings=[dict(
+                    meaning='Staff training is required before delivery.')])] if echo_protected_meaning else [],
+                    finding_dispositions=[dict(finding_id='finding-0', classification='already_covered',
                     action='already_covered', referenced_meaning_ids=['part-0:meaning-2'],
                     source_quote='Staff training is required before delivery.',
                     reason='The complete current union already includes this condition.')])
@@ -101,6 +104,8 @@ def test_only_final_fresh_full_source_review_can_accept_a_union_disposition(fina
             assert payload['source']['parts'][0]['source_text'] == source['parts'][0]['source_text']
             if len(reviews) == 3:
                 assert payload['meaning_resolution']['finding_dispositions'][0]['action'] == 'already_covered'
+                assert payload['meaning_resolution']['coalesced_unchanged_meaning_ids'] == (
+                    ['part-0:meaning-2'] if echo_protected_meaning else [])
                 assert len(payload['current_meaning_unions'][0]['meaning_ids']) == 2
                 return review_response(schema, messages, accepted=final_acceptance,
                     repair_scope='meanings', reason='Final independent source judgment.')

@@ -113,11 +113,21 @@ def apply_meaning_resolution(selection, response, findings, source):
     included_parts = {part_id for part_id in allowed if decisions[part_id].include}
     omitted_parts = allowed - included_parts
     edits = {}
+    seen_edits = set()
     changed = set()
     for edit in response.edits:
         original = meanings.get(edit.meaning_id)
-        if (original is None or edit.meaning_id not in editable_meanings
-                or edit.meaning_id in edits or not edit.required_meanings):
+        if (original is None or edit.meaning_id in seen_edits or not edit.required_meanings):
+            raise ValueError('Meaning resolution edit has an unknown, duplicate or unowned current meaning ID')
+        seen_edits.add(edit.meaning_id)
+        if edit.meaning_id not in editable_meanings:
+            if (original['part_id'] in included_parts and len(edit.required_meanings) == 1
+                    and edit.required_meanings[0].meaning == original['meaning']
+                    and edit.required_meanings[0].source_quote in ('', original['source_quote'])):
+                # A protected assertion echoed verbatim is no edit. Keep the
+                # original object and evidence, never the proposed replacement.
+                # Duplicate IDs still fail, and this cannot satisfy a correction.
+                continue
             raise ValueError('Meaning resolution edit has an unknown, duplicate or unowned current meaning ID')
         edits[edit.meaning_id] = edit.required_meanings
         if [meaning.meaning for meaning in edit.required_meanings] != [original['meaning']]:
@@ -197,6 +207,8 @@ def apply_meaning_resolution(selection, response, findings, source):
 def resolve_meaning_findings(gateway, source, selection, values, verdict, review, *, cancelled=None):
     """Correct exact current findings within the caller's bounded review budget."""
     findings = finding_inventory(verdict)
+    editable_meaning_ids = sorted({finding['meaning_id'] for finding in findings
+                                   if finding['kind'] == 'meaning'})
     # Full source occurs once. Each assertion's exact owning part is its lookup.
     meanings = [{key: value for key, value in row.items() if key != 'source_quote'}
                 for row in current_meanings(values)]
@@ -224,7 +236,9 @@ def resolve_meaning_findings(gateway, source, selection, values, verdict, review
         'conditions or uncertainty. Preserve every original intended selected assertion and necessary '
         'qualification, correcting unsupported stronger wording to its own source scope. '
         'Return edits ONLY for exact current meaning IDs named by meaning findings; every other '
-        'existing meaning is mechanically protected. An included_part finding permits only owned '
+        'existing meaning is mechanically protected. The editable_meaning_ids list names these '
+        'addresses explicitly. Do not echo unchanged meanings in edits, or claim to remove them '
+        'when adding their qualifiers to an editable assertion. An included_part finding permits only owned '
         'additions, not rewriting existing copy. Additions target currently included parts only. '
         'Never repeat an inclusion in additions. For an omitted_part finding, an explicit inclusion '
         'may select ONLY its exact eligible_inclusions part_id, with include=true, a substantive '
@@ -243,7 +257,8 @@ def resolve_meaning_findings(gateway, source, selection, values, verdict, review
     try:
         response = complete_response(gateway, [{'role': 'system', 'content': rules},
             untrusted_document_message(json.dumps(dict(source=source, current_meanings=meanings,
-                findings=findings, eligible_inclusions=eligible_inclusions), ensure_ascii=False))],
+                findings=findings, editable_meaning_ids=editable_meaning_ids,
+                eligible_inclusions=eligible_inclusions), ensure_ascii=False))],
             IntroductionMeaningResolution, cancelled=cancelled)
         record['response'] = response.model_dump(mode='json')
         record['response_source_quotes_status'] = 'untrusted_diagnostic_only'
@@ -255,10 +270,13 @@ def resolve_meaning_findings(gateway, source, selection, values, verdict, review
                       error_type=type(exc).__name__, error=str(exc))
         raise
     record.update(status='protocol_validated', semantic_approval=False,
+                  coalesced_unchanged_meaning_ids=[edit.meaning_id for edit in response.edits
+                      if edit.meaning_id not in editable_meaning_ids],
                   coalesced_inclusion_addition_part_ids=[addition.part_id for addition in response.additions
                       if any(inclusion.part_id == addition.part_id for inclusion in response.inclusions)],
                   changed=draft != selection, decisions_after=draft.model_dump(mode='json')['decisions'])
     return draft, dict(findings=findings, finding_dispositions=record['bound_finding_dispositions'],
+        coalesced_unchanged_meaning_ids=record['coalesced_unchanged_meaning_ids'],
         inclusions=record['response']['inclusions'],
         disposition_evidence_binding='exact_finding_owned_source_parts',
         reference_namespace='before_resolution_meanings', before_resolution_meanings=meanings,

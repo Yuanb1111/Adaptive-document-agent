@@ -48,6 +48,7 @@ def replay(path):
     return dict(saved_version=data['pipeline_version'], saved_failure=data['failure_details'],
         replay_status=record['status'], model_requests=0,
         coalesced_inclusion_addition_part_ids=record['coalesced_inclusion_addition_part_ids'],
+        coalesced_unchanged_meaning_ids=record['coalesced_unchanged_meaning_ids'],
         findings=len(saved['findings']), edits=len(response.edits),
         explicit_inclusions=len(response.inclusions), raw_response_preserved=True,
         semantic_approval=False,
