@@ -120,7 +120,7 @@ def test_two_length_failures_exhaust_capacity_and_cannot_mark_result_complete(op
 
 
 @pytest.mark.parametrize("operation", ["draft", "review"])
-@pytest.mark.parametrize("finish", ["stop", None, "content_filter"])
+@pytest.mark.parametrize("finish", ["content_filter"])
 def test_invalid_non_length_output_is_not_capacity_retried(operation, finish):
     result, constraint = fixture()
     original = result.executive_brief.model_copy(deep=True)

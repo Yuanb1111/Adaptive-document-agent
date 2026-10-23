@@ -2,14 +2,14 @@
 import json
 from copy import deepcopy
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field
 
 from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
-from adaptive_document_agent.services.llm.structured import validate_structured_text
 
 from .presentation_budget_output import complete_budget_output
 from .prompting import untrusted_document_message
 from .report_audit_source_index import discovery_input
+from .structured_output_correction import schema_feedback
 
 
 DISCOVERY_CONTRACT = 'report-audit-source-discovery-v174'
@@ -130,17 +130,7 @@ def discover_audit_sources(gateway, result, base, audit, *, progress=None):
                 entry['error'] = str(exc)
                 failure = dict(validation_error=str(exc))
                 if isinstance(exc, LLMStructuredOutputError):
-                    if exc.response.usage is not None and exc.response.usage.finish_reason == 'length':
-                        raise  # Capacity recovery is exhausted; never repair partial output.
-                    failure['raw_response'] = exc.response.text
-                    # Recover exact schema feedback hidden by the gateway's generic error.
-                    # Parsing here diagnoses only; it never accepts or fills missing content.
-                    try:
-                        validate_structured_text(exc.response.text, AuditSourceDiscovery)
-                    except ValidationError as invalid:
-                        failure['schema_errors'] = invalid.errors(include_input=False, include_url=False)
-                    except (ValueError, TypeError) as invalid:
-                        failure['schema_error'] = str(invalid)
+                    failure = schema_feedback(exc, AuditSourceDiscovery)
                 else:
                     failure['proposed_selection'] = entry['selection']
                 entry['correction_feedback'] = failure

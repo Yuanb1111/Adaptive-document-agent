@@ -43,6 +43,16 @@ def _label_variants(original, canonical, presentation, categories, source_rows=(
         variants.add(label)
         for match in re.finditer(r"\b(\w+)/(\w+)\b", label):
             variants.update(label[:match.start()] + option + label[match.end():] for option in match.groups())
+    # A source explicitly declaring A as a percentage/share of B owns A/B.
+    # Keep this compound intact: its denominator must not own its endpoints.
+    for source in (original, canonical, presentation):
+        if not source:
+            continue
+        match = re.fullmatch(r"(.+?)\s*:?\s*(?:as\s+)?(?:%\s*of|share\s+of|percentage\s+of)\s+(.+)",
+                             source.strip(), re.I)
+        if match:
+            numerator, denominator = (" ".join(part.strip(' :').casefold().split()) for part in match.groups())
+            variants.update(numerator + separator + denominator for separator in ('/', ' / ', '/ ', ' /'))
     return tuple(sorted(variants))
 
 

@@ -74,3 +74,20 @@ def test_exact_integer_and_decimal_spellings_share_numeric_identity(source, clai
     assert V._numbers(source) == V._numbers(claim)
     assert V._numbers("56600.01") != V._numbers("56600")
     assert V._numbers("34.3%") != V._numbers("34.3")
+
+
+@pytest.mark.parametrize('numerator,denominator', [('Gross profit', 'Revenue'), ('Defects', 'Inspected units')])
+@pytest.mark.parametrize('separator', ['/', ' / '])
+def test_source_defined_fraction_owns_endpoints_without_lending_them_to_denominator(numerator, denominator, separator):
+    ratio = [observation('r1', f'{numerator}: %of {denominator}', 39.1, unit='percent'),
+             observation('r2', f'{numerator}: %of {denominator}', 43.9, unit='percent')]
+    amounts = [observation('a1', numerator, 100), observation('a2', denominator, 200)]
+    slide = PresentationSlide(id='s', slide_type='analysis', title=(
+        f'{numerator}{separator}{denominator} rose from 39.1% to 43.9%.'))
+    assert not scoped_value_errors(slide, [*amounts, *ratio])
+    slide.title = slide.title.replace('43.9%', '200')
+    assert scoped_value_errors(slide, [*amounts, *ratio])
+    slide.title = f'{denominator} rose from 39.1% to 43.9%.'
+    assert scoped_value_errors(slide, [*amounts, *ratio])
+    slide.title = f'{numerator}{separator}{denominator} rose from 100 to 200.'
+    assert scoped_value_errors(slide, amounts, [*amounts, *ratio])

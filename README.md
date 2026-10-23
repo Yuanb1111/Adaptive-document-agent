@@ -1,5 +1,10 @@
 # Adaptive Document Intelligence Agent
 
+The [v178 report format recovery update](docs/REPORT_FORMAT_RECOVERY_V178.md)
+handles complete schema errors in supplementary-source writing/review and assurance
+writing with bounded corrections and exact diagnostics. Source-defined ratio
+subjects also retain ownership of their endpoint values in presentation copy.
+
 The [v177 audit source format correction](docs/AUDIT_SOURCE_FORMAT_CORRECTION_V177.md)
 gives malformed source-page selections one correction with complete original
 context and exact schema feedback. Strict source validation and the shared

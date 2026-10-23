@@ -56,7 +56,7 @@ def test_real_gateway_corrects_schema_with_full_context_and_raw_failure_retained
     else:
         assert attempts[0]['correction_feedback']['schema_errors']
     if kind == 'missing_rationale':
-        assert attempts[0]['correction_feedback']['schema_errors'][0]['loc'] == ('rationale',)
+        assert attempts[0]['correction_feedback']['schema_errors'][0]['loc'] == ['rationale']
     assert 'selection' not in attempts[0]
     assert audit['source_discovery']['selection'] == valid.model_dump(mode='json')
     assert expanded['source_pages'][-1]['text'] == result.document.pages[-1].text

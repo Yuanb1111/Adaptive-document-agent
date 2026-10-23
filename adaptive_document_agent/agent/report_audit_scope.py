@@ -13,6 +13,8 @@ from adaptive_document_agent.extraction.period_header_geometry import MONTH_COUN
 from adaptive_document_agent.models import ValidationIssue
 from adaptive_document_agent.models.executive_brief import BriefQuote
 from adaptive_document_agent.services.source_quotes import normalize_quote
+from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
+from .structured_output_correction import schema_feedback, format_correction_messages
 from .presentation_budget_output import complete_budget_output
 from .prompting import untrusted_document_message
 from .report_audit_eligibility import audit_binding_ineligibility
@@ -344,8 +346,18 @@ def _review_batch(gateway, context, record):
     for attempt in range(3):
         entry = {}
         record['attempts'].append(entry)
-        draft = complete_budget_output(gateway, messages, AuditScopeDraft, entry,
-            audit_key='draft_output_attempts', token_limits=AUDIT_DRAFT_TOKEN_LIMITS, stage='report')
+        try:
+            draft = complete_budget_output(gateway, messages, AuditScopeDraft, entry,
+                audit_key='draft_output_attempts', token_limits=AUDIT_DRAFT_TOKEN_LIMITS, stage='report')
+        except LLMStructuredOutputError as exc:
+            feedback = schema_feedback(exc, AuditScopeDraft)
+            entry.update(error=str(exc), format_failure=feedback, corrective_kind='binding_validation')
+            if correction_counts['binding_validation'] or attempt == 2:
+                entry['correction_budget_exhausted'] = True
+                raise
+            correction_counts['binding_validation'] += 1
+            messages.extend(format_correction_messages(feedback))
+            continue
         entry['draft'] = draft.model_dump(mode='json')
         corrective_kind = 'binding_validation'
         try:
