@@ -129,16 +129,12 @@ def _request(gateway, messages, schema, audit, calls, cancelled, *, tokens, char
         if attempt or error in previous:
             raise failure
         previous.add(error)
-        feedback = {'validation_error': error, 'rejected_response': rejected}
-        if sum(len(message['content']) for message in initial[1:]) + len(encode(feedback)) > characters:
-            raise ValueError('Coverage delta correction exceeds the bounded context budget.') from failure
-        messages = [*initial, untrusted_document_message(encode(feedback)),
-            {'role': 'user', 'content': 'Correct the listed source/schema failures using the SAME complete '
-             'evidence. Return every requested decision exactly once. Regroup related additions within '
-             'the schema topic limit; retain every original accepted observation. Reconsider lower-priority '
-             'proposals only with explicit source-aware omit reasons in coverage_decisions. '
-             'omissions is a bounded display summary, not the full ledger: it may be empty. '
-             'Never truncate evidence, drop decisions or invent facts to satisfy capacity.'}]
+        from .coverage_correction_context import correction_messages
+        try:
+            messages, entry['correction_context'] = correction_messages(
+                initial, error, rejected, characters=characters)
+        except ValueError as exc:
+            raise exc from failure
 
 
 def _merge(reviewed, original, provisional, lookup, primary_pages, validate):

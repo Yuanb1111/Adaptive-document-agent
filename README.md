@@ -1,5 +1,10 @@
 # Adaptive Document Intelligence Agent
 
+The [v176 coverage correction update](docs/COVERAGE_CORRECTION_CONTEXT_V176.md)
+keeps a rejected merge in the audit when repeating it would exceed the request
+budget. One complete regeneration retains all source evidence and validation
+feedback, and the resulting full response still passes the existing review gates.
+
 The [v175 introduction review source-binding fix](docs/INTRODUCTION_REVIEW_SOURCE_BINDING_V175.md)
 lets review findings reference exact source parts while Python retains their complete
 original evidence. Model replies remain auditable, malformed explicit quotations
