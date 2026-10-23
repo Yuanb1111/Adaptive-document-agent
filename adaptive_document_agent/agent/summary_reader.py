@@ -68,6 +68,8 @@ _RULES = (
     'may merge them. Split a block when a new subsection starts. Source headings need not be familiar. '
     'Use role content for source substance, heading for a standalone subsection title without '
     'body text, and layout only for running headers/footers/blank layout. '
+    'A standalone label introducing a section or source notes is a heading, even without a factual '
+    'claim. Separate it from adjacent running headers or blank layout; never dismiss it as a footer. '
     'Diagrams, architecture labels, product lists and table introductions can convey substance even '
     'without continuous prose or numbers. Read their stated components/relationships as content; '
     'never dismiss them as graphic layout. A qualitative fact is valid: it need not contain a value, '
@@ -154,6 +156,10 @@ def _read_batch_impl(gateway, result, blocks, cancelled: Event) -> ReadOutcome:
             record['line_coverage'] = line_coverage(parts, blocks)
             if not errors:
                 return ReadOutcome(parts, audit)
+            from .summary_read_repair import _layout_feedback
+            layout_feedback = _layout_feedback(parts, result)
+            if layout_feedback:
+                record['layout_evidence'] = layout_feedback
             if attempt:
                 ranges = missing_ranges(record['line_coverage'])
                 coverage_only = {'Summary parts skip or overlap supplied source lines',
@@ -176,7 +182,10 @@ def _read_batch_impl(gateway, result, blocks, cancelled: Event) -> ReadOutcome:
                  'continuation and table header lines within the same part. Retain complete source '
                  'currency, scale, sign, percentage column and per-unit denominator. Correct unsupported '
                  'reading-note numbers too. If exact evidence remains unavailable, leave that fact empty '
-                 'and explain the limitation; preserve its part and every source line. Never invent or pad facts.'}]
+                 'and explain the limitation; preserve its part and every source line. '
+                 'Respect each layout_evidence line\'s allowed_roles: unproved nonblank lines cannot '
+                 'remain layout. Read standalone section labels as headings with no facts, or body '
+                 'substance as content; split them from proved headers/footers. Never invent or pad facts.'}]
     except Exception as exc:
         # Preserve failed requests, including privacy/adapter errors, before the
         # owner re-raises them. No provider fallback or semantic salvage occurs.

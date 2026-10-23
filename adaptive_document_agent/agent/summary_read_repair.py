@@ -91,6 +91,12 @@ def repair_rejected_parts(gateway, result, blocks, parts, response, previous,
                  'For lead-ins and source cross-references, retain what is introduced or referenced; '
                  'never invent the following details. layout_evidence lists exact source lines and '
                  'their mechanical proofs: one proved footer cannot justify adjacent unproved prose. '
+                 'Each line has allowed_roles. A line without layout proof MUST be read as heading '
+                 'or content, never layout. A standalone label introducing a section or source notes '
+                 'can be a heading with facts=[]; absence of a factual claim does not make it layout. '
+                 'Split a mixed range so proved margin lines stay separate from the heading or content. '
+                 'Choose heading versus content from the source meaning; these constraints do not '
+                 'authorize hiding a qualification or body text as a heading. '
                  'Keep genuine headers/footers separate from body content when needed. Repetition '
                  'alone cannot make a disclaimer or qualification disposable layout. '
                  'Every content part needs source-supported facts, with quotes entirely inside its '
@@ -169,7 +175,9 @@ def _layout_feedback(parts, result):
         if all(line['proved'] for line in evidence):
             continue
         feedback.append({'part_id': part.id, 'block_id': part.block_id, 'source_page': part.source_page,
-            'lines': [{**line, 'line': part.start_line + line['line'] - 1} for line in evidence]})
+            'lines': [{**line, 'line': part.start_line + line['line'] - 1,
+                       'allowed_roles': ['layout', 'heading', 'content'] if line['proved']
+                       else ['heading', 'content']} for line in evidence]})
     return feedback
 
 

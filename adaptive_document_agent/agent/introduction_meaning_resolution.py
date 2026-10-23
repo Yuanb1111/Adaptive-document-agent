@@ -6,8 +6,9 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from adaptive_document_agent.services.source_quotes import normalize_quote
-from .introduction_audience import AUDIENCE_REASON_MAX_LENGTH, RequiredMeaning, complete_response
+from .introduction_audience import AUDIENCE_REASON_MAX_LENGTH, RequiredMeaning
 from .introduction_audience_review import current_meanings
+from .introduction_resolution_feedback import UnappliedMeaningCorrection, resolution_with_feedback
 from .prompting import untrusted_document_message
 
 
@@ -174,13 +175,16 @@ def apply_meaning_resolution(selection, response, findings, source):
         elif entry.action == 'outside_selected_scope':
             if entry.classification != 'new_assertion':
                 raise ValueError('Only a new independent assertion can be outside selected scope; necessary qualifiers cannot')
-        elif entry.classification == 'already_covered' or not (
-                set(refs) & changed or part_id in additions or part_id in inclusions):
-            raise ValueError('Corrected disposition needs a changed referenced meaning, owned addition or explicit inclusion')
+        elif entry.classification == 'already_covered':
+            raise ValueError('Corrected disposition cannot use the already-covered classification')
+        elif not (set(refs) & changed or part_id in additions or part_id in inclusions):
+            raise UnappliedMeaningCorrection(
+                'Corrected disposition needs a changed referenced meaning, owned addition or explicit inclusion', finding)
         if (entry.action == 'corrected' and entry.classification in {
                 'unsupported_assertion', 'missing_qualification', 'atomicity'} and finding.get('meaning_id')
                 and finding['meaning_id'] not in changed):
-            raise ValueError('Correction must repair the exact existing assertion identified by the finding')
+            raise UnappliedMeaningCorrection(
+                'Correction must repair the exact existing assertion identified by the finding', finding)
     addressed = {ref for entry in resolutions.values() if entry.action == 'corrected'
                  for ref in entry.referenced_meaning_ids}
     corrected_parts = {expected[entry.finding_id]['part_id'] for entry in resolutions.values()
@@ -232,6 +236,8 @@ def resolve_meaning_findings(gateway, source, selection, values, verdict, review
         'introduction section. Presence in an included source passage does not make every fact mandatory. '
         'Never use that disposition for a necessary condition, attribution, period, basis or qualifier '
         'of a selected assertion. Correct genuine defects with targeted edits or owned additions. '
+        'For action=corrected, return the actual changed wording in edits/additions/inclusions '
+        'and the corresponding referenced_meaning_ids; describing a change in reason does not apply it. '
         'Split atomic assertions without separating a measure from its period, basis, attribution, '
         'conditions or uncertainty. Preserve every original intended selected assertion and necessary '
         'qualification, correcting unsupported stronger wording to its own source scope. '
@@ -255,16 +261,16 @@ def resolve_meaning_findings(gateway, source, selection, values, verdict, review
         'already-covered or outside-scope disposition. Your reply is NOT acceptance. The final fresh '
         'independent full-source review must adjudicate every disposition and the entire revised union.')
     try:
-        response = complete_response(gateway, [{'role': 'system', 'content': rules},
+        def validate(response):
+            bound_response = _bind_disposition_evidence(selection, response, findings, source)
+            record['bound_finding_dispositions'] = bound_response.model_dump(mode='json')['finding_dispositions']
+            return apply_meaning_resolution(selection, bound_response, findings, source)
+
+        response, draft = resolution_with_feedback(gateway, [{'role': 'system', 'content': rules},
             untrusted_document_message(json.dumps(dict(source=source, current_meanings=meanings,
                 findings=findings, editable_meaning_ids=editable_meaning_ids,
                 eligible_inclusions=eligible_inclusions), ensure_ascii=False))],
-            IntroductionMeaningResolution, cancelled=cancelled)
-        record['response'] = response.model_dump(mode='json')
-        record['response_source_quotes_status'] = 'untrusted_diagnostic_only'
-        bound_response = _bind_disposition_evidence(selection, response, findings, source)
-        record['bound_finding_dispositions'] = bound_response.model_dump(mode='json')['finding_dispositions']
-        draft = apply_meaning_resolution(selection, bound_response, findings, source)
+            IntroductionMeaningResolution, validate, record, cancelled=cancelled)
     except Exception as exc:
         record.update(status='cancelled' if isinstance(exc, CancelledError) else 'failed',
                       error_type=type(exc).__name__, error=str(exc))
