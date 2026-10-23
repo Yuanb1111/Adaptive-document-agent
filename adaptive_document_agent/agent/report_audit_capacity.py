@@ -5,8 +5,12 @@ import json
 from adaptive_document_agent.services.llm.credentials import provider_endpoint
 
 
-AUDIT_DRAFT_TOKEN_LIMITS = (12000, 20000)
-AUDIT_REVIEW_TOKEN_LIMITS = (8192, 16384)
+# Start at the previously successful recovery capacity. Reasoning shares this
+# allowance with JSON; too-small first requests discard all completed reasoning
+# and repeat the same evidence. Keep one bounded length-only recovery, without
+# changing model, reasoning policy, evidence or independent acceptance gates.
+AUDIT_DRAFT_TOKEN_LIMITS = (20000, 32000)
+AUDIT_REVIEW_TOKEN_LIMITS = (16384, 24000)
 CAPACITY_CONTRACT = 'audit-capacity-route-policy-review-contract-v174'
 
 

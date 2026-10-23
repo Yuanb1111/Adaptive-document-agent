@@ -15,7 +15,9 @@ from .presentation_budget_output import complete_budget_output
 from .structured_output_correction import schema_feedback, format_correction_messages
 from .source_integration_output import review_output, SourceReviewContractError
 
-SOURCE_OUTPUT_TOKEN_LIMITS = (8192, 16384)
+# Reserve room for both reasoning and the complete evidence-bound answer on the
+# first request; the independent reviewer and all rejection gates stay intact.
+SOURCE_OUTPUT_TOKEN_LIMITS = (16384, 24000)
 
 
 class SourceDisposition(BaseModel):

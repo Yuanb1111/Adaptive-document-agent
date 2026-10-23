@@ -133,7 +133,7 @@ def test_exhausted_review_length_keeps_capacity_diagnostics_and_never_uses_forma
     gateway, record = ScriptedGateway([unknown_draft(), error, error]), dict(attempts=[])
     with pytest.raises(LLMStructuredOutputError):
         _review_batch(gateway, _context(result), record)
-    assert [call[2]['max_tokens'] for call in gateway.calls] == [12000, 8192, 16384]
+    assert [call[2]['max_tokens'] for call in gateway.calls] == [20000, 16384, 24000]
     assert gateway.calls[1][0] == gateway.calls[2][0]
     assert record['corrections_used']['independent_review'] == 0
     assert [a['status'] for a in record['attempts'][0]['review_output_attempts']] == ['truncated', 'truncated']

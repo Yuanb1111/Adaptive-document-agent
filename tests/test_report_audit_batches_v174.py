@@ -130,7 +130,7 @@ def test_truncated_batch_has_only_two_fixed_capacity_attempts_and_no_independent
     llm, client = gateway([response('', finish='length'), response('', finish='length')])
     with pytest.raises(LLMStructuredOutputError):
         review_report_audit_scope(llm, result)
-    assert [kwargs['max_tokens'] for _, kwargs in client.requests] == [12000, 20000]
+    assert [kwargs['max_tokens'] for _, kwargs in client.requests] == [20000, 32000]
     assert client.requests[0][0] == client.requests[1][0]
     audit = json.loads(result.validation_warnings[-1].message)
     assert len(audit['batches']) == 1 and audit['batches'][0]['status'] == 'failed'

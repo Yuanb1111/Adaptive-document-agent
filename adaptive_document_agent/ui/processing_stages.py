@@ -32,8 +32,13 @@ _GROUPS = {
     ),
     'chart_generation': ('Generating charts from selected presentation questions',),
     'presentation_planning': (
-        'Planning presentation narrative', 'Writing the evidence-bound executive briefing',
+        'Planning presentation narrative',
         'Retrying introduction with retained extraction and calculations',
+    ),
+    'executive_briefing': ('Writing the evidence-bound executive briefing',),
+    'report_audit_scope': (
+        'Reviewing source audit qualifications',
+        'Locating additional source pages for exact audit qualifications',
     ),
     'presentation_budget': (
         'Refining analytical priorities using actual physical slide costs',
@@ -42,10 +47,10 @@ _GROUPS = {
     'final_briefing': (
         'Regenerating and independently checking the briefing against the final budgeted topics',
     ),
-    'finalization': (
-        'Complete', 'Checking requested report customizations',
-        'Preparing complete display text for translation', 'Verifying requested report coverage',
-    ),
+    'source_integration': ('Reviewing supplementary sources against the final conclusions',),
+    'finalization': ('Complete',),
+    'requirements_review': ('Checking requested report customizations', 'Verifying requested report coverage'),
+    'localization': ('Preparing complete display text for translation',),
     'export_evidence': ('Checking PowerPoint evidence',),
     'export_build': ('Building PowerPoint',),
     'export_layout': ('Rendering and checking PowerPoint layout',),
@@ -61,7 +66,10 @@ _BATCH_PREFIXES = {
     'Understood selected pages ': 'discovery',
     'Understanding selected sections with ': 'discovery',
     'Scoring analysis candidates (': 'analysis_selection',
-    'Translating and reviewing display text (': 'finalization',
+    'Translating and reviewing display text (': 'localization',
+    'Linking audit qualifications: ': 'report_audit_scope',
+    'Audit qualification: ': 'report_audit_scope',
+    'Audit qualification source group ': 'report_audit_scope',
 }
 
 

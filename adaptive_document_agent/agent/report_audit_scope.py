@@ -398,6 +398,8 @@ def review_report_audit_scope(gateway, result, *, progress=None):
         raise ValueError('A model is required to resolve the report audit-scope qualification.')
     audit = dict(contract=BATCHED_AUDIT_CONTRACT, context=context, fingerprint=fingerprint, batches=[])
     try:
+        if progress:
+            progress('Reviewing source audit qualifications')
         from .report_audit_source_discovery import discover_audit_sources
         context = discover_audit_sources(gateway, result, context, audit, progress=progress)
         audit.update(context=context, fingerprint=_fingerprint(context))

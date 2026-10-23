@@ -17,7 +17,7 @@ from tests.test_executive_brief import payload
 from tests.test_source_integration_v166 import Gateway, fixture
 
 
-LIMITS = (8192, 16384)
+LIMITS = (16384, 24000)
 TRUNCATED_DRAFT = '{"additions":[{"text":"TRUNCATED_SOURCE_DRAFT_SENTINEL'
 TRUNCATED_REVIEW = '{"verdicts":[{"reason":"TRUNCATED_SOURCE_REVIEW_SENTINEL'
 
