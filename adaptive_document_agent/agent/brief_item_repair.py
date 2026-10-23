@@ -494,7 +494,8 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
         try:
             candidate = ExecutiveBrief(title=title, items=merged)
             source_corrected = correct_residual_source_errors(gateway, candidate, result=result,
-                excerpts=excerpts, initial_errors=audit['initial_errors'], audit=audit, cancelled=cancelled)
+                excerpts=excerpts, initial_errors=audit['initial_errors'], audit=audit, cancelled=cancelled,
+                evidence_catalog=evidence_catalog)
             if source_corrected is not None:
                 candidate = source_corrected
                 merged = [item.model_dump(mode='json') for item in candidate.items]

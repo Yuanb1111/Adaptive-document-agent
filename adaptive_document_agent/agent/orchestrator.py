@@ -688,6 +688,12 @@ class DocumentOrchestrator:
                     if deferred_brief:
                         from .brief_budget_schedule import complete_deferred_brief
                         complete_deferred_brief(self.gateway, final_result, progress=notify)
+                if final_result.executive_brief is None and any(
+                        issue.code == 'executive_brief_unavailable' for issue in final_result.validation_warnings):
+                    final_stage = 'executive_brief'
+                    reason = next(issue.message for issue in reversed(final_result.validation_warnings)
+                                  if issue.code == 'executive_brief_unavailable')
+                    raise ValueError(reason)
                 final_stage = 'source_integration'
                 original_brief = final_result.executive_brief
                 if original_brief is not None:
@@ -709,16 +715,18 @@ class DocumentOrchestrator:
                 final_result.retry_from = 'reporting'
                 final_result.failed_stage = final_stage
                 final_result.failure_details = dict(component=(
+                    'ExecutiveBrief' if final_stage == 'executive_brief' else
                     'SourceIntegration' if final_stage == 'source_integration' else
                     'ReportAuditScope' if final_stage == 'report_audit_scope' else
                     'PresentationCoverage' if final_stage == 'presentation_coverage' else 'PresentationBudget'),
                     error_type=type(exc).__name__, message=str(exc))
                 final_result.validation_warnings.append(ValidationIssue(code=(
-                    'source_integration_failed' if final_stage == 'source_integration'
+                    'executive_brief_failed' if final_stage == 'executive_brief'
+                    else 'source_integration_failed' if final_stage == 'source_integration'
                     else 'report_audit_scope_failed' if final_stage == 'report_audit_scope'
                     else 'presentation_coverage_failed' if final_stage == 'presentation_coverage'
                     else 'presentation_physical_budget_failed'), severity='warning',
-                    stage='report' if final_stage == 'source_integration' else 'presentation', message=str(exc)))
+                    stage='report' if final_stage in {'source_integration', 'executive_brief'} else 'presentation', message=str(exc)))
         if not is_complete(final_result):
             final_result.pipeline_state = 'partial'
             final_result.retry_from = 'reporting'

@@ -46,9 +46,11 @@ def check_meaning_contract(original, candidate, indices, *, result, excerpts, in
         placements = misplaced_parenthetical_statuses(item, result, inventory=inventories[index])
         if statuses:
             item_errors.extend(statuses)
+            from .brief_status_conflict import retryable_status_conflict
             recoverable &= all(any(f"'{row['status']}'" in error
                                    and f"'{row['ambiguous_preceding_period']}'" in error
-                                   for row in placements) for error in statuses)
+                                   for row in placements) or retryable_status_conflict(error, inventories[index])
+                               for error in statuses)
         if item_errors:
             errors.extend(item_errors)
             feedback[f'item_{index}'] = {'errors': item_errors,

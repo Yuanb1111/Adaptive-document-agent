@@ -21,8 +21,11 @@ def period_clarification_options(item, result, *, inventory=None):
     for relative in _RELATIVE_YEAR.finditer(item.text):
         prefix = item.text[:relative.start()]
         # Do not lend a date across a different sentence or independent clause.
-        boundary = max([0, *[m.end() for m in re.finditer(r'(?<!\d)[.!?](?!\d)\s+|[;\n]', prefix)]])
+        boundary = max([0, *[m.end() for m in re.finditer(r'[.!?](?!\d)\s+|[;\n]', prefix)]])
         before = [m for m in _PERIOD.finditer(prefix, boundary) if not m['year']]
+        # A later explicit endpoint owns "a year earlier"; earlier independent
+        # comparisons in the same sentence cannot make that endpoint ambiguous.
+        before = before[-1:]
         for table in inventory:
             columns = table['columns']
             declared = {re.sub(r'\s+', '', column['period']).upper() for column in columns}
