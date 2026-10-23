@@ -1,5 +1,10 @@
 # Adaptive Document Intelligence Agent
 
+The [v175 introduction review source-binding fix](docs/INTRODUCTION_REVIEW_SOURCE_BINDING_V175.md)
+lets review findings reference exact source parts while Python retains their complete
+original evidence. Model replies remain auditable, malformed explicit quotations
+still fail validation, and rejected content still needs repair and independent review.
+
 The [v174 report evidence and completion update](docs/REPORT_EVIDENCE_COMPLETION_V174.md)
 independently checks the direction expressed by conclusion copy, requires completed
 source coverage before export, and binds audit qualifications to individual source

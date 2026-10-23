@@ -20,7 +20,10 @@ class IntroductionReviewFinding(BaseModel):
     part_id: str
     meaning_id: str = ''
     current_meaning: str = ''
-    source_quote: str = Field(min_length=1, max_length=16000)
+    # Canonical source parts have no text-length cap; preserve them on audit reload.
+    source_quote: str = Field(default='',
+        description='Leave empty to reference the complete source part by part_id. Python attaches its exact text. '
+                    'If supplied, it must be one continuous literal quotation from that part.')
     reason: str = Field(min_length=1, max_length=2000)
 
 
@@ -96,8 +99,14 @@ _BINDING_RULES = (
     'included part use kind=included_part; for an unjustifiably omitted source part use '
     'kind=omitted_part. Part findings leave meaning_id/current_meaning empty and identify '
     'the missing assertion in reason; do not use them to criticize existing wording without '
-    'its exact meaning reference. Every finding must quote a nonempty literal source_quote '
-    'from its own source part. A meaningful original assertion lost during revision is a '
+    'its exact meaning reference. For EVERY finding, leave source_quote empty and identify its '
+    'exact owning source part by part_id. Python attaches that complete original passage before '
+    'binding validation and repair; do not retype, paraphrase or splice source sentences. '
+    'The complete owned source is evidence, never proof that your semantic criticism is correct. '
+    'Explain the actual defect in reason after reviewing that source and the CURRENT meaning union. '
+    'If you do supply source_quote, it must be one continuous literal passage from its own part, '
+    'including all intervening words; disconnected sentences are not one literal quotation. '
+    'A meaningful original assertion lost during revision is a '
     'missing assertion in the CURRENT included part, not a criticism of stale wording. '
     'Use repair_scope=selection for unjustified omitted parts. Accept only after the full '
     'semantic review, with findings empty. Do not invent findings merely to match an earlier '
@@ -182,7 +191,7 @@ def review_current_selection(gateway, source, values, rules, review, *, attempt,
     from .introduction_audience import complete_response
     from .introduction_review_history import (
         decision_references, prior_bound_history, review_context_identity, resolution_wire)
-    from .introduction_review_context import historical_context, binding_recheck
+    from .introduction_review_context import historical_context, binding_recheck, bind_finding_sources
     inventory = [{key: value for key, value in row.items() if key != 'source_quote'}
                  for row in current_meanings(values)]
     resolution = resolution_wire(meaning_resolution, source=source)
@@ -219,6 +228,9 @@ def review_current_selection(gateway, source, values, rules, review, *, attempt,
             record.update(status='cancelled' if isinstance(exc, CancelledError) else 'failed',
                           error_type=type(exc).__name__)
             raise
+        record['raw_review'] = verdict.model_dump(mode='json')
+        verdict, source_bindings = bind_finding_sources(verdict, payload)
+        record['finding_source_bindings'] = source_bindings
         errors = binding_errors(verdict, payload)
         record.update(review=verdict.model_dump(mode='json'), binding_errors=errors,
                       status='invalid_binding' if errors else 'bound')
