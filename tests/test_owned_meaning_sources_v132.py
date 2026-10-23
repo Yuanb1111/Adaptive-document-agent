@@ -43,7 +43,8 @@ def test_exact_owner_source_replaces_model_retyping_before_independent_review():
     assert 'proposed_source_quote' not in payload['parts'][0]['required_meanings'][0]
 
 
-def test_review_does_not_apply_author_empty_quote_instruction_to_python_bound_evidence():
+@pytest.mark.parametrize('accept', [True, False])
+def test_review_distinguishes_output_source_references_from_bound_draft_evidence(accept):
     from adaptive_document_agent.agent.introduction_audience import _AUTHOR_EVIDENCE_RULE
     result, review, _ = fixture(1)
     class CheckRoles(Client):
@@ -53,13 +54,35 @@ def test_review_does_not_apply_author_empty_quote_instruction_to_python_bound_ev
                 assert _AUTHOR_EVIDENCE_RULE in system
             else:
                 assert _AUTHOR_EVIDENCE_RULE not in system
-                assert 'leave source_quote empty' not in system
+                assert 'For EVERY finding, leave source_quote empty' in system
+                assert 'never require clearing canonical evidence already bound' in system
                 assert 'source.parts[].source_text by part_id' in system
                 assert 'reject a meaning not grounded in that exact part' in system
-            return super().generate_structured(messages, schema, **kwargs)
-    select_introduction_audience(CheckRoles(), result, review)
-    assert review.audience_selection['independent_review']['accepted']
-    assert review.audience_selection['decisions'][0]['required_meanings'][0]['source_quote'] == review.parts[0].source_text
+            response = super().generate_structured(messages, schema, **kwargs)
+            if schema.__name__ == 'IntroductionAudienceReview':
+                for finding in response.findings:
+                    finding.source_quote = ''
+            return response
+    client = CheckRoles(accept=accept)
+    if accept:
+        select_introduction_audience(client, result, review)
+        assert review.audience_selection['independent_review']['accepted']
+        assert review.audience_selection['decisions'][0]['required_meanings'][0]['source_quote'] == review.parts[0].source_text
+    else:
+        with pytest.raises(ValueError, match='not independently accepted'):
+            select_introduction_audience(client, result, review)
+        assert not review.audience_selection
+    records = [a['introduction_audience_review'] for a in review.plan_audits
+               if 'introduction_audience_review' in a]
+    for record in records:
+        assert record['status'] == 'bound'
+        assert record['decisions'][0]['required_meanings'][0]['source_quote'] == review.parts[0].source_text
+        assert record['review']['accepted'] is accept
+        for raw, bound in zip(record['raw_review']['findings'], record['review']['findings']):
+            assert raw['source_quote'] == ''
+            assert bound['source_quote'] == review.parts[0].source_text
+    assert all(p['source']['parts'][0]['source_text'] == review.parts[0].source_text
+               for p in client.reviews)
 
 
 def test_copying_owned_evidence_cannot_certify_an_unsupported_assertion():
