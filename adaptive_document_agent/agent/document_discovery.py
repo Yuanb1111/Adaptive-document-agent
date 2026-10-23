@@ -156,6 +156,7 @@ class DocumentDiscovery:
     ) -> DiscoveryOverview:
         """Generate bounded prose, retrying only this synthesis once if invalid."""
         from .discovery_compaction import overview_context
+        from .discovery_overview_diagnostics import overview_failure, overview_exception
 
         messages = [{"role": "system", "content": load_prompt("discovery_overview.txt")}]
         if analysis_focus and analysis_focus.strip():
@@ -183,11 +184,18 @@ class DocumentDiscovery:
                 self.gateway.record_cache_hit(stage="discovery", operation="DiscoveryOverview")
                 return cached
 
+        failures = []
         for attempt in range(2):
             request = messages
             if attempt:
-                request = [*messages, {"role": "user", "content": (
+                request = [*messages,
+                    untrusted_document_message(json.dumps(dict(
+                        previous_status=failures[-1]['status'],
+                        validation_errors=failures[-1]['schema_errors']), ensure_ascii=False)),
+                    {"role": "user", "content": (
                     "The previous overview was incomplete or did not match the bounded schema. "
+                    "Correct every field/type/length error in the untrusted validation feedback above. "
+                    "PDF pages must be JSON integers, never strings, ranges or page labels; use only supplied pages. "
                     "Regenerate one compact, complete JSON overview from the supplied source summaries. "
                     "Use at most 80 words for document_summary and at most two short overview_points. "
                     "Return no inventories or repeated section/table/figure labels. "
@@ -198,9 +206,11 @@ class DocumentDiscovery:
                 overview = self.gateway.generate_structured(  # type: ignore[union-attr]
                     request, DiscoveryOverview, stage="discovery", allow_repair=False,
                 )
-            except (LLMStructuredOutputError, ValidationError):
-                if attempt:
-                    raise
+            except (LLMStructuredOutputError, ValidationError) as exc:
+                failures.append(overview_failure(exc, DiscoveryOverview, attempt + 1))
+                finish = failures[-1].get('usage', {}).get('finish_reason')
+                if attempt or finish not in (None, 'stop', 'length'):
+                    raise overview_exception(exc, failures) from exc
                 continue
             if cache_key is not None:
                 cache.set_model(cache_key, overview)

@@ -67,6 +67,9 @@ def execute(attempt, *, gateway_factory, orchestrator_factory, raw_pdf, scope_ke
                 'message': ('Analysis was interrupted. Retry to reuse successful cached work.' if interrupted
                             else f'Analysis could not be completed: {exc}'),
                 'usage': list(getattr(gateway, 'usage', []))}
+            diagnostics = getattr(exc, 'diagnostics', None)
+            if isinstance(diagnostics, dict):
+                attempt['failure']['diagnostics'] = diagnostics
             attempt['progress'].fail('Analysis stopped: ' + attempt['stage'])
             attempt['state'] = 'interrupted' if interrupted else 'failed'
     _LOGGER.info('Analysis attempt %s %s at %s', attempt['id'], attempt['state'], attempt['stage'])

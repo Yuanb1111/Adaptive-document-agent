@@ -65,6 +65,13 @@ def _render_analysis_failure(st, failure, progress=None):
         else:
             progress.fail("Analysis could not be completed")
     st.error(failure["message"])
+    if failure.get('diagnostics'):
+        import json
+        st.download_button('Download failure diagnostics (.json)',
+            json.dumps(failure['diagnostics'], ensure_ascii=False, indent=2),
+            'analysis_failure_diagnostics.json', 'application/json',
+            key='download_analysis_failure_diagnostics', on_click='ignore',
+            help='Includes model responses derived from your document. Share only with intended recipients.')
     if failure["usage"]:
         from .llm_costs import render as render_costs
         render_costs(st, failure["usage"])

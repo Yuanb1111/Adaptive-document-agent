@@ -65,7 +65,9 @@ def test_oversized_schema_output_gets_one_source_grounded_overview_retry():
     assert len(client.calls) == 2
     assert [item["status"] for item in gateway.usage] == ["invalid_format", "success"]
     assert all(item["operation"] == "DiscoveryOverview" for item in gateway.usage)
-    assert client.calls[0][-1] == client.calls[1][-2]
+    assert client.calls[1][:len(client.calls[0])] == client.calls[0]
+    assert 'string_too_long' in client.calls[1][-2]['content']
+    assert 'document_summary' in client.calls[1][-2]['content']
     assert "Repeated prose" not in json.dumps(client.calls[1])
 
 

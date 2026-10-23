@@ -1,5 +1,10 @@
 # Adaptive Document Intelligence Agent
 
+The [v179 discovery overview feedback update](docs/OVERVIEW_VALIDATION_FEEDBACK_V179.md)
+provides exact field diagnostics to the bounded overview retry. Persistent failures
+identify their fields and offer a diagnostic download without repeating successful
+section discovery or displaying raw model responses in the normal error message.
+
 The [v178 report format recovery update](docs/REPORT_FORMAT_RECOVERY_V178.md)
 handles complete schema errors in supplementary-source writing/review and assurance
 writing with bounded corrections and exact diagnostics. Source-defined ratio
