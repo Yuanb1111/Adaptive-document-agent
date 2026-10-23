@@ -1,5 +1,10 @@
 # Adaptive Document Intelligence Agent
 
+The [v177 audit source format correction](docs/AUDIT_SOURCE_FORMAT_CORRECTION_V177.md)
+gives malformed source-page selections one correction with complete original
+context and exact schema feedback. Strict source validation and the shared
+correction limit remain in place; raw failed replies stay in the audit.
+
 The [v176 coverage correction update](docs/COVERAGE_CORRECTION_CONTEXT_V176.md)
 keeps a rejected merge in the audit when repeating it would exceed the request
 budget. One complete regeneration retains all source evidence and validation
