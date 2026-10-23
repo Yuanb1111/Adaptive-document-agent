@@ -10,7 +10,7 @@ REVIEW_TOKEN_LIMITS = (16000, 24000)
 
 
 def complete_budget_output(gateway, messages, schema, record, *, audit_key, token_limits,
-                           stage='presentation'):
+                           stage='presentation', cancelled=None):
     """Retry one proven length truncation from the identical complete messages.
 
     A partial JSON response is retained for diagnosis only. It is never parsed,
@@ -22,8 +22,9 @@ def complete_budget_output(gateway, messages, schema, record, *, audit_key, toke
                         capacity_retry=False)
         attempts.append(physical)
         try:
+            cancellation = {'cancelled': cancelled} if cancelled is not None else {}
             response = gateway.generate_structured(messages, schema, stage=stage,
-                allow_repair=False, max_tokens=limit)
+                allow_repair=False, max_tokens=limit, **cancellation)
         except Exception as exc:
             truncated = False
             if isinstance(exc, LLMStructuredOutputError):

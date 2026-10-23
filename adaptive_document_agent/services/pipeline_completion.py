@@ -28,5 +28,22 @@ def require_source_integration(result) -> None:
                          'Retry reporting before completing the analysis or exporting PowerPoint.')
 
 
+def topic_coverage_complete(result) -> bool:
+    from adaptive_document_agent.agent.topic_coverage_review import coverage_review_pending
+    return not coverage_review_pending(result)
+
+
+def require_topic_coverage(result) -> None:
+    if not topic_coverage_complete(result):
+        raise ValueError('Presentation source coverage review is incomplete or stale. '
+                         'Retry reporting before completing the analysis or exporting PowerPoint.')
+
+
 def is_complete(result) -> bool:
-    return is_reporting_ready(result) and source_review_complete(result)
+    from adaptive_document_agent.agent.report_audit_scope import require_report_audit_scope
+    try:
+        require_report_audit_scope(result)
+    except ValueError:
+        return False
+    return (is_reporting_ready(result) and source_review_complete(result)
+            and topic_coverage_complete(result))

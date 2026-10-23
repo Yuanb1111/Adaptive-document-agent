@@ -148,7 +148,8 @@ def source_audit_scope(item, result):
                               'columns': columns, 'literal_audit_header_lines': labels,
                               'binding_basis': 'complete_quoted_row_and_verified_column_geometry',
                               'source_table_confidence': table.confidence})
-    return inventory
+    from adaptive_document_agent.services.report_audit_scope import bind_brief_audit_inventory
+    return bind_brief_audit_inventory(inventory, result)
 
 
 def _calendar_date(value):

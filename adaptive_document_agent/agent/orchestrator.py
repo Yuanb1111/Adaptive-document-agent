@@ -239,6 +239,13 @@ class DocumentOrchestrator:
             candidates, scores = resume.candidates, resume.candidate_scores
             plan, results = resume.analysis_plan, resume.analysis_results
             issues = self._validate_analysis(profile, observations, results)
+            # A report retry can reuse only source-bound completed audit batches.
+            # Their own fingerprint and final target-partition checks remain
+            # mandatory after fresh topic selection; no stale approval is assumed.
+            audit_checkpoint = next((issue for issue in reversed(resume.validation_warnings)
+                if issue.code in {'report_audit_scope_review', 'report_audit_scope_unresolved'}), None)
+            if audit_checkpoint is not None:
+                issues.append(audit_checkpoint.model_copy(deep=True))
         else:
             notify("Generating analysis candidates")
             if attach_introduction is not None and attach_introduction.failed():
@@ -454,6 +461,10 @@ class DocumentOrchestrator:
                                 return
                             seed = current.model_copy(deep=True)
                             seed.presentation_plan = compiled.model_copy(deep=True)
+                            from .report_audit_scope import needs_report_audit_scope
+                            if needs_report_audit_scope(seed):
+                                deferred_brief = True
+                                return
                             try:
                                 with record_timing(timings, 'brief_identity_wait'):
                                     attach_introduction(seed.presentation_plan, seed)
@@ -575,9 +586,19 @@ class DocumentOrchestrator:
             checkpoint.presentation_plan = presentation_plan
             executive_brief = None
             from .brief_budget_schedule import native_briefing_waits_for_budget
+            from .report_audit_scope import defer_brief_for_audit
+            audit_deferred = defer_brief_for_audit(checkpoint, prepared_brief)
+            if audit_deferred:
+                deferred_brief = True
+                prepared_brief = None
             if prepared_brief is None and not deferred_brief:
                 deferred_brief = native_briefing_waits_for_budget(checkpoint, presentation_plan)
-            if self.gateway and deferred_brief:
+            if self.gateway and audit_deferred:
+                issues.append(ValidationIssue(code='executive_brief_deferred_to_audit',
+                    stage='report', severity='info', message=
+                    'Deferred the final briefing until measure-specific audit scope is reviewed. '
+                    'Any earlier parallel draft is discarded and its worker is drained.'))
+            elif self.gateway and deferred_brief:
                 issues.append(ValidationIssue(code='executive_brief_deferred_to_budget',
                     stage='report', severity='info', message=
                     'The selected draft already exceeds a slide limit. Deferred the briefing until '
@@ -647,13 +668,23 @@ class DocumentOrchestrator:
             pipeline_total_ms=int((perf_counter() - pipeline_started) * 1000),
         )
         from adaptive_document_agent.services.pipeline_completion import (
-            is_complete, is_reporting_ready, require_source_integration)
+            is_complete, is_reporting_ready, require_source_integration, require_topic_coverage)
         if self.gateway and is_reporting_ready(final_result):
             from .presentation_budget_refinement import refine_presentation_budget, FinalBudgetBriefError
-            final_stage = 'presentation_budget'
+            final_stage = 'presentation_coverage'
             try:
+                require_topic_coverage(final_result)
+                final_stage = 'report_audit_scope'
+                from .report_audit_scope import review_report_audit_scope
+                with record_timing(final_result.stage_details_ms, 'report_audit_scope'):
+                    review_report_audit_scope(self.gateway, final_result, progress=notify)
+                final_stage = 'presentation_budget'
                 with record_timing(final_result.stage_details_ms, 'physical_presentation_budget'):
                     refine_presentation_budget(self.gateway,final_result,progress=notify)
+                    final_stage = 'report_audit_scope'
+                    from .report_audit_scope import require_report_audit_scope
+                    require_report_audit_scope(final_result)
+                    final_stage = 'presentation_budget'
                     if deferred_brief:
                         from .brief_budget_schedule import complete_deferred_brief
                         complete_deferred_brief(self.gateway, final_result, progress=notify)
@@ -665,6 +696,8 @@ class DocumentOrchestrator:
                         final_result.executive_brief = review_supplementary_sources(
                             self.gateway, final_result, original_brief, progress=notify)
                 require_source_integration(final_result)
+                final_stage = 'presentation_coverage'
+                require_topic_coverage(final_result)
                 final_stage = 'presentation_budget'
                 if final_result.executive_brief != original_brief:
                     from .presentation_budget_refinement import measure
@@ -676,10 +709,14 @@ class DocumentOrchestrator:
                 final_result.retry_from = 'reporting'
                 final_result.failed_stage = final_stage
                 final_result.failure_details = dict(component=(
-                    'SourceIntegration' if final_stage == 'source_integration' else 'PresentationBudget'),
+                    'SourceIntegration' if final_stage == 'source_integration' else
+                    'ReportAuditScope' if final_stage == 'report_audit_scope' else
+                    'PresentationCoverage' if final_stage == 'presentation_coverage' else 'PresentationBudget'),
                     error_type=type(exc).__name__, message=str(exc))
                 final_result.validation_warnings.append(ValidationIssue(code=(
                     'source_integration_failed' if final_stage == 'source_integration'
+                    else 'report_audit_scope_failed' if final_stage == 'report_audit_scope'
+                    else 'presentation_coverage_failed' if final_stage == 'presentation_coverage'
                     else 'presentation_physical_budget_failed'), severity='warning',
                     stage='report' if final_stage == 'source_integration' else 'presentation', message=str(exc)))
         if not is_complete(final_result):

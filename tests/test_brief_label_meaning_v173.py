@@ -63,6 +63,10 @@ def test_independent_review_checks_label_and_body_without_rebinding_a_valid_labe
 
         def generate_structured(self, messages, schema, **kwargs):
             self.calls.append(messages)
+            if schema.__name__ == 'BriefClaimDirectionReview':
+                from tests.brief_direction_fixture import accepted_directions
+                return accepted_directions(messages, schema, [dict(index=0,
+                    comparisons=[c.model_dump(mode='json') for c in comparisons])])
             assert len(self.calls) == 1, 'An exact label claim must not require binding correction.'
             return schema.model_validate({'items': [dict(index=0, accepted=True,
                 reason='The reviewer has supplied the claimed directions and literal endpoints.',

@@ -286,48 +286,44 @@ def meaning_validator(gateway, *, cancelled=None, result=None):
         from .brief_review_bindings import correct_review_bindings
         response, binding_errors = correct_review_bindings(gateway, response, brief=brief,
             pending=pending, messages=messages, result=result, cancelled=cancelled)
-        audit = {'response': response.model_dump(mode='json'), 'source_catalogs': catalogs,
-                 'source_audit_scopes': {row['index']: row['source_audit_scope'] for row in pending}, 'errors': {}}
+        from .brief_meaning_evidence import review_evidence_errors
+        errors.update(review_evidence_errors(response, brief=brief, pending=pending,
+            catalogs=catalogs, result=result, binding_errors=binding_errors))
+        for index in ids & errors.keys():
+            checked[brief.items[index].model_dump_json()] = errors[index]
+        # A single source reviewer can silently map "narrowed" to increase to
+        # agree with the endpoints. Read audience predicates in a separate call
+        # without that review, its directions, or any source values. Only a
+        # comparison that survives BOTH semantic bindings can be memoized.
+        from .brief_claim_direction import review_claim_directions
+        correction_eligible = set()
+        direction_failures = review_claim_directions(gateway, brief=brief,
+            verdicts=[row for row in response.items if row.index not in errors],
+            result=result, cancelled=cancelled, correction_eligible=correction_eligible)
+        if correction_eligible:
+            from .brief_direction_repair import correct_direction_bindings
+
+            def revalidate(corrected):
+                # No recursive correction or relaxed gate: a proposed reviewer
+                # repair starts again at the original source/arithmetic checks.
+                failures = review_evidence_errors(corrected, brief=brief, pending=pending,
+                    catalogs=catalogs, result=result)
+                failures.update(review_claim_directions(gateway, brief=brief,
+                    verdicts=[row for row in corrected.items if row.index not in failures],
+                    result=result, cancelled=cancelled))
+                return failures
+
+            corrected_failures = correct_direction_bindings(gateway, response,
+                messages=messages, direction_failures={index: direction_failures[index]
+                    for index in correction_eligible}, revalidate=revalidate,
+                result=result, cancelled=cancelled)
+            direction_failures = {**{index: failures for index, failures in direction_failures.items()
+                                     if index not in correction_eligible}, **corrected_failures}
+        for index, failures in direction_failures.items():
+            checked[brief.items[index].model_dump_json()] = failures
+            errors[index] = failures
         for verdict in response.items:
-            item = brief.items[verdict.index]
-            failed = [*binding_errors.get(verdict.index, []), *([] if verdict.accepted else [verdict.reason])]
-            from .brief_audit_scope import audit_status_errors
-            failed.extend(audit_status_errors(item, result, inventory=next(
-                row['source_audit_scope'] for row in pending if row['index'] == verdict.index)))
-            if verdict.numeric_comparison and not verdict.comparisons:
-                failed.append('Every asserted numeric change needs source-bound comparison endpoints')
-            for comparison in verdict.comparisons:
-                updates = {}
-                for field in ('start', 'end', 'delta'):
-                    ref = getattr(comparison, field + '_ref')
-                    if ref:
-                        context = catalogs[verdict.index].get(ref)
-                        if context is None:
-                            failed.append('Comparison reference is outside its item evidence')
-                        else:
-                            supplied = getattr(comparison, field + '_context')
-                            if supplied and normalize_quote(supplied) != normalize_quote(context):
-                                failed.append('Comparison reference contradicts its supplied context')
-                            updates[field + '_context'] = context
-                comparison = comparison.model_copy(update=updates)
-                source_percentages = None
-                if comparison.measure_basis == 'source_percentage' and result is not None:
-                    from adaptive_document_agent.services.executive_brief import _quoted_table_percentages, _quantities
-                    from adaptive_document_agent.services.brief_table_evidence import quoted_table_context
-                    source_percentages = (_quoted_table_percentages(item, result)
-                        | quoted_table_context(item, result).percentages
-                        | {v for q in item.evidence for c, v, u in _quantities(q.text)
-                           if not c and u in {'%', 'percent'}})
-                failed.extend(comparison_errors(comparison, item, pages=(
-                    {p.page_number:p.text for p in result.document.pages} if result is not None else None),
-                    source_percentages=source_percentages))
-            checked[item.model_dump_json()] = failed
-            if failed:
-                errors[verdict.index] = failed
-                audit['errors'][str(verdict.index)] = failed
-        if result is not None:
-            from adaptive_document_agent.models import ValidationIssue
-            result.validation_warnings.append(ValidationIssue(code='executive_brief_meaning_audit',
-                stage='report', severity='info', message=json.dumps(audit, ensure_ascii=False)))
+            if verdict.index not in errors:
+                checked[brief.items[verdict.index].model_dump_json()] = []
         return errors
     return validate

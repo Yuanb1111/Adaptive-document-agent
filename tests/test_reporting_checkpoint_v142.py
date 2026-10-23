@@ -83,6 +83,7 @@ class SchemaReplayClient(MockLLMClient):
         from adaptive_document_agent.agent.introduction_selection_inventory import IntroductionAudienceInventoryCorrection
         from adaptive_document_agent.agent.introduction_meaning_repair import IntroductionMeaningRevision
         from adaptive_document_agent.agent.topic_coverage_review import TopicCoverageReview
+        from adaptive_document_agent.agent.brief_claim_direction import BriefClaimDirectionReview
         prefix = 'Return only JSON matching this schema: '
         assert messages[0]['content'].startswith(prefix)
         assert max_tokens is not None and max_tokens > 0
@@ -90,6 +91,7 @@ class SchemaReplayClient(MockLLMClient):
         schemas = {schema.__name__: schema for schema in (
             IntroductionAudienceSelection, IntroductionAudienceReview,
             IntroductionAudienceInventoryCorrection, IntroductionMeaningRevision, TopicCoverageReview,
+            BriefClaimDirectionReview,
         )}
         # Subclasses can add a newly introduced protocol without bypassing the
         # real gateway's schema-text parser or changing the v142 replay contract.
@@ -296,6 +298,10 @@ class SyntheticReportingClient(SchemaReplayClient):
             value = dict(items=[dict(index=row['index'], accepted=True,
                 reason='Exact separately dated synthetic source facts are retained.',
                 numeric_comparison=False, comparisons=[]) for row in values[0]])
+        elif name == 'BriefClaimDirectionReview':
+            assert all(not row['comparisons'] for row in values[0])
+            value = dict(items=[dict(index=row['index'], comparisons=[],
+                omitted_directional_claims=[]) for row in values[0]])
         else:
             raise AssertionError('Unexpected synthetic reporting operation: ' + name)
         from tests.summary_author_helpers import writer_test_value

@@ -8,6 +8,7 @@ from adaptive_document_agent.services.summary_validation import reading_errors
 from .prompting import untrusted_document_message
 from .summary_read_binding import bind_reading, line_coverage, missing_ranges, reconcile_layout
 from .summary_read_request import reading_request
+from .summary_read_scope import TargetedReadScopeError, targeted_source_messages
 
 
 _COVERAGE = {'Summary parts skip or overlap supplied source lines',
@@ -75,10 +76,12 @@ def repair_rejected_parts(gateway, result, blocks, parts, response, previous,
             if cancelled.is_set():
                 raise CancelledError('Summary reading cancelled')
             replacement = reading_request(gateway, [
-                *source_messages,
+                *targeted_source_messages(source_messages, blocks, ranges),
                 untrusted_document_message(json.dumps(current, ensure_ascii=False)),
                 {'role': 'user', 'content':
-                 'Re-read ONLY the listed inclusive ranges. Original blocks are context. Partition those '
+                 'Re-read ONLY the listed inclusive ranges. Supplied blocks are numbered excerpts; '
+                 'preserve their ORIGINAL line numbers, including gaps between disjoint ranges. '
+                 'All lines outside these ranges already have accepted ownership and are immutable. Partition those '
                  'ranges exactly once; do not return any lines outside them. Some ranges include adjacent '
                  'parts so a table and its headers can be grouped together without borrowing evidence. '
                  'Retain all their substantive content. Correct the specific '
@@ -95,9 +98,26 @@ def repair_rejected_parts(gateway, result, blocks, parts, response, previous,
                  'it, leave facts empty and explain that limitation. Its literal owned passage will '
                  'be retained as internal evidence requiring the independent slide editor. '
                  'Do not hide substance as headings/layout to pass validation.'}],
-                SummaryReadBatch, blocks, cancelled, current)
+                SummaryReadBatch, [b for b in blocks if any(r['block_id'] == b.id for r in ranges)],
+                cancelled, current)
             current['response'] = replacement.model_dump(mode='json')
-            scoped = _owned_replacements(replacement, ranges, retained, lengths, current)
+            try:
+                scoped = _owned_replacements(replacement, ranges, retained, lengths, current)
+            except TargetedReadScopeError as exc:
+                current['errors'] = [str(exc)]
+                record['errors'] = list(current['errors'])
+                if targeted_attempt:
+                    raise
+                # Reject the complete crossing proposal. One fresh model read
+                # may correct the partition inside the SAME owned ranges;
+                # accepted parts are neither clipped nor rebound from it.
+                current = {'ranges': ranges, 'rejected_parts': record['rejected_parts'],
+                           'previous_errors': list(current['errors']),
+                           'scope_violations': current['scope_violations']}
+                if feedback:
+                    current['layout_evidence'] = feedback
+                record['scope_retry'] = current
+                continue
             replacement = replacement.model_copy(update={'parts': scoped})
             additions, errors = bind_reading(replacement, blocks, result, current,
                                             literal_fallback=True, recover_cross_part=True)
@@ -154,6 +174,8 @@ def _layout_feedback(parts, result):
 
 
 def _owned_replacements(replacement, ranges, retained, lengths, record):
+    if any(not 1 <= p.start_line <= p.end_line <= lengths.get(p.block_id, 0) for p in replacement.parts):
+        raise ValueError('Summary targeted reading changed already accepted source lines')
     scoped = []
     for candidate in replacement.parts:
         if any(candidate.block_id == r['block_id'] and
@@ -168,6 +190,13 @@ def _owned_replacements(replacement, ranges, retained, lengths, record):
                 and set(range(candidate.start_line, candidate.end_line + 1)) <= owned):
             record.setdefault('ignored_out_of_scope_parts', []).append(candidate.model_dump(mode='json'))
         else:
+            if (1 <= candidate.start_line <= candidate.end_line <= lengths.get(candidate.block_id, 0)
+                    and any(_intersects(candidate.block_id, candidate.start_line, candidate.end_line, r)
+                            for r in ranges)):
+                record.setdefault('scope_violations', []).append(dict(block_id=candidate.block_id,
+                    start_line=candidate.start_line, end_line=candidate.end_line,
+                    reason='Proposed part crosses an immutable accepted-source boundary'))
+                raise TargetedReadScopeError('Summary targeted reading changed already accepted source lines')
             raise ValueError('Summary targeted reading changed already accepted source lines')
     if not scoped:
         raise ValueError('Summary targeted reading returned no requested source ranges')

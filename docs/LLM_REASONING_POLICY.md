@@ -12,6 +12,20 @@ without changing prompts, response validation, routing, credentials or privacy:
   source validation and the 24-batch, 36-call ceiling remain required; incomplete
   coverage remains unresolved and cannot certify business acceptance.
 - `ExecutiveBriefPatch` uses the same reduction for its single targeted repair.
+- `AuditSourceDiscovery` in `report` uses the configured reduction for source
+  navigation. Both `AuditScopeDraft` and `AuditScopeReview` preserve provider-default
+  reasoning: building and independently checking assurance bindings must reconcile
+  literal period/unit evidence, scope, table/column ownership and exact counterparts,
+  including evidence against proposed unknown dispositions.
+  Audit batches contain at most three exact target measures. Complete source
+  pages, exact counterpart row/header/unit proofs, independent assurance review,
+  Python value/period/unit/page checks and unknown dispositions remain required.
+  The existing output limits and correction budgets do not change. Provider-default
+  opt-out and exact route/capability checks still apply. The two assurance operations'
+  identities change within policy v9; unrelated operation caches remain reusable.
+  The strengthened unknown-review contract expires earlier audit approvals and
+  unfinished checkpoints. Approvals produced under the current contract can be
+  revalidated and reused independently of transport capacity failures.
 - `TakeawayCorrection` uses the same opt-out reduction and a 2,000-token output
   bound. It rewrites only a withheld conclusion from its selected evidence;
   strict compilation must succeed before the conclusion is restored.

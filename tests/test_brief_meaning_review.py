@@ -70,7 +70,7 @@ def test_writer_repairs_only_the_false_comparison_and_rechecks_the_patch(valid_p
             ExecutiveBriefWriter(g).generate(result)
     audit = json.loads(next(w.message for w in result.validation_warnings if w.code == 'executive_brief_repair_audit'))
     assert audit['locked_indices'] == [] and 'Meaning review' in str(audit['initial_errors'])
-    assert len(client.calls) == 4
+    assert len(client.calls) == (5 if valid_patch else 4)
 
 
 def test_accounting_parentheses_and_long_summary_quotes_keep_signs_and_headers():

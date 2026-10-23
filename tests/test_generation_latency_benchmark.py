@@ -17,8 +17,9 @@ def test_generation_latency_cli_preserves_repaired_evidence_and_repeatable_outpu
     report = json.loads(completed.stdout)
     assert report["mode"] == "synthetic_offline_replay"
     brief = report["brief"]
-    assert brief["calls"] == 4
-    assert brief["operations"] == ["ExecutiveBrief", "BriefMeaningReview", "ExecutiveBriefPatch", "BriefMeaningReview"]
+    assert brief["calls"] == 6
+    assert brief["operations"] == ["ExecutiveBrief", "BriefMeaningReview", "BriefClaimDirectionReview",
+                                   "ExecutiveBriefPatch", "BriefMeaningReview", "BriefClaimDirectionReview"]
     assert brief["result"] == {"title": "Key takeaways", "items": [
         {"label": f"Queue {letter}",
          "text": f"Service queue {letter} reported {10 + index} units during 2025.",

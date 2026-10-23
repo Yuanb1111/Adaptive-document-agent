@@ -531,7 +531,8 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
             moved = [part for part in (heading, subtitle, text) if part and part != panel_heading]
             text = '\n'.join(dict.fromkeys(moved))
             heading, subtitle = panel_heading, ''
-    page_title = heading
+    from .presentation_section_titles import source_scoped_heading
+    page_title = source_scoped_heading(heading, support + [index.get(oid) for oid in chart_obs if index.get(oid)])
     slide, top = _base(presentation, page_title, subtitle)
     slide.name = f"composed_{slide_plan.layout}"
     reference_ids = set(slide_plan.observation_ids) | chart_obs | set(support_ids)

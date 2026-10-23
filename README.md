@@ -1,5 +1,12 @@
 # Adaptive Document Intelligence Agent
 
+The [v174 report evidence and completion update](docs/REPORT_EVIDENCE_COMPLETION_V174.md)
+independently checks the direction expressed by conclusion copy, requires completed
+source coverage before export, and binds audit qualifications to individual source
+measures. Slide titles reflect their whole period scope and the Data Index uses
+actual topic names with measured pagination. Targeted Summary repair preserves
+accepted source lines and bounds its correction to the requested ranges.
+
 The [v173 dense-composition capacity recovery](docs/DENSE_COMPOSITION_CAPACITY_V173.md)
 gives a single chart full width after ordinary pagination and header reflow
 cannot fit its legend. Source qualifications stay on the chart page; complete

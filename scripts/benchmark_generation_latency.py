@@ -124,6 +124,13 @@ def run(args):
             return {'items': [dict(index=row['index'], accepted=True,
                 reason='Independent fixture review retains the exact source claim.',
                 numeric_comparison=False, comparisons=[]) for row in rows]}
+        if schema['title'] == 'BriefClaimDirectionReview':
+            text = messages[-1]['content']
+            rows = json.loads(text.split('\n', 1)[1].rsplit('\n', 1)[0])
+            # The fixture reports one value per queue, with no directional claim.
+            assert all(not row['comparisons'] for row in rows)
+            return {'items': [dict(index=row['index'], comparisons=[],
+                omitted_directional_claims=[]) for row in rows]}
         answer = {}
         for name in schema["properties"]:
             if name.startswith("item_"):
@@ -137,7 +144,7 @@ def run(args):
         return answer
 
     output["brief"] = measured(lambda gateway: ExecutiveBriefWriter(gateway).generate(result),
-                               [bad, repair_response, repair_response, repair_response])
+                               [bad, *[repair_response] * 5])
     # Compare the complete model output using the measured revision's defaults.
     # Keep replay responses unchanged so old/new request-volume comparisons use
     # identical fixtures; no returned facts or evidence are excluded from checks.

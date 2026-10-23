@@ -29,7 +29,7 @@ def capture_schemas(gateway):
     generate = gateway.generate_structured
 
     def recording(messages, response_model, **kwargs):
-        if response_model.__name__ != 'BriefMeaningReview':
+        if response_model.__name__ not in {'BriefMeaningReview', 'BriefClaimDirectionReview'}:
             captured.append((response_model.model_json_schema(), kwargs))
         return generate(messages, response_model, **kwargs)
 

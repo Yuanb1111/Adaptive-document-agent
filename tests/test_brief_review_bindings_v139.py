@@ -37,7 +37,11 @@ class Gateway:
     def generate_structured(self, messages, schema, **kwargs):
         self.calls.append(messages)
         assert kwargs['allow_repair'] is False
-        return schema.model_validate(next(self.responses))
+        if schema.__name__ == 'BriefClaimDirectionReview':
+            from tests.brief_direction_fixture import accepted_directions
+            return accepted_directions(messages, schema, self.last['items'])
+        self.last = next(self.responses)
+        return schema.model_validate(self.last)
 
 
 def test_exact_binding_correction_keeps_audience_sources_and_unchanged_items_memoized():
@@ -48,7 +52,7 @@ def test_exact_binding_correction_keeps_audience_sources_and_unchanged_items_mem
     assert validate(brief) == {}
     assert validate(brief) == {}
     assert brief.model_dump_json() == before
-    assert len(gateway.calls) == 2
+    assert len(gateway.calls) == 3
     assert '"index": 1' not in gateway.calls[1][1]['content']
     assert 'item.label or item.text' in gateway.calls[1][-1]['content']
     audit = json.loads(next(w.message for w in result.validation_warnings
@@ -88,7 +92,7 @@ def test_invalid_binding_correction_fails_closed_after_one_attempt(mutation):
     errors = validate(brief)
     assert set(errors) == {0}
     assert validate(brief) == errors
-    assert len(gateway.calls) == 2
+    assert len(gateway.calls) == 3
 
 
 @pytest.mark.parametrize('failure', ['direction', 'source', 'durations', 'qualification'])
@@ -110,7 +114,7 @@ def test_corrected_binding_still_runs_full_original_evidence_gates(failure):
     errors = meaning_validator(gateway, result=result)(brief)
     expected = 'outside' if failure == 'source' else failure
     assert any(expected in error for error in errors[0])
-    assert len(gateway.calls) == 2
+    assert len(gateway.calls) == 3
 
 
 def test_binding_correction_cannot_accept_a_previously_rejected_meaning():

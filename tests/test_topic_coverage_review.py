@@ -121,7 +121,7 @@ def test_review_transport_failure_preserves_selection_and_records_unresolved_cov
     assert selected == draft
     assert len(client.calls) == 2
     assert any(w.code == "presentation_topic_coverage_unresolved" for w in result.validation_warnings)
-    from adaptive_document_agent.agent.topic_coverage_review import coverage_review_pending
+    from adaptive_document_agent.agent.topic_coverage_review import coverage_review_pending, review_topic_coverage
     from adaptive_document_agent.services.presentation_editorial import review_presentation, stamp_editorial_review
     from adaptive_document_agent.models import PresentationPlan
     result.presentation_topics = selected
@@ -131,6 +131,9 @@ def test_review_transport_failure_preserves_selection_and_records_unresolved_cov
     assert stamp_editorial_review(plan, result, origin="topic_compilation").editorial_status == "needs_review"
     _, lookup = series_directory(result)
     result.presentation_topics = PresentationTopicSelection(topics=[_topic(sid, sid) for sid in lookup])
+    assert coverage_review_pending(result)  # Changing topics alone cannot clear a failed review.
+    review_topic_coverage(result.presentation_topics, result, lookup, set(), {}, None,
+                          PresentationTopicSelector._validate)
     assert not coverage_review_pending(result)
     assert stamp_editorial_review(plan, result, origin="topic_compilation").editorial_status == "ready"
 

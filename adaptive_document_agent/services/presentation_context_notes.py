@@ -74,6 +74,9 @@ def slide_context_notes(result, slide, charts, index, *, definitions=None):
         displayed_ids = set(slide.observation_ids)
         displayed_ids.update(oid for block in slide.visual_blocks for oid in block.observation_ids)
     displayed = [index.get(oid) for oid in displayed_ids if index.get(oid)]
+    from .report_audit_scope import report_audit_scope_notes, pure_audit_caveat
+    assurance_notes = report_audit_scope_notes(result, displayed)
+    notes.extend(assurance_notes)
     if not charts and displayed:
         from .source_row_qualifications import source_row_qualifications
         source_notes = source_row_qualifications(displayed, result.document)
@@ -91,6 +94,8 @@ def slide_context_notes(result, slide, charts, index, *, definitions=None):
                 if caveat == "Displayed composition covers the validated selected-category matrix for its cited periods.":
                     continue
                 if caveat.strip():
+                    if assurance_notes and pure_audit_caveat(caveat):
+                        continue  # Exact reviewed measures replace the obsolete blanket qualifier.
                     if _literal_note_key(caveat) in source_note_keys:
                         continue  # Keep the bound source wording once, including its qualifiers.
                     if re.fullmatch(r"(?:FY|Annual) columns'? audit status (?:is )?unknown\.?", caveat.strip(), re.I):

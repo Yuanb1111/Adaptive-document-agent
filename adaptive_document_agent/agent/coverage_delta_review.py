@@ -5,11 +5,11 @@ from hashlib import sha256
 import json
 from threading import Event, Lock
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from adaptive_document_agent.models import PresentationTopicSelection
 from adaptive_document_agent.models.presentation import PresentationOmission
-from adaptive_document_agent.services.llm.exceptions import LLMResponseError
+from adaptive_document_agent.services.llm.exceptions import LLMResponseError, LLMStructuredOutputError
 from .coverage_representation import representation_links
 from .coverage_review_context import compact_context, delta_context, encode, merge_context
 from .introduction_checkpoint import IntroductionVerificationFailed
@@ -101,26 +101,44 @@ def _request(gateway, messages, schema, audit, calls, cancelled, *, tokens, char
             if getattr(exc, 'response', None) is not None:
                 entry['invalid_response'] = exc.response.text
             audit.setdefault('attempts', []).append(entry)
-            raise
-        entry = {'review': response.model_dump(mode='json')}
-        audit.setdefault('attempts', []).append(entry)
-        try:
-            response = schema.model_validate(entry['review'])
-            value = validate(response)
-            audit['review'] = entry['review']
-            return value
-        except ValueError as exc:
-            entry['validation_error'] = str(exc)
-            if attempt or str(exc) in previous:
+            # A complete, parsed schema failure (including topic/display capacity)
+            # needs a source-aware correction, not a format-only JSON repair.
+            # Never regenerate after transport, cancellation or truncated output.
+            if (not isinstance(exc, LLMStructuredOutputError)
+                    or not isinstance(exc.__cause__, ValidationError)
+                    or any(e['type'] == 'json_invalid' for e in exc.__cause__.errors())
+                    or (exc.response.usage and exc.response.usage.finish_reason == 'length')):
                 raise
-            previous.add(str(exc))
-            feedback = {'validation_error': str(exc), 'rejected_response': entry['review']}
-            if sum(len(message['content']) for message in initial[1:]) + len(encode(feedback)) > characters:
-                raise ValueError('Coverage delta correction exceeds the bounded context budget.') from exc
-            messages = [*initial, untrusted_document_message(encode(feedback)),
-                {'role': 'user', 'content': 'Correct only the listed source/schema binding failure using '
-                 'the SAME complete evidence. Return every requested decision exactly once. '
-                 'Do not infer facts or change immutable accepted observations.'}]
+            error = str(exc.__cause__)
+            entry['validation_error'] = error
+            # Keep the complete rejected text, including harmless JSON fencing;
+            # the gateway already proved that its outer JSON parsed.
+            rejected = exc.response.text
+            failure = exc
+        else:
+            entry = {'review': response.model_dump(mode='json')}
+            audit.setdefault('attempts', []).append(entry)
+            try:
+                response = schema.model_validate(entry['review'])
+                value = validate(response)
+                audit['review'] = entry['review']
+                return value
+            except ValueError as exc:
+                error, rejected, failure = str(exc), entry['review'], exc
+                entry['validation_error'] = error
+        if attempt or error in previous:
+            raise failure
+        previous.add(error)
+        feedback = {'validation_error': error, 'rejected_response': rejected}
+        if sum(len(message['content']) for message in initial[1:]) + len(encode(feedback)) > characters:
+            raise ValueError('Coverage delta correction exceeds the bounded context budget.') from failure
+        messages = [*initial, untrusted_document_message(encode(feedback)),
+            {'role': 'user', 'content': 'Correct the listed source/schema failures using the SAME complete '
+             'evidence. Return every requested decision exactly once. Regroup related additions within '
+             'the schema topic limit; retain every original accepted observation. Reconsider lower-priority '
+             'proposals only with explicit source-aware omit reasons in coverage_decisions. '
+             'omissions is a bounded display summary, not the full ledger: it may be empty. '
+             'Never truncate evidence, drop decisions or invent facts to satisfy capacity.'}]
 
 
 def _merge(reviewed, original, provisional, lookup, primary_pages, validate):
@@ -261,6 +279,8 @@ def review_deltas(selection, candidates, lookup, primary_pages, payload, gateway
                 'provisional additions against the complete original and included facts now supplied. '
                 'Return the complete model-authored topics and exactly one coverage_decision for each '
                 'provisional series listed in series_requiring_coverage_decision, and NO others. '
+                'Use at most eight topics. omissions is only an optional display summary of at most '
+                'twelve entries; the complete per-series reasons belong in coverage_decisions. '
                 'selectable_series_ids also includes previously accepted series: retain those in topics '
                 'but do NOT add coverage_decisions for them. The ledger is a delta, not the selected set. '
                 'Retain every original accepted source observation. Regroup related '

@@ -20,8 +20,11 @@ def index_entries(result, index):
         titles = list(dict.fromkeys(charts[cid].title for cid in trace.get('chart_ids', [])
                                    if cid in charts and charts[cid].title))
         scope_titles[key] = list(dict.fromkeys([*scope_titles.get(key, []), *titles]))
-        topic = (selected.section_title or selected.title) if selected.theme_id else (
+        from .presentation_section_titles import section_heading
+        topic = section_heading(result, selected) if selected.theme_id else (
             ' and '.join(scope_titles[key]) or selected.title or selected.section_title)
+        if '?' in topic and scope_titles[key]:
+            topic = ' and '.join(scope_titles[key])
         entry = scopes.setdefault(key, {'topic': topic,
                                        'slides': [], 'source_pages': [], 'observation_ids': []})
         entry['topic'] = topic
@@ -30,11 +33,15 @@ def index_entries(result, index):
             entry[field] = list(dict.fromkeys([*entry[field], *values]))
     entries = []
     from adaptive_document_agent.document_model import period_sort_key
+    from .presentation_section_titles import source_scoped_heading
     for entry in scopes.values():
         observations = [index.get(oid) for oid in entry['observation_ids'] if index.get(oid)]
         unique = lambda values: list(dict.fromkeys(v for v in values if v))
         entries.append({
             **entry,
+            # One topic can span several planned chart pages. Its index label
+            # must cover their combined evidence, not just the last trace.
+            'topic': source_scoped_heading(entry['topic'], observations),
             'metrics': unique(o.metric_original for o in observations),
             'units': unique(o.raw_unit or o.unit for o in observations),
             'periods': sorted(unique(o.period for o in observations), key=period_sort_key),

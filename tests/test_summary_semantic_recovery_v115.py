@@ -64,10 +64,11 @@ def test_targeted_read_still_rejects_missing_substance_and_invalid_evidence(bad)
         fixes.pop()
     else:
         fixes.append(deepcopy(fixes[0]))
-    client = Responses([rows, rows, fixes])
+    client = Responses([rows, rows, fixes, fixes] if bad == 'overwrite' else [rows, rows, fixes])
     outcome = _read_batch(client, result, blocks, Event())
     assert outcome.error is not None and not outcome.parts
-    assert len(client.calls) == 3 and outcome.audit['rejected_part_read']['error']
+    assert len(client.calls) == (4 if bad == 'overwrite' else 3)
+    assert outcome.audit['rejected_part_read']['error']
 
 
 def test_targeted_read_discards_out_of_scope_proposals_without_changing_accepted_content():

@@ -36,19 +36,24 @@ class Reviewer:
 
     def generate_structured(self, messages, schema, **kwargs):
         self.calls += 1
+        if schema.__name__ == 'BriefClaimDirectionReview':
+            from tests.brief_direction_fixture import accepted_directions
+            return accepted_directions(messages, schema, self.verdict['items'])
         assert 'EXACT affected measure' in messages[0]['content']
         assert 'An unknown column cannot require' in messages[0]['content']
         row = json.loads(messages[1]['content'].split('\n', 1)[1].rsplit('\n', 1)[0])[0]
         assert [(c['period'], c['status']) for c in row['source_audit_scope'][0]['columns']] == [
             ('6M2023', 'unaudited'), ('6M2024', 'unknown')]
         clauses = row['item']['text'].split('. ')
-        return schema(items=[dict(index=0, accepted=self.accepted,
+        response = schema(items=[dict(index=0, accepted=self.accepted,
             reason='The comparative status is present in each clause.' if self.accepted
                    else 'Investing outflow omits an unaudited qualification for 6M2024.',
             numeric_comparison=True, comparisons=[dict(claim=clause,
                 start_value=start, end_value=end, direction='increase', absolute_magnitude=magnitude,
                 start_ref='i0_q0', end_ref='i0_q0', start_duration_months=6, end_duration_months=6)
                 for clause, start, end, magnitude in zip(clauses, ['1250', '-100'], ['1475', '-200'], [False, True])])])
+        self.verdict = response.model_dump(mode='json')
+        return response
 
 
 def test_each_measure_preserves_only_its_supported_comparative_status_and_signed_magnitude():
@@ -59,7 +64,7 @@ def test_each_measure_preserves_only_its_supported_comparative_status_and_signed
     reviewer = Reviewer()
     validate = meaning_validator(reviewer, result=result)
     assert validate(brief) == {}
-    assert validate(brief) == {} and reviewer.calls == 1
+    assert validate(brief) == {} and reviewer.calls == 2
     assert brief.model_dump_json() == before
 
 

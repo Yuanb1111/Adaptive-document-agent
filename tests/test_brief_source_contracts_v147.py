@@ -134,6 +134,9 @@ def test_reported_delta_ref_is_bound_and_validated_through_normal_independent_re
         numeric_comparison=True, comparisons=[comparison.model_dump(exclude={'delta_context'}) | {'delta_ref': 'i0_q0'}])
     class Gateway:
         def generate_structured(self, messages, schema, **kwargs):
+            if schema.__name__ == 'BriefClaimDirectionReview':
+                from tests.brief_direction_fixture import accepted_directions
+                return accepted_directions(messages, schema, [reply])
             return schema.model_validate({'items': [reply]})
     brief = ExecutiveBrief(items=[item])
     assert meaning_validator(Gateway(), result=result_for([item.evidence[0].text]))(brief) == {}

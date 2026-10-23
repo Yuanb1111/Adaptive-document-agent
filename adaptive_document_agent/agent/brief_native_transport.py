@@ -39,12 +39,19 @@ def source_quantity_options(result, excerpts, blocks, *, character_limit=18000):
             from adaptive_document_agent.models.executive_brief import ExecutiveBriefItem
             try:
                 item = ExecutiveBriefItem.model_validate(original['items'][0])
-                statuses = [{'period': option['period'], 'status': option['status']}
-                            for option in audit_status_options(item, result)]
+                # Assurance belongs to an exact table row and column. Keep its
+                # address even when another measure in the same period has a
+                # different status; a period-only pair would erase that scope.
+                statuses = audit_status_options(item, result)
             except ValueError:
                 statuses = []
             if statuses:
-                row['source_period_statuses'] = statuses
+                scoped = {**row, 'source_period_statuses': statuses}
+                if len(json.dumps([*rows, scoped], ensure_ascii=False)) <= character_limit:
+                    row = scoped
+                # These are optional transport aids. If the complete addresses
+                # cannot fit, retain the original evidence blocks and numeric
+                # options rather than sending misleading period-only statuses.
             for option in options:
                 compact = _compact(option)
                 key = json.dumps(compact, ensure_ascii=False, sort_keys=True)
