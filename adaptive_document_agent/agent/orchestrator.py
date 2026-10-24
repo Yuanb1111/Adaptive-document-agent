@@ -711,6 +711,8 @@ class DocumentOrchestrator:
                     deck, _ = measure(final_result)
                     require_exported_budgets(deck, final_result)
             except (ValueError, LLMResponseError, FinalBudgetBriefError) as exc:
+                if isinstance(exc, FinalBudgetBriefError):
+                    final_stage = 'executive_brief'
                 final_result.pipeline_state = 'partial'
                 final_result.retry_from = 'reporting'
                 final_result.failed_stage = final_stage

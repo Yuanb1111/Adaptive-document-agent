@@ -27,11 +27,15 @@ def complete_deferred_brief(gateway, result, *, progress=None):
     if result.executive_brief is not None:
         return
     from .executive_brief import ExecutiveBriefWriter
-    from .presentation_budget_refinement import measure
+    from .presentation_budget_refinement import measure, FinalBudgetBriefError
+    from adaptive_document_agent.services.llm.exceptions import LLMResponseError
     from adaptive_document_agent.services.slide_budgets import require_exported_budgets
     if progress is not None:
         progress('Writing the evidence-bound executive briefing')
-    result.executive_brief = ExecutiveBriefWriter(gateway).generate(result)
+    try:
+        result.executive_brief = ExecutiveBriefWriter(gateway).generate(result)
+    except (ValueError, LLMResponseError) as exc:
+        raise FinalBudgetBriefError('Deferred briefing failed source checks: ' + str(exc)) from exc
     deck, _ = measure(result)
     require_exported_budgets(deck, result)
 

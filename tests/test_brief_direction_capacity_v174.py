@@ -69,7 +69,10 @@ def test_complete_format_or_index_failure_retains_one_separate_correction(invali
     assert review_claim_directions(llm, brief=brief, verdicts=source.items, result=result) == {}
     assert [kw['max_tokens'] for _, kw in client.requests] == [8192, 16384, 8192]
     assert client.requests[0][0] == client.requests[1][0]
-    assert client.requests[2][0][:-1] == client.requests[0][0]
+    assert client.requests[2][0][:-2] == client.requests[0][0]
+    feedback = client.requests[2][0][-2]['content']
+    assert '<UNTRUSTED_DOCUMENT_CONTENT>' in feedback
+    assert 'previous_response' in feedback and 'validation_error' in feedback
     assert 'exact schema/index bindings' in client.requests[2][0][-1]['content']
     assert len(audit(result)['attempts']) == 2
 

@@ -122,6 +122,16 @@ def comparison_errors(comparison, item, *, pages=None, source_percentages=None):
             return Decimal(str(parsed.value / parsed.scale)) if parsed is not None else None
         endpoints = {coefficient(comparison.start_value), coefficient(comparison.end_value)}
         claimed = {Decimal(v) for c, v, u in _quantities(comparison.claim) if not c and u in {'%', 'percent'}}
+        # A purely qualitative heading is still an audience assertion. Its
+        # values may be stated in the same item's body; source meaning and
+        # independent predicate review must still approve that association.
+        # Headings can retain period labels, but explicit quantities or bare
+        # endpoint coefficients cannot borrow their missing percent units.
+        heading_quantities = _quantities(comparison.claim)
+        if comparison.claim in item.label and not any(
+                c or u or Decimal(v) in endpoints for c, v, u in heading_quantities):
+            claimed = {Decimal(v) for c, v, u in _quantities(item.text)
+                       if not c and u in {'%', 'percent'}}
         quoted = ({Decimal(v) for v in source_percentages} if source_percentages is not None else
                   {Decimal(v) for q in passages for c, v, u in _quantities(q.text)
                    if not c and u in {'%', 'percent'}})
@@ -239,7 +249,12 @@ def meaning_validator(gateway, *, cancelled=None, result=None):
              'A decline from 2% to 3% is false; annual and six-month losses do not establish a trend. '
              'Set measure_basis=flow_total for period aggregate amounts/counts: compared durations must match. '
              'Use source_percentage only for percentages actually reported in the quotations, with both '
-             'endpoints expressed as percentages in the claim. A reported composition share or percentage '
+             'endpoints expressed as percentages in the claim, or in the same item body when binding '
+             'a qualitative heading (possibly naming periods) without endpoint quantities. The heading must describe that same '
+             'measure, periods and scope; never borrow unrelated body percentages or use this rule '
+             'to supply missing units to numeric claims. Bind separate predicates for compound '
+             'headings or clauses with different directions (e.g. recovery and remaining below an '
+             'earlier level need different endpoint pairs). A reported composition share or percentage '
              'rate can be contrasted across differently sized periods when each period, the same definition '
              'and reporting scope are explicit and all material qualifications are preserved; this does '
              'not establish growth in the underlying flow total. Still reject unrelated populations, '

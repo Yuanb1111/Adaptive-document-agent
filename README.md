@@ -1,5 +1,10 @@
 # Adaptive Document Intelligence Agent
 
+The [v186 briefing review consistency fix](docs/BRIEF_REVIEW_CONSISTENCY_V186.md)
+reconciles overlapping covered/omitted direction verdicts within the existing
+single correction limit. Percentage headings can use explicit same-item body
+values, with source, arithmetic and independent direction checks retained.
+
 The [v185 introduction append transport fix](docs/INTRODUCTION_APPEND_TRANSPORT_V185.md)
 accepts an exact unchanged assertion followed by new model-authored assertions as
 an owned addition when the reviewer identified an included-part gap. Existing
