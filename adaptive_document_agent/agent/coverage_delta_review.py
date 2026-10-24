@@ -137,13 +137,15 @@ def _request(gateway, messages, schema, audit, calls, cancelled, *, tokens, char
             raise exc from failure
 
 
-def _merge(reviewed, original, provisional, lookup, primary_pages, validate):
+def _merge(reviewed, original, provisional, lookup, primary_pages, validate, *, audit=None):
     from .topic_reference_binding import bind_topic_references
+    from .coverage_merge_contract import scoped_merge_decisions
     bind_topic_references(reviewed, lookup)
     revised = PresentationTopicSelection(topics=reviewed.topics, omissions=reviewed.omissions)
+    old = {sid for topic in original.topics for sid in topic.series_ids}
     errors = []
     try:
-        local = _decisions(reviewed, provisional)
+        local, echoes = scoped_merge_decisions(reviewed, provisional, old)
     except ValueError as exc:
         errors.append(str(exc))
     try:
@@ -154,7 +156,6 @@ def _merge(reviewed, original, provisional, lookup, primary_pages, validate):
         # Report independent schema/binding and source errors together. The
         # single bounded correction must not discover them one at a time.
         raise ValueError('\n'.join(errors))
-    old = {sid for topic in original.topics for sid in topic.series_ids}
     selected_ids = {sid for topic in revised.topics for sid in topic.series_ids}
     if selected_ids - old - set(provisional):
         raise ValueError('Coverage merge selected deferred evidence without its complete source context.')
@@ -169,6 +170,12 @@ def _merge(reviewed, original, provisional, lookup, primary_pages, validate):
         if decision.decision == 'omit' and link is not None:
             local[sid] = CoverageDeltaDecision(series_id=sid, decision='include',
                 reason='All source facts are represented by the final model-selected evidence; original omission reasoning remains in the merge audit.')
+    if echoes and audit is not None:
+        audit['accepted_decision_echoes'] = dict(
+            disposition='outside_provisional_ledger',
+            decisions=[d.model_dump(mode='json') for d in echoes],
+            accepted_source_observations_preserved=True,
+            omission_reasons_used_as_evidence=False)
     return revised, local
 
 
@@ -262,7 +269,7 @@ def review_deltas(selection, candidates, lookup, primary_pages, payload, gateway
                     decision_limit=decision_limit)
                 context = merge_context(compact, selection, provisional, handles)
                 encoded = encode_merge_context(context)
-            from .topic_coverage_review import TopicCoverageReview
+            from .coverage_merge_contract import merge_response_model
             from .coverage_merge_capacity import merge_output_tokens
             merge_tokens = merge_output_tokens(selection.model_dump(mode='json'),
                 [decisions[sid].model_dump(mode='json') for sid in provisional], base_tokens=tokens)
@@ -285,9 +292,10 @@ def review_deltas(selection, candidates, lookup, primary_pages, payload, gateway
                 'included fact must actually appear in the returned series_ids with its entire scope. '
                 'The ordinary source, numerical, period, evidence and topic-capacity validators apply.'},
                 *instructions, untrusted_document_message(encoded)]
-            current, final = _request(gateway, messages, TopicCoverageReview, merge_audit, calls, cancelled,
+            accepted = {sid for topic in selection.topics for sid in topic.series_ids}
+            current, final = _request(gateway, messages, merge_response_model(provisional, accepted), merge_audit, calls, cancelled,
                 tokens=merge_tokens, characters=characters,
-                validate=lambda reply: _merge(reply, selection, provisional, lookup, primary_pages, validate))
+                validate=lambda reply: _merge(reply, selection, provisional, lookup, primary_pages, validate, audit=merge_audit))
             merge_audit['status'] = 'complete'
             decisions.update(final)
         represented = [item for topic in current.topics for sid in topic.series_ids for item in lookup[sid]]
@@ -316,8 +324,11 @@ def review_deltas(selection, candidates, lookup, primary_pages, payload, gateway
         raise  # Mandatory prerequisite failure must reach the orchestrator unchanged.
     except (LLMResponseError, ValueError, CancelledError) as exc:
         reviewed = {sid for local in completed.values() for sid in local}
+        reason = str(exc)
+        if isinstance(exc, LLMStructuredOutputError) and isinstance(exc.__cause__, ValidationError):
+            reason = '; '.join(error['msg'] for error in exc.__cause__.errors(include_input=False))
         record('presentation_topic_coverage_unresolved', 'warning', {
-            'wire_contract': 'independent-coverage-delta-v1', 'reason': str(exc), 'batches': audits,
+            'wire_contract': 'independent-coverage-delta-v1', 'reason': reason, 'batches': audits,
             'merge': locals().get('merge_audit'), 'calls_used': calls.used,
             'unreviewed_series_ids': [sid for sid in candidates if sid not in reviewed]})
         return selection

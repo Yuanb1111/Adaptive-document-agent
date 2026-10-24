@@ -48,9 +48,9 @@ def test_budget_changes_need_complete_independent_omission_review(accepted):
 
 def test_one_correction_receives_both_decision_and_source_errors():
     result, lookup, selected, _ = _fixture()
-    extra = selected.topics[0].series_ids[0]
+    extra = 'unknown-source'  # Accepted echoes are scoped separately after source validation.
     reply = TopicCoverageReview(topics=selected.topics, coverage_decisions=[dict(
-        series_id=extra, decision='include', reason='Already selected evidence.')])
+        series_id=extra, decision='include', reason='Unrecognized evidence.')])
     def invalid(*args, **kwargs):
         raise ValueError('Unsupported date scope')
     with pytest.raises(ValueError) as error:

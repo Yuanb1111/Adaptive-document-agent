@@ -8,7 +8,12 @@ from .prompting import untrusted_document_message
 
 _CORRECTION = (
     'Correct the listed source/schema failures using the SAME complete evidence. '
-    'Return every requested decision exactly once. Regroup related additions within '
+    'Return every requested decision exactly once and NO decisions for other IDs. '
+    'An unexpected ledger ID is not an instruction to remove its source evidence: '
+    'previously accepted series must remain represented in topics, outside coverage_decisions. '
+    'Remove the unexpected ledger entry, not the accepted observations. Check the exact '
+    'source measure before describing it; a rejected omission reason is not source evidence. '
+    'Regroup related additions within '
     'the schema topic limit; retain every original accepted observation. Reconsider '
     'lower-priority proposals only with explicit source-aware omit reasons in '
     'coverage_decisions. omissions is a bounded display summary, not the full ledger: '

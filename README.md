@@ -1,5 +1,11 @@
 # Adaptive Document Intelligence Agent
 
+The [v184 coverage merge contract update](docs/COVERAGE_MERGE_CONTRACT_V184.md)
+restricts the merge decision ledger to the exact proposed additions while preserving
+accepted topic evidence. Extra echoes of immutable accepted decisions remain in
+the audit and cannot change the proposal ledger or report copy. One source-complete correction remains available, and
+incomplete coverage now reports its retained cause before blocking PowerPoint export.
+
 The [v179 discovery overview feedback update](docs/OVERVIEW_VALIDATION_FEEDBACK_V179.md)
 provides exact field diagnostics to the bounded overview retry. Persistent failures
 identify their fields and offer a diagnostic download without repeating successful
