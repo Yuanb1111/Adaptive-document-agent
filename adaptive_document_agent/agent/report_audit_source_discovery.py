@@ -52,8 +52,8 @@ def _expanded_context(result, base, payload, selection, fingerprint):
     expanded = {**base, 'source_pages':[dict(page=n, text=pages[n]) for n in sorted(existing | selected)],
         'source_discovery':dict(contract=DISCOVERY_CONTRACT, input_fingerprint=fingerprint,
             selection=selection.model_dump(mode='json'), added_pages=sorted(selected-existing))}
-    if len(json.dumps(expanded, ensure_ascii=False)) > 150_000:
-        raise ValueError('Complete selected audit source pages exceed the 150000-character evidence budget; no page was truncated.')
+    from .report_audit_context_budget import require_audit_context_budget
+    require_audit_context_budget(expanded)
     return expanded
 
 

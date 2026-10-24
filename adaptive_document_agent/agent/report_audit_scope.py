@@ -104,8 +104,8 @@ def _context(result, *, targets=None):
         source_pages=[dict(page=n, text=pages[n].text) for n in sorted(selected)],
         source_checks=[dict(section_id=c.section_id, pages=c.pages, status=c.status) for c in checks],
         scope='Only supplied observations and source pages; missing bindings stay unknown.')
-    if len(json.dumps(context, ensure_ascii=False)) > 150_000:
-        raise ValueError('Report audit-scope evidence exceeds the bounded review context.')
+    # This is the local aggregate ledger, never a single model request.
+    # Capacity is checked against actual target batches before discovery/review.
     return context
 
 
@@ -398,11 +398,15 @@ def review_report_audit_scope(gateway, result, *, progress=None):
         raise ValueError('A model is required to resolve the report audit-scope qualification.')
     audit = dict(contract=BATCHED_AUDIT_CONTRACT, context=context, fingerprint=fingerprint, batches=[])
     try:
+        from .report_audit_context_budget import audit_context_budget, require_audit_context_budget
+        audit['context_budget'] = audit_context_budget(context)
+        require_audit_context_budget(context)
         if progress:
             progress('Reviewing source audit qualifications')
         from .report_audit_source_discovery import discover_audit_sources
         context = discover_audit_sources(gateway, result, context, audit, progress=progress)
-        audit.update(context=context, fingerprint=_fingerprint(context))
+        audit.update(context=context, fingerprint=_fingerprint(context),
+                     context_budget=require_audit_context_budget(context))
         review_partitions(gateway, result, context, audit, _review_batch, progress=progress)
         draft, review, ledger = aggregate_batches(context, audit['batches'])
         audit.update(draft=draft.model_dump(mode='json'), review=review.model_dump(mode='json'), ledger=ledger)

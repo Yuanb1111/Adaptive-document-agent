@@ -15,6 +15,8 @@ def digest(value):
 
 def discovery_input(result, context):
     """Index every page; literal hits navigate only and never establish meaning."""
+    from .report_audit_context_budget import audit_context_budget
+    budget = audit_context_budget(context)
     physical_pages = [p.page_number for p in result.document.pages]
     if (len(physical_pages) != len(set(physical_pages))
             or set(physical_pages) != set(range(1, result.document.page_count+1))):
@@ -44,7 +46,7 @@ def discovery_input(result, context):
         source_checks=[{key: check.model_dump(mode='json')[key] for key in (
             'section_id', 'pages', 'status', 'reason', 'decision_impact', 'finding', 'evidence_quotes')}
             for check in checks],
-        remaining_source_character_budget=150_000-len(json.dumps(context, ensure_ascii=False)),
+        remaining_source_character_budget=budget['limit']-budget['largest_batch_characters'],
         navigation_notice='Every physical page is indexed. Previews and literal value hits are navigation '
             'data only, not source quotations, metric matches, assurance or complete page reading.')
     if len(json.dumps(payload, ensure_ascii=False)) > MAX_DISCOVERY_INPUT_CHARS:

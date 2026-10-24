@@ -1,5 +1,9 @@
 # Adaptive Document Intelligence Agent
 
+The [v187 audit context budget fix](docs/AUDIT_CONTEXT_BUDGET_V187.md) applies
+the evidence-size limit to actual three-target review requests. Large aggregate
+ledgers retain every target and full source page, with unchanged review gates.
+
 The [v186 briefing review consistency fix](docs/BRIEF_REVIEW_CONSISTENCY_V186.md)
 reconciles overlapping covered/omitted direction verdicts within the existing
 single correction limit. Percentage headings can use explicit same-item body
