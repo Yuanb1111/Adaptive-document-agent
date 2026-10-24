@@ -106,22 +106,38 @@ def _bind_disposition_evidence(selection, response, findings, source):
     return bound
 
 
-def apply_meaning_resolution(selection, response, findings, source):
+def apply_meaning_resolution(selection, response, findings, source, *, transport_audit=None):
     """Validate exact addresses and preserve unedited assertions mechanically."""
     draft = selection.model_copy(deep=True)
     meanings, decisions, parts, expected, allowed = _finding_ownership(draft, findings, source)
     editable_meanings = {finding['meaning_id'] for finding in findings if finding['kind'] == 'meaning'}
+    addition_parts = {finding['part_id'] for finding in findings if finding['kind'] == 'included_part'}
     included_parts = {part_id for part_id in allowed if decisions[part_id].include}
     omitted_parts = allowed - included_parts
     edits = {}
     seen_edits = set()
     changed = set()
+    appended = {}
+    append_transports = []
     for edit in response.edits:
         original = meanings.get(edit.meaning_id)
         if (original is None or edit.meaning_id in seen_edits or not edit.required_meanings):
             raise ValueError('Meaning resolution edit has an unknown, duplicate or unowned current meaning ID')
         seen_edits.add(edit.meaning_id)
         if edit.meaning_id not in editable_meanings:
+            first = edit.required_meanings[0]
+            if (original['part_id'] in addition_parts and len(edit.required_meanings) > 1
+                    and first.meaning == original['meaning']
+                    and first.source_quote in ('', original['source_quote'])
+                    and all(item.meaning != original['meaning'] for item in edit.required_meanings[1:])):
+                # Lossless append transport: retain the original assertion at its
+                # original address, and route only the model-authored new items
+                # to the exact part that already has an included_part finding.
+                # This grants no edit authority and no semantic approval.
+                appended.setdefault(original['part_id'], []).extend(edit.required_meanings[1:])
+                append_transports.append(dict(meaning_id=edit.meaning_id, part_id=original['part_id'],
+                    appended_count=len(edit.required_meanings) - 1, original_meaning_preserved=True))
+                continue
             if (original['part_id'] in included_parts and len(edit.required_meanings) == 1
                     and edit.required_meanings[0].meaning == original['meaning']
                     and edit.required_meanings[0].source_quote in ('', original['source_quote'])):
@@ -156,6 +172,10 @@ def apply_meaning_resolution(selection, response, findings, source):
             continue
         else:
             raise ValueError('Meaning resolution addition requires an affected included part or an exact copy of its explicit inclusion')
+    for part_id, new_meanings in appended.items():
+        if part_id in additions:
+            raise ValueError('Meaning resolution cannot mix append-only edits and explicit additions for the same part')
+        additions[part_id] = new_meanings
     resolutions = _exact_dispositions(response, expected)
     for identifier, entry in resolutions.items():
         finding = expected[identifier]
@@ -205,6 +225,8 @@ def apply_meaning_resolution(selection, response, findings, source):
             revised.extend(edits.get(identifier, [meaning]))
         revised.extend(additions.get(decision.part_id, []))
         decision.required_meanings = revised
+    if append_transports and transport_audit is not None:
+        transport_audit['append_only_edits'] = append_transports
     return draft
 
 
@@ -245,7 +267,9 @@ def resolve_meaning_findings(gateway, source, selection, values, verdict, review
         'existing meaning is mechanically protected. The editable_meaning_ids list names these '
         'addresses explicitly. Do not echo unchanged meanings in edits, or claim to remove them '
         'when adding their qualifiers to an editable assertion. An included_part finding permits only owned '
-        'additions, not rewriting existing copy. Additions target currently included parts only. '
+        'additions, not rewriting existing copy. If supplementing an unchanged existing assertion, '
+        'put ONLY the new assertions in additions for its exact part_id; do not return the original '
+        'assertion plus new items as a replacement edit. Additions target currently included parts only. '
         'Never repeat an inclusion in additions. For an omitted_part finding, an explicit inclusion '
         'may select ONLY its exact eligible_inclusions part_id, with include=true, a substantive '
         'source-aware reason and nonempty required_meanings. An omission cannot be corrected by '
@@ -264,7 +288,7 @@ def resolve_meaning_findings(gateway, source, selection, values, verdict, review
         def validate(response):
             bound_response = _bind_disposition_evidence(selection, response, findings, source)
             record['bound_finding_dispositions'] = bound_response.model_dump(mode='json')['finding_dispositions']
-            return apply_meaning_resolution(selection, bound_response, findings, source)
+            return apply_meaning_resolution(selection, bound_response, findings, source, transport_audit=record)
 
         response, draft = resolution_with_feedback(gateway, [{'role': 'system', 'content': rules},
             untrusted_document_message(json.dumps(dict(source=source, current_meanings=meanings,
@@ -282,6 +306,7 @@ def resolve_meaning_findings(gateway, source, selection, values, verdict, review
                       if any(inclusion.part_id == addition.part_id for inclusion in response.inclusions)],
                   changed=draft != selection, decisions_after=draft.model_dump(mode='json')['decisions'])
     return draft, dict(findings=findings, finding_dispositions=record['bound_finding_dispositions'],
+        append_only_edits=record.get('append_only_edits', []),
         coalesced_unchanged_meaning_ids=record['coalesced_unchanged_meaning_ids'],
         inclusions=record['response']['inclusions'],
         disposition_evidence_binding='exact_finding_owned_source_parts',

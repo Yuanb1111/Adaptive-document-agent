@@ -1,5 +1,10 @@
 # Adaptive Document Intelligence Agent
 
+The [v185 introduction append transport fix](docs/INTRODUCTION_APPEND_TRANSPORT_V185.md)
+accepts an exact unchanged assertion followed by new model-authored assertions as
+an owned addition when the reviewer identified an included-part gap. Existing
+assertions remain protected, and fresh independent semantic review is mandatory.
+
 The [v184 coverage merge contract update](docs/COVERAGE_MERGE_CONTRACT_V184.md)
 restricts the merge decision ledger to the exact proposed additions while preserving
 accepted topic evidence. Extra echoes of immutable accepted decisions remain in
