@@ -18,7 +18,6 @@ from adaptive_document_agent.utils.chunking import DocumentChunk
     {"document_summary": "x" * 1201},
     {"overview_points": ["a", "b", "c", "d"]},
     {"overview_points": ["x" * 221]},
-    {"document_summary_pages": list(range(1, 26))},
     {"document_summary_pages": [True]},
     {"data_quality_notes": ["a"] * 5},
     {"data_quality_notes": ["x" * 241]},

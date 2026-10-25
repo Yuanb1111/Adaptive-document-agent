@@ -1,5 +1,9 @@
 # Adaptive Document Intelligence Agent
 
+The [v190 discovery citation fix](docs/DISCOVERY_CITATIONS_V190.md) removes the
+arbitrary 24-page overview citation cap while retaining strict page validation
+and reviewed-source filtering.
+
 The [v189 presentation efficiency update](docs/PRESENTATION_EFFICIENCY_V189.md)
 reduces repeated topic context and editorial reasoning, and packs short commentary
 continuations into measured space on sibling chart pages while retaining source gates.

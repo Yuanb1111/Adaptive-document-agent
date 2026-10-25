@@ -45,7 +45,9 @@ class DiscoveryOverview(BaseModel):
     document_purpose: str = Field(default="Not yet determined", max_length=400)
     overview_title: str = Field(default="Document overview", max_length=160)
     document_summary: str = Field(default="", max_length=1200)
-    document_summary_pages: list[Annotated[StrictInt, Field(ge=1)]] = Field(default_factory=list, max_length=24)
+    # Citation cardinality follows the reviewed source, not the prose budget.
+    # discover() deduplicates and intersects these IDs with reviewed PDF pages.
+    document_summary_pages: list[Annotated[StrictInt, Field(ge=1)]] = Field(default_factory=list)
     overview_points: list[Annotated[str, Field(max_length=220)]] = Field(default_factory=list, max_length=3)
     language: str | None = Field(default=None, max_length=40)
     data_quality_notes: list[Annotated[str, Field(max_length=240)]] = Field(default_factory=list, max_length=4)
