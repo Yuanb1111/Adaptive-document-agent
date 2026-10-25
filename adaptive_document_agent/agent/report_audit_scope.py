@@ -304,6 +304,25 @@ def require_report_audit_scope(result):
         raise ValueError('Report audit-scope review is unfinished or stale for the retained measures.')
 
 
+def refresh_report_audit_scope(gateway, result, *, progress=None):
+    """Review the current selection before writing copy that relies on assurance.
+
+    A budget proposal or native preparation can introduce new qualifications.
+    Existing accepted supersets remain reusable; a newly accepted evidence
+    context invalidates any briefing written against the earlier assurance.
+    """
+    try:
+        require_report_audit_scope(result)
+    except ValueError:
+        pass
+    else:
+        return False
+    review_report_audit_scope(gateway, result, progress=progress)
+    require_report_audit_scope(result)
+    result.executive_brief = None
+    return True
+
+
 def defer_brief_for_audit(result, prepared=None):
     """The final plan can introduce qualifications absent from a parallel seed."""
     if not needs_report_audit_scope(result):

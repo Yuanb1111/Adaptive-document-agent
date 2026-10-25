@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from adaptive_document_agent.models import ValidationIssue
 from adaptive_document_agent.services.slide_budgets import report_budget, resolved_limits, exported_slide_numbers, require_exported_budgets
 from adaptive_document_agent.models.customization import ReportRequirement
+from adaptive_document_agent.services.llm.exceptions import LLMResponseError
 from .prompting import untrusted_document_message
 from .presentation_budget_output import (
     complete_budget_output, SELECTION_TOKEN_LIMITS, REVIEW_TOKEN_LIMITS,
@@ -65,6 +66,15 @@ def _native_projection_identity(candidate):
     return sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode('utf-8')).hexdigest()
 
 
+def _refresh_audit_scope(gateway, result, *, progress=None):
+    from .report_audit_scope import refresh_report_audit_scope
+    try:
+        return refresh_report_audit_scope(gateway, result, progress=progress)
+    except (ValueError, LLMResponseError) as exc:
+        # Assurance failures must never become reasons to omit another topic.
+        raise FinalBudgetAuditError(exc) from exc
+
+
 def refine_presentation_budget(gateway, result, *, progress=None):
     """At most two source-checked selection proposals, then a fresh final briefing.
 
@@ -80,9 +90,28 @@ def refine_presentation_budget(gateway, result, *, progress=None):
     deck, counts = measure(result)
     try:
         require_exported_budgets(deck, result)
-        return False
     except ValueError:
         pass
+    else:
+        changed = _refresh_audit_scope(gateway, result, progress=progress)
+        if not changed:
+            return False
+        # Native preparation can change scope even without a budget proposal.
+        # Write against its reviewed assurance and measure the new copy/notes.
+        from .executive_brief import ExecutiveBriefWriter
+        try:
+            result.executive_brief = ExecutiveBriefWriter(gateway).generate(result)
+        except (ValueError, LLMResponseError) as exc:
+            raise FinalBudgetBriefError('Audit-refreshed briefing failed source checks: ' + str(exc)) from exc
+        deck, counts = measure(result)
+        try:
+            require_exported_budgets(deck, result)
+        except ValueError:
+            # The refreshed brief can increase physical cost. Use its actual
+            # geometry for the normal model-owned selection below.
+            pass
+        else:
+            return False
     notify = progress or (lambda message: None)
     notify('Refining analytical priorities using actual physical slide costs')
     from .presentation_topic_selector import series_directory
@@ -291,6 +320,28 @@ def refine_presentation_budget(gateway, result, *, progress=None):
             record['independent_review'] = verdict.model_dump(mode='json')
             if not verdict.accepted:
                 raise ValueError('Physical budget selection was independently rejected: '+verdict.reason)
+            notify('Reviewing audit qualifications for the final budgeted topics')
+            started = perf_counter()
+            try:
+                _refresh_audit_scope(gateway, candidate, progress=notify)
+            except Exception as exc:
+                record['audit_scope_error'] = str(exc)
+                failure = exc.failure if isinstance(exc, FinalBudgetAuditError) else exc
+                record['audit_scope_error_type'] = type(failure).__name__
+                # Keep exact source discovery and completed batch checkpoints
+                # available to reporting retries, even before candidate commit.
+                for issue in candidate.validation_warnings:
+                    if issue not in result.validation_warnings:
+                        result.validation_warnings.append(issue)
+                raise
+            finally:
+                record['timings_ms']['audit_scope'] = int((perf_counter()-started)*1000)
+                # A later briefing/geometry failure must not discard successful
+                # assurance work. Its exact source context still gates reuse.
+                for issue in candidate.validation_warnings:
+                    if (issue.code in {'report_audit_scope_review', 'report_audit_scope_unresolved'}
+                            and issue not in result.validation_warnings):
+                        result.validation_warnings.append(issue)
             from .executive_brief import ExecutiveBriefWriter
             notify('Regenerating and independently checking the briefing against the final budgeted topics')
             try:
@@ -355,3 +406,11 @@ def _record_failure(result,counts,original,attempts):
 
 class FinalBudgetBriefError(RuntimeError):
     """A source/meaning failure must not be fed back as a topic omission reason."""
+
+
+class FinalBudgetAuditError(RuntimeError):
+    """Carry the original assurance failure across the budget selection boundary."""
+
+    def __init__(self, failure):
+        self.failure = failure
+        super().__init__(str(failure))

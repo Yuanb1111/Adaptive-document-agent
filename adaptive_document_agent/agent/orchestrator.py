@@ -670,24 +670,29 @@ class DocumentOrchestrator:
         from adaptive_document_agent.services.pipeline_completion import (
             is_complete, is_reporting_ready, require_source_integration, require_topic_coverage)
         if self.gateway and is_reporting_ready(final_result):
-            from .presentation_budget_refinement import refine_presentation_budget, FinalBudgetBriefError
+            from .presentation_budget_refinement import (
+                refine_presentation_budget, FinalBudgetBriefError, FinalBudgetAuditError)
             final_stage = 'presentation_coverage'
             try:
                 require_topic_coverage(final_result)
                 final_stage = 'report_audit_scope'
-                from .report_audit_scope import review_report_audit_scope
+                from .report_audit_scope import refresh_report_audit_scope, require_report_audit_scope
                 with record_timing(final_result.stage_details_ms, 'report_audit_scope'):
-                    review_report_audit_scope(self.gateway, final_result, progress=notify)
+                    if refresh_report_audit_scope(self.gateway, final_result, progress=notify):
+                        deferred_brief = True
                 final_stage = 'presentation_budget'
                 with record_timing(final_result.stage_details_ms, 'physical_presentation_budget'):
                     refine_presentation_budget(self.gateway,final_result,progress=notify)
                     final_stage = 'report_audit_scope'
-                    from .report_audit_scope import require_report_audit_scope
-                    require_report_audit_scope(final_result)
+                    if refresh_report_audit_scope(self.gateway, final_result, progress=notify):
+                        deferred_brief = True
                     final_stage = 'presentation_budget'
                     if deferred_brief:
                         from .brief_budget_schedule import complete_deferred_brief
                         complete_deferred_brief(self.gateway, final_result, progress=notify)
+                    final_stage = 'report_audit_scope'
+                    require_report_audit_scope(final_result)
+                    final_stage = 'presentation_budget'
                 if final_result.executive_brief is None and any(
                         issue.code == 'executive_brief_unavailable' for issue in final_result.validation_warnings):
                     final_stage = 'executive_brief'
@@ -710,9 +715,12 @@ class DocumentOrchestrator:
                     from adaptive_document_agent.services.slide_budgets import require_exported_budgets
                     deck, _ = measure(final_result)
                     require_exported_budgets(deck, final_result)
-            except (ValueError, LLMResponseError, FinalBudgetBriefError) as exc:
+            except (ValueError, LLMResponseError, FinalBudgetBriefError, FinalBudgetAuditError) as exc:
                 if isinstance(exc, FinalBudgetBriefError):
                     final_stage = 'executive_brief'
+                if isinstance(exc, FinalBudgetAuditError):
+                    final_stage = 'report_audit_scope'
+                    exc = exc.failure
                 final_result.pipeline_state = 'partial'
                 final_result.retry_from = 'reporting'
                 final_result.failed_stage = final_stage

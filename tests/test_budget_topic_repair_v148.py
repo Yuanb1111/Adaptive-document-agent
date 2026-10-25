@@ -83,7 +83,7 @@ def test_repaired_budget_copy_is_measured_and_independently_reviewed_before_comm
         assert final['applied_selection']['topics'] == reviewed_topics[0]
         assert final['applied_selection'] == result.presentation_topics.model_dump(mode='json')
         assert final['timings_ms'].keys() == {'selection', 'compilation_and_source_checks',
-            'native_measurement', 'independent_review', 'final_briefing', 'final_native_measurement'}
+            'native_measurement', 'independent_review', 'audit_scope', 'final_briefing', 'final_native_measurement'}
         assert all(type(value) is int and value >= 0 for value in final['timings_ms'].values())
         assert notifications == [
             'Refining analytical priorities using actual physical slide costs',
@@ -91,6 +91,7 @@ def test_repaired_budget_copy_is_measured_and_independently_reviewed_before_comm
             'Budget proposal 1/2: compiling and checking selected findings',
             'Budget proposal 1/2: measuring native PowerPoint pages',
             'Budget proposal 1/2: independently reviewing scope and omissions',
+            'Reviewing audit qualifications for the final budgeted topics',
             'Regenerating and independently checking the briefing against the final budgeted topics',
             'Measuring the final briefing and complete PowerPoint budget']
     else:

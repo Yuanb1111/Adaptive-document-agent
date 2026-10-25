@@ -1,5 +1,10 @@
 # Adaptive Document Intelligence Agent
 
+The [v188 budget audit lifecycle fix](docs/BUDGET_AUDIT_LIFECYCLE_V188.md) reviews
+audit qualifications introduced by the final physical budget selection before
+writing its briefing. Audit failures preserve their cause and evidence without
+triggering another topic omission; unchanged approvals remain reusable.
+
 The [v187 audit context budget fix](docs/AUDIT_CONTEXT_BUDGET_V187.md) applies
 the evidence-size limit to actual three-target review requests. Large aggregate
 ledgers retain every target and full source page, with unchanged review gates.

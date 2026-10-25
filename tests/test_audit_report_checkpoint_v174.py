@@ -16,7 +16,7 @@ def test_reporting_retry_preserves_latest_audit_event_until_source_revalidation(
                              message='Latest exact checkpoint for subsequent source revalidation.')
     source.validation_warnings.extend([old, latest])
     original = source.model_copy(deep=True)
-    actual = report_audit_scope.review_report_audit_scope
+    actual = report_audit_scope.refresh_report_audit_scope
     seen = []
     def inspect(gateway, result, **kwargs):
         events = [w for w in result.validation_warnings if w.code in {
@@ -24,9 +24,9 @@ def test_reporting_retry_preserves_latest_audit_event_until_source_revalidation(
         assert events == [latest]
         seen.append(True)
         return actual(gateway, result, **kwargs)
-    monkeypatch.setattr(report_audit_scope, 'review_report_audit_scope', inspect)
+    monkeypatch.setattr(report_audit_scope, 'refresh_report_audit_scope', inspect)
     runner = DocumentOrchestrator(_gateway(SyntheticReportingClient(source, accept_introduction=True)))
     monkeypatch.setattr(runner, '_load_document', lambda data, digest: source.document)
     result = runner.analyse_pdf(raw, resume=source)
-    assert seen == [True] and result.pipeline_state == 'complete'
+    assert seen and result.pipeline_state == 'complete'
     assert source == original
