@@ -18,7 +18,8 @@ EDITORIAL_OPERATIONS = [
         'TopicCoverageDelta', 'SummarySynthesisDraft',
         'IntroductionAudienceSelection', 'IntroductionMeaningRevision',
         'IntroductionMeaningResolution', 'SummaryCoverageReview',
-        'PhysicalBudgetReview')
+        'PhysicalBudgetReview', 'IntroductionAudienceReview',
+        'SummaryLayoutPages', 'PhysicalBudgetSelection')
 ] + [('report', 'BriefMeaningReview')]
 
 
@@ -37,12 +38,12 @@ def test_new_editorial_reduction_is_route_stage_and_optout_bound(stage, operatio
     assert policy()['status'] == 'unsupported' and policy()['options'] == {}
 
 
-def test_budget_priority_selection_preserves_reasoning_while_review_policy_stays_unchanged():
+def test_budget_selection_and_review_use_configured_editorial_reasoning():
     settings = LLMSettings(provider=ProviderName.DEEPSEEK, model='deepseek-flash')
     selection = request_reasoning_policy(settings, stage='presentation',
         operation='PhysicalBudgetSelection', model='deepseek-flash')
-    assert selection['intent'] == 'preserve' and selection['status'] == 'provider_default'
-    assert selection['options'] == {}
+    assert selection['intent'] == 'reduce' and selection['status'] == 'requested'
+    assert selection['options'] == {'extra_body': {'thinking': {'type': 'disabled'}}}
     review = request_reasoning_policy(settings, stage='presentation',
         operation='PhysicalBudgetReview', model='deepseek-flash')
     assert review['options'] == {'extra_body': {'thinking': {'type': 'disabled'}}}

@@ -3,7 +3,7 @@ from copy import deepcopy
 import json
 
 
-def encode(payload):
+def encode(payload, *, factor_cells=False):
     payload = deepcopy(payload)
     rows = payload.get('all_extracted_series', [])
     if payload.get('point_encoding') and rows and isinstance(rows[0], dict):
@@ -62,6 +62,12 @@ def encode(payload):
         payload['period_view_encoding'] = ('Each view is [scope_note_index, same_source_row_entries]. '
             'Scope index refers to period_view_scope_notes; entry cells follow period_view_entry_columns. '
             'Separate views are not automatically comparable; every source period remains present.')
+    if factor_cells:
+        from .context_dictionary import factor_series_cells
+        original = json.dumps(payload, ensure_ascii=False, separators=(',', ':'))
+        payload = factor_series_cells(payload)
+        factored = json.dumps(payload, ensure_ascii=False, separators=(',', ':'))
+        return factored if len(factored) < len(original) else original
     return json.dumps(payload, ensure_ascii=False, separators=(',', ':'))
 
 

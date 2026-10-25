@@ -48,6 +48,11 @@ _SIMPLE_OPERATIONS = frozenset({("presentation", "IntroductionPages"), ("report"
                               # mandatory; a long reasoning trace is not acceptance.
                               ("presentation", "SummarySynthesisDraft"),
                               ("presentation", "IntroductionAudienceSelection"),
+                              # Source-bound editorial review/layout still passes
+                              # independent semantic, quantity and geometry gates.
+                              ("presentation", "IntroductionAudienceReview"),
+                              ("presentation", "SummaryLayoutPages"),
+                              ("presentation", "PhysicalBudgetSelection"),
                               ("presentation", "IntroductionMeaningRevision"),
                               ("presentation", "IntroductionMeaningResolution"),
                               ("presentation", "SummaryCoverageReview"),

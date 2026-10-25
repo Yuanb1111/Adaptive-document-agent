@@ -43,10 +43,14 @@ without changing prompts, response validation, routing, credentials or privacy:
   bounded decision. Analytical discovery, resolution, insight generation and
   initial topic selection retain their existing policies. The explicit
   `provider_default` opt-out and exact route/capability checks remain effective.
-  `IntroductionAudienceReview`, `SummaryLayoutPages` and `PhysicalBudgetSelection` retain provider defaults: deciding introductory
-  importance, qualifying scope and preservation across an entire source union
-  and physical synthesis, or choosing a faithful audience scope against actual chart-group costs,
-  requires substantive semantic work.
+  In v189, `IntroductionAudienceReview`, `SummaryLayoutPages` and
+  `PhysicalBudgetSelection` also use the configured editorial reduction. The
+  model still judges meaning, source qualifications and importance; current-draft
+  binding, independent review, quantity/coverage validation and native physical
+  measurements remain mandatory. Output capacity and repair budgets are unchanged.
+  `provider_default` opts out. The existing exact model/endpoint guards apply.
+  Their changed per-operation policy is part of each cache key; the common policy
+  version remains v9 so unrelated extraction and analytical requests stay reusable.
 - `SemanticCandidateScores` uses the opt-out reduction for bounded ranking of
   the supplied evidence-backed candidate set. Global context, explicit rationales,
   incomplete-decision quarantine and LLM semantic selection remain unchanged.

@@ -1,5 +1,9 @@
 # Adaptive Document Intelligence Agent
 
+The [v189 presentation efficiency update](docs/PRESENTATION_EFFICIENCY_V189.md)
+reduces repeated topic context and editorial reasoning, and packs short commentary
+continuations into measured space on sibling chart pages while retaining source gates.
+
 The [v188 budget audit lifecycle fix](docs/BUDGET_AUDIT_LIFECYCLE_V188.md) reviews
 audit qualifications introduced by the final physical budget selection before
 writing its briefing. Audit failures preserve their cause and evidence without

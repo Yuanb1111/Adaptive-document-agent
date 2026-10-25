@@ -105,9 +105,6 @@ def test_other_providers_cannot_borrow_static_openai_capability(monkeypatch, pro
 @pytest.mark.parametrize('stage,operation', [
     ('semantic', 'SemanticResolution'), ('planner', 'AnalysisPlan'), ('insight', 'InsightList'),
     ('presentation', 'PresentationTopicSelection'), ('presentation', 'IntroductionDraft'),
-    ('presentation', 'IntroductionAudienceReview'),
-    ('presentation', 'SummaryLayoutPages'),
-    ('presentation', 'PhysicalBudgetSelection'),
     ('presentation', 'PresentationPlan'), ('presentation', 'UnknownOperation'),
     ('planner', 'IntroductionPages'), ('report', 'text'),
 ])

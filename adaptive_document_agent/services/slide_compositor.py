@@ -351,7 +351,8 @@ def _paginate_chart_slide(presentation, slide_plan: PresentationSlide,
             "observation_ids": [] if part else slide_plan.observation_ids,
             "layout": "two_up" if len(group) > 1 else 'single' if part else "chart_plus_commentary"})
         rendered.extend(render_composed_slide(presentation, physical, group, result, index, preserve_charts=True))
-    return rendered
+    from .composition_commentary_packing import pack_commentary_pages
+    return pack_commentary_pages(presentation, rendered, [c for group in groups for c in group], index)
 
 
 def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: list[ChartPlan],

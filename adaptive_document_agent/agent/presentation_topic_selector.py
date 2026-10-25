@@ -201,7 +201,7 @@ class PresentationTopicSelector:
         # No series or interior point is sampled away to shorten this request.
         messages = [
             {"role": "system", "content": with_presentation_limits(load_prompt("presentation_topic_selection.txt"))},
-            untrusted_document_message(encode(compact_context(payload))),
+            untrusted_document_message(encode(compact_context(payload), factor_cells=True)),
         ]
         from .report_requirements import instruction_messages
         messages[1:1] = instruction_messages(result.profile, purpose='topic selection and narrative detail')
