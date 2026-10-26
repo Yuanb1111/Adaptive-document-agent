@@ -15,7 +15,7 @@ class SourceTextCorrection(BaseModel):
     append_evidence_refs: list[str] = Field(default_factory=list, max_length=4)
 
 
-def _remove_unused_magnitude_bindings(item, indices):
+def _remove_unused_magnitude_bindings(item, indices, *, native_options):
     """Execute only explicit model choices with the same displayed signed value.
 
     Python never decides a magnitude meaning, changes a source sign or silently
@@ -31,6 +31,8 @@ def _remove_unused_magnitude_bindings(item, indices):
         return item, ['Source correction removal indices must be distinct existing quantity annotations']
     displayed = {canonical_quantity(*q) for q in _quantities(brief_claim_text(item, canonicalize_table_signs=True))}
     errors = []
+    native = {(row['currency'], Decimal(row['signed_coefficient']), row['source_scale'])
+              for row in native_options}
     for index in indices:
         binding = item.quantity_representations[index]
         values = {canonical_quantity(*q) for q in _quantities(binding.quantity_text)}
@@ -42,8 +44,17 @@ def _remove_unused_magnitude_bindings(item, indices):
             source = Decimal(PresentationPlanValidator._normalize_number(binding.source_value))
             expected = (currency, source, unit)
             signed = {(c, Decimal(v), u) for c, v, u in displayed}
-            if ((currency, value, unit) in displayed or source >= 0 or Decimal(value) != abs(source)
-                    or expected not in signed):
+            # A malformed old annotation may mix a rounded display scale with
+            # its exact native coefficient. It need not become valid before an
+            # explicit removal. Prove its retained signed coefficient against
+            # this item's literal native evidence and the new displayed copy.
+            # A valid old binding keeps its own unit; an invalid one requires a
+            # unique native unit, never a guessed conversion or currency change.
+            candidates = {q for q in native if q[0] == currency and q[1] == source}
+            if expected in candidates and Decimal(value) == abs(source):
+                candidates = {expected}
+            if ((currency, value, unit) in displayed or source >= 0 or Decimal(value) <= 0
+                    or len(candidates) != 1 or not candidates <= signed):
                 errors.append('Source correction may remove only an unused magnitude annotation whose exact signed native quantity remains displayed')
         except InvalidOperation:
             errors.append('Source correction cannot remove an annotation with an invalid signed source value')
@@ -144,8 +155,10 @@ def correct_residual_source_errors(gateway, brief, *, result, excerpts, initial_
         except ValueError as exc:
             rejected[i] = [str(exc)]
             continue
+        native = native_quantity_options({'items': [candidate.model_dump(mode='json')]},
+            [0], result, excerpts).get('item_0', [])
         candidate, errors = _remove_unused_magnitude_bindings(
-            candidate, patch.remove_quantity_representation_indices)
+            candidate, patch.remove_quantity_representation_indices, native_options=native)
         errors = [*errors, *validate_executive_brief(
             ExecutiveBrief(title='Source check', items=[candidate]), result, excerpts=excerpts)]
         if errors:

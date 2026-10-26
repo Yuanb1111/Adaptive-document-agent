@@ -1,5 +1,9 @@
 # Adaptive Document Intelligence Agent
 
+The [v195 native-quantity repair fix](docs/BRIEF_NATIVE_REPAIR_V195.md)
+allows explicitly selected obsolete magnitude annotations to be removed after
+their exact signed native quantities are verified in the revised copy and source.
+
 The [v194 audit correction-budget fix](docs/AUDIT_REVIEW_BUDGET_V194.md)
 separates reviewer output repair from correction of rejected evidence bindings,
 so a format repair cannot prevent the first substantive draft correction.

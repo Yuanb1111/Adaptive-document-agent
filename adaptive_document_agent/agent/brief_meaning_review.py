@@ -40,7 +40,10 @@ class MeaningVerdict(BaseModel):
     index: int = Field(ge=0)
     accepted: bool
     reason: str = Field(min_length=1, max_length=500)
-    numeric_comparison: bool
+    numeric_comparison: bool = Field(description=
+        'True only when the label or body asserts a numeric change/equality; then provide '
+        'source-bound comparisons. Independently dated facts without such an assertion '
+        'use false and an empty comparisons list. Reassess this flag when correcting bindings.')
     comparisons: list[MeaningComparison] = Field(default_factory=list, max_length=12)
 
 
