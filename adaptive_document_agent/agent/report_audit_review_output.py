@@ -1,4 +1,4 @@
-"""Correct a reviewer's output contract within the shared independent-review budget."""
+"""Bound reviewer format repair separately from correction of rejected draft content."""
 import json
 
 from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
@@ -38,6 +38,10 @@ UNKNOWN_REVIEW_INSTRUCTIONS = (
     'source-specific reason; never invent a counterpart. ')
 
 
+class AuditReviewOutputExhausted(ValueError):
+    """Reviewer output repair is exhausted; the writer cannot repair its schema."""
+
+
 def review_draft(gateway, context, draft, entry, correction_counts):
     """Only complete format/ID errors return to the reviewer; evidence rejections propagate."""
     from .report_audit_scope import AuditScopeReview
@@ -51,7 +55,11 @@ def review_draft(gateway, context, draft, entry, correction_counts):
         'or adjusted figures. Do not transfer a comparative column qualifier to another period. '
         'Assess whether any unresolved measure actually has sufficient evidence and reject '
         'unjustified unknowns. ' + UNKNOWN_REVIEW_INSTRUCTIONS + REVIEW_ID_INSTRUCTIONS + QUOTE_FORMAT_INSTRUCTIONS
-        + COUNTERPART_REVIEW_INSTRUCTIONS),
+        + COUNTERPART_REVIEW_INSTRUCTIONS
+        + f'This draft contains {len(draft.bindings)} proposed bindings and '
+          f'{len(draft.unresolved_observation_ids)} unresolved IDs. '
+        + ('Return verdicts=[]; assess all unknown dispositions in unresolved_accepted and '
+           'unresolved_reason only. ' if not draft.bindings else '')),
         untrusted_document_message(json.dumps(context, ensure_ascii=False)),
         untrusted_document_message(json.dumps(entry['draft'], ensure_ascii=False))]
     for _ in range(2):
@@ -74,11 +82,13 @@ def review_draft(gateway, context, draft, entry, correction_counts):
             else:
                 failure['raw_response'] = exc.response.text
             entry.setdefault('review_contract_corrections', []).append(failure)
-            entry['corrective_kind'] = 'independent_review'
-            if correction_counts['independent_review']:
+            entry['corrective_kind'] = 'review_output'
+            if correction_counts['review_output']:
                 entry['correction_budget_exhausted'] = True
-                raise ValueError(f'Independent review output correction budget exhausted: {exc}') from exc
-            correction_counts['independent_review'] += 1
+                raise AuditReviewOutputExhausted(
+                    f'Report audit-scope review_output correction budget exhausted '
+                    f'(one reviewer output correction per batch): {exc}') from exc
+            correction_counts['review_output'] += 1
             messages.extend([untrusted_document_message(json.dumps(failure, ensure_ascii=False)),
                 dict(role='system', content='Correct only your review response format and exact ID ledger. '
                     'The complete source context and draft above are unchanged. Reassess the evidence; '

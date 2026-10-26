@@ -1,4 +1,4 @@
-"""Review shape recovery preserves unknown semantics and the single shared correction."""
+"""Reviewer output repair cannot consume or replace a writer's evidence correction."""
 from concurrent.futures import CancelledError
 from copy import deepcopy
 
@@ -56,7 +56,7 @@ def test_all_unknown_extra_verdicts_are_rejected_then_reviewer_corrects_same_dra
     gateway, record = run([draft, invalid, valid])
     assert [call[1] for call in gateway.calls] == [AuditScopeDraft, AuditScopeReview, AuditScopeReview]
     assert len(record['attempts']) == 1
-    assert record['corrections_used'] == dict(binding_validation=0, independent_review=1)
+    assert record['corrections_used'] == dict(binding_validation=0, independent_review=0, review_output=1)
     assert record['draft'] == draft.model_dump()
     assert record['review'] == valid.model_dump()
     entry = record['attempts'][0]
@@ -85,35 +85,37 @@ def test_mixed_review_exact_binding_ledger_is_corrected_without_rewriting_source
     assert record['review']['verdicts'][0]['covered_source'] == covered_source(binding)
 
 
-@pytest.mark.parametrize('second', ['invalid_id', 'semantic_rejection'])
-def test_review_format_recovery_cannot_borrow_a_later_writer_semantic_correction(second):
+def test_repeated_review_format_failure_cannot_borrow_writer_correction():
     result, _ = fixture()
     gateway = ScriptedGateway([unknown_draft(), unknown_review(extra=True),
-        unknown_review(extra=second == 'invalid_id', accepted=second != 'semantic_rejection')])
+        unknown_review(extra=True)])
     record = dict(attempts=[])
-    with pytest.raises(ValueError, match='independent_review correction budget exhausted'):
+    with pytest.raises(ValueError, match='review_output correction budget exhausted'):
         _review_batch(gateway, _context(result), record)
     assert len(gateway.calls) == 3 and len(record['attempts']) == 1
+    assert record['corrections_used'] == dict(binding_validation=0, independent_review=0, review_output=1)
     assert 'status' not in record
 
 
-def test_previous_semantic_writer_correction_cannot_borrow_review_format_correction():
+def test_review_format_repair_remains_available_after_semantic_writer_correction():
     result, _ = fixture()
     draft = unknown_draft()
-    gateway = ScriptedGateway([draft, unknown_review(accepted=False), draft, unknown_review(extra=True)])
+    gateway = ScriptedGateway([draft, unknown_review(accepted=False), draft,
+        unknown_review(extra=True), unknown_review()])
     record = dict(attempts=[])
-    with pytest.raises(ValueError, match='independent_review correction budget exhausted'):
-        _review_batch(gateway, _context(result), record)
-    assert [call[1] for call in gateway.calls] == [AuditScopeDraft, AuditScopeReview] * 2
+    _review_batch(gateway, _context(result), record)
+    assert [call[1] for call in gateway.calls] == [AuditScopeDraft, AuditScopeReview] * 2 + [AuditScopeReview]
     assert record['corrections_used']['independent_review'] == 1
+    assert record['corrections_used']['review_output'] == 1
+    assert record['status'] == 'complete'
 
 
-def test_complete_review_format_error_uses_the_shared_reviewer_correction():
+def test_complete_review_format_error_uses_only_reviewer_output_correction():
     error = LLMStructuredOutputError('Invalid complete schema', response=response('{"wrong":true}', finish='stop'))
     gateway, record = run([unknown_draft(), error, unknown_review()])
     assert [call[1] for call in gateway.calls] == [AuditScopeDraft, AuditScopeReview, AuditScopeReview]
     assert record['attempts'][0]['review_contract_corrections'][0]['raw_response'] == '{"wrong":true}'
-    assert record['corrections_used']['independent_review'] == 1
+    assert record['corrections_used'] == dict(binding_validation=0, independent_review=0, review_output=1)
 
 
 @pytest.mark.parametrize('error', [LLMTransportError('Offline'), PrivacyViolationError('Local only'), CancelledError()])

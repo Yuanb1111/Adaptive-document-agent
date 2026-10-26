@@ -86,8 +86,9 @@ def test_each_correction_kind_has_one_opportunity_then_exact_unknown_is_independ
     assert not reviewed_audit_bindings(result)  # Reviewer rejection never becomes opposite assurance.
     record = json.loads(result.validation_warnings[-1].message)
     batch = record['batches'][0]
-    assert batch['correction_limits'] == dict(binding_validation=1, independent_review=1, max_drafts=3)
-    assert batch['corrections_used'] == dict(binding_validation=1, independent_review=1)
+    assert batch['correction_limits'] == dict(binding_validation=1, independent_review=1,
+                                             review_output=1, max_drafts=3)
+    assert batch['corrections_used'] == dict(binding_validation=1, independent_review=1, review_output=0)
     assert batch['review']['unresolved_accepted'] is True
     assert (result.document, result.observations, result.analysis_results) == original
 

@@ -70,7 +70,69 @@ def replay(path):
         model_calls=0, end_to_end_verified=False)
 
 
+class WriterCorrectionRequired(RuntimeError):
+    pass
+
+
+class RecordedReviewGateway:
+    """Replay real reviewer responses; do not invent the missing corrected draft."""
+    def __init__(self, attempt):
+        self.attempt = attempt
+        self.reviews = iter([item['review'] for item in attempt.get('review_contract_corrections', [])]
+                            + [attempt['review']])
+        self.calls = []
+        self.source_message = None
+
+    def generate_structured(self, messages, schema, **kwargs):
+        self.calls.append(schema.__name__)
+        if self.source_message is None:
+            self.source_message = messages[1]
+        assert messages[1] == self.source_message, 'Full source context changed during correction.'
+        if schema is AuditScopeDraft:
+            if len(self.calls) == 1:
+                return schema.model_validate(self.attempt['draft'])
+            feedback = json.loads(messages[-2]['content'].split('\n', 1)[1].rsplit('\n', 1)[0])
+            assert feedback['independent_review'] == self.attempt['review']
+            assert feedback['corrective_kind'] == 'independent_review'
+            raise WriterCorrectionRequired('Real rejection reached writer; fresh model output required.')
+        assert schema is AuditScopeReview
+        return schema.model_validate(next(self.reviews))
+
+
+def replay_review_correction(context, attempt):
+    gateway, record = RecordedReviewGateway(attempt), dict(attempts=[])
+    try:
+        _review_batch(gateway, context, record)
+    except WriterCorrectionRequired:
+        return dict(status='reached_writer_correction', operations=gateway.calls,
+            corrections_used=record['corrections_used'], full_feedback_delivered=True,
+            semantic_approval=False)
+    raise AssertionError('Expected recorded reviewer rejection to reach a fresh writer correction.')
+
+
+def replay_review_correction_path(path):
+    raw = json.loads(Path(path).read_text(encoding='utf-8'))
+    audit = json.loads(next(row['message'] for row in reversed(raw['validation_warnings'])
+        if row['code'] == 'report_audit_scope_unresolved'))
+    rows = []
+    for number, batch in enumerate(audit['batches']):
+        if batch['status'] != 'failed':
+            continue
+        for attempt in batch.get('attempts', []):
+            if (attempt.get('review_contract_corrections') and attempt.get('review')
+                    and attempt['review']['unresolved_accepted'] is False):
+                result = replay_review_correction(batch_context(audit['context'], batch['observation_ids']), attempt)
+                rows.append(dict(batch=number, **result))
+                break
+    return dict(pipeline_version=raw['pipeline_version'], batches=rows,
+        model_calls=0, end_to_end_verified=False)
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('path', type=Path)
-    print(json.dumps(replay(parser.parse_args().path), ensure_ascii=False, indent=2))
+    parser.add_argument('--review-correction-path', action='store_true',
+        help='Replay recorded review format repair and rejection through the real writer-correction path.')
+    args = parser.parse_args()
+    action = replay_review_correction_path if args.review_correction_path else replay
+    print(json.dumps(action(args.path), ensure_ascii=False, indent=2))

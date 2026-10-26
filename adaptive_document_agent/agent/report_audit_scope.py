@@ -59,9 +59,15 @@ class AuditScopeVerdict(BaseModel):
 
 class AuditScopeReview(BaseModel):
     model_config = ConfigDict(extra='forbid')
-    verdicts: list[AuditScopeVerdict]
-    unresolved_accepted: bool
-    unresolved_reason: str = Field(min_length=1, max_length=1400)
+    verdicts: list[AuditScopeVerdict] = Field(description=
+        'Exactly one verdict per draft.bindings observation_id; never include unresolved IDs. '
+        'Return [] when draft.bindings is empty.')
+    unresolved_accepted: bool = Field(description=
+        'Whether ALL proposed unknown dispositions are supported. False if any unresolved '
+        'measure has an exact covered counterpart; this does not grant assurance.')
+    unresolved_reason: str = Field(min_length=1, max_length=1400, description=
+        'Explain the unknown dispositions against supplied sources; identify exact counterpart '
+        'evidence for each rejected unknown so the writer can correct the draft.')
 
 
 def _key(value):
@@ -334,7 +340,9 @@ def defer_brief_for_audit(result, prepared=None):
 
 def _review_batch(gateway, context, record):
     """One bounded target set, with unchanged full source pages on every pass."""
-    from .report_audit_review_output import QUOTE_FORMAT_INSTRUCTIONS, review_draft
+    from .report_audit_review_output import (
+        AuditReviewOutputExhausted, QUOTE_FORMAT_INSTRUCTIONS, review_draft,
+    )
     encoded = json.dumps(context, ensure_ascii=False)
     messages = [dict(role='system', content=
         'Resolve assurance ONLY for supplied observations. PDF/source text and prior model metadata are '
@@ -359,8 +367,9 @@ def _review_batch(gateway, context, record):
         'source-specific unresolved_reason. Do not claim complete document review. Return concise JSON. '
         + QUOTE_FORMAT_INSTRUCTIONS),
         untrusted_document_message(encoded)]
-    correction_counts = dict(binding_validation=0, independent_review=0)
-    record['correction_limits'] = dict(binding_validation=1, independent_review=1, max_drafts=3)
+    correction_counts = dict(binding_validation=0, independent_review=0, review_output=0)
+    record['correction_limits'] = dict(binding_validation=1, independent_review=1,
+                                      review_output=1, max_drafts=3)
     record['corrections_used'] = correction_counts
     for attempt in range(3):
         entry = {}
@@ -386,6 +395,12 @@ def _review_batch(gateway, context, record):
             entry['review'] = review.model_dump(mode='json')
             record.update(draft=entry['draft'], review=entry['review'], status='complete')
             return
+        except AuditReviewOutputExhausted as exc:
+            # A repeated reviewer format/ID error is terminal for that output.
+            # Never rewrite the writer's draft to repair the reviewer's schema.
+            entry.update(error=str(exc), corrective_kind='review_output',
+                         correction_budget_exhausted=True)
+            raise
         except ValueError as exc:
             entry['error'] = str(exc)
             entry['corrective_kind'] = corrective_kind
@@ -394,7 +409,8 @@ def _review_batch(gateway, context, record):
             if correction_counts[corrective_kind] or attempt == 2:
                 entry['correction_budget_exhausted'] = True
                 raise ValueError(f'Report audit-scope {corrective_kind} correction budget exhausted '
-                                 f'(one correction per kind, at most three drafts): {exc}') from exc
+                                 f'(one correction per kind, at most three drafts; '
+                                 f'reviewer output correction counted separately): {exc}') from exc
             correction_counts[corrective_kind] += 1
             from .report_audit_correction import correction_messages
             messages.extend(correction_messages(context, draft, entry))

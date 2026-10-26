@@ -20,7 +20,10 @@ without changing prompts, response validation, routing, credentials or privacy:
   Audit batches contain at most three exact target measures. Complete source
   pages, exact counterpart row/header/unit proofs, independent assurance review,
   Python value/period/unit/page checks and unknown dispositions remain required.
-  The existing output limits and correction budgets do not change. Provider-default
+  The reasoning change preserves output limits and correction budgets. In v194,
+  reviewer format/ID repair is counted separately from substantive writer correction;
+  each has one allowance per batch and drafts remain capped at three (see
+  [audit correction budgets](AUDIT_REVIEW_BUDGET_V194.md)). Provider-default
   opt-out and exact route/capability checks still apply. The two assurance operations'
   identities change within policy v9; unrelated operation caches remain reusable.
   The existing strengthened unknown-review contract is unchanged. Approvals produced under it can be

@@ -1,5 +1,9 @@
 # Adaptive Document Intelligence Agent
 
+The [v194 audit correction-budget fix](docs/AUDIT_REVIEW_BUDGET_V194.md)
+separates reviewer output repair from correction of rejected evidence bindings,
+so a format repair cannot prevent the first substantive draft correction.
+
 The [v193 audit period-header correction](docs/AUDIT_PERIOD_HEADERS_V193.md)
 recognizes shared date notation without replacing independent column/scope review,
 and applies the configured reasoning reduction to bounded audit requests.
