@@ -9,6 +9,12 @@ from adaptive_document_agent.document_model.series import source_context_key
 from adaptive_document_agent.models import ChartPlan, Observation, PresentationPlan
 
 
+def _metric_key(observation: Observation) -> str:
+    """Use the retained semantic resolver mapping; never invent an alias."""
+    from adaptive_document_agent.document_model.series import metric_label
+    return metric_label(observation).strip().casefold()
+
+
 def _same_reported_fact(left: Observation, right: Observation) -> bool:
     """Require an exact-period, exact-value duplicate, not merely a shared label."""
     if left.value is None or right.value is None:
@@ -17,11 +23,12 @@ def _same_reported_fact(left: Observation, right: Observation) -> bool:
     left_dimensions = {k: v for k, v in left.dimensions.items() if k not in excluded_dimensions}
     right_dimensions = {k: v for k, v in right.dimensions.items() if k not in excluded_dimensions}
     return (
-        left.metric_original.strip().casefold() == right.metric_original.strip().casefold()
+        _metric_key(left) == _metric_key(right)
         and (left.metric_canonical or "").strip().casefold()
         == (right.metric_canonical or "").strip().casefold()
         and left.period == right.period
         and left.entity == right.entity
+        and left.parent_section == right.parent_section
         and left_dimensions == right_dimensions
         and left.category_dimensions == right.category_dimensions
         and left.unit == right.unit
@@ -75,7 +82,7 @@ def align_redundant_slide_evidence(
             for obs_id in chart.observation_ids:
                 obs = obs_by_id.get(obs_id)
                 if obs is not None and obs.period and obs.value is not None:
-                    key = (obs.metric_original.strip().casefold(), source_context_key(obs), chart_id)
+                    key = (_metric_key(obs), source_context_key(obs), chart_id)
                     chart_series[key].append(obs)
 
         direct_ids = set(slide.observation_ids) | {
@@ -85,7 +92,7 @@ def align_redundant_slide_evidence(
         for obs_id in direct_ids:
             obs = obs_by_id.get(obs_id)
             if obs is not None and obs.period and obs.value is not None:
-                key = (obs.metric_original.strip().casefold(), source_context_key(obs))
+                key = (_metric_key(obs), source_context_key(obs))
                 direct_series[key].append(obs)
 
         replacements: dict[str, str] = {}

@@ -241,6 +241,13 @@ def refine_presentation_budget(gateway, result, *, progress=None):
             record['applied_selection'] = selection.model_dump(mode='json')
             candidate = result.model_copy(deep=True)
             candidate.presentation_topics = selection
+            if candidate.pipeline_version:
+                from .topic_evidence_review import review_topic_evidence
+                from .presentation_topic_selector import PresentationTopicSelector
+                checked = review_topic_evidence(selection, lookup, candidate, gateway,
+                    PresentationTopicSelector._validate, allow_correction=False)
+                if checked != selection:
+                    raise ValueError('Budget selection failed independent source-row semantic review.')
             from .topic_plan_compiler import compile_topic_plan
             notify(f'Budget proposal {attempt+1}/2: compiling and checking selected findings')
             started = perf_counter()

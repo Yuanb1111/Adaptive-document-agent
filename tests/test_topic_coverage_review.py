@@ -11,6 +11,19 @@ from adaptive_document_agent.services.llm import LLMGateway, LLMSettings, MockLL
 from tests.test_pptx_export import _result
 
 
+@pytest.fixture(autouse=True)
+def isolate_topic_structure_and_coverage(monkeypatch):
+    """These tests isolate structural/coverage repair call budgets.
+
+    Independent source-row semantics and selector integration are exercised
+    with the real gateway contract in test_topic_evidence_binding_v201.py.
+    """
+    monkeypatch.setattr(
+        'adaptive_document_agent.agent.topic_evidence_review.review_topic_evidence',
+        lambda selection, *args, **kwargs: selection,
+    )
+
+
 def _observation(metric, period, value, *, basis="FY", definition="UNSPECIFIED", page=234):
     return Observation(id=f"{metric}-{period}-{definition}", metric_original=metric, raw_value=str(value),
         value=value, period=period, unit="count", raw_unit="units", unit_scale=1,

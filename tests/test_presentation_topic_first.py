@@ -18,6 +18,19 @@ from adaptive_document_agent.validation.presentation_plan_validator import Prese
 from tests.test_pptx_export import _result
 
 
+@pytest.fixture(autouse=True)
+def isolate_topic_structure_and_coverage(monkeypatch):
+    """These tests isolate structural/coverage repair call budgets.
+
+    Independent source-row semantics and selector integration are exercised
+    with the real gateway contract in test_topic_evidence_binding_v201.py.
+    """
+    monkeypatch.setattr(
+        'adaptive_document_agent.agent.topic_evidence_review.review_topic_evidence',
+        lambda selection, *args, **kwargs: selection,
+    )
+
+
 def test_topic_selector_receives_complete_series_directory_and_exact_ids() -> None:
     result = _result()
     directory, _ = series_directory(result)

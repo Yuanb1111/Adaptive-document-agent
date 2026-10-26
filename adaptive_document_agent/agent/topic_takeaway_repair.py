@@ -118,6 +118,13 @@ def repair_withheld_takeaways(gateway: LLMGateway, result: PipelineResult,
                             and json.loads(n[len(_WITHHELD_PREFIX):]).get('topic_id') == topic_id)]
                 corrected = next(t for t in snapshot.presentation_topics.topics if t.id == topic_id)
                 corrected.title, corrected.takeaway = title, correction.takeaway
+                if snapshot.pipeline_version:
+                    from .topic_evidence_review import review_topic_evidence
+                    from .presentation_topic_selector import PresentationTopicSelector
+                    reviewed = review_topic_evidence(snapshot.presentation_topics, lookup, snapshot, gateway,
+                        PresentationTopicSelector._validate, allow_correction=False)
+                    if reviewed != snapshot.presentation_topics:
+                        raise ValueError('Takeaway correction failed independent source-row semantic review.')
                 candidate = compile_topic_plan(snapshot)
                 if topic_id in withheld_topic_ids(candidate):
                     raise ValueError('; '.join(n for n in candidate.editorial_notes
@@ -128,6 +135,8 @@ def repair_withheld_takeaways(gateway: LLMGateway, result: PipelineResult,
                 audit['status'] = 'accepted'
                 # Keep the orchestrator's retained selection reference current.
                 original.title, original.takeaway = title, correction.takeaway
+                result.validation_warnings.extend(w for w in snapshot.validation_warnings
+                                                  if w not in result.validation_warnings)
                 plan = candidate
             except LLMTransportError:
                 raise  # A transport failure is never a reusable author verdict.

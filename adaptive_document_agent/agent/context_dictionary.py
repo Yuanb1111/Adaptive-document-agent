@@ -33,7 +33,11 @@ def factor_series_cells(payload):
     """Reference repeated evidence cells once; retain every series and note."""
     columns = payload.get('series_columns', [])
     if columns and not payload.get('series_value_dictionaries'):
-        dictionaries = dictionary_columns(payload.get('all_extracted_series', []), columns)
+        # Keep the selectable handle adjacent to its human-readable identity.
+        # Indirection here is lossless for Python but makes model ID selection
+        # unnecessarily depend on joining a second dictionary correctly.
+        dictionaries = dictionary_columns(payload.get('all_extracted_series', []), columns,
+                                          literal=('id', 'metric', 'canonical_metric'))
         if dictionaries:
             payload['series_value_dictionaries'] = dictionaries
             payload['series_cell_encoding'] = (

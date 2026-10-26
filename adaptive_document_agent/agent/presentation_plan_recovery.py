@@ -127,6 +127,8 @@ class PresentationPlanRecovery:
                 else:
                     base.editorial_notes.append(note)
         _, series_by_id = series_directory(result)
+        from .topic_evidence_review import require_topic_evidence_review
+        require_topic_evidence_review(selection, series_by_id, result)
         from adaptive_document_agent.validation.topic_period_consistency import reconcile_topic_periods
         reconcile_topic_periods(result, series_by_id)
         from adaptive_document_agent.document_model import period_sort_key

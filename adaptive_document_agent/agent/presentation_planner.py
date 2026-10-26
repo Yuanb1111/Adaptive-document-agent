@@ -27,6 +27,15 @@ class PresentationPlanner:
             # asking it to copy hundreds of IDs into a second full slide plan.
             from .topic_plan_compiler import compile_topic_plan
             from .presentation_visual_enrichment import enrich_selected_plan
+            if result.pipeline_version:
+                from .topic_plan_compiler import reconcile_topic_source_scope
+                from .topic_evidence_review import review_topic_evidence
+                from .presentation_topic_selector import PresentationTopicSelector
+                lookup = reconcile_topic_source_scope(result)
+                checked = review_topic_evidence(result.presentation_topics, lookup, result,
+                    self.gateway, PresentationTopicSelector._validate, allow_correction=False)
+                if checked != result.presentation_topics:
+                    raise ValueError('Selected topics changed source meaning; rerun topic selection and coverage review.')
             compiled = compile_topic_plan(result)
             from .topic_takeaway_repair import repair_withheld_takeaways
             compiled = repair_withheld_takeaways(self.gateway, result, compiled)

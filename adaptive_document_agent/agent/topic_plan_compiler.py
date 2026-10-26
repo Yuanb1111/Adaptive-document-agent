@@ -44,6 +44,14 @@ def compile_topic_plan(result: PipelineResult) -> PresentationPlan:
     PresentationPlanValidator().validate(plan, result)
     plan = stamp_editorial_review(plan, result, origin="topic_compilation")
     for issue in result.validation_warnings:
+        if issue.code == 'presentation_topic_evidence_review':
+            import json
+            audit = json.loads(issue.message)
+            omitted = set(audit.get('omitted_topic_ids', [])) - compiled_topics
+            if omitted:
+                plan.editorial_status = 'needs_review'
+                plan.editorial_notes.append('Source-row semantic review withheld unsupported topics: '
+                                            + ', '.join(sorted(omitted)))
         if issue.code == "presentation_topic_coverage_unresolved":
             from .topic_coverage_review import coverage_review_pending
             if coverage_review_pending(result):

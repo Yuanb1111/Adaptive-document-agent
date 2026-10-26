@@ -44,6 +44,8 @@ def _build_series_directory(result: PipelineResult) -> tuple[list[dict[str, obje
     ]
     from adaptive_document_agent.services.source_scope_completeness import declared_scope_series
     groups = [*evidence_groups(eligible), *declared_scope_series(result, eligible)]
+    from adaptive_document_agent.services.presentation_source_series import distinct_source_series
+    groups = [source for group in groups for source in distinct_source_series(group)]
     for group in groups:
         if not any(item.value is not None and item.evidence for item in group):
             continue
@@ -247,12 +249,19 @@ class PresentationTopicSelector:
             result.presentation_topics = previous
         from .topic_selection_repair import retain_valid_topics
         retained = retain_valid_topics(selection, lookup, primary_pages, result, self.gateway, self._validate)
+        from .topic_evidence_review import review_topic_evidence
+        retained = review_topic_evidence(retained, lookup, result, self.gateway, self._validate,
+                                         primary_pages=primary_pages)
         retained = review_topic_coverage(retained, result, lookup, primary_pages, payload,
                                          self.gateway, self._validate)
         from .topic_caveat_review import reconcile_caveats
         reconcile_caveats(retained, directory, result, self.gateway)
         prepare_topic_ratio_definitions(retained, lookup, result)
-        return retained
+        reviewed = review_topic_evidence(retained, lookup, result, self.gateway, self._validate,
+                                         primary_pages=primary_pages, allow_correction=False)
+        if reviewed != retained:
+            raise ValueError('Coverage synthesis introduced unsupported topic meaning; source coverage needs review.')
+        return reviewed
 
     @staticmethod
     def _validate(

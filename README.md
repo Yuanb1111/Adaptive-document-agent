@@ -1,5 +1,10 @@
 # Adaptive Document Intelligence Agent
 
+The [v201 topic evidence binding fixes](docs/TOPIC_EVIDENCE_BINDING_V201.md)
+independently review topic meaning against selected source rows, preserve literal
+catalog identities, and separate incompatible disclosure scopes while aligning
+proven duplicates without changing source observations.
+
 The [v200 current-review and topic recovery fixes](docs/CURRENT_REVIEW_TOPIC_RECOVERY_V200.md)
 adjudicate unchanged proposed corrections within the existing retry budget,
 retain selected topics when one ratio claim is unbound, and space date-axis labels.

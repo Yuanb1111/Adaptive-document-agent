@@ -156,6 +156,8 @@ def test_missing_introduction_stops_after_semantic_selection_without_purchasing_
         {"title": "Revenue Performance Analysis", "sections": [{"title": "Revenue Performance", "purpose": "Explain the validated change.", "insight_ids": ["insight_mock"]}]},
         {"topics": [{"id": "revenue", "title": "Revenue movement", "question": "How did revenue change?",
                      "rationale": "The document contains one comparable series.", "series_ids": [topic_series_id]}]},
+        {"decisions": [{"topic_id": "revenue", "supported": True,
+                        "reason": "The selected literal revenue rows support this revenue question."}]},
         {"pages": []},  # No introductory source pages in this synthetic document.
         {"title": "Key takeaways", "items": [{"label": "Revenue",
             "text": "Revenue was 150 in 2025, compared with 100 in 2023.",
@@ -180,7 +182,7 @@ def test_missing_introduction_stops_after_semantic_selection_without_purchasing_
     assert "## Revenue overview" in result.report_markdown
     # No mandatory opening was sourced. Do not spend another generation/review
     # pair regardless of what the optional briefing writer would have done.
-    assert len(client.calls) == 8 and len(client.responses) == 2
+    assert len(client.calls) == 9 and len(client.responses) == 2
     assert not brief_calls and result.executive_brief is None
     assert result.pipeline_state == 'partial' and result.retry_from == 'reporting'
     codes = {issue.code for issue in result.validation_warnings}
