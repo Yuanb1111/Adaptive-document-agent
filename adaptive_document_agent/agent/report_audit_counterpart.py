@@ -33,6 +33,20 @@ class AuditCoveredSource(BaseModel):
     page_coverage: list[AuditPageCoverage] = Field(min_length=1, max_length=3)
 
 
+MEASURE_IDENTITY_INSTRUCTIONS = (
+    'Interpret each target using its full retained identity: metric_original/metric_canonical, '
+    'dimensions, category_dimensions, parent_section and literal evidence row_label together. '
+    'A metric may name a broader parent measure while its category and source row identify the '
+    'specific component. Do not mistake a component for its parent total, or reject a supported '
+    'component merely because its broader metric label differs from the counterpart row. '
+    'The model must establish the exact semantic correspondence from original source rows and '
+    'context; matching values alone do not establish identity. source_metric must be the literal '
+    'counterpart row name for that same retained component. Never rename retained observations, '
+    'change their category/value/period or substitute a total to make an assurance binding fit. '
+    'If the retained identity genuinely conflicts with the source, retain a source-specific '
+    'unknown rather than proposing an observation edit. ')
+
+
 COUNTERPART_REVIEW_INSTRUCTIONS = (
     'Every accepted verdict MUST include covered_source, independently quoting the covered original '
     'table row (covered_value_quote), its exact period column (covered_header_quote) and literal unit '

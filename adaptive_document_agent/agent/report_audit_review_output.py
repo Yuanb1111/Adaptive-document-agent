@@ -6,14 +6,16 @@ from .presentation_budget_output import complete_budget_output
 from .prompting import untrusted_document_message
 from .report_audit_batches import AuditReviewContractError, validate_review
 from .report_audit_capacity import AUDIT_REVIEW_TOKEN_LIMITS
-from .report_audit_counterpart import COUNTERPART_REVIEW_INSTRUCTIONS
+from .report_audit_counterpart import COUNTERPART_REVIEW_INSTRUCTIONS, MEASURE_IDENTITY_INSTRUCTIONS
 from .audit_period_header import PERIOD_HEADER_INSTRUCTIONS
+from .structured_output_correction import schema_feedback
 
 
 QUOTE_FORMAT_INSTRUCTIONS = (
     'Literal evidence quotations may omit purely typographic table dot leaders. '
     'Preserve every word, number, decimal point, sign, symbol and unit in the selected passage; '
-    'do not extend, repeat or invent quotation content. ' + PERIOD_HEADER_INSTRUCTIONS)
+    'do not extend, repeat or invent quotation content. ' + PERIOD_HEADER_INSTRUCTIONS
+    + MEASURE_IDENTITY_INSTRUCTIONS)
 
 REVIEW_ID_INSTRUCTIONS = (
     'verdicts must contain exactly one item for each observation_id in draft.bindings, '
@@ -80,17 +82,22 @@ def review_draft(gateway, context, draft, entry, correction_counts):
             if review is not None:
                 failure['review'] = review.model_dump(mode='json')
             else:
-                failure['raw_response'] = exc.response.text
+                failure.update(schema_feedback(exc, AuditScopeReview))
             entry.setdefault('review_contract_corrections', []).append(failure)
             entry['corrective_kind'] = 'review_output'
             if correction_counts['review_output']:
                 entry['correction_budget_exhausted'] = True
+                details = '; '.join('.'.join(map(str, error['loc'])) + ': ' + error['msg']
+                                    for error in failure.get('schema_errors', [])[:6])
                 raise AuditReviewOutputExhausted(
                     f'Report audit-scope review_output correction budget exhausted '
-                    f'(one reviewer output correction per batch): {exc}') from exc
+                    f'(one reviewer output correction per batch): {details or str(exc)}') from exc
             correction_counts['review_output'] += 1
             messages.extend([untrusted_document_message(json.dumps(failure, ensure_ascii=False)),
                 dict(role='system', content='Correct only your review response format and exact ID ledger. '
+                    'Use schema_errors for exact field paths, types and limits. Rephrase overlong '
+                    'reasons within their field limits, preserving the verdict, relevant IDs, '
+                    'source distinctions and material qualifications; never truncate source quotations. '
                     'The complete source context and draft above are unchanged. Reassess the evidence; '
                     'do not change the draft, discard a substantive rejection, or infer approval from this '
                     'format feedback. Return the complete AuditScopeReview JSON. ' + REVIEW_ID_INSTRUCTIONS)])

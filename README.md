@@ -1,5 +1,9 @@
 # Adaptive Document Intelligence Agent
 
+The [v196 audit rationale correction](docs/AUDIT_BATCH_REASON_V196.md)
+sizes shared reasons for the bounded target batch, reports exact schema failures,
+and clarifies component identity without changing retained observations.
+
 The [v195 native-quantity repair fix](docs/BRIEF_NATIVE_REPAIR_V195.md)
 allows explicitly selected obsolete magnitude annotations to be removed after
 their exact signed native quantities are verified in the revised copy and source.

@@ -128,11 +128,46 @@ def replay_review_correction_path(path):
         model_calls=0, end_to_end_verified=False)
 
 
+def replay_review_schema_path(path):
+    """Revalidate recorded complete output, preserving its full semantic verdict."""
+    raw = json.loads(Path(path).read_text(encoding='utf-8'))
+    audit = json.loads(next(row['message'] for row in reversed(raw['validation_warnings'])
+        if row['code'] == 'report_audit_scope_unresolved'))
+    rows, completed = [], 0
+    for number, batch in enumerate(audit['batches']):
+        if batch['status'] == 'complete':
+            completed_batch(audit['context'], batch)
+            completed += 1
+            continue
+        for attempt in batch.get('attempts', []):
+            responses = [failure['raw_response'] for failure in attempt.get('review_contract_corrections', [])
+                         if 'raw_response' in failure]
+            if not responses:
+                continue
+            from adaptive_document_agent.services.llm.structured import validate_structured_text
+            reviews = [validate_structured_text(value, AuditScopeReview) for value in responses]
+            first = reviews[0]
+            if first.unresolved_accepted:
+                raise ValueError('This replay expects an unknown-disposition rejection, not an approval.')
+            record = dict(draft=attempt['draft'], review=first.model_dump(mode='json'),
+                          review_contract_corrections=[])
+            flow = replay_review_correction(batch_context(audit['context'], batch['observation_ids']), record)
+            rows.append(dict(batch=number, recorded_response_characters=[len(v.unresolved_reason) for v in reviews],
+                recorded_outputs_schema_valid=len(reviews), **flow))
+            break
+    return dict(pipeline_version=raw['pipeline_version'], completed_batches_revalidated=completed,
+        batches=rows, model_calls=0, end_to_end_verified=False)
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('path', type=Path)
-    parser.add_argument('--review-correction-path', action='store_true',
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--review-correction-path', action='store_true',
         help='Replay recorded review format repair and rejection through the real writer-correction path.')
+    mode.add_argument('--review-schema-path', action='store_true',
+        help='Revalidate complete recorded review responses and replay their rejection without truncation.')
     args = parser.parse_args()
-    action = replay_review_correction_path if args.review_correction_path else replay
+    action = (replay_review_schema_path if args.review_schema_path else
+              replay_review_correction_path if args.review_correction_path else replay)
     print(json.dumps(action(args.path), ensure_ascii=False, indent=2))

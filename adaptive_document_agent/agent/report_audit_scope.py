@@ -20,6 +20,12 @@ from .prompting import untrusted_document_message
 from .report_audit_eligibility import audit_binding_ineligibility
 from .report_audit_counterpart import AuditCoveredSource
 from .report_audit_capacity import AUDIT_DRAFT_TOKEN_LIMITS
+from .report_audit_batches import AUDIT_SCOPE_BATCH_SIZE
+
+
+# The unknown explanation covers the entire bounded batch, unlike each binding
+# or verdict reason. Allow the same per-target space without adding requests.
+AUDIT_BATCH_REASON_CHARS = 1400 * AUDIT_SCOPE_BATCH_SIZE
 
 
 class AuditMeasureBinding(BaseModel):
@@ -46,7 +52,7 @@ class AuditScopeDraft(BaseModel):
     model_config = ConfigDict(extra='forbid')
     bindings: list[AuditMeasureBinding] = Field(default_factory=list)
     unresolved_observation_ids: list[str] = Field(default_factory=list)
-    unresolved_reason: str = Field(default='', max_length=1400)
+    unresolved_reason: str = Field(default='', max_length=AUDIT_BATCH_REASON_CHARS)
 
 
 class AuditScopeVerdict(BaseModel):
@@ -65,7 +71,7 @@ class AuditScopeReview(BaseModel):
     unresolved_accepted: bool = Field(description=
         'Whether ALL proposed unknown dispositions are supported. False if any unresolved '
         'measure has an exact covered counterpart; this does not grant assurance.')
-    unresolved_reason: str = Field(min_length=1, max_length=1400, description=
+    unresolved_reason: str = Field(min_length=1, max_length=AUDIT_BATCH_REASON_CHARS, description=
         'Explain the unknown dispositions against supplied sources; identify exact counterpart '
         'evidence for each rejected unknown so the writer can correct the draft.')
 

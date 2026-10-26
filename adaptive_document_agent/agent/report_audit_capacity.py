@@ -11,7 +11,7 @@ from adaptive_document_agent.services.llm.credentials import provider_endpoint
 # changing model, reasoning policy, evidence or independent acceptance gates.
 AUDIT_DRAFT_TOKEN_LIMITS = (20000, 32000)
 AUDIT_REVIEW_TOKEN_LIMITS = (16384, 24000)
-CAPACITY_CONTRACT = 'audit-capacity-route-policy-review-contract-v174'
+CAPACITY_CONTRACT = 'audit-capacity-batch-reason-v196'
 
 
 def audit_capacity_identity(gateway, request_strategy):
