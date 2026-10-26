@@ -198,8 +198,16 @@ def apply_meaning_resolution(selection, response, findings, source, *, transport
         elif entry.classification == 'already_covered':
             raise ValueError('Corrected disposition cannot use the already-covered classification')
         elif not (set(refs) & changed or part_id in additions or part_id in inclusions):
+            target = finding.get('meaning_id')
+            unchanged = edits.get(target, [])
+            context = (dict(finding_id=identifier, meaning_id=target, part_id=part_id,
+                current_meaning=meanings[target]['meaning'], proposed_meaning=unchanged[0].meaning,
+                finding_reason=finding['reason'], proposed_reason=entry.reason)
+                if target in meanings and len(unchanged) == 1
+                and unchanged[0].meaning == meanings[target]['meaning'] else None)
             raise UnappliedMeaningCorrection(
-                'Corrected disposition needs a changed referenced meaning, owned addition or explicit inclusion', finding)
+                'Corrected disposition needs a changed referenced meaning, owned addition or explicit inclusion',
+                finding, unchanged_proposal=context)
         if (entry.action == 'corrected' and entry.classification in {
                 'unsupported_assertion', 'missing_qualification', 'atomicity'} and finding.get('meaning_id')
                 and finding['meaning_id'] not in changed):

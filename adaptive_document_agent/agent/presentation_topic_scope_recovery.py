@@ -7,6 +7,7 @@ from adaptive_document_agent.validation.claim_validator import ClaimValidator, r
 from adaptive_document_agent.validation.presentation_provenance import insight_inputs
 
 _WITHHELD_PREFIX = "[claim_scope_withheld] "
+_UNBOUND_SCOPE_CODES = {'direction_scope_ambiguous', 'direction_ratio_subject_ambiguous'}
 
 
 def withheld_topic_ids(plan: PresentationPlan) -> set[str]:
@@ -52,7 +53,7 @@ def recover_cached_topic_claims(plan: PresentationPlan, result: PipelineResult) 
         return []
     issues = ClaimValidator().validate_plan(plan, result.observations, result.charts,
                                            insight_observation_ids=insight_inputs(result))
-    if not any(issue.code == "direction_scope_ambiguous" for issue in issues):
+    if not any(issue.code in _UNBOUND_SCOPE_CODES for issue in issues):
         return []
     return recover_unscoped_topic_claims(plan, result, issues)
 
@@ -144,7 +145,7 @@ def recover_unscoped_topic_claims(plan: PresentationPlan, result: PipelineResult
     affected = set()
     errors_by_topic: dict[str, list[str]] = {}
     for issue in issues:
-        if issue.code != "direction_scope_ambiguous":
+        if issue.code not in _UNBOUND_SCOPE_CODES:
             continue
         slide_id = getattr(issue, "slide_id", None)
         summary = summaries.get(slide_id)
@@ -251,7 +252,7 @@ def recover_unscoped_topic_claims(plan: PresentationPlan, result: PipelineResult
     # wording in the topic and audit, and retain all selected source records.
     question_topics = set()
     for issue in checked:
-        if issue.code != 'direction_scope_ambiguous':
+        if issue.code not in _UNBOUND_SCOPE_CODES:
             continue
         slide = next((s for s in candidate.slides if s.id == getattr(issue, 'slide_id', None)), None)
         if slide is None:

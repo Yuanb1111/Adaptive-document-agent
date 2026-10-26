@@ -9,10 +9,11 @@ from .prompting import untrusted_document_message
 class UnappliedMeaningCorrection(ValueError):
     """A disposition claims a correction without the required concrete mutation."""
 
-    def __init__(self, message, finding):
+    def __init__(self, message, finding, *, unchanged_proposal=None):
         super().__init__(message)
         self.finding_id = finding['finding_id']
         self.meaning_id = finding.get('meaning_id', '')
+        self.unchanged_proposal = unchanged_proposal
 
 
 def resolution_with_feedback(gateway, messages, schema, validate, record, *, cancelled=None):
@@ -33,6 +34,18 @@ def resolution_with_feedback(gateway, messages, schema, validate, record, *, can
                        meaning_id=exc.meaning_id)
             if attempt:
                 raise
+            if exc.unchanged_proposal is not None:
+                from .introduction_unchanged_review import adjudicate_unchanged
+                corrected, correction_row = adjudicate_unchanged(gateway, messages, response,
+                    exc.unchanged_proposal, record, cancelled=cancelled)
+                record['response'] = corrected.model_dump(mode='json')
+                try:
+                    draft = validate(corrected)
+                except Exception as error:
+                    correction_row.update(status='rejected', error=str(error))
+                    raise
+                correction_row['status'] = 'protocol_validated'
+                return corrected, draft
             current_messages = messages + [untrusted_document_message(json.dumps(dict(
                 rejected_proposal=row['response'], validation_error=str(exc),
                 finding_id=exc.finding_id, required_current_meaning_id=exc.meaning_id), ensure_ascii=False)),

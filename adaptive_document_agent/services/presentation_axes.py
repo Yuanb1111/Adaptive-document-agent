@@ -44,7 +44,13 @@ def style_date_axis(chart, dates, width):
         if not nodes:
             axis._element.scaling.append(element)
     months = (max(dates).year - min(dates).year) * 12 + max(dates).month - min(dates).month
-    target = max(2, int(width))
+    # A full date is much wider than a month/year label. Reserve axis margins
+    # and inter-label space rather than treating each inch as one readable tick.
+    font_size = axis.tick_labels.font.size
+    points = font_size.pt if font_size is not None else 11
+    characters = 11 if width >= 5 else 8
+    label_points = characters * points * .6 + 2 * points
+    target = max(2, int(max(.5, width - .8) * 72 / label_points))
     step = next((n for n in (1, 3, 6, 12, 24, 60) if n >= months / target), 120)
     for tag, value in (("c:baseTimeUnit", "days"), ("c:majorUnit", str(step)), ("c:majorTimeUnit", "months")):
         nodes = axis._element.xpath(tag)

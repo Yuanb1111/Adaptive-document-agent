@@ -1,5 +1,9 @@
 # Adaptive Document Intelligence Agent
 
+The [v200 current-review and topic recovery fixes](docs/CURRENT_REVIEW_TOPIC_RECOVERY_V200.md)
+adjudicate unchanged proposed corrections within the existing retry budget,
+retain selected topics when one ratio claim is unbound, and space date-axis labels.
+
 The [v199 introduction review placement fix](docs/INTRODUCTION_REVIEW_PLACEMENT_V199.md)
 binds part-level review tags to the exact current include/omit ledger, preserving
 all rejected findings for source-aware correction and fresh independent review.

@@ -1879,10 +1879,11 @@ class ClaimValidator:
                         clause, {ratio_metric: [possessive_ratio[1]]}
                     ) if ratio_metric else [])
                     if len(ratio_assocs) != 1:
-                        issues.append(ValidationIssue(
+                        issues.append(DirectionalClaimIssue(
                             code="direction_ratio_subject_ambiguous", severity="error", stage="presentation",
                             message=(f"Slide {slide.id} {comp_type}: the subject of "
                                      f"'{possessive_ratio[1]}' is not uniquely supported."),
+                            slide_id=slide.id, target_component=comp_type, bullet_index=bullet_idx,
                         ))
                         continue
                     assocs = ratio_assocs
