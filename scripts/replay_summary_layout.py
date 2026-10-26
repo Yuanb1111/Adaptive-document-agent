@@ -96,9 +96,56 @@ def replay_repair_path(path):
         selection_response='mock_inline_choices', semantic_approval=False, export_verified=False)
 
 
+def replay_recorded_final(path):
+    """Measure and natively generate final recorded copy without any model choice."""
+    from adaptive_document_agent.agent.summary_layout_repair import paginate_draft
+    from adaptive_document_agent.models.summary import SummarySlidePage
+    raw = json.loads(Path(path).read_text(encoding='utf-8'))
+    audit = json.loads(next(row['message'] for row in reversed(raw['validation_warnings'])
+        if row['code'] == 'company_introduction_summary_audit'))
+    review = SummaryReview.model_validate(audit)
+    _, catalog = compact_input(review)
+    recorded = next(plan['layout_attempts'] for plan in reversed(review.plan_audits)
+                    if plan.get('layout_attempts'))
+    initial = SummarySynthesisDraft.model_validate(recorded[0]['draft'])
+    draft = SummarySynthesisDraft.model_validate(recorded[-1]['draft'])
+    snapshot = draft.model_dump(mode='json')
+    class NoModel:
+        def generate_structured(self, *args, **kwargs):
+            raise AssertionError('Recorded-final replay cannot invent a new rewrite or model choice.')
+    measured = {}
+    final, pages = paginate_draft(NoModel(), draft, catalog, review, [], measured,
+        expand_compact, SummarySynthesisDraft, allow_rewrite=False)
+    assert final.model_dump(mode='json') == snapshot
+    pages = [SummarySlidePage.model_validate_json(page.model_dump_json()) for page in pages]
+    errors = compression_binding_errors(final, initial, catalog)
+    errors += authored_coverage_errors(final, selected_meaning_source(review), catalog, {})
+    errors += compact_layout_errors(pages)
+    from pptx import Presentation
+    from adaptive_document_agent.models.summary_display import SummaryDisplay
+    from adaptive_document_agent.services.pptx_export import _resolve_template_path
+    from adaptive_document_agent.services.presentation_brief import BriefItem, render_profile
+    deck, rendered = Presentation(_resolve_template_path()), []
+    for page in pages:
+        rendered.extend(render_profile(deck, page.title, [BriefItem(item.label, item.text,
+            item.source_pages, display=item.display or SummaryDisplay()) for item in page.items]))
+    visible = ''.join(shape.text for slide in rendered for shape in slide.shapes if shape.name == 'brief:body')
+    expected = ''.join(item.text for page in final.pages for item in page.items)
+    assert visible == expected, 'Native generation must preserve complete authored text.'
+    assert len(rendered) == len(pages), 'Native generation must agree with measured pagination.'
+    return dict(pipeline_version=raw['pipeline_version'], budget=review.max_intro_slides,
+        recorded_physical_pages=recorded[-1]['layout_feedback']['score']['body_slides'],
+        measured_physical_pages=len(pages), native_generated_pages=len(rendered),
+        complete_body_text_preserved=True, validation_errors=errors,
+        model_calls=0, semantic_approval=False, export_verified=False)
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('analysis_json')
-    parser.add_argument('--repair-path', action='store_true', help='Exercise the real controller with a mock choice')
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--repair-path', action='store_true', help='Exercise the real controller with a mock choice')
+    mode.add_argument('--recorded-final', action='store_true', help='Natively generate the final recorded draft without model calls')
     arguments = parser.parse_args()
-    print(json.dumps((replay_repair_path if arguments.repair_path else replay)(arguments.analysis_json), indent=2))
+    action = replay_recorded_final if arguments.recorded_final else replay_repair_path if arguments.repair_path else replay
+    print(json.dumps(action(arguments.analysis_json), indent=2))

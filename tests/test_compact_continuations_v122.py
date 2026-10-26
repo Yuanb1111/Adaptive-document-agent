@@ -28,7 +28,9 @@ def errors(result, review, pages):
 def test_long_compact_copy_retains_every_character_unit_and_binding():
     result, review, original, pages = prepared()
     items = [item for page in pages for item in page.items]
-    assert len(items) > 1 and all(len(item.text) <= 1200 for item in items)
+    from adaptive_document_agent.services.compact_summary import compact_layout_errors
+    assert len(items) > 1 and all(len(item.text) <= 6000 for item in items)
+    assert not compact_layout_errors(pages)
     assert ''.join(item.text for item in items) == original
     assert len({item.continuation_group for item in items}) == 1
     assert not errors(result, review, pages)

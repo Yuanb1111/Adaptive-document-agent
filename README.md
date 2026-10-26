@@ -1,5 +1,9 @@
 # Adaptive Document Intelligence Agent
 
+The [v197 physical continuation fix](docs/SUMMARY_PHYSICAL_SPLIT_V197.md)
+measures complete authored paragraphs before splitting, preventing a character
+ceiling from creating unnecessary continuation slides when the native copy fits.
+
 The [v196 audit rationale correction](docs/AUDIT_BATCH_REASON_V196.md)
 sizes shared reasons for the bounded target batch, reports exact schema failures,
 and clarifies component identity without changing retained observations.

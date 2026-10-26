@@ -17,7 +17,11 @@ def split_compact_item(text, title, identity, values):
     from hashlib import sha256
     from adaptive_document_agent.models.summary import SummarySlideItem
     from .summary_editorial import split_editorial_copy
-    limit = min(1200, len(text))
+    # Measure the complete authored paragraph first. A fixed 1200-character
+    # split can strand a tiny continuation even when the whole copy fits the
+    # native 16pt body box. Keep the bounded schema limit for long input, then
+    # reduce chunk size only when actual geometry requires continuation.
+    limit = min(6000, len(text))
     while True:
         pieces = split_editorial_copy(text, limit=limit)
         items = [SummarySlideItem(text=piece, **values) for piece in pieces]

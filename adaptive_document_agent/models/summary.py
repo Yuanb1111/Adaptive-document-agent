@@ -51,7 +51,9 @@ class SummaryFactRef(BaseModel):
 
 class SummarySlideItem(SummaryFact):
     label: str = Field(min_length=1, max_length=60)
-    text: str = Field(min_length=1, max_length=1200)
+    # Transport/storage bound matches authored copy. Readable physical fit is
+    # established by the template geometry, never by this character ceiling.
+    text: str = Field(min_length=1, max_length=6000)
     source_quote: str = Field(min_length=8, max_length=80000)
     part_ids: list[str] = Field(min_length=1)
     source_refs: list[SummaryFactRef] = Field(default_factory=list)
