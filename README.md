@@ -1,5 +1,9 @@
 # Adaptive Document Intelligence Agent
 
+The [v192 physical-budget recovery correction](docs/SUMMARY_BUDGET_TRIGGER_V192.md)
+ensures a shorter draft that still exceeds its introduction page budget reaches
+the measured layout selector on its final repair round.
+
 The [v191 introduction layout recovery](docs/SUMMARY_LAYOUT_CHOICES_V191.md)
 replaces a stalled final compression with model-selected, measured full-copy
 layout choices while preserving source bindings and independent meaning review.

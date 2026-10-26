@@ -204,10 +204,16 @@ def paginate_draft(
             record['compression_round'] = attempt + 1
             record['compression_round_limit'] = repair_limit
             choices = {}
-            if (selected and over_budget and attempt == repair_limit - 1
-                    and not record.get('compression_progress', {}).get('improved', True)):
+            # Reduced text height (or even fewer pages) is not budget success.
+            # Always evaluate measured alternatives before spending the final
+            # selected-audience repair on another unrestricted page rewrite.
+            if selected and over_budget and attempt == repair_limit - 1:
                 from .summary_layout_choices import layout_choices
                 choices = layout_choices(draft, catalog, review, expand)
+                record['layout_choice_evaluation'] = dict(
+                    reason='final_repair_still_over_physical_budget',
+                    physical_pages=body_count, target_pages=review.max_intro_slides,
+                    candidate_groups=list(choices), feasible=bool(choices))
             if choices:
                 from .summary_layout_choices import choose_layout
                 revised = choose_layout(gateway, draft, catalog, review, record, choices, schema,
