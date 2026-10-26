@@ -203,7 +203,16 @@ def paginate_draft(
                         'never solve the budget by removing a meaning, evidence binding or qualification.')
             record['compression_round'] = attempt + 1
             record['compression_round_limit'] = repair_limit
-            if over_budget and any(getattr(p, 'placement', 'body') == 'appendix' for p in draft.pages):
+            choices = {}
+            if (selected and over_budget and attempt == repair_limit - 1
+                    and not record.get('compression_progress', {}).get('improved', True)):
+                from .summary_layout_choices import layout_choices
+                choices = layout_choices(draft, catalog, review, expand)
+            if choices:
+                from .summary_layout_choices import choose_layout
+                revised = choose_layout(gateway, draft, catalog, review, record, choices, schema,
+                                        cancelled=cancelled)
+            elif over_budget and any(getattr(p, 'placement', 'body') == 'appendix' for p in draft.pages):
                 from .summary_body_allocation import reallocate_body
                 revised = reallocate_body(gateway, draft, [], schema, record,
                                           limit=review.max_intro_slides, cancelled=cancelled)

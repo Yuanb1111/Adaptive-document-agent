@@ -1,5 +1,9 @@
 # Adaptive Document Intelligence Agent
 
+The [v191 introduction layout recovery](docs/SUMMARY_LAYOUT_CHOICES_V191.md)
+replaces a stalled final compression with model-selected, measured full-copy
+layout choices while preserving source bindings and independent meaning review.
+
 The [v190 discovery citation fix](docs/DISCOVERY_CITATIONS_V190.md) removes the
 arbitrary 24-page overview citation cap while retaining strict page validation
 and reviewed-source filtering.
