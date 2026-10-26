@@ -13,8 +13,8 @@ without changing prompts, response validation, routing, credentials or privacy:
   coverage remains unresolved and cannot certify business acceptance.
 - `ExecutiveBriefPatch` uses the same reduction for its single targeted repair.
 - `AuditSourceDiscovery` in `report` uses the configured reduction for source
-  navigation. Both `AuditScopeDraft` and `AuditScopeReview` preserve provider-default
-  reasoning: building and independently checking assurance bindings must reconcile
+  navigation. In v193, `AuditScopeDraft` and `AuditScopeReview` also honor the
+  configured reduction. Building and independently checking assurance bindings still reconcile
   literal period/unit evidence, scope, table/column ownership and exact counterparts,
   including evidence against proposed unknown dispositions.
   Audit batches contain at most three exact target measures. Complete source
@@ -23,8 +23,7 @@ without changing prompts, response validation, routing, credentials or privacy:
   The existing output limits and correction budgets do not change. Provider-default
   opt-out and exact route/capability checks still apply. The two assurance operations'
   identities change within policy v9; unrelated operation caches remain reusable.
-  The strengthened unknown-review contract expires earlier audit approvals and
-  unfinished checkpoints. Approvals produced under the current contract can be
+  The existing strengthened unknown-review contract is unchanged. Approvals produced under it can be
   revalidated and reused independently of transport capacity failures.
 - `TakeawayCorrection` uses the same opt-out reduction and a 2,000-token output
   bound. It rewrites only a withheld conclusion from its selected evidence;

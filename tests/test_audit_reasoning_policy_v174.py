@@ -1,4 +1,4 @@
-"""Substantive audit operations retain provider reasoning and unrelated caches."""
+"""Bounded audit operations honor configured reasoning and preserve unrelated caches."""
 import json
 from unittest.mock import Mock
 
@@ -32,16 +32,17 @@ def policy(settings, schema, *, stage='report'):
 
 @pytest.mark.parametrize('schema', AUDIT_SCHEMAS)
 @pytest.mark.parametrize('setting', ['reduced', 'provider_default'])
-def test_each_audit_operation_preserves_reasoning_and_unchanged_token_limit(monkeypatch, schema, setting):
+def test_each_audit_operation_honors_reasoning_setting_and_unchanged_token_limit(monkeypatch, schema, setting):
     settings = LLMSettings(provider=ProviderName.DEEPSEEK, model='deepseek-flash', simple_task_reasoning=setting)
     provider = LiteLLMProvider(settings)
     complete = Mock(return_value=raw_response(json.dumps(RESPONSES[schema.__name__])))
     monkeypatch.setattr(provider, '_completion', complete)
     gateway = LLMGateway(provider, settings)
     gateway.generate_structured([], schema, stage='report', allow_repair=False, max_tokens=12000)
-    assert complete.call_args.kwargs.get('extra_body') is None
+    expected = {'thinking': {'type': 'disabled'}} if setting == 'reduced' else None
+    assert complete.call_args.kwargs.get('extra_body') == expected
     assert complete.call_args.kwargs['max_tokens'] == 12000
-    assert gateway.usage[-1]['reasoning_policy']['intent'] == 'preserve'
+    assert gateway.usage[-1]['reasoning_policy']['intent'] == ('reduce' if setting == 'reduced' else 'preserve')
 
 
 @pytest.mark.parametrize('schema', AUDIT_SCHEMAS)
@@ -55,18 +56,18 @@ def test_each_audit_operation_preserves_reasoning_and_unchanged_token_limit(monk
 ])
 def test_each_audit_operation_preserves_unsupported_custom_local_and_unknown_routes(schema, provider, endpoint, model):
     value = policy(LLMSettings(provider=provider, base_url=endpoint, model=model), schema)
-    assert value['status'] == 'provider_default'
-    assert value['intent'] == 'preserve'
+    assert value['status'] == 'unsupported'
+    assert value['intent'] == 'reduce'
     assert value['options'] == {}
 
 
 @pytest.mark.parametrize('schema', AUDIT_SCHEMAS)
 @pytest.mark.parametrize('capable', [False, True])
-def test_each_audit_operation_preserves_reasoning_regardless_of_capabilities(monkeypatch, schema, capable):
+def test_each_audit_operation_requires_verified_capabilities(monkeypatch, schema, capable):
     fake_litellm(monkeypatch, capable=capable)
     settings = LLMSettings(provider=ProviderName.OPENAI, model='capable-model')
-    assert policy(settings, schema)['options'] == {}
-    assert policy(settings, schema)['intent'] == 'preserve'
+    assert policy(settings, schema)['options'] == ({'reasoning_effort': 'low'} if capable else {})
+    assert policy(settings, schema)['intent'] == 'reduce'
     settings.base_url = 'https://proxy.example/v1'
     assert policy(settings, schema)['options'] == {}
 
@@ -78,7 +79,7 @@ def test_audit_operation_also_preserves_reasoning_in_other_stages(schema):
     assert policy(settings, schema, stage='presentation')['intent'] == 'preserve'
 
 
-def test_restored_draft_reasoning_invalidates_only_its_old_reduced_cache(monkeypatch, tmp_path):
+def test_audit_reduction_invalidates_only_changed_operation_caches(monkeypatch, tmp_path):
     settings = LLMSettings(provider=ProviderName.DEEPSEEK, model='deepseek-flash')
     provider = LiteLLMProvider(settings)
     def reply(messages, **kwargs):
@@ -88,13 +89,13 @@ def test_restored_draft_reasoning_invalidates_only_its_old_reduced_cache(monkeyp
     monkeypatch.setattr(provider, '_completion', complete)
     gateway = LLMGateway(provider, settings, cache=DiskCache(tmp_path))
     current = reasoning_policy._SIMPLE_OPERATIONS
-    assert ('report', 'AuditScopeDraft') not in current
-    assert ('report', 'AuditScopeReview') not in current
+    assert ('report', 'AuditScopeDraft') in current
+    assert ('report', 'AuditScopeReview') in current
     schemas = (*AUDIT_SCHEMAS, AuditSourceDiscovery, BriefSourcePages, BriefClaimDirectionReview)
     monkeypatch.setattr(reasoning_policy, '_SIMPLE_OPERATIONS',
-                        current | {('report', 'AuditScopeDraft')})
+                        current - {('report', schema.__name__) for schema in AUDIT_SCHEMAS})
     before = {schema.__name__: policy(settings, schema) for schema in schemas}
-    assert before['AuditScopeDraft']['intent'] == 'reduce'
+    assert before['AuditScopeDraft']['intent'] == 'preserve'
     assert before['AuditScopeReview']['intent'] == 'preserve'
     assert before['AuditSourceDiscovery']['intent'] == 'reduce'
     for schema in schemas:
@@ -103,10 +104,10 @@ def test_restored_draft_reasoning_invalidates_only_its_old_reduced_cache(monkeyp
     monkeypatch.setattr(reasoning_policy, '_SIMPLE_OPERATIONS', current)
     assert reasoning_policy.REASONING_POLICY_VERSION == 'operation-reasoning-v9'
     for schema in schemas:
-        assert (before[schema.__name__] != policy(settings, schema)) is (schema is AuditScopeDraft)
+        assert (before[schema.__name__] != policy(settings, schema)) is (schema in AUDIT_SCHEMAS)
         gateway.generate_structured([], schema, stage='report', allow_repair=False, max_tokens=12000)
-    assert complete.call_count == 6
-    assert policy(settings, AuditScopeDraft)['intent'] == 'preserve'
-    assert complete.call_args.kwargs.get('extra_body') is None
+    assert complete.call_count == 7
+    assert policy(settings, AuditScopeDraft)['intent'] == 'reduce'
+    assert complete.call_args.kwargs['extra_body'] == {'thinking': {'type': 'disabled'}}
     gateway.generate_structured([], AuditScopeDraft, stage='report', allow_repair=False, max_tokens=12000)
-    assert complete.call_count == 6
+    assert complete.call_count == 7

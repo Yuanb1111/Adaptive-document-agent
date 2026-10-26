@@ -7,12 +7,13 @@ from .prompting import untrusted_document_message
 from .report_audit_batches import AuditReviewContractError, validate_review
 from .report_audit_capacity import AUDIT_REVIEW_TOKEN_LIMITS
 from .report_audit_counterpart import COUNTERPART_REVIEW_INSTRUCTIONS
+from .audit_period_header import PERIOD_HEADER_INSTRUCTIONS
 
 
 QUOTE_FORMAT_INSTRUCTIONS = (
     'Literal evidence quotations may omit purely typographic table dot leaders. '
     'Preserve every word, number, decimal point, sign, symbol and unit in the selected passage; '
-    'do not extend, repeat or invent quotation content. ')
+    'do not extend, repeat or invent quotation content. ' + PERIOD_HEADER_INSTRUCTIONS)
 
 REVIEW_ID_INSTRUCTIONS = (
     'verdicts must contain exactly one item for each observation_id in draft.bindings, '

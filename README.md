@@ -1,5 +1,9 @@
 # Adaptive Document Intelligence Agent
 
+The [v193 audit period-header correction](docs/AUDIT_PERIOD_HEADERS_V193.md)
+recognizes shared date notation without replacing independent column/scope review,
+and applies the configured reasoning reduction to bounded audit requests.
+
 The [v192 physical-budget recovery correction](docs/SUMMARY_BUDGET_TRIGGER_V192.md)
 ensures a shorter draft that still exceeds its introduction page budget reaches
 the measured layout selector on its final repair round.

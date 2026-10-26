@@ -38,10 +38,12 @@ def test_capacity_identity_changes_with_exact_route_model_or_policy(field, value
     assert audit_capacity_identity(gateway, AUDIT_REQUEST_STRATEGY) != original
 
 
-def test_simple_task_optout_does_not_change_complex_audit_capacity_policy():
+def test_simple_task_optout_expires_capacity_failures_for_changed_audit_reasoning():
     gateway = configured_gateway()
     original = audit_capacity_identity(gateway, AUDIT_REQUEST_STRATEGY)
     gateway.settings.simple_task_reasoning = 'provider_default'
+    assert audit_capacity_identity(gateway, AUDIT_REQUEST_STRATEGY) != original
+    gateway.settings.simple_task_reasoning = 'reduced'
     assert audit_capacity_identity(gateway, AUDIT_REQUEST_STRATEGY) == original
 
 

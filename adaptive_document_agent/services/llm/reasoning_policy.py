@@ -59,6 +59,11 @@ _SIMPLE_OPERATIONS = frozenset({("presentation", "IntroductionPages"), ("report"
                               ("presentation", "PhysicalBudgetReview"),
                               ("report", "BriefMeaningReview"),
                               ("report", "BriefClaimDirectionReview"),
+                              # Exact assurance bindings retain independent source
+                              # review and deterministic gates under the existing
+                              # user-selectable reduced-reasoning policy.
+                              ("report", "AuditScopeDraft"),
+                              ("report", "AuditScopeReview"),
                               # Only a failed, split mapping assignment uses the
                               # configured reduced-reasoning recovery policy.
                               ("semantic", "SemanticResolutionRecovery"),

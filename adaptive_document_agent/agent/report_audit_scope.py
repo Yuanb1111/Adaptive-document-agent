@@ -119,6 +119,9 @@ def _literal(quote, pages):
 
 def _period_in_header(period, text):
     """Check literal year and duration/date; column ownership remains reviewed."""
+    if re.fullmatch(r'\d{4}-\d{2}-\d{2}', period):
+        from .audit_period_header import snapshot_period_in_header
+        return snapshot_period_in_header(period, text)
     compact = re.sub(r'\s+', '', text).casefold()
     if re.sub(r'\s+', '', period).casefold() in compact:
         return True
@@ -132,9 +135,6 @@ def _period_in_header(period, text):
         return int(flow[1]) in {month_count(value) for value in durations}
     if re.fullmatch(r'FY\d{4}', period, re.I):
         return bool(re.search(r'\byears?\s+ended\b', text, re.I))
-    if re.fullmatch(r'\d{4}-\d{2}-\d{2}', period):
-        from .brief_audit_scope import _PERIOD, _calendar_date
-        return any(match['date'] and str(_calendar_date(match[0])) == period for match in _PERIOD.finditer(text))
     return False
 
 
