@@ -1,5 +1,9 @@
 # Adaptive Document Intelligence Agent
 
+The [v199 introduction review placement fix](docs/INTRODUCTION_REVIEW_PLACEMENT_V199.md)
+binds part-level review tags to the exact current include/omit ledger, preserving
+all rejected findings for source-aware correction and fresh independent review.
+
 The [v198 audit draft correction](docs/AUDIT_DRAFT_OUTPUT_V198.md)
 separates malformed draft output from source-binding correction and supplies
 retained measure constraints before the first response, within the same three-draft cap.
