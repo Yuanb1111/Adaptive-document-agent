@@ -1,5 +1,9 @@
 # Adaptive Document Intelligence Agent
 
+The [v202 fallback measurement and checkpoint fix](docs/FALLBACK_SOURCE_CHECKPOINT_V202.md)
+remeasures supplementary conclusion changes even when topic selection is absent,
+and retains downloadable partial diagnostics for unexpected final reporting errors.
+
 The [v201 topic evidence binding fixes](docs/TOPIC_EVIDENCE_BINDING_V201.md)
 independently review topic meaning against selected source rows, preserve literal
 catalog identities, and separate incompatible disclosure scopes while aligning

@@ -52,10 +52,13 @@ def require_topic_coverage(result) -> None:
 
 
 def is_complete(result) -> bool:
+    # A retained failure is already incomplete. Do not invoke the same final
+    # review gate again while the UI is trying to publish its diagnostics.
+    if not is_reporting_ready(result):
+        return False
     from adaptive_document_agent.agent.report_audit_scope import require_report_audit_scope
     try:
         require_report_audit_scope(result)
     except ValueError:
         return False
-    return (is_reporting_ready(result) and source_review_complete(result)
-            and topic_coverage_complete(result))
+    return source_review_complete(result) and topic_coverage_complete(result)

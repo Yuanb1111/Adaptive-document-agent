@@ -37,11 +37,14 @@ def measure(result):
             slide_section=section, slide_scope='all')
         sections[section] = len(exported_slide_numbers(deck, result, req))
     from adaptive_document_agent.services.presentation_body_budget import slide_counts
+    # Source integration can add conclusions to an evidence-only fallback.
+    # Its physical slides still need measurement even without selected topics.
+    topics = result.presentation_topics.topics if result.presentation_topics else []
     return deck, {**slide_counts(deck, result), **sections,
         'topic_pages':[{'topic_id': t.id, 'title':t.title,
                        'physical_slides':len({n for tr in result.presentation_export_trace if tr.get('topic_id')==t.id
                                              for n in tr['slide_numbers']})}
-                       for t in result.presentation_topics.topics]}
+                       for t in topics]}
 
 
 def validate_subset(draft, original, lookup, result):

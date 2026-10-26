@@ -1,7 +1,9 @@
 """End-to-end pipeline; UI and providers depend on this stable API."""
 
 from collections.abc import Callable
+from concurrent.futures import CancelledError
 from contextlib import ExitStack, nullcontext
+import logging
 from typing import BinaryIO
 
 from adaptive_document_agent.document_model import DocumentIndex, DocumentModelBuilder
@@ -14,7 +16,7 @@ from adaptive_document_agent.extraction.vision_adapter import VisionAdapter
 from adaptive_document_agent.models import AnalysisResult, AnalysisScopePreview, AnalysisTask, DocumentProfile, Observation, ParsedDocument, PipelineResult, ValidationIssue
 from adaptive_document_agent.services.llm import LLMGateway
 from adaptive_document_agent.models.customization import PresentationBudget
-from adaptive_document_agent.services.llm.exceptions import LLMResponseError
+from adaptive_document_agent.services.llm.exceptions import LLMResponseError, PrivacyViolationError
 from adaptive_document_agent.utils.caching import DiskCache
 from adaptive_document_agent.utils.hashing import sha256_bytes
 from adaptive_document_agent.utils.timing import record_timing
@@ -713,9 +715,18 @@ class DocumentOrchestrator:
                 if final_result.executive_brief != original_brief:
                     from .presentation_budget_refinement import measure
                     from adaptive_document_agent.services.slide_budgets import require_exported_budgets
+                    notify('Measuring the final briefing and complete PowerPoint budget')
                     deck, _ = measure(final_result)
                     require_exported_budgets(deck, final_result)
-            except (ValueError, LLMResponseError, FinalBudgetBriefError, FinalBudgetAuditError) as exc:
+            except (PrivacyViolationError, CancelledError):
+                raise  # Privacy and cancellation cannot become reporting fallback.
+            except Exception as exc:
+                # Extraction and analysis are already retained here. Unexpected
+                # reporting defects must be visible failures with downloadable
+                # diagnostics, not exceptions that discard the whole result.
+                # BaseException/process interruption deliberately still escapes.
+                if not isinstance(exc, (ValueError, LLMResponseError, FinalBudgetBriefError, FinalBudgetAuditError)):
+                    logging.getLogger(__name__).exception('Unexpected final reporting failure at %s', final_stage)
                 if isinstance(exc, FinalBudgetBriefError):
                     final_stage = 'executive_brief'
                 if isinstance(exc, FinalBudgetAuditError):
