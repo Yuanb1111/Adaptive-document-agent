@@ -66,7 +66,7 @@ def test_unknown_with_exact_covered_counterpart_requires_writer_correction_and_f
     record = dict(attempts=[])
     _review_batch(gateway, _context(result), record)
     assert [call[1] for call in gateway.calls] == [AuditScopeDraft, AuditScopeReview] * 2
-    assert record['corrections_used'] == dict(binding_validation=0, independent_review=1, review_output=0)
+    assert record['corrections_used'] == dict(draft_output=0, binding_validation=0, independent_review=1, review_output=0)
     assert record['draft'] == corrected.model_dump()
     instructions = gateway.calls[1][0][0]['content']
     assert 'BOTH audited and unaudited' in instructions

@@ -25,7 +25,7 @@ def test_batch_reason_capacity_preserves_rejection_and_reaches_writer(length):
     record = dict(attempts=[])
     _review_batch(gateway, _context(result), record)
     assert len(gateway.calls) == 4
-    assert record['corrections_used'] == dict(binding_validation=0, independent_review=1, review_output=0)
+    assert record['corrections_used'] == dict(draft_output=0, binding_validation=0, independent_review=1, review_output=0)
     feedback = json.loads(gateway.calls[2][0][-2]['content'].split('\n', 1)[1].rsplit('\n', 1)[0])
     assert feedback['independent_review']['unresolved_reason'] == reason
     assert feedback['independent_review']['unresolved_accepted'] is False
@@ -56,7 +56,7 @@ def test_overlong_complete_review_receives_exact_field_limit_before_content_corr
     feedback = json.loads(retry_messages[-2]['content'].split('\n', 1)[1].rsplit('\n', 1)[0])
     assert feedback['schema_errors'] == detail['schema_errors']
     assert 'Rephrase overlong' in retry_messages[-1]['content']
-    assert record['corrections_used'] == dict(binding_validation=0, independent_review=1, review_output=1)
+    assert record['corrections_used'] == dict(draft_output=0, binding_validation=0, independent_review=1, review_output=1)
 
 
 def test_repeated_overlong_output_still_stops_with_full_diagnostics():

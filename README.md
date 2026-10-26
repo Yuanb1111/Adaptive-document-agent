@@ -1,5 +1,9 @@
 # Adaptive Document Intelligence Agent
 
+The [v198 audit draft correction](docs/AUDIT_DRAFT_OUTPUT_V198.md)
+separates malformed draft output from source-binding correction and supplies
+retained measure constraints before the first response, within the same three-draft cap.
+
 The [v197 physical continuation fix](docs/SUMMARY_PHYSICAL_SPLIT_V197.md)
 measures complete authored paragraphs before splitting, preventing a character
 ceiling from creating unnecessary continuation slides when the native copy fits.

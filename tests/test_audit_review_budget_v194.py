@@ -35,7 +35,7 @@ def test_format_then_rejection_delivers_full_feedback_to_writer_and_requires_fre
     assert [call[1] for call in gateway.calls] == [AuditScopeDraft, AuditScopeReview,
         AuditScopeReview, AuditScopeDraft, AuditScopeReview]
     assert len(record['attempts']) == 2 and record['status'] == 'complete'
-    assert record['corrections_used'] == dict(binding_validation=0, independent_review=1, review_output=1)
+    assert record['corrections_used'] == dict(draft_output=0, binding_validation=0, independent_review=1, review_output=1)
     messages = gateway.calls[3][0]
     feedback = json.loads(messages[-2]['content'].split('\n', 1)[1].rsplit('\n', 1)[0])
     assert feedback['independent_review'] == rejected.model_dump()
@@ -56,7 +56,7 @@ def test_format_repair_never_certifies_repeated_unknown_rejection():
         _review_batch(gateway, _context(result), record)
     assert len(gateway.calls) == 5 and len(record['attempts']) == 2
     assert 'status' not in record
-    assert record['corrections_used'] == dict(binding_validation=0, independent_review=1, review_output=1)
+    assert record['corrections_used'] == dict(draft_output=0, binding_validation=0, independent_review=1, review_output=1)
 
 
 def test_reviewer_output_allowance_is_per_batch_not_reset_for_new_draft():
@@ -82,7 +82,7 @@ def test_content_correction_still_runs_value_checks_and_needs_independent_proof(
     assert [call[1] for call in gateway.calls] == [AuditScopeDraft, AuditScopeReview,
         AuditScopeReview, AuditScopeDraft, AuditScopeDraft, AuditScopeReview]
     assert len(record['attempts']) == 3
-    assert record['corrections_used'] == dict(binding_validation=1, independent_review=1, review_output=1)
+    assert record['corrections_used'] == dict(draft_output=0, binding_validation=1, independent_review=1, review_output=1)
     assert any('source_raw_value' in issue['field'] for issue in record['attempts'][1]['validation_issues'])
     assert record['status'] == 'complete'
 

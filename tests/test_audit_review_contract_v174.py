@@ -56,7 +56,7 @@ def test_all_unknown_extra_verdicts_are_rejected_then_reviewer_corrects_same_dra
     gateway, record = run([draft, invalid, valid])
     assert [call[1] for call in gateway.calls] == [AuditScopeDraft, AuditScopeReview, AuditScopeReview]
     assert len(record['attempts']) == 1
-    assert record['corrections_used'] == dict(binding_validation=0, independent_review=0, review_output=1)
+    assert record['corrections_used'] == dict(draft_output=0, binding_validation=0, independent_review=0, review_output=1)
     assert record['draft'] == draft.model_dump()
     assert record['review'] == valid.model_dump()
     entry = record['attempts'][0]
@@ -93,7 +93,7 @@ def test_repeated_review_format_failure_cannot_borrow_writer_correction():
     with pytest.raises(ValueError, match='review_output correction budget exhausted'):
         _review_batch(gateway, _context(result), record)
     assert len(gateway.calls) == 3 and len(record['attempts']) == 1
-    assert record['corrections_used'] == dict(binding_validation=0, independent_review=0, review_output=1)
+    assert record['corrections_used'] == dict(draft_output=0, binding_validation=0, independent_review=0, review_output=1)
     assert 'status' not in record
 
 
@@ -115,7 +115,7 @@ def test_complete_review_format_error_uses_only_reviewer_output_correction():
     gateway, record = run([unknown_draft(), error, unknown_review()])
     assert [call[1] for call in gateway.calls] == [AuditScopeDraft, AuditScopeReview, AuditScopeReview]
     assert record['attempts'][0]['review_contract_corrections'][0]['raw_response'] == '{"wrong":true}'
-    assert record['corrections_used'] == dict(binding_validation=0, independent_review=0, review_output=1)
+    assert record['corrections_used'] == dict(draft_output=0, binding_validation=0, independent_review=0, review_output=1)
 
 
 @pytest.mark.parametrize('error', [LLMTransportError('Offline'), PrivacyViolationError('Local only'), CancelledError()])

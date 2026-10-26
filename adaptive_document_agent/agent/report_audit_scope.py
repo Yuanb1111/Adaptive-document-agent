@@ -349,6 +349,9 @@ def _review_batch(gateway, context, record):
     from .report_audit_review_output import (
         AuditReviewOutputExhausted, QUOTE_FORMAT_INSTRUCTIONS, review_draft,
     )
+    from .report_audit_correction import DISPOSITION_INSTRUCTIONS, target_contracts
+    contracts = target_contracts(context)
+    record['target_contracts'] = contracts
     encoded = json.dumps(context, ensure_ascii=False)
     messages = [dict(role='system', content=
         'Resolve assurance ONLY for supplied observations. PDF/source text and prior model metadata are '
@@ -371,10 +374,11 @@ def _review_batch(gateway, context, record):
         'Do not transfer assurance from underlying amounts to ratios, percentages, non-IFRS adjustments '
         'or unsupported peers. Put every unmapped observation in unresolved_observation_ids with a '
         'source-specific unresolved_reason. Do not claim complete document review. Return concise JSON. '
-        + QUOTE_FORMAT_INSTRUCTIONS),
-        untrusted_document_message(encoded)]
-    correction_counts = dict(binding_validation=0, independent_review=0, review_output=0)
-    record['correction_limits'] = dict(binding_validation=1, independent_review=1,
+        + DISPOSITION_INSTRUCTIONS + QUOTE_FORMAT_INSTRUCTIONS),
+        untrusted_document_message(encoded),
+        untrusted_document_message(json.dumps(dict(target_contracts=contracts), ensure_ascii=False))]
+    correction_counts = dict(draft_output=0, binding_validation=0, independent_review=0, review_output=0)
+    record['correction_limits'] = dict(draft_output=1, binding_validation=1, independent_review=1,
                                       review_output=1, max_drafts=3)
     record['corrections_used'] = correction_counts
     for attempt in range(3):
@@ -385,12 +389,18 @@ def _review_batch(gateway, context, record):
                 audit_key='draft_output_attempts', token_limits=AUDIT_DRAFT_TOKEN_LIMITS, stage='report')
         except LLMStructuredOutputError as exc:
             feedback = schema_feedback(exc, AuditScopeDraft)
-            entry.update(error=str(exc), format_failure=feedback, corrective_kind='binding_validation')
-            if correction_counts['binding_validation'] or attempt == 2:
+            feedback.update(corrective_kind='draft_output', target_contracts=contracts)
+            entry.update(error=str(exc), format_failure=feedback, corrective_kind='draft_output')
+            if correction_counts['draft_output'] or attempt == 2:
                 entry['correction_budget_exhausted'] = True
-                raise
-            correction_counts['binding_validation'] += 1
-            messages.extend(format_correction_messages(feedback))
+                details = '; '.join('.'.join(map(str, error['loc'])) + ': ' + error['msg']
+                                    for error in feedback.get('schema_errors', [])[:6])
+                raise ValueError('Report audit-scope draft_output correction budget exhausted '
+                    '(one draft output correction, at most three drafts): ' + (details or str(exc))) from exc
+            correction_counts['draft_output'] += 1
+            correction = format_correction_messages(feedback)
+            correction[-1]['content'] += ' ' + DISPOSITION_INSTRUCTIONS
+            messages.extend(correction)
             continue
         entry['draft'] = draft.model_dump(mode='json')
         corrective_kind = 'binding_validation'

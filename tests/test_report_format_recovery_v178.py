@@ -109,7 +109,7 @@ def test_draft_format_correction_cannot_bypass_literal_evidence_or_borrow_semant
 
 
 @pytest.mark.parametrize('recover', [True, False])
-def test_audit_writer_format_error_shares_existing_binding_validation_budget(recover):
+def test_audit_writer_format_error_preserves_binding_validation_budget(recover):
     result, _ = audit_fixture()
     invalid = '{"unexpected":true}'
     outputs = [response(invalid), response(unknown_draft()) if recover else response(invalid)]
@@ -123,10 +123,14 @@ def test_audit_writer_format_error_shares_existing_binding_validation_budget(rec
         _review_batch(llm, context, record)
         assert record['status'] == 'complete'
     else:
-        with pytest.raises(LLMStructuredOutputError):
+        with pytest.raises(ValueError, match='draft_output correction budget exhausted') as failure:
             _review_batch(llm, context, record)
+        assert isinstance(failure.value.__cause__, LLMStructuredOutputError)
+        assert 'unexpected' in str(failure.value)
         assert record.get('status') != 'complete'
     assert len(client.requests) == len(outputs)
-    assert record['corrections_used']['binding_validation'] == 1
+    assert record['corrections_used']['draft_output'] == 1
+    assert record['corrections_used']['binding_validation'] == 0
+    assert record['corrections_used']['independent_review'] == 0
     assert record['attempts'][0]['format_failure']['raw_response'] == invalid
     assert context == original
