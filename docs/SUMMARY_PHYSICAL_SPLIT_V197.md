@@ -69,3 +69,20 @@ remains unverified; the broad run is not an all-green result. Syntax and Git
 whitespace checks passed.
 
 The pipeline becomes v197. Extraction and analysis cache contracts are unchanged.
+
+## CI contract follow-up
+
+The first v197 [GitHub Actions run](https://github.com/Yuanb1111/Adaptive-document-agent/actions/runs/40274515317)
+finished with 5,822 passed, seven skipped and one failed on both Python 3.11 and
+3.12. The local UI subprocess limitation did not reproduce there. The sole
+failure was the older customization test still expecting `SummarySlideItem` to
+reject a 1,650-character paragraph at construction. The earlier local module
+selection omitted that customization module.
+
+The test now checks the intended physical-capacity contract: source reading
+retains the full paragraph, an unsplit overflowing page is rejected, and lossless
+continuations fit while retaining every body character and source binding. No
+production code, page budget, review gate or pipeline version changes in this
+follow-up. The complete customization module and v197/v122/v191/v192 layout
+regressions passed locally: 39 tests. A fresh GitHub run is required to confirm
+the full Linux matrix after this correction.

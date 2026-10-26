@@ -7,7 +7,9 @@ import pytest
 from adaptive_document_agent.services.report_language import translation_errors
 from adaptive_document_agent.extraction.source_grid_recovery import recover_source_grids
 from adaptive_document_agent.agent.summary_reader import _read_batch
-from adaptive_document_agent.models.summary import SummarySlideItem
+from adaptive_document_agent.models.summary import SummarySlideItem, SummarySlidePage
+from adaptive_document_agent.agent.summary_theme_layout import pack_theme_pages, split_compact_item
+from adaptive_document_agent.services.compact_summary import compact_layout_errors
 from tests.test_complete_summary_reading import SummaryClient, distinct_source, gateway, generate
 from adaptive_document_agent.services.summary_source import source_blocks
 
@@ -47,7 +49,7 @@ def test_unverified_reading_paraphrase_is_replaced_by_exact_selected_source_not_
     assert all(bad not in item.text for page in result.presentation_plan.company.summary_pages for item in page.items)
 
 
-def test_long_internal_extract_does_not_expand_published_slide_limit():
+def test_long_internal_extract_does_not_bypass_physical_slide_capacity():
     text = 'Delivery depends on integration and customer training. ' * 30
     result = distinct_source(1);result.document.pages[0].text = text
     blocks = source_blocks(result,[1])
@@ -58,8 +60,22 @@ def test_long_internal_extract_does_not_expand_published_slide_limit():
                 'facts':[{'label':'Delivery','text':text,'quote_start_line':1,'quote_end_line':1}]}]})
     outcome = _read_batch(Reader(), result, blocks, Event())
     assert outcome.error is None and outcome.parts[0].facts[0].text == text
-    with pytest.raises(ValueError):
-        SummarySlideItem(text=text,label='Delivery',source_pages=[1],source_quote=text,part_ids=['part'])
+    values = dict(label='Delivery', source_pages=[1], source_quote=text, part_ids=['part'])
+    item = SummarySlideItem(text=text, **values)
+    assert item.text == text
+    page = SummarySlidePage(id='delivery', title='Delivery', source_section='Delivery',
+        compact=True, items=[item])
+    # Storage accepts complete source copy; the native template rejects actual
+    # overflow. The former 1,200-character schema cap was not a physical limit.
+    assert compact_layout_errors([page])
+    with pytest.raises(ValueError, match='shorter complete model-authored copy'):
+        pack_theme_pages([page])
+    pieces = split_compact_item(text, page.title, page.id, values)
+    pages = pack_theme_pages([page.model_copy(update={'items': pieces})])
+    assert len(pages) > 1 and not compact_layout_errors(pages)
+    assert ''.join(item.text for page in pages for item in page.items) == text
+    assert all(item.source_quote == text and item.source_pages == [1] and item.part_ids == ['part']
+               for page in pages for item in page.items)
 
 
 class WordPage:
