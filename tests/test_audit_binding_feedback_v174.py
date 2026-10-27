@@ -42,7 +42,8 @@ def test_wrong_target_page_and_missing_source_row_name_are_reported_together():
     assert {(issue['observation_id'], issue['field']) for issue in errors} == {
         ('amount', 'target_quote.page'), ('amount', 'value_quote.text')}
     assert errors[0]['expected'] == [1]
-    assert errors[1]['expected'] == 'Cost of sales'
+    assert errors[1]['expected'] == dict(source_metric_must_be_literal=True,
+                                       same_measure_and_signed_amount_required=True)
     assert 'The target quotation must belong to the observation source.' in str(raised.value)
     assert 'The source metric must occur in its quoted source row.' in str(raised.value)
 

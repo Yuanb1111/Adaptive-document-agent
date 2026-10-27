@@ -4,6 +4,7 @@ import json
 from .prompting import untrusted_document_message
 from .report_audit_eligibility import audit_binding_ineligibility
 from .audit_header_feedback import HEADER_QUOTE_INSTRUCTIONS, header_reading_windows
+from .audit_value_feedback import VALUE_QUOTE_INSTRUCTIONS, value_reading_windows
 
 
 COUNTERPART_LOCATION_INSTRUCTIONS = (
@@ -22,7 +23,7 @@ COUNTERPART_LOCATION_INSTRUCTIONS = (
     'source_unit must copy the literal unit spelling in unit_quote; do not normalize it '
     'to a different equivalent spelling. Match scale and currency numerically instead. '
     'Assess each target independently: bind supported targets even when another target '
-    'in the same batch must remain unresolved. ')
+    'in the same batch must remain unresolved. ' + VALUE_QUOTE_INSTRUCTIONS)
 
 
 DISPOSITION_INSTRUCTIONS = (
@@ -144,12 +145,16 @@ def correction_messages(context, draft, entry):
     contracts = target_contracts(context, draft)
     header_failures = {issue['observation_id'] for issue in entry.get('validation_issues', [])
                        if issue['field'].startswith('header_quote')}
+    value_failures = {issue['observation_id'] for issue in entry.get('validation_issues', [])
+                     if issue['field'].startswith('value_quote')}
     bindings = {binding.observation_id: binding for binding in draft.bindings}
     for contract in contracts:
         oid = contract['observation_id']
         if oid in header_failures and oid in bindings:
             contract['header_reading_windows'] = header_reading_windows(
                 context, bindings[oid], contract['retained_target']['period'])
+        if oid in value_failures and oid in bindings:
+            contract['value_reading_windows'] = value_reading_windows(context, bindings[oid])
     entry['correction_contracts'] = contracts
     feedback = dict(corrective_kind=entry.get('corrective_kind', 'binding_validation'),
                     target_contracts=contracts, validation_issues=entry.get('validation_issues', []),

@@ -77,7 +77,8 @@ class TopicRelationValidator:
         # a ratio, arithmetic relationship, direction or causality. Chart-level
         # claims and units still pass their independent validators.
         if (slide.comparison_mode == "parallel"
-                and metrics_match_topic(observation, "", topic.title, topic.question)):
+                and (self._has_current_semantic_review(topic)
+                     or metrics_match_topic(observation, "", topic.title, topic.question))):
             return SourceTopicRelation("selected_topic_scope", (observation.id,),
                                        tuple(sorted({e.page for e in observation.evidence})))
         # Model-authored caveats can name a deliberately selected supporting
@@ -121,6 +122,16 @@ class TopicRelationValidator:
                 if relation:
                     return relation
         return None
+
+    def _has_current_semantic_review(self, topic):
+        """An exact model-reviewed topic/row binding outranks keyword heuristics.
+
+        Recompute the binding so altered copy, IDs or source facts cannot reuse
+        an earlier approval. This establishes authored panel scope only.
+        """
+        from adaptive_document_agent.agent.topic_evidence_review import unreviewed_topics
+        return topic.id not in unreviewed_topics(
+            self.result.presentation_topics, self._lookup, self.result)
 
     def _adjacent_sum(self, item, subtotal, tables, page_number):
         # A source-ordered three-row subtotal can prove a relationship without

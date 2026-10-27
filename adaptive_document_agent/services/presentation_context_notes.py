@@ -69,10 +69,13 @@ def slide_context_notes(result, slide, charts, index, *, definitions=None):
             [index.get(oid) for oid in chart.observation_ids if index.get(oid)], result.document)
         notes.extend(note['text'] for note in source_notes)
         source_note_keys.update(_literal_note_key(note['text']) for note in source_notes)
-    displayed_ids = {oid for chart in charts for oid in chart.observation_ids}
+    # Display copy must be identical during localization and a later export
+    # process. A set changed assurance-name order with Python's hash seed.
+    displayed_ids = list(dict.fromkeys(oid for chart in charts for oid in chart.observation_ids))
     if not displayed_ids:
-        displayed_ids = set(slide.observation_ids)
-        displayed_ids.update(oid for block in slide.visual_blocks for oid in block.observation_ids)
+        displayed_ids = list(dict.fromkeys([
+            *slide.observation_ids,
+            *(oid for block in slide.visual_blocks for oid in block.observation_ids)]))
     displayed = [index.get(oid) for oid in displayed_ids if index.get(oid)]
     from .report_audit_scope import report_audit_scope_notes, pure_audit_caveat
     assurance_notes = report_audit_scope_notes(result, displayed)

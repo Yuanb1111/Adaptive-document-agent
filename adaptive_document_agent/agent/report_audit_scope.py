@@ -226,11 +226,20 @@ def _validate(draft, context):
                    'An existing retained target entity remains locked.', oid,
                    expected=entity_correction_contract(observation))
         if normalize_quote(binding.source_metric).casefold() not in normalize_quote(binding.value_quote.text).casefold():
-            reject('value_quote.text', 'The source metric must occur in its quoted source row.', oid,
-                   expected=binding.source_metric)
+            reject('value_quote.text', 'The source metric must occur in its quoted source row. '
+                   'source_metric is a model proposal, not required source wording. Reselect a literal '
+                   'label for the same measure from the covered row; never add the target label to an '
+                   'unlabeled subtotal. If no complete labeled counterpart exists, explain the '
+                   'source limitation in an unresolved disposition for independent review.', oid,
+                   expected=dict(source_metric_must_be_literal=True,
+                                 same_measure_and_signed_amount_required=True))
         if normalize_quote(binding.source_raw_value) not in normalize_quote(binding.value_quote.text):
-            reject('value_quote.text', 'The source row must contain the exact mapped raw value.', oid,
-                   expected=binding.source_raw_value)
+            reject('value_quote.text', 'The source row must contain the exact mapped raw value. '
+                   'Do not create a row by adding components or copying a summary from another page. '
+                   'Reselect a complete literal counterpart matching the retained amount, or explain '
+                   'why no such counterpart can be bound in an unresolved disposition.', oid,
+                   expected=dict(source_raw_value_must_be_literal=True,
+                                 preserve_target_signed_amount=True))
         if normalize_quote(binding.source_unit) not in normalize_quote(binding.unit_quote.text):
             reject('source_unit/unit_quote.text',
                    'The proposed source_unit does not occur in its unit quotation. Both are editable '
