@@ -11,6 +11,16 @@ HEADER_QUOTE_INSTRUCTIONS = (
     'not approved headers or proof of column ownership or assurance. Inspect the full source '
     'page and independently select the exact header belonging to the mapped amount. ')
 
+SNAPSHOT_HEADER_INSTRUCTIONS = (
+    'For a retained YYYY-MM-DD snapshot period, the current binding contract requires a literal '
+    'snapshot date header (for example As at/As of with its date tiers and year row). A Year ended '
+    'or Months ended flow header is not that snapshot header. Do not repeatedly reformat the '
+    'same flow header or insert invented As at wording to repair this failure. Search ALL supplied '
+    'pages for the same exact signed measure in a covered table with a snapshot date header; '
+    'value_quote, header_quote and unit_quote may move together to that supported counterpart. '
+    'If no complete supported counterpart exists, justify an unresolved disposition. The source '
+    'reviewer must still verify row identity, date-column ownership and assurance independently. ')
+
 
 def header_reading_windows(context: dict, binding, period: str | None) -> dict:
     """Return exact line windows around year tokens on model-proposed pages.

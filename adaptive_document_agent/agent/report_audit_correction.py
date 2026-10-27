@@ -3,7 +3,7 @@ import json
 
 from .prompting import untrusted_document_message
 from .report_audit_eligibility import audit_binding_ineligibility
-from .audit_header_feedback import HEADER_QUOTE_INSTRUCTIONS, header_reading_windows
+from .audit_header_feedback import HEADER_QUOTE_INSTRUCTIONS, SNAPSHOT_HEADER_INSTRUCTIONS, header_reading_windows
 from .audit_value_feedback import VALUE_QUOTE_INSTRUCTIONS, value_reading_windows
 
 
@@ -23,7 +23,7 @@ COUNTERPART_LOCATION_INSTRUCTIONS = (
     'source_unit must copy the literal unit spelling in unit_quote; do not normalize it '
     'to a different equivalent spelling. Match scale and currency numerically instead. '
     'Assess each target independently: bind supported targets even when another target '
-    'in the same batch must remain unresolved. ' + VALUE_QUOTE_INSTRUCTIONS)
+    'in the same batch must remain unresolved. ' + VALUE_QUOTE_INSTRUCTIONS + SNAPSHOT_HEADER_INSTRUCTIONS)
 
 
 DISPOSITION_INSTRUCTIONS = (

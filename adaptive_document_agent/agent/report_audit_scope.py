@@ -108,16 +108,22 @@ def _context(result, *, targets=None):
     if not targets or not checks:
         return None
     pages = {p.page_number: p for p in result.document.pages}
-    checked = {n for check in checks if check.status in {'checked_found', 'checked_not_found'} for n in check.pages}
+    # A failed/unfinished semantic source check does not erase its original
+    # pages. Audit review must see every nominated page independently of that
+    # earlier outcome; the check status remains unchanged in the context.
+    nominated = {n for check in checks for n in check.pages}
     # Read bounded adjacent continuations, including a financial grid following
     # an assurance statement. These pages are evidence candidates, not approvals.
-    candidates = {n + delta for n in checked for delta in (-1, 0, 1, 2) if n + delta in pages}
+    candidates = {n + delta for n in nominated for delta in (-1, 0, 1, 2) if n + delta in pages}
     source_pages = {e.page for o in targets for e in o.evidence}
     selected = candidates | source_pages
     context = dict(observations=[o.model_dump(mode='json') for o in targets],
         source_pages=[dict(page=n, text=pages[n].text) for n in sorted(selected)],
         source_checks=[dict(section_id=c.section_id, pages=c.pages, status=c.status) for c in checks],
-        scope='Only supplied observations and source pages; missing bindings stay unknown.')
+        scope='Only supplied observations and source pages; missing bindings stay unknown. '
+              'Source-check statuses describe earlier bounded semantic checks, not whether the '
+              'original page text exists. Failed or unfinished checks do not approve or invalidate '
+              'their supplied source pages; independently evaluate the full literal evidence.')
     # This is the local aggregate ledger, never a single model request.
     # Capacity is checked against actual target batches before discovery/review.
     return context
