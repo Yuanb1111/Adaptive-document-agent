@@ -7,6 +7,7 @@ import pytest
 from adaptive_document_agent.agent.report_audit_batches import batch_context, batch_targets
 from adaptive_document_agent.agent.report_audit_context_budget import (
     MAX_AUDIT_CONTEXT_CHARS, audit_context_budget, require_audit_context_budget,
+    serialize_audit_context,
 )
 from adaptive_document_agent.agent.report_audit_scope import (
     _context, review_report_audit_scope, require_report_audit_scope, reviewed_audit_bindings,
@@ -55,7 +56,7 @@ def test_source_selection_budget_uses_largest_exact_request_not_aggregate_size()
     result, _ = large_aggregate()
     context = _context(result)
     payload, fingerprint = discovery_input(result, context)
-    actual_max = max(len(json.dumps(batch_context(context, ids), ensure_ascii=False))
+    actual_max = max(len(serialize_audit_context(batch_context(context, ids)))
                      for ids in batch_targets(context))
     assert payload['remaining_source_character_budget'] == MAX_AUDIT_CONTEXT_CHARS - actual_max > 0
     assert len(payload['targets']) == 63

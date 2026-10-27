@@ -4,13 +4,18 @@ import json
 MAX_AUDIT_CONTEXT_CHARS = 150_000
 
 
+def serialize_audit_context(context):
+    """Remove only JSON separator whitespace, preserving every source character."""
+    return json.dumps(context, ensure_ascii=False, separators=(',', ':'))
+
+
 def audit_context_budget(context):
     """Measure the exact existing target partitions with every source page intact."""
     from .report_audit_batches import batch_context, batch_targets
-    sizes = [len(json.dumps(batch_context(context, ids), ensure_ascii=False))
+    sizes = [len(serialize_audit_context(batch_context(context, ids)))
              for ids in batch_targets(context)]
     return dict(limit=MAX_AUDIT_CONTEXT_CHARS,
-                aggregate_characters=len(json.dumps(context, ensure_ascii=False)),
+                aggregate_characters=len(serialize_audit_context(context)),
                 target_count=len(context['observations']),
                 source_page_count=len(context['source_pages']),
                 batch_count=len(sizes), largest_batch_characters=max(sizes, default=0))

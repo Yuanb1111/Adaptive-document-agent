@@ -217,7 +217,7 @@ def paginate_draft(
             if choices:
                 from .summary_layout_choices import choose_layout
                 revised = choose_layout(gateway, draft, catalog, review, record, choices, schema,
-                                        cancelled=cancelled)
+                                        cancelled=cancelled, instruction=instruction)
             elif over_budget and any(getattr(p, 'placement', 'body') == 'appendix' for p in draft.pages):
                 from .summary_body_allocation import reallocate_body
                 revised = reallocate_body(gateway, draft, [], schema, record,

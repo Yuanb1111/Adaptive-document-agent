@@ -28,6 +28,7 @@ def digest(value):
 def discovery_input(result, context):
     """Index every page; literal hits navigate only and never establish meaning."""
     from .report_audit_context_budget import audit_context_budget
+    from .audit_source_layout import audit_source_page
     budget = audit_context_budget(context)
     physical_pages = [p.page_number for p in result.document.pages]
     if (len(physical_pages) != len(set(physical_pages))
@@ -35,8 +36,10 @@ def discovery_input(result, context):
         raise ValueError('Complete physical-page navigation is unavailable; audit discovery cannot silently omit pages.')
     observations = context['observations']
     needles = [normalize_quote(o['raw_value']) for o in observations]
-    page_index = []
+    page_index, source_fingerprints = [], []
     for page in result.document.pages:
+        source = audit_source_page(page)
+        source_fingerprints.append(dict(page=page.page_number, sha256=digest(source)))
         normalized = normalize_quote(page.text)
         # This is explicitly a navigation preview, never a quote or read page.
         heading = ' '.join(line.strip() for line in page.text.splitlines() if line.strip())[:140]
@@ -44,9 +47,10 @@ def discovery_input(result, context):
             complete_text_chars=len(page.text),
             literal_raw_value_target_indices=[i for i, value in enumerate(needles)
                                               if value and value in normalized]))
+        if 'layout_lines' in source:
+            page_index[-1]['complete_reading_chars'] = len(json.dumps(source, ensure_ascii=False))
     checks = result.profile.source_coverage.checks
-    document_fingerprint = digest([
-        dict(page=p.page_number, sha256=sha256(p.text.encode()).hexdigest()) for p in result.document.pages])
+    document_fingerprint = digest(source_fingerprints)
     payload = dict(document_source_fingerprint=document_fingerprint,
         targets=[dict(index=i, **{key: o.get(key) for key in (
             'id', 'metric_original', 'raw_value', 'value', 'period', 'entity', 'unit', 'raw_unit',
@@ -54,7 +58,11 @@ def discovery_input(result, context):
             evidence=o['evidence']) for i, o in enumerate(observations)],
         sections=[s.model_dump(mode='json') for s in inventory(result.document)],
         page_index=page_index,
-        already_read_source_pages=context['source_pages'],
+        # Navigation chooses pages, not column ownership. Complete text stays
+        # here; coordinate evidence is supplied to the subsequent full review
+        # and participates in its budget and source fingerprints.
+        already_read_source_pages=[{key: page[key] for key in ('page', 'text')}
+                                   for page in context['source_pages']],
         source_checks=[{key: check.model_dump(mode='json')[key] for key in (
             'section_id', 'pages', 'status', 'reason', 'decision_impact', 'finding', 'evidence_quotes')}
             for check in checks],

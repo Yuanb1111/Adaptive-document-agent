@@ -35,8 +35,9 @@ class AuditSourceDiscovery(BaseModel):
 
 
 def _expanded_context(result, base, payload, selection, fingerprint):
+    from .audit_source_layout import audit_source_page
     sections = {s['id']: s for s in payload['sections']}
-    pages = {p.page_number: p.text for p in result.document.pages}
+    pages = {p.page_number: p for p in result.document.pages}
     targets = {o['id'] for o in base['observations']}
     selected = set()
     for span in selection.ranges:
@@ -47,12 +48,12 @@ def _expanded_context(result, base, payload, selection, fingerprint):
         if len(set(span.observation_ids)) != len(span.observation_ids) or not set(span.observation_ids) <= targets:
             raise ValueError('Audit discovery range names duplicated or unknown observation IDs.')
         selected.update(range(span.start_page, span.end_page+1))
-    if any(n not in pages or not pages[n].strip() for n in selected):
+    if any(n not in pages or not pages[n].text.strip() for n in selected):
         raise ValueError('Complete model-selected audit source pages are unavailable; no partial reading was accepted.')
     existing = {s['page'] for s in base['source_pages']}
     if len(selected-existing) > MAX_ADDITIONAL_PAGES:
         raise ValueError('Audit discovery exceeds the bounded supplementary-page allowance.')
-    expanded = {**base, 'source_pages':[dict(page=n, text=pages[n]) for n in sorted(existing | selected)],
+    expanded = {**base, 'source_pages':[audit_source_page(pages[n]) for n in sorted(existing | selected)],
         'source_discovery':dict(contract=DISCOVERY_CONTRACT, input_fingerprint=fingerprint,
             selection=selection.model_dump(mode='json'), added_pages=sorted(selected-existing))}
     from .report_audit_context_budget import require_audit_context_budget

@@ -36,7 +36,8 @@ class Client(DraftClient):
         if schema.__name__ == 'SummaryLayoutChoice':
             self.calls.append(deepcopy(messages))
             assert kwargs['allow_repair'] is False
-            return schema.model_validate({key: self.choice for key in schema.model_fields})
+            return schema.model_validate({key: self.choice for key in schema.model_fields
+                                          if key != 'replacement'})
         return super().generate_structured(messages, schema, **kwargs)
 
 

@@ -12,6 +12,8 @@ from .audit_period_header import PERIOD_HEADER_INSTRUCTIONS
 from .audit_header_feedback import HEADER_QUOTE_INSTRUCTIONS
 from .structured_output_correction import schema_feedback
 from .report_audit_correction import COUNTERPART_LOCATION_INSTRUCTIONS
+from .audit_source_layout import LAYOUT_INSTRUCTIONS
+from .report_audit_context_budget import serialize_audit_context
 
 
 QUOTE_FORMAT_INSTRUCTIONS = (
@@ -64,12 +66,15 @@ def review_draft(gateway, context, draft, entry, correction_counts):
         'or adjusted figures. Do not transfer a comparative column qualifier to another period. '
         'Assess whether any unresolved measure actually has sufficient evidence and reject '
         'unjustified unknowns. ' + UNKNOWN_REVIEW_INSTRUCTIONS + REVIEW_ID_INSTRUCTIONS + QUOTE_FORMAT_INSTRUCTIONS
-        + COUNTERPART_REVIEW_INSTRUCTIONS + COUNTERPART_LOCATION_INSTRUCTIONS
+        + COUNTERPART_REVIEW_INSTRUCTIONS + COUNTERPART_LOCATION_INSTRUCTIONS + LAYOUT_INSTRUCTIONS
+        + 'Both audited and unaudited are valid proposed statuses for eligible amounts. '
+          'Judge the actual draft.status against its exact evidence; never assume every binding '
+          'claims audited status or reject unaudited merely because it is not audited. '
         + f'This draft contains {len(draft.bindings)} proposed bindings and '
           f'{len(draft.unresolved_observation_ids)} unresolved IDs. '
         + ('Return verdicts=[]; assess all unknown dispositions in unresolved_accepted and '
            'unresolved_reason only. ' if not draft.bindings else '')),
-        untrusted_document_message(json.dumps(context, ensure_ascii=False)),
+        untrusted_document_message(serialize_audit_context(context)),
         untrusted_document_message(json.dumps(entry['draft'], ensure_ascii=False))]
     for _ in range(2):
         review = None

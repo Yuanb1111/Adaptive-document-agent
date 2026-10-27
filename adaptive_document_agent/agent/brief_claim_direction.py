@@ -115,8 +115,13 @@ def direction_errors(response, *, requested, verdicts, correction_eligible=None)
                     failures.append('Audience direction predicate does not bind its exact displayed words')
                     other_failure = True
                 if claim.direction == 'uncertain':
-                    failures.append('Audience direction is ambiguous: ' + claim.reason)
-                    other_failure = True
+                    failures.append('Audience direction is ambiguous: ' + claim.reason
+                                    + f'; comparison_index={claim.comparison_index}, claim={bound!r}')
+                    # A reviewer may have bound several distinct predicates
+                    # to one comparison. The existing single binding correction
+                    # can split that scope, but never edits audience copy or
+                    # clears uncertainty without fresh source/predicate review.
+                    binding_failure = True
                 elif claim.direction != comparison.direction:
                     failures.append('Audience predicate direction contradicts the source-bound comparison: '
                                     + repr(claim.predicate) + ' asserts ' + claim.direction
