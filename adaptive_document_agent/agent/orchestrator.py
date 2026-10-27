@@ -308,6 +308,10 @@ class DocumentOrchestrator:
         checkpoint = PipelineResult(document=document, profile=profile, observations=index.observations,
             candidates=candidates, candidate_scores=scores, analysis_plan=plan,
             analysis_results=results, validation_warnings=issues)
+        from .source_reading_checkpoint import incomplete_source_reads, retain_source_reading_failure
+        if incomplete_source_reads(profile):
+            return retain_source_reading_failure(checkpoint, self.gateway, resources,
+                attach_introduction, timings, details, pipeline_started, notify)
         editorial_gateway = (IntroductionGuardedGateway(self.gateway, attach_introduction)
                              if attach_introduction is not None else self.gateway)
         try:

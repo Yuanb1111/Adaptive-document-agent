@@ -15,9 +15,11 @@ def failure_record(error):
     return record
 
 
-def source_check_request(gateway, messages, schema, source, check, ledger):
+def source_check_request(gateway, messages, schema, source, check, ledger, *, blocks):
     """At most two semantic reads and one strictly content-preserving format repair."""
     original, format_used = list(messages), False
+    from .source_check_references import reference_schema, expand_source_quotes
+    wire_schema = reference_schema(schema)
     metadata = dict(source_page_start=min(source), source_page_end=max(source))
     for attempt in range(2):
         entry = dict(attempt=attempt + 1, status='pending')
@@ -25,7 +27,7 @@ def source_check_request(gateway, messages, schema, source, check, ledger):
         try:
             ledger.calls_used += 1
             try:
-                reply = gateway.generate_structured(messages, schema, stage='discovery',
+                reply = gateway.generate_structured(messages, wire_schema, stage='discovery',
                     allow_repair=False, max_tokens=2048, request_metadata=metadata)
             except LLMStructuredOutputError as exc:
                 entry.update(failure_record(exc))
@@ -34,7 +36,7 @@ def source_check_request(gateway, messages, schema, source, check, ledger):
                 # evidence rather than ask a format-only repair to change copy.
                 length_only = False
                 try:
-                    schema.model_validate_json(exc.response.text)
+                    wire_schema.model_validate_json(exc.response.text)
                 except ValidationError as validation:
                     length_only = all(e['loc'] == ('finding',) and e['type'] == 'string_too_long'
                                       for e in validation.errors())
@@ -55,11 +57,23 @@ def source_check_request(gateway, messages, schema, source, check, ledger):
                 format_used = True
                 ledger.calls_used += 1
                 diagnostic = entry.setdefault('format_repair', {})
-                reply = gateway.repair_structured_output(exc, schema, stage='discovery',
+                reply = gateway.repair_structured_output(exc, wire_schema, stage='discovery',
                     request_metadata=metadata, diagnostics=diagnostic, max_tokens=2048)
+            entry['reference_response'] = reply.model_dump(mode='json')
+            try:
+                reply = schema.model_validate(expand_source_quotes(entry['reference_response'], blocks))
+            except ValueError as exc:
+                entry.update(status='invalid_evidence', validation_errors=[str(exc)])
+                if attempt:
+                    raise
+                messages = [*original, untrusted_document_message(json.dumps(dict(
+                    rejected_response=entry['reference_response'], validation_errors=[str(exc)]), ensure_ascii=False)),
+                    dict(role='user', content='Correct the invalid quote references using only the supplied '
+                         'source_quote_blocks. Preserve source meaning and uncertainty. Never invent an ID or infer absence.')]
+                continue
             entry['response'] = reply.model_dump(mode='json')
             errors = [f'Quotation not present on its stated source page {q.page}'
-                for q in reply.quotes if q.page not in source
+                for q in reply.quotes if not q.text.strip() or q.page not in source
                 or ' '.join(q.text.split()) not in ' '.join(source[q.page].split())]
             if reply.found and not reply.quotes:
                 errors.append('Finding has no literal evidence')

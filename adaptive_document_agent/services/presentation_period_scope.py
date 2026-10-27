@@ -112,6 +112,29 @@ def _companion_records(visible, by_subject, eligible):
     return companions
 
 
+def _original_bullet_scopes(result, slide, charts, observations):
+    """Make existing implicit provenance explicit before adding separate context."""
+    if slide.bullet_observation_ids:
+        scopes = [list(scope) for scope in slide.bullet_observation_ids]
+        if (len(scopes) != len(slide.bullets) or any(not scope for scope in scopes)
+                or any(oid not in observations for scope in scopes for oid in scope)):
+            return None  # A malformed prior binding has no inferred replacement.
+        return scopes
+    if not slide.bullets:
+        return []
+    from adaptive_document_agent.validation.narrative_plan_validator import expanded_observation_ids
+    from adaptive_document_agent.validation.presentation_provenance import insight_inputs
+    ids = expanded_observation_ids(slide, charts)
+    refs = insight_inputs(result)
+    for iid in [*slide.insight_ids, *(iid for block in slide.visual_blocks for iid in block.insight_ids)]:
+        ids.update(refs.get(iid, []))
+    if not ids or not ids <= observations.keys():
+        return None
+    # These are exactly the inputs already available to every unscoped bullet,
+    # not new source selection or a semantic approval of the existing copy.
+    return [sorted(ids) for _ in slide.bullets]
+
+
 def review_presentation_period_scope(result, plan=None) -> list[tuple[str, str]]:
     """Read current copy/evidence; historical audits never force a review flag.
 
@@ -137,7 +160,10 @@ def review_presentation_period_scope(result, plan=None) -> list[tuple[str, str]]
             findings.append((slide.id, "Displayed period scope is unknown, missing or ineligible; broad-period copy requires review."))
         elif not (all(scope == scopes[0] for scope in scopes) and len({p[0] for p in scopes[0]}) == 1):
             findings.append((slide.id, "Displayed panels use different period sets; the combined claim requires review."))
-        elif len(set(slide.observation_ids) | _companion_records(visible, by_subject, eligible).keys()) > 40:
+        elif (bullet_scopes := _original_bullet_scopes(result, slide, charts, observations)) is None:
+            findings.append((slide.id, "Existing bullet provenance is incomplete; no evidence binding was guessed."))
+        elif len(set(slide.observation_ids) | {oid for scope in bullet_scopes for oid in scope}
+                 | _companion_records(visible, by_subject, eligible).keys()) > 40:
             findings.append((slide.id, "Additional period evidence exceeds the slide reference limit; requires a separate evidence panel."))
     return findings
 
@@ -240,7 +266,15 @@ def prepare_presentation_period_scope(result: PipelineResult, plan: Presentation
         companions = _companion_records(visible, by_subject, eligible)
         if same_scope and not companions:
             continue  # The full known series is already shown; no narrowing needed.
-        if len(set(slide.observation_ids) | companions.keys()) > 40:
+        bullet_scopes = _original_bullet_scopes(result, slide, charts, observations)
+        if bullet_scopes is None:
+            _require_review(target, f"Slide {slide.id}: existing bullet provenance is incomplete; no evidence binding was guessed.")
+            _add_audit(result, slide, {"original": original, "visible_observation_ids": ids,
+                "reason": "existing bullet provenance is incomplete"}, unresolved=True)
+            continue
+        bullet_ids = {oid for scope in bullet_scopes for oid in scope}
+        coverage_ids = list(dict.fromkeys([*companions, *(ids if not same_scope else [])]))
+        if len(set(slide.observation_ids) | bullet_ids | set(coverage_ids)) > 40:
             note = f"Slide {slide.id}: additional period evidence exceeds the slide reference limit; requires a separate evidence panel."
             _require_review(target, note)
             _add_audit(result, slide, {"original": original, "visible_observation_ids": ids,
@@ -265,23 +299,22 @@ def prepare_presentation_period_scope(result: PipelineResult, plan: Presentation
                 details.append(f"Separate source coverage: {periods}; outside the displayed comparison (see source pages).")
         coverage = " ".join(details)
         if coverage:
+            slide.bullet_observation_ids = bullet_scopes
             if len(slide.bullets) < 5:
                 slide.bullets.append(coverage)
-                while len(slide.bullet_observation_ids) < len(slide.bullets) - 1:
-                    slide.bullet_observation_ids.append([])
-                slide.bullet_observation_ids.append(list(companions) or ids)
+                slide.bullet_observation_ids.append(coverage_ids)
             else:
                 slide.bullets[-1] += " " + coverage
-                while len(slide.bullet_observation_ids) < len(slide.bullets):
-                    slide.bullet_observation_ids.append([])
-                slide.bullet_observation_ids[-1] = list(dict.fromkeys([*slide.bullet_observation_ids[-1], *companions]))
+                slide.bullet_observation_ids[-1] = list(dict.fromkeys([*slide.bullet_observation_ids[-1], *coverage_ids]))
             # Reference IDs establish provenance only; two_up/auto composition
             # does not add raw rows to the selected chart series.
-            slide.observation_ids = list(dict.fromkeys([*slide.observation_ids, *companions]))
-            slide.source_pages = sorted(set(slide.source_pages) | {e.page for o in companions.values() for e in o.evidence})
+            slide.observation_ids = list(dict.fromkeys([*slide.observation_ids,
+                *(oid for scope in slide.bullet_observation_ids for oid in scope)]))
+            slide.source_pages = sorted(set(slide.source_pages) | {
+                e.page for oid in slide.observation_ids for e in observations[oid].evidence})
             theme = next((t for t in target.themes if t.id == slide.theme_id), None)
             if theme:
-                theme.observation_ids = list(dict.fromkeys([*theme.observation_ids, *companions]))
+                theme.observation_ids = list(dict.fromkeys([*theme.observation_ids, *slide.observation_ids]))
                 theme.source_pages = sorted(set(theme.source_pages) | set(slide.source_pages))
         note = f"Slide {slide.id}: broad period wording restricted to {label}; additional periods remain separate evidence."
         if note not in target.editorial_notes:

@@ -200,13 +200,18 @@ def recover_insight_narrative(result, plan=None):
         if not selected or any(not set(charts[cid].observation_ids) <= covered
                                for cid in chart_ids if cid in charts):
             continue
+        if len(set(slide.observation_ids) | covered) > 40:
+            continue  # Exact retained provenance must fit; never truncate it.
         slide.title = selected[0][0].title
         slide.message = selected[0][1]
         # Explicit copies prevent renderers from replacing an empty bullet list
         # with the unvalidated long-form insight narrative. Duplicate message
         # copy is removed by the compositor, not by consulting raw insight prose.
         slide.bullets = [copy for item, copy in selected]
-        slide.bullet_observation_ids = []
+        refs = insight_inputs(result)
+        slide.bullet_observation_ids = [list(refs[item.id]) for item, copy in selected]
+        slide.observation_ids = list(dict.fromkeys([*slide.observation_ids,
+            *(oid for scope in slide.bullet_observation_ids for oid in scope)]))
         slide.insight_ids = [item.id for item, copy in selected]
         # A structured movement may mention a signed delta as a positive
         # magnitude ("declined 1.3 pp"). Bind that exact Python calculation,
