@@ -90,8 +90,14 @@ def test_failed_physical_request_is_not_semantically_rewritten(monkeypatch, fail
     result, lookup, selected, raw, delta, valid, _ = prepared(monkeypatch)
     failed = (LLMTransportError('Unavailable') if failure == 'transport' else
               response('{"topics":', finish='length' if failure == 'length' else 'stop'))
-    llm, client = gateway([response(delta), failed, response(valid)])
+    # Proven length failures have one identical-context capacity retry. After
+    # that bound, neither partial JSON nor a semantic rewrite may be accepted.
+    failures = [failed, failed] if failure == 'length' else [failed]
+    llm, client = gateway([response(delta), *failures, response(valid)])
     result.presentation_topics = review_topic_coverage(selected, result, lookup, set(), raw, llm,
                                                        PresentationTopicSelector._validate)
-    assert len(client.requests) == 2 and len(client.outputs) == 1
+    assert len(client.requests) == 1 + len(failures) and len(client.outputs) == 1
+    if failure == 'length':
+        assert client.requests[1][0] == client.requests[2][0]
+        assert client.requests[2][1]['max_tokens'] > client.requests[1][1]['max_tokens']
     assert not is_complete(result)

@@ -5,7 +5,7 @@ from adaptive_document_agent.services.export import export_json
 
 
 def _render(st, result, diagnostics, key, exporter):
-    st.caption('Complete analysis and source evidence; may contain document content.')
+    st.caption('Retained analysis, source evidence and diagnostics; may contain document content.')
     # Clicking refresh reruns only this fragment and registers the file again.
     # It does not click a model retry or rebuild the presentation.
     st.button('Refresh JSON download link', key=key + '_refresh',
@@ -37,6 +37,12 @@ def render_incomplete(st, result, *, scope_key):
         st.error(f"Failed stage: {result.failed_stage}{location}. {details.get('message', '')}")
     st.warning('This analysis is incomplete. Download the retained data and diagnostics below. '
                'Use Retry analysis (reuse successful cache) to continue; PowerPoint remains blocked.')
+    from adaptive_document_agent.services.topic_review_status import topic_review_gaps, coverage_review_gaps
+    gaps = topic_review_gaps(result) + coverage_review_gaps(result)
+    if gaps:
+        st.write('Unverified analytical coverage')
+        for gap in gaps:
+            st.text(gap['title'] + ': ' + gap['reason'])
     render(st, result, key='analysis_json_' + scope_key)
     failures = [issue for issue in result.validation_warnings
                 if issue.severity == 'error' or issue.code == 'company_introduction_unavailable']

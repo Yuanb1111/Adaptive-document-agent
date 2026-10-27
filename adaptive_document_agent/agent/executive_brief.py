@@ -123,6 +123,9 @@ class ExecutiveBriefWriter:
             # constraint or explanation that the selector had requested.
             selected = list(dict.fromkeys([*anchors[:2], *selected, *anchors[2:]]))[:10]
         excerpts = {p: pages[p][:9000] for p in selected}
+        from .brief_companion_context import companion_excerpts
+        companions = companion_excerpts(result, excerpts)
+        excerpts.update(companions)
         # Identity is already model-selected elsewhere. Supply its bounded
         # literal source without displacing analytical/narrative selections.
         # Metadata alone never authorizes an identity claim or external lookup.
@@ -155,6 +158,7 @@ class ExecutiveBriefWriter:
                                                 for title, source_pages in included_topics],
                    'supplementary_source_checks': source_checks,
                    'source_table_guide': _table_evidence_guide(result, excerpts),
+                   'companion_context_pages': list(companions),
                    'source_excerpts': [{'page': p, 'text': text, 'truncated': len(pages[p]) > len(text)}
                                        for p, text in excerpts.items()]}
         from .brief_evidence_blocks import evidence_blocks
@@ -168,7 +172,14 @@ class ExecutiveBriefWriter:
                      '\nPrefer evidence entries {"ref":"block_id"} from evidence_blocks. '
                      f'Return at most {maximum_findings} material findings, reserving the remaining '
                      'brief capacity for independently reviewed supplementary qualifications. '
-                     'Select the material lead and counterpoints using the complete supplied evidence. Detailed introduction coverage '
+                     'Select the material lead and counterpoints using the complete supplied evidence. '
+                     'Read companion_context_pages for related totals, definition differences, reconciliations, '
+                     'alternative assumptions and source explanations. Their retrieval does not establish '
+                     'relevance: decide whether they materially qualify a finding. Keep the latest comparable '
+                     'outcome and any necessary counterpoint together, with separate labelled bases when needed. '
+                     'For a scenario, retain the resource scope, base date and assumption rather than presenting '
+                     'one conditional estimate as the only outlook. Attribute reported causes to their source. '
+                     'Detailed introduction coverage '
                      'and source-table appendices belong to separate sections, not this briefing. '
                      'The application fills their exact page and original text. Cite the blocks '
                      'containing the source row AND its year/period headers, currency, scale, '
@@ -197,7 +208,8 @@ class ExecutiveBriefWriter:
         from .brief_meaning_review import meaning_validator
         brief = generate_with_item_repair(self.gateway, messages, result=result, excerpts=excerpts,
                                          topics=included_topics, source_context=payload, evidence_catalog=blocks,
-                                         cancelled=cancelled, semantic_validator=meaning_validator(self.gateway, cancelled=cancelled, result=result))
+                                         cancelled=cancelled, semantic_validator=meaning_validator(
+                                             self.gateway, cancelled=cancelled, result=result, source_context=payload))
         record_uncited_checks(result, brief)
         return brief
 

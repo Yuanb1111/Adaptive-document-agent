@@ -6,7 +6,7 @@ import json
 from adaptive_document_agent.agent.coverage_merge_capacity import MAX_MERGE_OUTPUT_TOKENS, merge_output_tokens
 from adaptive_document_agent.agent.coverage_delta_review import TopicCoverageDelta
 from adaptive_document_agent.agent.presentation_topic_selector import PresentationTopicSelector
-from adaptive_document_agent.agent.topic_coverage_review import review_topic_coverage
+from adaptive_document_agent.agent.topic_coverage_review import review_topic_coverage, MAX_REVIEW_OUTPUT_TOKENS
 from adaptive_document_agent.models import PresentationTopicSelection
 from tests.test_bounded_topic_coverage import context_fixture
 from tests.test_coverage_delta_v147 import decisions, force_delta, payload
@@ -44,8 +44,9 @@ def test_merge_uses_complete_inventory_budget_but_delta_calls_keep_base_budget(m
     candidates = [sid for sid in lookup if sid != annual]
     initial = [dict(series_id=sid, decision='include', reason='A complete source-bound material qualification. ' * 8)
                for sid in candidates]
-    expected = merge_output_tokens(selected.model_dump(mode='json'), initial)
-    assert expected > 8192
+    expected = merge_output_tokens(selected.model_dump(mode='json'), initial,
+                                   base_tokens=MAX_REVIEW_OUTPUT_TOKENS)
+    assert expected >= MAX_REVIEW_OUTPUT_TOKENS
     class Gateway:
         def __init__(self):
             self.calls = 0
@@ -54,7 +55,7 @@ def test_merge_uses_complete_inventory_budget_but_delta_calls_keep_base_budget(m
             self.calls += 1
             ids = payload(messages)['series_requiring_coverage_decision']
             if schema is TopicCoverageDelta:
-                assert kwargs['max_tokens'] == 8192
+                assert kwargs['max_tokens'] == MAX_REVIEW_OUTPUT_TOKENS
                 return schema(coverage_decisions=[item for item in initial if item['series_id'] in ids])
             assert kwargs['max_tokens'] == expected
             return schema(topics=selected.topics,

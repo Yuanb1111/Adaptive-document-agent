@@ -85,6 +85,7 @@ class SchemaReplayClient(MockLLMClient):
         from adaptive_document_agent.agent.topic_coverage_review import TopicCoverageReview
         from adaptive_document_agent.agent.brief_claim_direction import BriefClaimDirectionReview
         from adaptive_document_agent.agent.topic_evidence_review import TopicEvidenceReview
+        from adaptive_document_agent.agent.brief_meaning_review import BriefMeaningReview
         prefix = 'Return only JSON matching this schema: '
         assert messages[0]['content'].startswith(prefix)
         assert max_tokens is not None and max_tokens > 0
@@ -92,7 +93,7 @@ class SchemaReplayClient(MockLLMClient):
         schemas = {schema.__name__: schema for schema in (
             IntroductionAudienceSelection, IntroductionAudienceReview,
             IntroductionAudienceInventoryCorrection, IntroductionMeaningRevision, TopicCoverageReview,
-            BriefClaimDirectionReview, TopicEvidenceReview,
+            BriefClaimDirectionReview, TopicEvidenceReview, BriefMeaningReview,
         )}
         # Subclasses can add a newly introduced protocol without bypassing the
         # real gateway's schema-text parser or changing the v142 replay contract.

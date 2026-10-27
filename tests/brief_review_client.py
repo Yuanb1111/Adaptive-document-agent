@@ -15,6 +15,14 @@ from adaptive_document_agent.services.llm.usage import LLMUsage
 
 class BriefReviewClient(MockLLMClient):
     def generate_text(self, messages, **kwargs):
+        prefix = 'Return only JSON matching this schema: '
+        if (messages and messages[0]['content'].startswith(prefix)
+                and json.loads(messages[0]['content'][len(prefix):]).get('title') == 'BriefMeaningReview'):
+            # The text transport owns max_tokens; MockLLMClient's structured
+            # fixture only accepts its semantic temperature argument.
+            _, response = self.generate_structured(messages[1:], BriefMeaningReview,
+                **{k: v for k, v in kwargs.items() if k == 'temperature'})
+            return response
         direction_start = next((i for i, message in enumerate(messages) if message['content'].startswith(
             'Independently read the DIRECTION ASSERTED BY AUDIENCE WORDS')), None)
         if direction_start is not None:

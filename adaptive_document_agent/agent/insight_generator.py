@@ -29,7 +29,11 @@ class InsightGenerator:
         from adaptive_document_agent.validation.insight_context import qualified_metric_label, validate_insight_contexts
         if not self.gateway or not valid:
             return [self._deterministic(result, observations) for result in valid]
-        contexts = build_source_contexts(valid, observations or [], document)
+        # The transport is already bounded per batch. Dividing one global text
+        # allowance by ALL results left large documents with only their table
+        # window and no opportunity to read explanations or counterevidence.
+        contexts = build_source_contexts(valid, observations or [], document,
+            max_total_chars=max(36_000, len(valid) * 6_000))
         by_id = {o.id: o for o in observations or []}
         records = [{**r.model_dump(mode="json", exclude={"evidence"}),
             # Explicit units and periods prevent prose from describing unlabelled

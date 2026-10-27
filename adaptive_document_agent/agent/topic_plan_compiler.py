@@ -41,6 +41,8 @@ def compile_topic_plan(result: PipelineResult) -> PresentationPlan:
         if slide.slide_type == "company_overview":
             slide.title = "Document at a Glance"
     # from_selected_topics owns the shared strict claim-recovery boundary.
+    from .topic_explanations import attach_topic_explanations
+    attach_topic_explanations(plan, result)
     PresentationPlanValidator().validate(plan, result)
     plan = stamp_editorial_review(plan, result, origin="topic_compilation")
     for issue in result.validation_warnings:
@@ -49,12 +51,13 @@ def compile_topic_plan(result: PipelineResult) -> PresentationPlan:
             audit = json.loads(issue.message)
             omitted = set(audit.get('omitted_topic_ids', [])) - compiled_topics
             if omitted:
-                plan.editorial_status = 'needs_review'
+                if plan.editorial_status != 'degraded':
+                    plan.editorial_status = 'needs_review'
                 plan.editorial_notes.append('Source-row semantic review withheld unsupported topics: '
                                             + ', '.join(sorted(omitted)))
         if issue.code == "presentation_topic_coverage_unresolved":
             from .topic_coverage_review import coverage_review_pending
-            if coverage_review_pending(result):
+            if coverage_review_pending(result) and plan.editorial_status != 'degraded':
                 plan.editorial_status = "needs_review"
             continue  # The concise editorial finding links to the full audit.
         if issue.code in {"presentation_topics_unavailable", "presentation_topic_claims_withheld",
@@ -65,6 +68,7 @@ def compile_topic_plan(result: PipelineResult) -> PresentationPlan:
                                                      if not t.takeaway.strip()}
                 if not set(issue.related_ids) & active:
                     continue  # Historical rejection remains in the audit.
-            plan.editorial_status = "needs_review"
+            if plan.editorial_status != 'degraded':
+                plan.editorial_status = "needs_review"
             plan.editorial_notes.append(f"{', '.join(issue.related_ids)}: {issue.message}")
     return plan

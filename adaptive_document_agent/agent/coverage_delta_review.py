@@ -81,14 +81,23 @@ def _decisions(response, requested):
 
 def _request(gateway, messages, schema, audit, calls, cancelled, *, tokens, characters, validate):
     """One bounded semantic correction; transport/privacy errors are never repaired."""
+    from .coverage_merge_capacity import MAX_MERGE_OUTPUT_TOKENS
+    initial_tokens = max(tokens, 16384)
+    if initial_tokens > MAX_MERGE_OUTPUT_TOKENS:
+        raise ValueError('Coverage output request exceeds the absolute capacity ceiling.')
+    retry_tokens = min(MAX_MERGE_OUTPUT_TOKENS, max(initial_tokens * 3 // 2, 24576))
+    limits = (initial_tokens, retry_tokens) if retry_tokens > initial_tokens else (initial_tokens,)
     initial, previous = list(messages), set()
     for attempt in range(2):
         if cancelled.is_set():
             raise CancelledError('Coverage delta cancelled after another independent batch failed.')
-        calls.reserve()
+        output_record = {}
+        audit.setdefault('output_requests', []).append(output_record)
         try:
-            response = gateway.generate_structured(messages, schema, stage='presentation',
-                allow_repair=False, max_tokens=tokens, cancelled=cancelled)
+            from .presentation_budget_output import complete_budget_output
+            response = complete_budget_output(gateway, messages, schema, output_record,
+                audit_key='output_attempts', token_limits=limits,
+                cancelled=cancelled, before_attempt=calls.reserve)
         except IntroductionVerificationFailed as exc:
             audit.setdefault('attempts', []).append({
                 'request_error': str(exc), 'error_type': type(exc).__name__,
@@ -103,7 +112,7 @@ def _request(gateway, messages, schema, audit, calls, cancelled, *, tokens, char
             audit.setdefault('attempts', []).append(entry)
             # A complete, parsed schema failure (including topic/display capacity)
             # needs a source-aware correction, not a format-only JSON repair.
-            # Never regenerate after transport, cancellation or truncated output.
+            # Exhausted capacity is not permission for a semantic/format retry.
             if (not isinstance(exc, LLMStructuredOutputError)
                     or not isinstance(exc.__cause__, ValidationError)
                     or any(e['type'] == 'json_invalid' for e in exc.__cause__.errors())

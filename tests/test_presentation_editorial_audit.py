@@ -55,6 +55,9 @@ def test_current_unresolved_period_prevents_ready_but_historical_warning_does_no
     plan = result.presentation_plan
     plan.themes = [PresentationTheme(id="operations", title="Operations", question="What changed?",
                                     rationale="Compare the reported movements.")]
+    for slide in plan.slides:
+        if slide.slide_type == 'analysis':
+            slide.analytical_question = 'What changed in the reported operations?'
     result.observations[0].period = "Unknown"
     prepare_presentation_period_scope(result)
     stamp_editorial_review(plan, result, origin="model")
@@ -65,3 +68,13 @@ def test_current_unresolved_period_prevents_ready_but_historical_warning_does_no
     assert plan.editorial_status == "ready"
     assert not any("[review:presentation_period_scope_unresolved]" in note for note in plan.editorial_notes)
     assert any(w.code == "presentation_period_scope_unresolved" for w in result.validation_warnings)
+
+
+def test_an_analysis_page_without_a_question_is_not_editorially_ready():
+    result = themed_result()
+    slide = next(s for s in result.presentation_plan.slides if s.slide_type == 'analysis')
+    slide.analytical_question = ''
+    stamp_editorial_review(result.presentation_plan, result, origin='model')
+    assert result.presentation_plan.editorial_status == 'needs_review'
+    assert any('[review:presentation_missing_question]' in note
+               for note in result.presentation_plan.editorial_notes)

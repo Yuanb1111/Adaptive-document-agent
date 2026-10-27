@@ -10,7 +10,7 @@ REVIEW_TOKEN_LIMITS = (16000, 24000)
 
 
 def complete_budget_output(gateway, messages, schema, record, *, audit_key, token_limits,
-                           stage='presentation', cancelled=None):
+                           stage='presentation', cancelled=None, before_attempt=None):
     """Retry one proven length truncation from the identical complete messages.
 
     A partial JSON response is retained for diagnosis only. It is never parsed,
@@ -18,6 +18,8 @@ def complete_budget_output(gateway, messages, schema, record, *, audit_key, toke
     """
     attempts = record.setdefault(audit_key, [])
     for attempt, limit in enumerate(token_limits, 1):
+        if before_attempt is not None:
+            before_attempt()
         physical = dict(attempt=attempt, requested_max_tokens=limit, status='pending',
                         capacity_retry=False)
         attempts.append(physical)

@@ -30,10 +30,13 @@ def require_source_integration(result) -> None:
 
 def topic_coverage_complete(result) -> bool:
     from adaptive_document_agent.agent.topic_coverage_review import coverage_review_pending
-    return not coverage_review_pending(result)
+    from .topic_review_status import topic_review_gaps
+    return not topic_review_gaps(result) and not coverage_review_pending(result)
 
 
 def require_topic_coverage(result) -> None:
+    from .topic_review_status import require_topic_review
+    require_topic_review(result)
     if not topic_coverage_complete(result):
         import json
         latest = next((issue for issue in reversed(result.validation_warnings)

@@ -21,7 +21,7 @@ from .coverage_representation import representation_links
 MAX_REVIEW_CHARACTERS = 120_000
 MAX_REVIEW_BATCHES = 24
 MAX_REVIEW_CALLS = MAX_REVIEW_BATCHES + 12
-MAX_REVIEW_OUTPUT_TOKENS = 8192
+MAX_REVIEW_OUTPUT_TOKENS = 16384
 MAX_REVIEW_DECISIONS = 32
 # Delta output contains no repeated topic descriptions, so twice as many
 # complete per-series decisions fit the same bounded output contract.
@@ -114,12 +114,14 @@ def _review_batch(context, current, requested, lookup, primary_pages, gateway, v
     rejected_errors = set()
     initial_messages = list(messages)
     for attempt in range(3):
-        if budget['calls'] >= MAX_REVIEW_CALLS:
-            raise ValueError('Coverage model-call budget exhausted; remaining evidence requires review.')
-        budget['calls'] += 1
+        def reserve():
+            if budget['calls'] >= MAX_REVIEW_CALLS:
+                raise ValueError('Coverage model-call budget exhausted; remaining evidence requires review.')
+            budget['calls'] += 1
         try:
-            reviewed = gateway.generate_structured(messages, TopicCoverageReview,
-                                                   stage='presentation', allow_repair=False,max_tokens=MAX_REVIEW_OUTPUT_TOKENS)
+            from .presentation_budget_output import complete_budget_output
+            reviewed = complete_budget_output(gateway, messages, TopicCoverageReview, audit,
+                audit_key='output_attempts', token_limits=(16384, 24576), before_attempt=reserve)
         except LLMResponseError as exc:
             # A topic-count overflow needs a semantic regrouping with source
             # context, not truncation or an evidence-blind format-only repair.
@@ -290,12 +292,13 @@ def review_topic_coverage(
                                review_payload, gateway, validate, record, instructions=instructions)
     reviewed = None
     try:
-        reviewed = gateway.generate_structured([
+        from .presentation_budget_output import complete_budget_output
+        reviewed = complete_budget_output(gateway, [
             {"role": "system", "content": with_presentation_limits(load_prompt("presentation_topic_selection.txt")) + "\n\n"
              + load_prompt("presentation_topic_coverage_review.txt")},
             *instructions,
             untrusted_document_message(encoded),
-        ], TopicCoverageReview, stage="presentation", allow_repair=False,max_tokens=MAX_REVIEW_OUTPUT_TOKENS)
+        ], TopicCoverageReview, audit, audit_key='output_attempts', token_limits=(16384, 24576))
         from .topic_reference_binding import bind_topic_references
         bind_topic_references(reviewed, lookup, result)
         revised = PresentationTopicSelection(topics=reviewed.topics, omissions=reviewed.omissions)

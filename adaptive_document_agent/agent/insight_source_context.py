@@ -50,10 +50,13 @@ def _page_windows(text: str, size: int, terms: list[str]) -> list[tuple[int, str
     stride = max(1, size * 3 // 4)
     starts = list(range(0, len(text) - size + 1, stride))
     starts.append(len(text) - size)
-    # For equal lexical overlap, prefer text over table padding and digit-only
-    # cells. This chooses a reading window, not an explanation or causal claim.
+    # For equal lexical overlap, prefer prose density before raw letter count.
+    # A long row-label table can otherwise displace a shorter complete narrative
+    # paragraph. This selects reading material, never a cause or an importance.
     return sorted(((start, text[start:start + size]) for start in dict.fromkeys(starts)),
                   key=lambda item: (-_overlap(item[1], terms),
+                                    -sum(c.isalpha() for c in item[1]) /
+                                    max(1, sum(not c.isspace() for c in item[1])),
                                     -sum(character.isalpha() for character in item[1]), item[0]))
 
 
@@ -86,7 +89,7 @@ elsewhere in the document. No embeddings, external lookup, or model calls occur.
         scores = {number: _overlap(page.text, terms) for number, page in pages.items()}
         rank = lambda number: (-scores[number], -lexical_richness[number], number)
         direct = sorted(anchors & pages.keys(), key=rank)
-        neighbors = sorted(({number + step for number in anchors for step in (-1, 1)} & pages.keys()) - anchors,
+        neighbors = sorted(({number + step for number in anchors for step in (-2, -1, 1, 2)} & pages.keys()) - anchors,
                            key=rank)
         other = sorted((number for number in pages if scores[number] > 0
                         and number not in anchors and number not in neighbors), key=rank)

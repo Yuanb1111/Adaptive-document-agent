@@ -45,6 +45,10 @@ def review_presentation(plan: PresentationPlan | None, result: PipelineResult) -
     if plan is None:
         return [EditorialFinding("presentation_legacy", "Legacy evidence export: no analytical presentation plan is available.")]
     findings = []
+    from .topic_review_status import topic_review_gaps
+    for gap in topic_review_gaps(result):
+        findings.append(EditorialFinding('presentation_degraded',
+            gap['title'] + ': ' + gap['reason']))
     from adaptive_document_agent.agent.topic_coverage_review import coverage_review_pending
     if coverage_review_pending(result):
         findings.append(EditorialFinding("presentation_topic_coverage_unresolved",
@@ -98,6 +102,9 @@ def review_presentation(plan: PresentationPlan | None, result: PipelineResult) -
         topic_titles.update({_normal(obs.metric_original), _normal(obs.metric_canonical or "")})
     single_pages = []
     for slide in analysis:
+        if not slide.analytical_question.strip():
+            findings.append(EditorialFinding('presentation_missing_question',
+                'This analysis page needs an explicit evidence-supported question.', slide.id))
         cids = set(slide.chart_ids) | {cid for b in slide.visual_blocks for cid in b.chart_ids}
         if len(cids) == 1:
             single_pages.append(slide)
@@ -127,7 +134,8 @@ def stamp_editorial_review(plan: PresentationPlan, result: PipelineResult, *, or
     """Server-owned status; never accept the model's self-assessment."""
     plan.planning_origin = origin
     findings = review_presentation(plan, result)
-    plan.editorial_status = "degraded" if origin in {"fallback", "topic_recovery"} else "needs_review" if findings else "ready"
+    plan.editorial_status = "degraded" if (origin in {"fallback", "topic_recovery"}
+        or any(f.code == 'presentation_degraded' for f in findings)) else "needs_review" if findings else "ready"
     # Repair history is durable; review findings describe only the current plan.
     # Recognise the previous untagged review format for cached exports as well.
     review_prefixes = (

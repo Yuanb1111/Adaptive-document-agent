@@ -1,9 +1,10 @@
 """Independent report and presentation-question planning over shared evidence."""
 
-from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+from concurrent.futures import CancelledError, ThreadPoolExecutor, wait, FIRST_COMPLETED
 from typing import Callable
 from adaptive_document_agent.models import PipelineResult, ReportPlan, PresentationTopicSelection
 from adaptive_document_agent.services.llm import LLMGateway
+from adaptive_document_agent.services.llm.exceptions import PrivacyViolationError
 
 from .report_planner import DynamicReportPlanner
 from .presentation_topic_selector import PresentationTopicSelector
@@ -27,6 +28,8 @@ def plan_outputs(
         try:
             with record_timing(timings, "topic_selection"):
                 return PresentationTopicSelector(gateway).select(result), None
+        except (PrivacyViolationError, CancelledError):
+            raise
         except Exception as exc:
             return None, exc
 

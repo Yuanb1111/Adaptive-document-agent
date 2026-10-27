@@ -37,6 +37,10 @@ class NoTopicsClient(SyntheticReportingClient):
 
 
 def reporting_run(monkeypatch, *, fault=None):
+    if fault is not None:
+        # Isolate the late-stage checkpoint under test. Production now stops
+        # this synthetic missing-topic run at the earlier coverage gate.
+        monkeypatch.setattr('adaptive_document_agent.services.topic_review_status.topic_review_gaps', lambda r: [])
     source, raw = _synthetic_checkpoint()
     client = NoTopicsClient(source, accept_introduction=True)
     runner = DocumentOrchestrator(_gateway(client))
@@ -87,11 +91,12 @@ def reporting_run(monkeypatch, *, fault=None):
     return source, result, measurements, progress
 
 
-def test_full_fallback_reporting_rechecks_changed_brief_without_losing_result(monkeypatch):
+def test_missing_topics_cannot_complete_merely_because_fallback_can_render(monkeypatch):
     source, result, measurements, _ = reporting_run(monkeypatch)
-    assert result.pipeline_state == 'complete' and result.presentation_topics is None
-    assert result.executive_brief.title == 'Source-reviewed conclusions'
-    assert measurements and measurements[-1]['topic_pages'] == []
+    assert result.pipeline_state == 'partial' and result.presentation_topics is None
+    assert result.failed_stage == 'presentation_coverage'
+    assert 'Analytical topic review incomplete' in result.failure_details['message']
+    assert not measurements
     assert result.observations == source.observations
     assert any(w.code == 'presentation_topic_selection_failed' for w in result.validation_warnings)
 
