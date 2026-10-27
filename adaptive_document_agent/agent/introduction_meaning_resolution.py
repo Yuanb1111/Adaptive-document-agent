@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from adaptive_document_agent.services.source_quotes import normalize_quote
 from .introduction_audience import AUDIENCE_REASON_MAX_LENGTH, RequiredMeaning
 from .introduction_audience_review import current_meanings
-from .introduction_resolution_feedback import UnappliedMeaningCorrection, resolution_with_feedback
+from .introduction_resolution_feedback import MeaningReferenceError, UnappliedMeaningCorrection, resolution_with_feedback
 from .prompting import untrusted_document_message
 
 
@@ -186,7 +186,8 @@ def apply_meaning_resolution(selection, response, findings, source, *, transport
         refs = entry.referenced_meaning_ids
         if len(refs) != len(set(refs)) or any(
                 ref not in meanings or meanings[ref]['part_id'] != part_id for ref in refs):
-            raise ValueError('Finding disposition references an unknown, duplicate or differently owned current meaning')
+            raise MeaningReferenceError(finding, refs,
+                [ref for ref, meaning in meanings.items() if meaning['part_id'] == part_id])
         if not entry.reason.strip():
             raise ValueError('Finding disposition requires a substantive source-aware reason')
         if entry.action == 'already_covered':

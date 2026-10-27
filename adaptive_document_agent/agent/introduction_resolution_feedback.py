@@ -1,4 +1,4 @@
-"""One bounded correction when a claimed meaning repair was never applied."""
+"""One bounded correction for unapplied repairs or invalid owned references."""
 from concurrent.futures import CancelledError
 import json
 
@@ -16,6 +16,15 @@ class UnappliedMeaningCorrection(ValueError):
         self.unchanged_proposal = unchanged_proposal
 
 
+class MeaningReferenceError(ValueError):
+    """A model-owned reference can be corrected within the same protocol budget."""
+
+    def __init__(self, finding: dict, references: list[str], allowed_references: list[str]) -> None:
+        super().__init__('Finding disposition references an unknown, duplicate or differently owned current meaning')
+        self.feedback = dict(finding_id=finding['finding_id'], part_id=finding['part_id'],
+            received_references=list(references), allowed_current_meaning_ids=list(allowed_references))
+
+
 def resolution_with_feedback(gateway, messages, schema, validate, record, *, cancelled=None):
     """Keep both proposals; neither narrative reasons nor a retry grants approval."""
     current_messages = messages
@@ -29,6 +38,24 @@ def resolution_with_feedback(gateway, messages, schema, validate, record, *, can
         record['response_source_quotes_status'] = 'untrusted_diagnostic_only'
         try:
             draft = validate(response)
+        except MeaningReferenceError as exc:
+            row.update(status='rejected', error=str(exc), reference_error=exc.feedback)
+            if attempt:
+                raise
+            current_messages = messages + [untrusted_document_message(json.dumps(dict(
+                rejected_proposal=row['response'], validation_error=str(exc),
+                reference_error=exc.feedback), ensure_ascii=False)),
+                {'role': 'user', 'content':
+                 'Correct the exact finding reference error within the unchanged source ownership rules. '
+                 'Return the COMPLETE resolution for every finding. referenced_meaning_ids must contain '
+                 'distinct BEFORE-RESOLUTION meanings owned by that finding\'s own part; the supplied '
+                 'allowed_current_meaning_ids identifies those addresses, not semantic support. A fact '
+                 'covered only by another part cannot use that foreign meaning ID as an already_covered '
+                 'binding. Reassess whether an owned addition is necessary or a genuinely new assertion '
+                 'is outside the selected scope; do not transfer qualifications, guess a nearby ID or '
+                 'invent a same-part reference. Preserve all protected meanings and other valid findings. '
+                 'This uses the existing single protocol correction, not another semantic-review loop. '
+                 'The revised proposal still requires validation and fresh independent full-source review.'}]
         except UnappliedMeaningCorrection as exc:
             row.update(status='rejected', error=str(exc), finding_id=exc.finding_id,
                        meaning_id=exc.meaning_id)
