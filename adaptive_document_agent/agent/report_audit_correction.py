@@ -3,6 +3,7 @@ import json
 
 from .prompting import untrusted_document_message
 from .report_audit_eligibility import audit_binding_ineligibility
+from .audit_header_feedback import HEADER_QUOTE_INSTRUCTIONS, header_reading_windows
 
 
 DISPOSITION_INSTRUCTIONS = (
@@ -92,6 +93,10 @@ def target_contracts(context, draft=None):
             allowed_dispositions=['unresolved'] if ineligibility else ['audited', 'unaudited', 'unresolved'],
             binding_ineligibility=ineligibility,
             entity_contract=entity_correction_contract(observation),
+            header_quote=dict(required_period=observation.get('period'),
+                              continuous_source_passage=True,
+                              retain_duration_and_year_tiers=True,
+                              column_ownership_requires_independent_review=True),
             target_quote=dict(
                 allowed_source_pages=sorted({item['page'] for item in evidence}),
                 required_raw_value=observation['raw_value'],
@@ -114,10 +119,18 @@ def target_contracts(context, draft=None):
 def correction_messages(context, draft, entry):
     """Expose retained identities as data, without choosing evidence or assurance."""
     contracts = target_contracts(context, draft)
+    header_failures = {issue['observation_id'] for issue in entry.get('validation_issues', [])
+                       if issue['field'].startswith('header_quote')}
+    bindings = {binding.observation_id: binding for binding in draft.bindings}
+    for contract in contracts:
+        oid = contract['observation_id']
+        if oid in header_failures and oid in bindings:
+            contract['header_reading_windows'] = header_reading_windows(
+                context, bindings[oid], contract['retained_target']['period'])
     entry['correction_contracts'] = contracts
     feedback = dict(corrective_kind=entry.get('corrective_kind', 'binding_validation'),
                     target_contracts=contracts, validation_issues=entry.get('validation_issues', []),
                     validation_or_review_error=entry['error'], independent_review=entry.get('review'))
     return [dict(role='assistant', content=json.dumps(entry['draft'], ensure_ascii=False)),
             untrusted_document_message(json.dumps(feedback, ensure_ascii=False)),
-            dict(role='user', content=_CORRECTION_INSTRUCTIONS)]
+            dict(role='user', content=_CORRECTION_INSTRUCTIONS + ' ' + HEADER_QUOTE_INSTRUCTIONS)]
