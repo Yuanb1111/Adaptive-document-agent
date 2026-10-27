@@ -8,10 +8,10 @@ from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputE
 
 from .presentation_budget_output import complete_budget_output
 from .prompting import untrusted_document_message
-from .report_audit_source_index import discovery_input
+from .report_audit_source_index import discovery_input, discovery_request
 from .structured_output_correction import schema_feedback
 from .audit_discovery_references import (
-    AuditDiscoveryReferenceError, REFERENCE_INSTRUCTIONS, reference_input, resolve_selection,
+    AuditDiscoveryReferenceError, REFERENCE_INSTRUCTIONS, resolve_selection,
 )
 
 
@@ -97,7 +97,8 @@ def discover_audit_sources(gateway, result, base, audit, *, progress=None):
             return expanded
         if progress:
             progress('Locating additional source pages for exact audit qualifications')
-        wire_payload, references = reference_input(payload)
+        encoded_payload, references = discovery_request(payload)
+        record['serialized_input_characters'] = len(encoded_payload)
         record['reference_map'] = references
         messages = [dict(role='system', content=
             'Locate additional source pages needed to establish or challenge exact assurance bindings '
@@ -123,7 +124,7 @@ def discover_audit_sources(gateway, result, base, audit, *, progress=None):
             'can be identified, return an empty range list with a source-specific rationale; that '
             'does not certify document completeness or absence of evidence. Do not assign assurance. '
             + REFERENCE_INSTRUCTIONS),
-            untrusted_document_message(json.dumps(wire_payload, ensure_ascii=False))]
+            untrusted_document_message(encoded_payload)]
         for attempt in range(2):
             entry = {}
             record['attempts'].append(entry)

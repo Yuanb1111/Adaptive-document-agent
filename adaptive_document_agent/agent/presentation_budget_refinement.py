@@ -179,6 +179,15 @@ def refine_presentation_budget(gateway, result, *, progress=None):
         'row from a retained one-page group does not establish any saved page. Choose a '
         'source-faithful scope change capable of reducing page-bearing groups; do not assume '
         'one omitted series equals one saved page. Only the rebuilt native deck proves fit. '
+        'When complete measured topics have disjoint pages, whole_topic_reference_options '
+        'provides Python-calculated combinations within ALL current report and analysis caps. '
+        'Use those sums when choosing whole-topic omissions; do not claim that removing fewer '
+        'pages than required reaches the cap. The options are not ranked by analytical value '
+        'and do not authorize any omission. You still choose priorities from the complete '
+        'source and must preserve material qualifications and counterevidence. These reference '
+        'costs apply only to complete measured topics; partial-series scope changes need new '
+        'native measurement. If no honest combination fits, explain why instead of pretending '
+        'an over-budget combination fits. '
         'If indispensable evidence cannot fit, explain that inability in '
         'the decision reasons and retain it for transparent failure; do not invent an omission. '
         'historical_omissions_read_only records prior decisions outside this editable inventory; '
@@ -212,8 +221,11 @@ def refine_presentation_budget(gateway, result, *, progress=None):
         try:
             notify(f'Budget proposal {attempt+1}/2: choosing evidence priorities')
             started = perf_counter()
-            draft = complete_budget_output(gateway,messages,PhysicalBudgetSelection,record,
-                audit_key='selection_output_attempts',token_limits=SELECTION_TOKEN_LIMITS)
+            from .presentation_budget_scope import choose_whole_topic_scope
+            draft = choose_whole_topic_scope(gateway, messages, context, original, record)
+            if draft is None:
+                draft = complete_budget_output(gateway,messages,PhysicalBudgetSelection,record,
+                    audit_key='selection_output_attempts',token_limits=SELECTION_TOKEN_LIMITS)
             record.setdefault('timings_ms', {})['selection'] = int((perf_counter()-started)*1000)
             record['proposal'] = draft.model_dump(mode='json')
             record['inventory_diagnostics'] = selection_inventory_diagnostics(draft, original)

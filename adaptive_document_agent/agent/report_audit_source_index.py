@@ -9,6 +9,18 @@ from .source_coverage import inventory
 MAX_DISCOVERY_INPUT_CHARS = 260_000
 
 
+def discovery_request(payload):
+    """Bound the exact lossless wire payload, after replacing opaque addresses."""
+    from .audit_discovery_references import reference_input
+    wire, references = reference_input(payload)
+    encoded = json.dumps(wire, ensure_ascii=False, separators=(',', ':'))
+    if len(encoded) > MAX_DISCOVERY_INPUT_CHARS:
+        raise ValueError('Complete audit source navigation exceeds its bounded input budget '
+                         f'({len(encoded)} > {MAX_DISCOVERY_INPUT_CHARS} serialized characters); '
+                         'no index entries were dropped.')
+    return encoded, references
+
+
 def digest(value):
     return sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
@@ -49,8 +61,10 @@ def discovery_input(result, context):
         remaining_source_character_budget=budget['limit']-budget['largest_batch_characters'],
         navigation_notice='Every physical page is indexed. Previews and literal value hits are navigation '
             'data only, not source quotations, metric matches, assurance or complete page reading.')
-    if len(json.dumps(payload, ensure_ascii=False)) > MAX_DISCOVERY_INPUT_CHARS:
-        raise ValueError('Complete audit source navigation exceeds its bounded input budget; no index entries were dropped.')
+    # The canonical local ledger retains long source identities. Admission must
+    # measure the identical serialized payload sent to the gateway, not that
+    # larger ledger. JSON separator whitespace is not source content.
+    discovery_request(payload)
     # Page previews alone cannot keep a cached selection current after a source
     # body changes. Hash complete local text without sending unselected bodies.
     return payload, digest(payload)

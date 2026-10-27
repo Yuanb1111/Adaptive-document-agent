@@ -146,7 +146,7 @@ def test_transport_failure_is_not_retried_as_output_capacity():
 def test_small_context_partitions_before_request_without_sampling(monkeypatch):
     from adaptive_document_agent.agent import topic_evidence_review as module
     result, lookup, selection = selected()
-    lengths = [len(json.dumps(module.evidence_payload([t], lookup), separators=(',', ':')))
+    lengths = [len(json.dumps(module.evidence_payload([t], lookup, result), separators=(',', ':')))
                for t in selection.topics]
     monkeypatch.setattr(module, 'MAX_CONTEXT', max(lengths) + 10)
     g, client = gateway([response(verdict(t.id)) for t in selection.topics])

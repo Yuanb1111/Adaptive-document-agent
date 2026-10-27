@@ -110,11 +110,13 @@ def measured_budget_allocation(counts, requirement, requirements, *, maximum_ana
 
 def budget_action_feedback(counts, allocation):
     """Expose the measured repair task and the actual subset-only action space."""
+    from .presentation_budget_options import whole_topic_cost_options
     return dict(current_analysis_slides=counts['analysis'],
         analysis_capacity_with_current_overhead=allocation['effective_analysis_capacity'],
         required_analysis_slide_reduction=max(0, counts['analysis']-allocation['effective_analysis_capacity']),
         report_constraints=allocation['constraints'], measured_original_topic_costs=counts.get('topic_pages', []),
         measured_native_groups=counts.get('native_groups', []),
+        whole_topic_reference_options=whole_topic_cost_options(counts, allocation),
         supported_actions=['Omit an entire lower-priority original topic with explicit source-aware series decisions.',
             'Retain an original topic ID with a subset of only its own original series; rewrite copy to that exact scope.'],
         unsupported_action='Cross-topic evidence unions are not supported. A topic cannot take another original topic\'s series.',
