@@ -5,6 +5,47 @@ from adaptive_document_agent.models.executive_brief import ExecutiveBrief
 from tests.test_executive_brief import result_for, payload
 
 
+def test_displayed_quantity_contract_keeps_signed_source_scale_without_conversion():
+    from adaptive_document_agent.agent.brief_meaning_contract import displayed_quantity_contract
+    brief = ExecutiveBrief.model_validate(payload('Cash outflow was RMB -70414 thousand in 1H2024.'))
+    contract = displayed_quantity_contract(brief.items[0])
+    assert dict(currency='rmb', signed_coefficient='-70414', unit='thousand',
+                amount_text='RMB -70414 thousand') in contract
+    assert not any(row['unit'] == 'million' for row in contract)
+
+
+@pytest.mark.parametrize('invented_label', [False, True])
+def test_meaning_repair_can_fix_rejected_label_but_cannot_add_label_quantities(invented_label):
+    source = 'Loss was USD 12 million in 2023 and USD 24 million in 2024.'
+    result = result_for([source])
+    brief = ExecutiveBrief.model_validate(payload(source))
+    brief.items[0].label = 'Loss narrowed'
+    brief.items[0].evidence[0].text = source
+    locked = brief.items[0].model_copy(update={'label': 'Reported amounts',
+                                              'text': 'The source reports annual losses.'})
+    brief.items.append(locked)
+    reviewed = []
+    def meaning(value):
+        reviewed.append(value)
+        return {0: ['Label contradicts loss magnitude.']} if value.items[0].label == 'Loss narrowed' else {}
+    class Client:
+        def generate_structured(self, messages, schema, **kwargs):
+            assert set(schema.model_fields) == {'item_0'}
+            return schema(item_0=dict(text=source,
+                label='Loss widened to USD 99 million' if invented_label else 'Loss widened'))
+    audit = {}
+    corrected = correct_new_meaning_errors(Client(), brief, result=result, excerpts={1: source},
+        topics=[], source_context={}, evidence_catalog=None, semantic_validator=meaning, audit=audit)
+    if invented_label:
+        assert corrected is None
+        assert len(reviewed) == 1
+        assert 'introduced new quantities' in str(audit)
+    else:
+        assert corrected.items[0].label == 'Loss widened'
+        assert corrected.items[1] == locked
+        assert len(reviewed) == 2
+
+
 @pytest.mark.parametrize('valid', [True, False])
 def test_post_source_meaning_patch_is_bounded_locks_good_items_and_rechecks_sources(valid):
     source = 'Revenue was USD 12 million in 2024, unaudited.'

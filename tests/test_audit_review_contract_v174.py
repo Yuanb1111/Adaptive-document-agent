@@ -140,3 +140,27 @@ def test_exhausted_review_length_keeps_capacity_diagnostics_and_never_uses_forma
     assert record['corrections_used']['independent_review'] == 0
     assert [a['status'] for a in record['attempts'][0]['review_output_attempts']] == ['truncated', 'truncated']
     assert not record['attempts'][0].get('review_contract_corrections')
+
+
+@pytest.mark.parametrize('repeated', [False, True])
+def test_page_label_typo_returns_to_reviewer_without_spending_writer_correction(repeated):
+    result, binding = fixture()
+    draft = AuditScopeDraft(bindings=[binding], unresolved_observation_ids=['ratio'],
+        unresolved_reason='Ratio outside amount assurance.')
+    valid = AuditScopeReview(verdicts=[dict(observation_id='amount', accepted=True,
+        reason='Exact covered source.', covered_source=covered_source(binding))],
+        unresolved_accepted=True, unresolved_reason='Ratio outside amount assurance.')
+    invalid = valid.model_copy(deep=True)
+    invalid.verdicts[0].covered_source.page_coverage[0].covered_page_label = '6'
+    gateway = ScriptedGateway([draft, invalid, invalid if repeated else valid])
+    record = dict(attempts=[])
+    if repeated:
+        with pytest.raises(ValueError, match='review_output correction budget exhausted'):
+            _review_batch(gateway, _context(result), record)
+    else:
+        _review_batch(gateway, _context(result), record)
+        assert record['draft'] == draft.model_dump(mode='json')
+    assert [call[1] for call in gateway.calls] == [AuditScopeDraft, AuditScopeReview, AuditScopeReview]
+    assert record['corrections_used']['review_output'] == 1
+    assert record['corrections_used']['independent_review'] == 0
+    assert record['corrections_used']['binding_validation'] == 0

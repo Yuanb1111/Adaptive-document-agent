@@ -93,3 +93,21 @@ def test_date_components_never_override_other_binding_errors(field, value):
         review_report_audit_scope(gateway, result)
     assert all(call[0] is AuditScopeDraft for call in gateway.calls)
     assert not reviewed_audit_bindings(result)
+
+
+@pytest.mark.parametrize('prefix,suffix', [
+    ('', '\nRMB’000 RMB’000 RMB’000 RMB’000'),
+    ('STATEMENT OF FINANCIAL POSITION\n', '\nRMB’000 RMB’000 RMB’000 RMB’000\n(Unaudited)'),
+])
+def test_complete_literal_header_can_retain_surrounding_title_units_and_qualifiers(prefix, suffix):
+    header = prefix + TIERS + suffix
+    assert _period_in_header('2022-12-31', header)
+    assert _period_in_header('2024-06-30', header)
+    assert not _period_in_header('2020-12-31', header)
+    assert not _period_in_header('2022-06-29', header)
+
+
+@pytest.mark.parametrize('intervening', ['Revenue 500', 'A different table follows.', 'RMB’000 RMB’000'])
+def test_subheader_scan_never_bridges_intervening_source_content(intervening):
+    header = f'As at 31 December\n{intervening}\nNotes 2021 2022 2023\nRMB’000'
+    assert not _period_in_header('2022-12-31', header)

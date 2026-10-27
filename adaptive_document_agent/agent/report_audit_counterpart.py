@@ -14,6 +14,10 @@ class AuditPageLabelQuote(BriefQuote):
     text: str = Field(min_length=1, max_length=100)
 
 
+class AuditPageLabelError(ValueError):
+    """A reviewer-owned page marker needs correction, not a rewritten draft."""
+
+
 class AuditPageCoverage(BaseModel):
     model_config = ConfigDict(extra='forbid')
     page: int = Field(ge=1)
@@ -116,7 +120,12 @@ def _validate_page_coverage(coverage, binding, pages):
             or printed != _label(coverage.covered_page_label)
             or not any(_label(line).strip('-–—()[]{}:.,') == printed
                        for line in pages.get(coverage.page, '').splitlines())):
-        raise ValueError('The counterpart page label must be a literal standalone source-page marker.')
+        raise AuditPageLabelError(
+            'The counterpart page label must be a literal standalone source-page marker. '
+            f'Physical page {coverage.page}: declared covered_page_label={coverage.covered_page_label!r}; '
+            f'page_label_quote.page={quote.page}, page_label_quote.text={quote.text!r}. '
+            'Recheck the original page footer/header and make the declared label and literal quote agree; '
+            'do not infer a printed label from the physical page number or change the proposed binding.')
 
 
 def validate_covered_sources(draft, review, context):

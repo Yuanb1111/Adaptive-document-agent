@@ -7,6 +7,13 @@ from .brief_audit_scope import (
 from .brief_period_clarification import original_period_identities, quantity_text_with_bound_dates
 
 
+def displayed_quantity_contract(item):
+    """Expose existing numeric tokens to the writer without deriving new values."""
+    return [dict(currency=currency, signed_coefficient=value, unit=unit,
+                 amount_text=' '.join(part for part in (currency.upper(), value, unit) if part))
+            for currency, value, unit in sorted(_quantities(item.text) | _quantities(item.label))]
+
+
 def check_meaning_contract(original, candidate, indices, *, result, excerpts, inventories, periods):
     """Return exact violations and whether one narrow protocol correction is possible.
 
@@ -18,14 +25,16 @@ def check_meaning_contract(original, candidate, indices, *, result, excerpts, in
     items = list(candidate.items)
     for index in indices:
         before, item = original.items[index], items[index]
-        raw_shown = {canonical_quantity(*q) for q in _quantities(item.text)}
+        raw_shown = {canonical_quantity(*q) for q in _quantities(item.text) | _quantities(item.label)}
         aliases = original_period_identities(before, inventories[index], result=result)
         checked_text = quantity_text_with_bound_dates(item.text, periods[index], inventories[index],
                                                      original_periods=aliases)
         shown = {canonical_quantity(*q) for q in _quantities(checked_text)}
+        shown.update(canonical_quantity(*q) for q in _quantities(item.label))
         original_text = quantity_text_with_bound_dates(before.text, periods[index], inventories[index],
                                                        original_periods=aliases)
         permitted = {canonical_quantity(*q) for q in _quantities(original_text)}
+        permitted.update(canonical_quantity(*q) for q in _quantities(before.label))
         representations = []
         for representation in before.quantity_representations:
             positive = {canonical_quantity(*q) for q in _quantities(representation.quantity_text)}

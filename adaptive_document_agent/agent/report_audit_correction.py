@@ -6,6 +6,25 @@ from .report_audit_eligibility import audit_binding_ineligibility
 from .audit_header_feedback import HEADER_QUOTE_INSTRUCTIONS, header_reading_windows
 
 
+COUNTERPART_LOCATION_INSTRUCTIONS = (
+    'The allowed_source_pages inside target_quote constrain ONLY target_quote. '
+    'They NEVER constrain value_quote, header_quote, unit_quote or scope_evidence: '
+    'those may use ANY supplied source page, including a different statement or note. '
+    'Do not reject an exact counterpart merely because it is on a different physical page '
+    'from the original observation. Preserve any actual contradiction and assess its scope. '
+    'An exact counterpart requires a literal row for the SAME measure and signed amount. '
+    'A collection of component rows, a matching parent total, or a sum calculated from '
+    'other measures is NOT an exact counterpart for this amount-binding operation. '
+    'Do not perform arithmetic or invent a combined source row to confer assurance. '
+    'A literal summary row outside an explicitly covered page range cannot inherit that '
+    'range\'s audit opinion merely because its entity and period match. Without an exact '
+    'covered counterpart or an explicit qualification of that table, keep its status unresolved. '
+    'source_unit must copy the literal unit spelling in unit_quote; do not normalize it '
+    'to a different equivalent spelling. Match scale and currency numerically instead. '
+    'Assess each target independently: bind supported targets even when another target '
+    'in the same batch must remain unresolved. ')
+
+
 DISPOSITION_INSTRUCTIONS = (
     'Unaudited is an affirmative source conclusion, not a default for missing audit proof. '
     'The supplied target_contracts expose constraints from retained observation metadata, '
@@ -14,7 +33,7 @@ DISPOSITION_INSTRUCTIONS = (
     'unresolved_observation_ids with a source-specific unresolved_reason for independent review. '
     'Do not change retained observation types to make a binding eligible. '
     'Eligible amounts still require the complete exact source chain; unknown is not a shortcut '
-    'when a covered counterpart exists. ')
+    'when a covered counterpart exists. ' + COUNTERPART_LOCATION_INSTRUCTIONS)
 
 
 _CORRECTION_INSTRUCTIONS = (
@@ -97,6 +116,10 @@ def target_contracts(context, draft=None):
                               continuous_source_passage=True,
                               retain_duration_and_year_tiers=True,
                               column_ownership_requires_independent_review=True),
+            counterpart_quotes=dict(allowed_source_pages=[p['page'] for p in context['source_pages']],
+                                    target_page_restriction_applies=False,
+                                    literal_same_measure_and_amount_required=True,
+                                    component_arithmetic_is_not_a_counterpart=True),
             target_quote=dict(
                 allowed_source_pages=sorted({item['page'] for item in evidence}),
                 required_raw_value=observation['raw_value'],
@@ -133,4 +156,5 @@ def correction_messages(context, draft, entry):
                     validation_or_review_error=entry['error'], independent_review=entry.get('review'))
     return [dict(role='assistant', content=json.dumps(entry['draft'], ensure_ascii=False)),
             untrusted_document_message(json.dumps(feedback, ensure_ascii=False)),
-            dict(role='user', content=_CORRECTION_INSTRUCTIONS + ' ' + HEADER_QUOTE_INSTRUCTIONS)]
+            dict(role='user', content=_CORRECTION_INSTRUCTIONS + ' ' + HEADER_QUOTE_INSTRUCTIONS
+                 + COUNTERPART_LOCATION_INSTRUCTIONS)]

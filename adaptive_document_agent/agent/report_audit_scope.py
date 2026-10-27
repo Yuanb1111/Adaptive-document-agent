@@ -68,12 +68,14 @@ class AuditScopeReview(BaseModel):
     verdicts: list[AuditScopeVerdict] = Field(description=
         'Exactly one verdict per draft.bindings observation_id; never include unresolved IDs. '
         'Return [] when draft.bindings is empty.')
-    unresolved_accepted: bool = Field(description=
-        'Whether ALL proposed unknown dispositions are supported. False if any unresolved '
-        'measure has an exact covered counterpart; this does not grant assurance.')
     unresolved_reason: str = Field(min_length=1, max_length=AUDIT_BATCH_REASON_CHARS, description=
         'Explain the unknown dispositions against supplied sources; identify exact counterpart '
         'evidence for each rejected unknown so the writer can correct the draft.')
+    unresolved_accepted: bool = Field(description=
+        'Your conclusion from unresolved_reason: TRUE if keeping every unresolved target unknown '
+        'is justified (including no exact covered counterpart). FALSE only if at least one '
+        'unknown should be bound using an exact supported counterpart. This accepts unknown '
+        'status, not assurance. The draft has no unresolved_accepted field to evaluate.')
 
 
 def _key(value):
@@ -230,8 +232,13 @@ def _validate(draft, context):
             reject('value_quote.text', 'The source row must contain the exact mapped raw value.', oid,
                    expected=binding.source_raw_value)
         if normalize_quote(binding.source_unit) not in normalize_quote(binding.unit_quote.text):
-            reject('unit_quote.text', 'The mapped source unit requires its literal declaration.', oid,
-                   expected=binding.source_unit)
+            reject('source_unit/unit_quote.text',
+                   'The proposed source_unit does not occur in its unit quotation. Both are editable '
+                   'proposals: select the literal unit declaration applying to the source row and '
+                   'copy that spelling into source_unit. Do not rewrite a quotation to match a '
+                   'normalized or invented unit spelling. Preserve numerical scale and currency.', oid,
+                   expected=dict(source_unit_must_be_literal=True,
+                                 preserve_target_amount_scale_and_currency=True))
         raw = parse_number(binding.source_raw_value)
         unit = infer_unit_defaults(binding.source_unit)
         target_unit = infer_unit_defaults(observation['raw_unit'] or observation['currency'] or '')

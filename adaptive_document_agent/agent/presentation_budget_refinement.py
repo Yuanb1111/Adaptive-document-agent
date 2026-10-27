@@ -247,8 +247,16 @@ def refine_presentation_budget(gateway, result, *, progress=None):
             if candidate.pipeline_version:
                 from .topic_evidence_review import review_topic_evidence
                 from .presentation_topic_selector import PresentationTopicSelector
-                checked = review_topic_evidence(selection, lookup, candidate, gateway,
-                    PresentationTopicSelector._validate, allow_correction=False)
+                before_review = len(candidate.validation_warnings)
+                try:
+                    checked = review_topic_evidence(selection, lookup, candidate, gateway,
+                        PresentationTopicSelector._validate, allow_correction=False)
+                finally:
+                    # The candidate is discarded on rejection. Retain the exact
+                    # reviewer reasons in the bounded next proposal's feedback,
+                    # otherwise it receives only a generic failure and repeats it.
+                    record['source_semantic_audits'] = [w.model_dump(mode='json')
+                        for w in candidate.validation_warnings[before_review:]]
                 if checked != selection:
                     raise ValueError('Budget selection failed independent source-row semantic review.')
             from .topic_plan_compiler import compile_topic_plan

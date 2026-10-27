@@ -7,9 +7,11 @@ from .prompting import untrusted_document_message
 from .report_audit_batches import AuditReviewContractError, validate_review
 from .report_audit_capacity import AUDIT_REVIEW_TOKEN_LIMITS
 from .report_audit_counterpart import COUNTERPART_REVIEW_INSTRUCTIONS, MEASURE_IDENTITY_INSTRUCTIONS
+from .report_audit_counterpart import AuditPageLabelError
 from .audit_period_header import PERIOD_HEADER_INSTRUCTIONS
 from .audit_header_feedback import HEADER_QUOTE_INSTRUCTIONS
 from .structured_output_correction import schema_feedback
+from .report_audit_correction import COUNTERPART_LOCATION_INSTRUCTIONS
 
 
 QUOTE_FORMAT_INSTRUCTIONS = (
@@ -23,7 +25,11 @@ REVIEW_ID_INSTRUCTIONS = (
     'with no duplicate, missing or extra IDs. Never put unresolved_observation_ids in verdicts, '
     'even as accepted=false. If draft.bindings is [], return verdicts=[]. '
     'Review all unresolved IDs only through unresolved_accepted and unresolved_reason. '
-    'unresolved_accepted=true means their unknown dispositions are supported, not that they are audited. ')
+    'unresolved_accepted=true means their unknown dispositions are supported, not that they are audited. '
+    'First explain your source-based conclusion in unresolved_reason, then set your own '
+    'unresolved_accepted consistently with it. No exact covered counterpart means keep unknown '
+    'and accept that disposition (true). The writer draft has no unresolved_accepted field; '
+    'do not critique an imagined boolean in the draft. ')
 
 UNKNOWN_REVIEW_INSTRUCTIONS = (
     'For EVERY unresolved observation, independently search ALL supplied original statement and note '
@@ -58,7 +64,7 @@ def review_draft(gateway, context, draft, entry, correction_counts):
         'or adjusted figures. Do not transfer a comparative column qualifier to another period. '
         'Assess whether any unresolved measure actually has sufficient evidence and reject '
         'unjustified unknowns. ' + UNKNOWN_REVIEW_INSTRUCTIONS + REVIEW_ID_INSTRUCTIONS + QUOTE_FORMAT_INSTRUCTIONS
-        + COUNTERPART_REVIEW_INSTRUCTIONS
+        + COUNTERPART_REVIEW_INSTRUCTIONS + COUNTERPART_LOCATION_INSTRUCTIONS
         + f'This draft contains {len(draft.bindings)} proposed bindings and '
           f'{len(draft.unresolved_observation_ids)} unresolved IDs. '
         + ('Return verdicts=[]; assess all unknown dispositions in unresolved_accepted and '
@@ -73,7 +79,7 @@ def review_draft(gateway, context, draft, entry, correction_counts):
             entry['review'] = review.model_dump(mode='json')
             validate_review(draft, review, context)
             return review
-        except (AuditReviewContractError, LLMStructuredOutputError) as exc:
+        except (AuditReviewContractError, AuditPageLabelError, LLMStructuredOutputError) as exc:
             if (isinstance(exc, LLMStructuredOutputError) and exc.response.usage is not None
                     and exc.response.usage.finish_reason == 'length'):
                 raise  # Capacity recovery has already been exhausted; never repair partial JSON.
@@ -95,7 +101,9 @@ def review_draft(gateway, context, draft, entry, correction_counts):
                     f'(one reviewer output correction per batch): {details or str(exc)}') from exc
             correction_counts['review_output'] += 1
             messages.extend([untrusted_document_message(json.dumps(failure, ensure_ascii=False)),
-                dict(role='system', content='Correct only your review response format and exact ID ledger. '
+                dict(role='system', content='Correct only your review response format, exact ID ledger and '
+                    'reviewer-owned page-label proof. A page-label error requires a fresh literal marker '
+                    'check against the unchanged source page; do not change the writer binding. '
                     'Use schema_errors for exact field paths, types and limits. Rephrase overlong '
                     'reasons within their field limits, preserving the verdict, relevant IDs, '
                     'source distinctions and material qualifications; never truncate source quotations. '

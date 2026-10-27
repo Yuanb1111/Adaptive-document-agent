@@ -133,3 +133,31 @@ def test_wrong_page_alone_still_repeats_raw_value_and_row_label_contract():
     assert {issue['message'] for issue in missing_row.value.issues} == {
         'The target quotation must contain its retained raw value.',
         'The target quotation must retain its source row label.'}
+
+
+def test_target_page_contract_does_not_restrict_counterpart_source_reading():
+    from adaptive_document_agent.agent.report_audit_correction import target_contracts
+    result, valid, _ = source_case()
+    context = _context(result)
+    contract = next(c for c in target_contracts(context) if c['observation_id'] == 'amount')
+    assert contract['target_quote']['allowed_source_pages'] == [1]
+    assert contract['counterpart_quotes']['allowed_source_pages'] == [p['page'] for p in context['source_pages']]
+    assert 5 in contract['counterpart_quotes']['allowed_source_pages']
+    assert contract['counterpart_quotes']['target_page_restriction_applies'] is False
+    _validate(AuditScopeDraft(bindings=[valid], unresolved_observation_ids=['ratio'],
+                             unresolved_reason='No amount assurance for ratio.'), context)
+
+
+def test_unit_spelling_feedback_does_not_treat_model_proposal_as_source():
+    result, valid, _ = source_case()
+    original = valid['source_unit']
+    valid['source_unit'] = 'RMB in thousands'
+    with pytest.raises(AuditBindingValidationError) as raised:
+        _validate(AuditScopeDraft(bindings=[valid], unresolved_observation_ids=['ratio'],
+                                 unresolved_reason='Ratio is unresolved.'), _context(result))
+    issue = next(i for i in raised.value.issues if i['field'] == 'source_unit/unit_quote.text')
+    assert issue['expected']['source_unit_must_be_literal'] is True
+    assert 'Both are editable' in issue['message']
+    valid['source_unit'] = original
+    _validate(AuditScopeDraft(bindings=[valid], unresolved_observation_ids=['ratio'],
+                             unresolved_reason='Ratio is unresolved.'), _context(result))

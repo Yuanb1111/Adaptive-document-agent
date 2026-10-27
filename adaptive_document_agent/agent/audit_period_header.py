@@ -47,10 +47,19 @@ def snapshot_period_in_header(period, text):
         return False
     if re.search(r'(?<![\d-])' + re.escape(period) + r'(?![\d-])', text):
         return True
-    shared = _shared_header_components(text)
-    if shared is not None:
-        years, month_days = shared
-        return expected.year in years and (expected.month, expected.day) in month_days
+    # A literal quote may also retain its title, units and qualification rows.
+    # Locate a continuous header block inside it, without joining date/year
+    # fragments across intervening prose, amounts or another table.
+    lines = [line for line in text.splitlines() if line.strip()]
+    for end, line in enumerate(lines):
+        if not _YEAR_ROW.fullmatch(line):
+            continue
+        for start in range(max(0, end - 4), end):
+            shared = _shared_header_components('\n'.join(lines[start:end + 1]))
+            if shared is not None:
+                years, month_days = shared
+                if expected.year in years and (expected.month, expected.day) in month_days:
+                    return True
     for match in _DAY_MONTH.finditer(text):
         years = _YEAR_LIST.match(text, match.end())
         if years is None or _month_day(match) != (expected.month, expected.day):
