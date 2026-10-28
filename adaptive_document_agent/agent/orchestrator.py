@@ -68,6 +68,7 @@ class DocumentOrchestrator:
         presentation_budget = fixed_presentation_budget(presentation_budget)
         from adaptive_document_agent.services.analysis_deadline import AnalysisDeadline, AnalysisTimeLimitExceeded
         from .analysis_time_limit import retain_timed_out_result
+        from adaptive_document_agent.services.validation_cache import validation_cache_scope
         previous = getattr(self.gateway, 'run_deadline', None)
         deadline = previous if isinstance(previous, AnalysisDeadline) else AnalysisDeadline()
         if isinstance(self.gateway, LLMGateway):
@@ -80,7 +81,7 @@ class DocumentOrchestrator:
             if progress is not None:
                 progress(stage)
         try:
-            with ExitStack() as resources:
+            with validation_cache_scope(), ExitStack() as resources:
                 deadline.check()
                 result = self._analyse_pdf(
                     file, settings, progress=timed_progress, analysis_focus=analysis_focus,

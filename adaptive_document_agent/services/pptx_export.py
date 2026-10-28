@@ -11,6 +11,7 @@ import re
 from typing import Any, Iterable
 
 from pptx.util import Inches, Pt
+from .validation_cache import validation_cache_scope
 
 from adaptive_document_agent.document_model import (
     DocumentIndex,
@@ -138,6 +139,7 @@ def _resolve_template_path(template_path: str | Path | None = None) -> Path:
     )
 
 
+@validation_cache_scope()
 def build_presentation(result: PipelineResult, template_path: str | Path | None = None, *, artwork: bytes | None = None,
                        source_pdf: bytes | None = None, preflight_report: PreflightReport | None = None) -> bytes:
     """Return an editable, presentation-ready PowerPoint based on the FOURIER Light Version Template."""
@@ -202,6 +204,7 @@ def presentation_for_copy(result: PipelineResult):
     return presentation
 
 
+@validation_cache_scope()
 def _compose_presentation(result, template_path=None, *, artwork=None, source_pdf=None,
                           source_tables=True, validate_plan=True):
     """Share native composition between validated exports and private copy inventory."""

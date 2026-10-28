@@ -230,6 +230,13 @@ class CompanyProfileDiscovery:
         """Return the top ranked page numbers for company-profile extraction."""
         if not document or not document.pages:
             return []
+        from .validation_cache import ranked_profile_pages
+
+        return ranked_profile_pages(document, profile, max_pages, cls._rank_profile_pages)
+
+    @classmethod
+    def _rank_profile_pages(cls, document, profile, max_pages):
+        """Uncached ranking; inputs are fingerprinted by the public entry point."""
 
         scored_pages: list[tuple[float, int]] = []
         for page in document.pages:

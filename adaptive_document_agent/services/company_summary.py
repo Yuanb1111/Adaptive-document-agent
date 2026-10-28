@@ -78,6 +78,10 @@ def validate_summary(company, result) -> list[str]:
         return errors
     elif company.summary_pages:
         errors.append('Dynamic Summary slides require their complete reading/decision audit')
+    if not (company.summary_overview or company.summary_business or company.value_chain):
+        # No legacy introduction items need candidate-source membership checks.
+        # Keep the missing dynamic audit error above even when there are no items.
+        return errors
     candidate_text = {p["page"]: p["text"] for p in summary_excerpts(result.document, result.profile)}
     normalize = normalize_quote
     for field in ("summary_overview", "summary_business"):

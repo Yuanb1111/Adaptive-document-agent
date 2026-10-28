@@ -3,9 +3,14 @@
 import re
 import unicodedata
 from dataclasses import dataclass
+from .validation_cache import normalized_quote
 
 
 def normalize_quote(text: str) -> str:
+    return normalized_quote(text, _normalize_quote)
+
+
+def _normalize_quote(text: str) -> str:
     text = unicodedata.normalize("NFKC", text).replace("\u00ad", "")
     text = text.translate(str.maketrans({"’": "'", "‘": "'", "“": '"', "”": '"'}))
     # Table leaders are layout, not omitted prose. Leave individual decimal

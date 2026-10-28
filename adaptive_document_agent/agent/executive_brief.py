@@ -7,6 +7,7 @@ from adaptive_document_agent.models import PipelineResult
 from adaptive_document_agent.models.executive_brief import BriefQuote, ExecutiveBrief, ExecutiveBriefItem
 from adaptive_document_agent.services.brief_context import adjacent_definition_excerpts
 from adaptive_document_agent.services.llm import LLMGateway
+from adaptive_document_agent.services.validation_cache import validation_cache_scope
 from .prompting import load_prompt, untrusted_document_message
 from .brief_item_repair import generate_with_item_repair
 from .brief_source_checks import source_check_context, record_uncited_checks
@@ -51,6 +52,7 @@ class ExecutiveBriefWriter:
     def __init__(self, gateway: LLMGateway) -> None:
         self.gateway = gateway
 
+    @validation_cache_scope()
     def generate(self, result: PipelineResult, *, cancelled: Event | None = None) -> ExecutiveBrief:
         from .brief_review_checkpoint import BriefReviewUnavailable
         from adaptive_document_agent.services.llm.exceptions import LLMResponseError

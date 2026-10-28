@@ -301,6 +301,11 @@ def _accepted_record(result):
                   if w.code in {'report_audit_scope_review', 'report_audit_scope_unresolved'}), None)
     if issue is None or issue.code != 'report_audit_scope_review':
         return None
+    from adaptive_document_agent.services.validation_cache import accepted_audit_record
+    return accepted_audit_record(result, issue, _validate_accepted_record)
+
+
+def _validate_accepted_record(result, issue):
     try:
         record = json.loads(issue.message)
         from .report_audit_batches import (

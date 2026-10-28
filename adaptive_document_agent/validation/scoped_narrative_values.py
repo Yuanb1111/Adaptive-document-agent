@@ -70,6 +70,9 @@ def _number(value):
 
 def scoped_value_errors(slide: PresentationSlide, observations: list[Observation],
                         label_catalog: list[Observation] | None = None) -> list[str]:
+    components = [slide.title, slide.message, *slide.bullets]
+    if not any(_AMOUNT.search(component) for component in components):
+        return []  # This validator only checks explicit from/to endpoints.
     by_label: dict[str, list[Observation]] = {}
     selected_ids = {o.id for o in observations}
     for obs in label_catalog if label_catalog is not None else observations:
@@ -84,10 +87,12 @@ def scoped_value_errors(slide: PresentationSlide, observations: list[Observation
             if obs.id in selected_ids and obs not in group:
                 group.append(obs)
     errors = []
-    for component in [slide.title, slide.message, *slide.bullets]:
+    for component in components:
         # Preserve decimal points and split only definite statement boundaries.
         clauses = re.split(r";|\n|,?\s+\b(?:but|while|whereas)\b\s+|(?<=[.!?])\s+(?=[A-Z])", component)
         for clause_index, clause in enumerate(clauses):
+            if not _AMOUNT.search(clause):
+                continue
             matches = []
             for label in by_label:
                 matches.extend((m.start(), m.end(), label) for m in _label_pattern(label).finditer(clause))
