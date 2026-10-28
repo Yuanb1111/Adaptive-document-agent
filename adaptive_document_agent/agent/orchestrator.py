@@ -248,6 +248,10 @@ class DocumentOrchestrator:
                 if issue.code in {'report_audit_scope_review', 'report_audit_scope_unresolved'}), None)
             if audit_checkpoint is not None:
                 issues.append(audit_checkpoint.model_copy(deep=True))
+            brief_checkpoint = next((issue for issue in reversed(resume.validation_warnings)
+                if issue.code == 'executive_brief_review_checkpoint'), None)
+            if brief_checkpoint is not None:
+                issues.append(brief_checkpoint.model_copy(deep=True))
         else:
             notify("Generating analysis candidates")
             if attach_introduction is not None and attach_introduction.failed():
@@ -617,7 +621,9 @@ class DocumentOrchestrator:
                         observations=index.observations, insights=insights, analysis_results=results,
                         presentation_plan=presentation_plan, presentation_topics=topic_selection)
                     try:
-                        executive_brief = current_executive_brief(editorial_gateway, snapshot, prepared_brief)
+                        from .brief_review_progress import brief_progress
+                        with brief_progress(notify):
+                            executive_brief = current_executive_brief(editorial_gateway, snapshot, prepared_brief)
                     except (LLMResponseError, ValueError) as exc:
                         issues.append(ValidationIssue(code="executive_brief_unavailable", stage="report",
                             severity="warning", message="The final briefing could not be source-checked: " + str(exc)[:500]))

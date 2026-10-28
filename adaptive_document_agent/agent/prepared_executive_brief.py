@@ -4,6 +4,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 from threading import Event, get_ident
 from time import perf_counter
+from queue import SimpleQueue, Empty
 
 from adaptive_document_agent.models import PipelineResult
 from adaptive_document_agent.models.executive_brief import ExecutiveBrief
@@ -45,13 +46,16 @@ class PreparedExecutiveBrief:
         self._source = source.model_copy(deep=True)
         self._cancelled = Event()
         self.duration_ms = 0
+        self._progress = SimpleQueue()
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='executive-brief')
         self._future: Future[ExecutiveBrief] = self._pool.submit(self._generate, gateway)
 
     def _generate(self, gateway: LLMGateway) -> ExecutiveBrief:
         started = perf_counter()
         try:
-            return ExecutiveBriefWriter(gateway).generate(self._source, cancelled=self._cancelled)
+            from .brief_review_progress import brief_progress
+            with brief_progress(self._progress.put):
+                return ExecutiveBriefWriter(gateway).generate(self._source, cancelled=self._cancelled)
         finally:
             self.duration_ms = int((perf_counter() - started) * 1000)
 
@@ -59,6 +63,22 @@ class PreparedExecutiveBrief:
         if get_ident() != self._caller:
             raise RuntimeError('Only the pipeline caller may attach the executive brief')
         try:
+            from .brief_review_progress import report_brief_progress
+            def drain():
+                while True:
+                    try:
+                        message = self._progress.get_nowait()
+                    except Empty:
+                        break
+                    report_brief_progress(message.removeprefix('Briefing review: '))
+            while not self._future.done():
+                drain()
+                try:
+                    self._future.result(timeout=0.25)
+                except TimeoutError:
+                    if self._future.done():
+                        break
+            drain()
             brief = self._future.result()
         finally:
             current.stage_details_ms.update(self._source.stage_details_ms)

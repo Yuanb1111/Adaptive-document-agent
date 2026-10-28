@@ -169,16 +169,27 @@ def test_meaning_references_are_item_scoped_and_still_check_arithmetic():
     assert 'direction' in str(meaning_validator(g, result=result)(brief))
 
 
-def test_meaning_format_failure_has_one_correction_and_memoizes_only_failed_claims():
+def test_meaning_format_failure_has_one_correction_and_remains_unavailable():
+    from adaptive_document_agent.agent.brief_review_checkpoint import BriefReviewUnavailable
     source = 'Share was 2% in 2023. Share was 3% in 2024.'
     result = result_for([source])
     brief = ExecutiveBrief(title='Shares', items=[dict(label='Share', text='Share rose from 2% to 3%.',
         evidence=[dict(page=1, text=source)])])
     g, client = gateway(['invalid JSON', 'invalid JSON'])
     validate = meaning_validator(g, result=result)
-    assert 'unavailable' in str(validate(brief))
-    assert 'unavailable' in str(validate(brief)) and len(client.calls) == 2
-    assert len([w for w in result.validation_warnings if w.code.endswith('format_audit')]) == 2
+    with pytest.raises(BriefReviewUnavailable) as first:
+        validate(brief)
+    with pytest.raises(BriefReviewUnavailable) as second:
+        validate(brief)
+    assert first.value.failures == second.value.failures == {0: 'invalid_response_format'}
+    assert len(client.calls) == 2
+    audit = json.loads(next(w.message for w in result.validation_warnings
+                           if w.code == 'executive_brief_meaning_capacity_audit'))
+    batch = audit['single_item_batches'][0]
+    assert len(batch['output_attempts']) == len(batch['format_correction']['output_attempts']) == 1
+    checkpoint = json.loads(next(w.message for w in result.validation_warnings
+                                if w.code == 'executive_brief_review_checkpoint'))
+    assert checkpoint['checked'] == {} and checkpoint['pending'] == [0]
     assert 'executive_brief_meaning_review' in result.stage_details_ms
 
 

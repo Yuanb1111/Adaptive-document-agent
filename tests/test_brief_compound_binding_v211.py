@@ -26,7 +26,8 @@ def test_compound_and_unasserted_bindings_are_corrected_without_rewriting_audien
     assert validate(brief) == {} and validate(brief) == {}
     assert len(gateway.calls) == 4
     assert before == (brief.model_dump_json(), result.document.model_dump_json())
-    audit = json.loads(result.validation_warnings[-1].message)
+    audit = json.loads(next(w.message for w in reversed(result.validation_warnings)
+                           if w.code == 'executive_brief_comparison_correction_audit'))
     assert audit['status'] == 'accepted'
     assert 'comparison_index=0' in str(audit['direction_errors'])
     assert 'Source comparison infers a direction' in str(audit['direction_errors'])
@@ -39,7 +40,9 @@ def test_unchanged_ambiguous_binding_fails_after_one_correction_without_looping(
     errors = validate(brief)
     assert 'Audience direction is ambiguous' in str(errors)
     assert validate(brief) == errors and len(gateway.calls) == 4
-    assert json.loads(result.validation_warnings[-1].message)['status'] == 'rejected'
+    audit = json.loads(next(w.message for w in reversed(result.validation_warnings)
+                           if w.code == 'executive_brief_comparison_correction_audit'))
+    assert audit['status'] == 'rejected'
 
 
 @pytest.mark.parametrize('failure', ['wrong_direction', 'wrong_source', 'source_rejection'])

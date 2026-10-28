@@ -155,7 +155,8 @@ def meaning_validator(gateway, *, cancelled=None, result=None, source_context=No
         pending, errors = [], {}
         # Contextual sufficiency can depend on a companion finding. Removing or
         # changing that finding invalidates approval of the remaining briefing.
-        memo_prefix = brief.model_dump_json() if source_context is not None else ''
+        from .brief_review_checkpoint import context_key
+        memo_prefix = context_key(brief if source_context is not None else None, source_context, result)
         def memo_key(item):
             return memo_prefix + item.model_dump_json()
         for index, item in enumerate(brief.items):
@@ -293,91 +294,9 @@ def meaning_validator(gateway, *, cancelled=None, result=None, source_context=No
              'values and comparison endpoints must still be supported by THAT item quotations. '
              'A corrected item must cite its newly included source evidence and pass a fresh review.'},
             untrusted_document_message(json.dumps(pending, ensure_ascii=False))]
-        from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
-        for attempt in range(2):
-            started = perf_counter()
-            try:
-                from .brief_meaning_capacity import complete_meaning_output
-                output_record = {}
-                response = complete_meaning_output(gateway, messages, BriefMeaningReview, pending,
-                    output_record, capacity, cancelled=cancelled)
-                if result is not None and (len(output_record['output_attempts']) > 1
-                                          or output_record.get('single_item_batches')):
-                    from adaptive_document_agent.models import ValidationIssue
-                    result.validation_warnings.append(ValidationIssue(code='executive_brief_meaning_capacity_audit',
-                        stage='report', severity='info', message=json.dumps(output_record)))
-                break
-            except LLMStructuredOutputError as exc:
-                if result is not None:
-                    from adaptive_document_agent.models import ValidationIssue
-                    result.validation_warnings.append(ValidationIssue(code='executive_brief_meaning_format_audit',
-                        stage='report', severity='warning', message=json.dumps({'attempt': attempt + 1,
-                        'indices': [r['index'] for r in pending], 'error': str(exc),
-                        'validation_detail': str(exc.__cause__ or exc), 'raw_response': exc.response.text,
-                        'capacity_recovery': output_record})))
-                from .topic_review_output import is_truncated
-                if attempt or is_truncated(exc):
-                    # A failed review cannot certify these claims or erase
-                    # independent findings already checked in this invocation.
-                    # The existing item repair/salvage gate keeps only verified
-                    # findings and still requires its topic coverage minimum.
-                    for row in pending:
-                        failure = ['Meaning review unavailable after bounded output recovery']
-                        checked[memo_key(brief.items[row['index']])] = failure
-                        errors[row['index']] = failure
-                    return errors
-                messages = messages[:2] + [{'role': 'user', 'content':
-                    'The previous response failed format validation. Return every exact index in '
-                    'the original payload. Use start_ref/end_ref, not copied tables. Keep every '
-                    'meaning and arithmetic check; do not invent or accept uncertain evidence.'}]
-            finally:
-                if result is not None:
-                    details = result.stage_details_ms
-                    details['executive_brief_meaning_review'] = details.get('executive_brief_meaning_review', 0) + round((perf_counter()-started)*1000)
-        ids = {row['index'] for row in pending}
-        if len(response.items) != len(ids) or {v.index for v in response.items} != ids:
-            raise ValueError('Brief meaning review must cover every exact supplied index')
-        from .brief_review_bindings import correct_review_bindings
-        response, binding_errors = correct_review_bindings(gateway, response, brief=brief,
-            pending=pending, messages=messages, result=result, cancelled=cancelled)
-        from .brief_meaning_evidence import review_evidence_errors
-        errors.update(review_evidence_errors(response, brief=brief, pending=pending,
-            catalogs=catalogs, result=result, binding_errors=binding_errors))
-        for index in ids & errors.keys():
-            checked[memo_key(brief.items[index])] = errors[index]
-        # A single source reviewer can silently map "narrowed" to increase to
-        # agree with the endpoints. Read audience predicates in a separate call
-        # without that review, its directions, or any source values. Only a
-        # comparison that survives BOTH semantic bindings can be memoized.
-        from .brief_claim_direction import review_claim_directions
-        correction_eligible = set()
-        direction_failures = review_claim_directions(gateway, brief=brief,
-            verdicts=[row for row in response.items if row.index not in errors],
-            result=result, cancelled=cancelled, correction_eligible=correction_eligible)
-        if correction_eligible:
-            from .brief_direction_repair import correct_direction_bindings
-
-            def revalidate(corrected):
-                # No recursive correction or relaxed gate: a proposed reviewer
-                # repair starts again at the original source/arithmetic checks.
-                failures = review_evidence_errors(corrected, brief=brief, pending=pending,
-                    catalogs=catalogs, result=result)
-                failures.update(review_claim_directions(gateway, brief=brief,
-                    verdicts=[row for row in corrected.items if row.index not in failures],
-                    result=result, cancelled=cancelled))
-                return failures
-
-            corrected_failures = correct_direction_bindings(gateway, response,
-                messages=messages, direction_failures={index: direction_failures[index]
-                    for index in correction_eligible}, revalidate=revalidate,
-                result=result, cancelled=cancelled)
-            direction_failures = {**{index: failures for index, failures in direction_failures.items()
-                                     if index not in correction_eligible}, **corrected_failures}
-        for index, failures in direction_failures.items():
-            checked[memo_key(brief.items[index])] = failures
-            errors[index] = failures
-        for verdict in response.items:
-            if verdict.index not in errors:
-                checked[memo_key(brief.items[verdict.index])] = []
-        return errors
+        from .brief_review_execution import execute_review
+        return execute_review(gateway, brief=brief, pending=pending, messages=messages,
+            catalogs=catalogs, errors=errors, checked=checked, memo_key=memo_key,
+            capacity=capacity, result=result, cancelled=cancelled,
+            source_context=source_context)
     return validate

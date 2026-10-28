@@ -52,8 +52,22 @@ class ExecutiveBriefWriter:
         self.gateway = gateway
 
     def generate(self, result: PipelineResult, *, cancelled: Event | None = None) -> ExecutiveBrief:
+        from .brief_review_checkpoint import BriefReviewUnavailable
+        from adaptive_document_agent.services.llm.exceptions import LLMResponseError
+        try:
+            return self._generate(result, cancelled=cancelled)
+        except BriefReviewUnavailable as exc:
+            # The private signal bypasses all copy-patch/salvage catches. Only
+            # the writer boundary converts it to a retryable pipeline failure.
+            raise LLMResponseError(str(exc)) from exc
+
+    def _generate(self, result: PipelineResult, *, cancelled: Event | None = None) -> ExecutiveBrief:
         if cancelled is not None and cancelled.is_set():
             raise CancelledError('Executive brief was cancelled')
+        from .brief_review_resume import resume_brief_review
+        resumed = resume_brief_review(self.gateway, result, cancelled=cancelled)
+        if resumed is not None:
+            return resumed
         pages = {p.page_number: p.text for p in result.document.pages if p.text.strip()}
         if not pages:
             raise ValueError('No page text is available for a source-bound executive brief.')

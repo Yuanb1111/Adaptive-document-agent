@@ -196,7 +196,9 @@ def test_erased_real_heading_obligation_is_caught_by_fresh_independent_review_an
     errors = validate(brief)
     assert 'lacks its own source-bound comparison' in str(errors)
     assert validate(brief) == errors and len(gateway.calls) == 4
-    assert json.loads(result.validation_warnings[-1].message)['status'] == 'rejected'
+    audit = json.loads(next(w.message for w in reversed(result.validation_warnings)
+                           if w.code == 'executive_brief_comparison_correction_audit'))
+    assert audit['status'] == 'rejected'
 
 
 @pytest.mark.parametrize('failure', ['indices', 'format'])

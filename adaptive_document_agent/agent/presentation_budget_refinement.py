@@ -103,7 +103,9 @@ def refine_presentation_budget(gateway, result, *, progress=None):
         # Write against its reviewed assurance and measure the new copy/notes.
         from .executive_brief import ExecutiveBriefWriter
         try:
-            result.executive_brief = ExecutiveBriefWriter(gateway).generate(result)
+            from .brief_review_progress import brief_progress
+            with brief_progress(progress):
+                result.executive_brief = ExecutiveBriefWriter(gateway).generate(result)
         except (ValueError, LLMResponseError) as exc:
             raise FinalBudgetBriefError('Audit-refreshed briefing failed source checks: ' + str(exc)) from exc
         deck, counts = measure(result)
@@ -376,9 +378,11 @@ def refine_presentation_budget(gateway, result, *, progress=None):
             notify('Regenerating and independently checking the briefing against the final budgeted topics')
             try:
                 started = perf_counter()
-                candidate.executive_brief = ExecutiveBriefWriter(gateway).generate(candidate)
+                from .brief_review_progress import brief_progress
+                with brief_progress(progress):
+                    candidate.executive_brief = ExecutiveBriefWriter(gateway).generate(candidate)
                 record['timings_ms']['final_briefing'] = int((perf_counter()-started)*1000)
-            except ValueError as exc:
+            except (ValueError, LLMResponseError) as exc:
                 record['brief_error'] = str(exc)
                 record['brief_audits'] = [w.model_dump(mode='json') for w in candidate.validation_warnings
                                          if w not in result.validation_warnings]

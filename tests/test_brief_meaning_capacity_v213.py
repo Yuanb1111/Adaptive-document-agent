@@ -64,14 +64,16 @@ def test_transport_privacy_and_cancellation_never_trigger_partitioning(failure):
     assert len(client.requests) == 1 and not capacity
 
 
-def test_single_item_exhaustion_stops_without_returning_partial_approval():
-    messages, pending, _ = request()
-    llm, client = gateway([response('', finish='length')] * 4)
+def test_single_item_exhaustion_checks_siblings_without_returning_partial_approval():
+    from adaptive_document_agent.agent.brief_review_checkpoint import BriefReviewUnavailable
+    messages, pending, reviews = request()
+    llm, client = gateway([response('', finish='length')] * 4 + [response(reviews[1])])
     record = {}
-    with pytest.raises(LLMStructuredOutputError):
+    with pytest.raises(BriefReviewUnavailable) as error:
         complete_meaning_output(llm, messages, BriefMeaningReview, pending, record, {})
-    assert len(client.requests) == 4
-    assert len(record['single_item_batches']) == 1
+    assert len(client.requests) == 5
+    assert error.value.failures == {0: 'output_capacity_exhausted'}
+    assert len(record['single_item_batches']) == 2
 
 
 def test_wrong_partition_index_cannot_be_joined_into_approval():
