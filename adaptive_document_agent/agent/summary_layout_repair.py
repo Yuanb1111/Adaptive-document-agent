@@ -203,7 +203,7 @@ def paginate_draft(
                         'never solve the budget by removing a meaning, evidence binding or qualification.')
             record['compression_round'] = attempt + 1
             record['compression_round_limit'] = repair_limit
-            choices = {}
+            choices, allocations = {}, {}
             # Reduced text height (or even fewer pages) is not budget success.
             # Always evaluate measured alternatives before spending the final
             # selected-audience repair on another unrestricted page rewrite.
@@ -214,10 +214,20 @@ def paginate_draft(
                     reason='final_repair_still_over_physical_budget',
                     physical_pages=body_count, target_pages=review.max_intro_slides,
                     candidate_groups=list(choices), feasible=bool(choices))
+                if not choices:
+                    from .summary_layout_allocation import allocation_choices
+                    allocations = allocation_choices(draft, catalog, review, expand)
+                    record['layout_allocation_evaluation'] = dict(
+                        candidate_transfers=list(allocations), feasible=bool(allocations),
+                        semantic_approval=False)
             if choices:
                 from .summary_layout_choices import choose_layout
                 revised = choose_layout(gateway, draft, catalog, review, record, choices, schema,
                                         cancelled=cancelled, instruction=instruction)
+            elif allocations:
+                from .summary_layout_allocation import choose_allocation
+                revised = choose_allocation(gateway, draft, catalog, review, record, allocations, schema,
+                                            cancelled=cancelled, instruction=instruction)
             elif over_budget and any(getattr(p, 'placement', 'body') == 'appendix' for p in draft.pages):
                 from .summary_body_allocation import reallocate_body
                 revised = reallocate_body(gateway, draft, [], schema, record,
