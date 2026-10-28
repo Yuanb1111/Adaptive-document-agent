@@ -281,7 +281,7 @@ def test_one_invalid_protected_quantity_does_not_displace_verified_translation()
 
 
 @pytest.mark.parametrize('setting', ['reduced', 'provider_default'])
-def test_summary_reading_and_bounded_meaning_review_honor_configured_reasoning(setting):
+def test_summary_reading_honors_setting_while_source_meaning_preserves_reasoning(setting):
     from adaptive_document_agent.services.llm import LLMSettings, ProviderName
     from adaptive_document_agent.services.llm.reasoning_policy import request_reasoning_policy
     settings = LLMSettings(provider=ProviderName.DEEPSEEK, simple_task_reasoning=setting)
@@ -290,4 +290,4 @@ def test_summary_reading_and_bounded_meaning_review_honor_configured_reasoning(s
     reading=request_reasoning_policy(settings,stage='presentation',operation='SummaryReadBatch',model='deepseek-flash')
     assert bool(reading['options'])==(setting=='reduced')
     meaning = request_reasoning_policy(settings,stage='report',operation='BriefMeaningReview',model='deepseek-flash')
-    assert bool(meaning['options']) == (setting == 'reduced')
+    assert meaning['intent'] == 'preserve' and meaning['options'] == {}

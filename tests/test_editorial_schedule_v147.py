@@ -20,7 +20,7 @@ EDITORIAL_OPERATIONS = [
         'IntroductionMeaningResolution', 'SummaryCoverageReview',
         'PhysicalBudgetReview', 'IntroductionAudienceReview',
         'SummaryLayoutPages', 'PhysicalBudgetSelection')
-] + [('report', 'BriefMeaningReview')]
+] + [('report', 'BriefClaimDirectionReview')]
 
 
 @pytest.mark.parametrize('stage,operation', EDITORIAL_OPERATIONS)

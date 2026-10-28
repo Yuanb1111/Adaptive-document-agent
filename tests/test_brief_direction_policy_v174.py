@@ -56,10 +56,11 @@ def test_other_providers_still_require_positive_loaded_capability_metadata(monke
 def test_complex_analysis_operations_and_other_stages_keep_prior_reasoning():
     settings = LLMSettings(provider=ProviderName.DEEPSEEK, model='deepseek-flash')
     for stage, operation in [('semantic', 'SemanticResolution'), ('planner', 'AnalysisPlan'),
+                             ('report', 'BriefMeaningReview'),
                              ('presentation', 'BriefClaimDirectionReview'), ('insight', 'Insights')]:
         value = policy(settings, stage=stage, operation=operation)
         assert value['intent'] == 'preserve' and value['options'] == {}
-    assert policy(settings)['options'] == policy(settings, operation='BriefMeaningReview')['options']
+    assert policy(settings)['options'] == {'extra_body': {'thinking': {'type': 'disabled'}}}
 
 
 def test_only_new_operation_cache_identity_changes_without_global_policy_bump(monkeypatch, tmp_path):

@@ -87,3 +87,15 @@ extraction, calculations and validated plan; it is not a fresh full-PDF run.
 The final saved checkpoint has no failed stage, and its document, observations
 and calculated results remain equal to `.209`. Local rendering QA does not
 certify PowerPoint/Google Slides parity or aesthetic quality.
+
+## CI follow-up
+
+The first v212 push exposed three stale assertions in the full Linux suite on
+both Python 3.11 and 3.12 (6117 passed, three failed, seven skipped). The earlier
+focused regression selections did not include these tests. They still expected
+`BriefMeaningReview` to disable reasoning. The follow-up aligns the historical
+direction, customization and editorial-scheduling tests with the v212 policy:
+source meaning preserves provider defaults under either editorial setting,
+while `BriefClaimDirectionReview` retains its configured reduction and route
+guards. Runtime behavior and evidence gates are unchanged. All 92 tests in
+these three files plus the audit reasoning regression file pass locally.
