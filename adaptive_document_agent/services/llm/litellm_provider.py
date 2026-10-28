@@ -21,6 +21,7 @@ from .usage import LLMUsage
 from .usage_parser import get_field, usage_counters
 from .costs import estimate_cost
 from .reasoning_policy import reasoning_parameters, request_reasoning_policy
+from adaptive_document_agent.services.analysis_deadline import AnalysisTimeLimitExceeded, request_timeout
 
 _attempts: ContextVar[list | None] = ContextVar("llm_attempts", default=None)
 _stage: ContextVar[str | None] = ContextVar("llm_stage", default=None)
@@ -113,6 +114,7 @@ class LiteLLMProvider(LLMClient):
         transient_retries = 0
         compatibility_retry_used = False
         while True:
+            timeout = request_timeout(self.settings.timeout_seconds)
             started = time.perf_counter()
             event = {"attempt": transient_retries + int(compatibility_retry_used) + 1,
                      "started_at": datetime.now(timezone.utc).isoformat(),
@@ -126,7 +128,7 @@ class LiteLLMProvider(LLMClient):
                         api_key=key,
                         api_base=base_url,
                         custom_llm_provider=self._provider_route,
-                        timeout=self.settings.timeout_seconds,
+                        timeout=timeout,
                         num_retries=0,
                         **client_options,
                         **request_kwargs,
@@ -182,7 +184,7 @@ class LiteLLMProvider(LLMClient):
         # HTTPX strips Authorization across origins, but not x-goog-api-key.
         # Use a request-owned client so concurrent sessions and retries cannot
         # forward Gemini credentials via redirects or mutate global SDK state.
-        client = HTTPHandler(timeout=self.settings.timeout_seconds)
+        client = HTTPHandler(timeout=request_timeout(self.settings.timeout_seconds))
         client.client.follow_redirects = False
         try:
             yield {"client": client}
@@ -295,6 +297,9 @@ class LiteLLMProvider(LLMClient):
             estimate_cost(usage, self.settings)
             return LLMResponse(text=text, usage=usage, raw=raw, attempts=attempt_log)
         except LLMConfigurationError:
+            raise
+        except AnalysisTimeLimitExceeded as exc:
+            exc.attempts = attempt_log
             raise
         except Exception as exc:
             raise LLMTransportError(f"Model request failed: {type(exc).__name__}", attempts=attempt_log) from exc

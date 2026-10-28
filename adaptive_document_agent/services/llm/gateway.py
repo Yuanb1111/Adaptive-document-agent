@@ -17,6 +17,7 @@ from .base import LLMClient, LLMResponse
 from .config import LLMSettings, PrivacyMode
 from .exceptions import LLMResponseError, LLMTransportError, LLMStructuredOutputError, PrivacyViolationError
 from .structured import preserves_json_content, validate_structured_text
+from adaptive_document_agent.services.analysis_deadline import AnalysisTimeLimitExceeded
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -37,6 +38,7 @@ class LLMGateway:
         self.cache_enabled = cache_enabled
         self._validation_cache_keys = ContextVar('validated_cache_keys', default=None)
         self.usage: list[dict[str, object]] = []
+        self.run_deadline = None
         self._usage_lock = Lock()
         # Shared by every independent pipeline stage on this gateway, not by
         # other sessions. Stage-local pools must not multiply provider pressure.
@@ -75,12 +77,25 @@ class LLMGateway:
         """Bound actual calls, including repair, without charging cache hits.
 
         A queued request checks cancellation after acquiring its slot. Provider
-        operations already in flight retain the configured timeout/retry bound.
+        operations already in flight use the remaining analysis time as their
+        timeout, and each provider retry checks the same deadline.
         """
-        with self._request_slots:
+        from adaptive_document_agent.services.analysis_deadline import request_deadline
+        deadline = self.run_deadline
+        if deadline is not None:
+            deadline.check()
+        while not self._request_slots.acquire(timeout=0.1):
+            if deadline is not None:
+                deadline.check()
+            if cancelled is not None and cancelled.is_set():
+                raise CancelledError('LLM operation was cancelled while queued')
+        try:
             if cancelled is not None and cancelled.is_set():
                 raise CancelledError("LLM operation was cancelled before admission")
-            yield
+            with request_deadline(deadline):
+                yield
+        finally:
+            self._request_slots.release()
 
     def generate_text(self, messages: list[dict[str, Any]], *, stage: str, max_tokens: int | None = None) -> str:
         try:
@@ -91,6 +106,10 @@ class LLMGateway:
                     max_tokens=max_tokens,
                     model=self.settings.model_for(stage),
                 )
+        except AnalysisTimeLimitExceeded as exc:
+            if exc.attempts:
+                self._record_failure(exc, stage, operation='text')
+            raise
         except LLMTransportError as exc:
             self._record_failure(exc, stage, operation="text")
             raise self._located_failure(exc, stage, 'text') from exc
@@ -181,6 +200,10 @@ class LLMGateway:
                 raise
             value = self._repair_structured(exc.response.text, response_model, stage=stage, request_metadata=metadata,
                                             cancelled=cancelled, repair_policy=repair_policy, model_name=model_name)
+        except AnalysisTimeLimitExceeded as exc:
+            if exc.attempts:
+                self._record_failure(exc, stage, operation=response_model.__name__, request_metadata=metadata)
+            raise
         except LLMTransportError as exc:
             self._record_failure(exc, stage, operation=response_model.__name__, request_metadata=metadata)
             raise self._located_failure(exc, stage, response_model.__name__) from exc
@@ -256,6 +279,10 @@ class LLMGateway:
             if preserve_content and not preserves_json_content(invalid_text, response.text):
                 raise LLMResponseError('Format repair changed content or structure; source re-reading is required.')
             return value
+        except AnalysisTimeLimitExceeded as exc:
+            if exc.attempts:
+                self._record_failure(exc, stage, operation=response_model.__name__, request_metadata=request_metadata)
+            raise
         except LLMTransportError as exc:
             self._record_failure(exc, stage, operation=response_model.__name__, request_metadata=request_metadata)
             raise self._located_failure(exc, stage, response_model.__name__) from exc

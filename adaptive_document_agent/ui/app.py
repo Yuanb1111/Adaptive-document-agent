@@ -287,6 +287,8 @@ def run_app() -> None:
             )
         uploaded = st.file_uploader("Upload one PDF", type=["pdf"], accept_multiple_files=False)
         st.caption("Analysis starts automatically after upload unless page-scope review is enabled.")
+        st.caption('Each analysis has a 15-minute limit. After that, no new model requests or retries '
+                   'start; completed evidence is retained. In-flight requests may still be billed.')
     from adaptive_document_agent.services.presentation_requirements import budget_request, fixed_presentation_budget
     presentation_budget = fixed_presentation_budget()
     scope_instructions = budget_request(analysis_focus, presentation_budget)

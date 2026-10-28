@@ -66,11 +66,34 @@ class DocumentOrchestrator:
         # orchestrator/session. ExitStack also drains it on any primary failure.
         from adaptive_document_agent.services.presentation_requirements import fixed_presentation_budget
         presentation_budget = fixed_presentation_budget(presentation_budget)
-        with ExitStack() as resources:
-            return self._analyse_pdf(
-                file, settings, progress=progress, analysis_focus=analysis_focus,
-                scope=scope, resume=resume, presentation_budget=presentation_budget, resources=resources,
-            )
+        from adaptive_document_agent.services.analysis_deadline import AnalysisDeadline, AnalysisTimeLimitExceeded
+        from .analysis_time_limit import retain_timed_out_result
+        previous = getattr(self.gateway, 'run_deadline', None)
+        deadline = previous if isinstance(previous, AnalysisDeadline) else AnalysisDeadline()
+        if isinstance(self.gateway, LLMGateway):
+            self.gateway.run_deadline = deadline
+        state = {'result': resume.model_copy(deep=True) if resume is not None else None,
+                 'reporting_ready': resume is not None and resume.retry_from == 'reporting'}
+        def timed_progress(stage):
+            deadline.check()
+            state['stage'] = stage
+            if progress is not None:
+                progress(stage)
+        try:
+            with ExitStack() as resources:
+                deadline.check()
+                result = self._analyse_pdf(
+                    file, settings, progress=timed_progress, analysis_focus=analysis_focus,
+                    scope=scope, resume=resume, presentation_budget=presentation_budget,
+                    resources=resources, run_state=state)
+                state['result'] = result
+            deadline.check()
+            return result
+        except AnalysisTimeLimitExceeded:
+            return retain_timed_out_result(state, self.gateway, deadline)
+        finally:
+            if isinstance(self.gateway, LLMGateway):
+                self.gateway.run_deadline = previous
 
     def _analyse_pdf(
         self,
@@ -83,6 +106,7 @@ class DocumentOrchestrator:
         resume: PipelineResult | None = None,
         presentation_budget: PresentationBudget | None = None,
         resources: ExitStack,
+        run_state: dict,
     ) -> PipelineResult:
         del settings  # Configuration is enforced when constructing the gateway.
         notify = progress or (lambda _: None)
@@ -90,6 +114,7 @@ class DocumentOrchestrator:
         pipeline_started = perf_counter()
         timings: dict[str, int] = {}
         details: dict[str, int] = {}
+        run_state.update(timings=timings, details=details)
         raw = bytes(file) if isinstance(file, (bytes, bytearray)) else file.read()
         digest = sha256_bytes(raw)
 
@@ -133,6 +158,7 @@ class DocumentOrchestrator:
             notify("Reading PDF")
             with record_timing(timings, "pdf_ingestion"):
                 document = self._load_document(raw, digest)
+            run_state['result'] = PipelineResult(document=document, profile=DocumentProfile())
             if scope and (scope.document_sha256 != digest or scope.page_count != document.page_count):
                 raise ValueError("The confirmed analysis scope does not belong to this PDF.")
 
@@ -161,6 +187,7 @@ class DocumentOrchestrator:
                     confirmed_scope=scope is not None,
                 )
 
+            run_state['result'].profile = profile
             from .company_introduction import prepare_company_introduction
             if requirements is not None:
                 profile.report_requirements = requirements
@@ -213,10 +240,12 @@ class DocumentOrchestrator:
                                           if page_numbers is None or page.page_number in page_numbers):
                         self.cache.set_model(f"tables-{EXTRACTION_VERSION}-{digest}-{scope}", document)
 
+            run_state['result'].document = document
             notify("Extracting structured observations")
             with record_timing(timings, "observation_extraction"):
                 extractor = ObservationExtractor()
                 observations = extractor.extract(document, page_ranges=profile.analysis_page_ranges)
+                run_state['result'].observations = observations
                 mappings = SemanticResolver(self.gateway).resolve_metrics(
                     [item.metric_original for item in observations],
                     context="\n".join(page.text[:2_000] for page in document.pages)[:12_000],
@@ -232,6 +261,7 @@ class DocumentOrchestrator:
                 from adaptive_document_agent.services.financial_normalizer import FinancialNormalizer
 
                 observations = FinancialNormalizer.normalize_observations(observations)
+                run_state['result'].observations = observations
 
             notify("Building document model")
             with record_timing(timings, "document_model"):
@@ -312,6 +342,7 @@ class DocumentOrchestrator:
         checkpoint = PipelineResult(document=document, profile=profile, observations=index.observations,
             candidates=candidates, candidate_scores=scores, analysis_plan=plan,
             analysis_results=results, validation_warnings=issues)
+        run_state.update(result=checkpoint, reporting_ready=True, issues=issues)
         from .source_reading_checkpoint import incomplete_source_reads, retain_source_reading_failure
         if incomplete_source_reads(profile):
             return retain_source_reading_failure(checkpoint, self.gateway, resources,
@@ -681,6 +712,7 @@ class DocumentOrchestrator:
         )
         from adaptive_document_agent.services.pipeline_completion import (
             is_complete, is_reporting_ready, require_source_integration, require_topic_coverage)
+        run_state['result'] = final_result
         if self.gateway and is_reporting_ready(final_result):
             from .presentation_budget_refinement import (
                 refine_presentation_budget, FinalBudgetBriefError, FinalBudgetAuditError)
