@@ -19,7 +19,17 @@ from .report_audit_context_budget import serialize_audit_context
 QUOTE_FORMAT_INSTRUCTIONS = (
     'Literal evidence quotations may omit purely typographic table dot leaders. '
     'Preserve every word, number, decimal point, sign, symbol and unit in the selected passage; '
-    'do not extend, repeat or invent quotation content. ' + PERIOD_HEADER_INSTRUCTIONS
+    'do not extend, repeat or invent quotation content. '
+    'scope_evidence may also retain a short literal standalone printed page marker. '
+    'Do not pad or extend a marker to meet prose length limits. A marker is supporting '
+    'navigation evidence only, never an assurance statement or independent approval; '
+    'complete scope prose and the reviewer-owned page coverage chain are still required. '
+    'unit_quote and covered_unit_quote may retain a short complete source unit declaration '
+    'without padding. target_quote/value_quote remain complete labeled source rows: include '
+    'the measure label AND signed raw value in the same continuous literal quote, not only '
+    'the amount token. Their 8-character minimum is not permission to pad an amount with '
+    'spaces or invented text; read the full source row. '
+    + PERIOD_HEADER_INSTRUCTIONS
     + HEADER_QUOTE_INSTRUCTIONS + MEASURE_IDENTITY_INSTRUCTIONS)
 
 REVIEW_ID_INSTRUCTIONS = (
@@ -109,6 +119,11 @@ def review_draft(gateway, context, draft, entry, correction_counts):
                 dict(role='system', content='Correct only your review response format, exact ID ledger and '
                     'reviewer-owned page-label proof. A page-label error requires a fresh literal marker '
                     'check against the unchanged source page; do not change the writer binding. '
+                    'Recheck accepted as well: if the actual printed page lies outside the quoted '
+                    'scope or no covered counterpart exists, return accepted=false with a specific '
+                    'source-based rejection and covered_source=null. Never preserve accepted=true '
+                    'by assigning a covered label from another page. The writer can then correct '
+                    'the substantive binding through its existing bounded correction. '
                     'Use schema_errors for exact field paths, types and limits. Rephrase overlong '
                     'reasons within their field limits, preserving the verdict, relevant IDs, '
                     'source distinctions and material qualifications; never truncate source quotations. '

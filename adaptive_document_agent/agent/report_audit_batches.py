@@ -220,6 +220,8 @@ def review_partitions(gateway, result, context, audit, review_batch, *, progress
     from .report_audit_capacity import audit_capacity_identity
     from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
     ready = resumable_batches(result, context)
+    from .report_audit_draft_resume import pending_audit_drafts
+    pending = pending_audit_drafts(result, context)
     capacity_identity = audit_capacity_identity(gateway, AUDIT_REQUEST_STRATEGY)
     known = _known_capacity_splits(result, context, capacity_identity)
     audit['request_strategy'] = AUDIT_REQUEST_STRATEGY
@@ -252,6 +254,8 @@ def review_partitions(gateway, result, context, audit, review_batch, *, progress
             return
         scoped = batch_context(context, ids)
         record = dict(observation_ids=ids, context_fingerprint=_fingerprint(scoped), status='pending', attempts=[])
+        if tuple(ids) in pending:
+            record['retained_unreviewed_draft'] = deepcopy(pending[tuple(ids)])
         partition['batches'].append(record)
         if notify:
             notify(f'Linking audit qualifications: reviewing {len(ids)} measures')

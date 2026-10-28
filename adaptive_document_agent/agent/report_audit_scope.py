@@ -18,7 +18,9 @@ from .structured_output_correction import schema_feedback, format_correction_mes
 from .presentation_budget_output import complete_budget_output
 from .prompting import untrusted_document_message
 from .report_audit_eligibility import audit_binding_ineligibility
-from .report_audit_counterpart import AuditCoveredSource
+from .report_audit_counterpart import (
+    AuditCoveredSource, AuditScopeQuote, AuditUnitQuote, literal_standalone_page_label,
+)
 from .report_audit_capacity import AUDIT_DRAFT_TOKEN_LIMITS
 from .report_audit_batches import AUDIT_SCOPE_BATCH_SIZE
 
@@ -40,11 +42,16 @@ class AuditMeasureBinding(BaseModel):
     source_unit: str
     source_unit_scale: float = Field(gt=0)
     source_currency: str | None = None
-    target_quote: BriefQuote
-    value_quote: BriefQuote
+    target_quote: BriefQuote = Field(description=
+        'Complete literal original observation row including its row label and signed raw value; '
+        'never an isolated amount. Keep at least 8 characters of actual source context, without padding.')
+    value_quote: BriefQuote = Field(description=
+        'Complete literal covered counterpart row containing BOTH source_metric and source_raw_value. '
+        'Never an isolated amount or unlabeled subtotal. Keep at least 8 characters of actual '
+        'source context, without padding; retain unresolved if no exact labeled counterpart exists.')
     header_quote: BriefQuote
-    unit_quote: BriefQuote
-    scope_evidence: list[BriefQuote] = Field(min_length=1, max_length=5)
+    unit_quote: AuditUnitQuote
+    scope_evidence: list[AuditScopeQuote] = Field(min_length=1, max_length=5)
     reason: str = Field(min_length=1, max_length=1400)
 
 
@@ -201,6 +208,11 @@ def _validate(draft, context):
         for name, quote in quotes:
             if not _literal(quote, pages):
                 reject(name, 'Every audit binding needs literal quotations from the supplied source pages.', oid)
+            if (name.startswith('scope_evidence[') and len(quote.text.strip()) < 8
+                    and not literal_standalone_page_label(quote, pages)):
+                reject(name, 'Short scope evidence must be a literal standalone printed page marker '
+                       'on its cited page. It supports navigation only; complete assurance prose '
+                       'and independent counterpart coverage remain required.', oid)
         target_pages = sorted({e['page'] for e in observation['evidence']})
         if binding.target_quote.page not in target_pages:
             reject('target_quote.page', 'The target quotation must belong to the observation source.', oid,
@@ -410,8 +422,15 @@ def _review_batch(gateway, context, record):
         entry = {}
         record['attempts'].append(entry)
         try:
-            draft = complete_budget_output(gateway, messages, AuditScopeDraft, entry,
-                audit_key='draft_output_attempts', token_limits=AUDIT_DRAFT_TOKEN_LIMITS, stage='report')
+            retained = record.get('retained_unreviewed_draft') if attempt == 0 else None
+            if retained is not None:
+                if retained['source_context_fingerprint'] != _fingerprint(context):
+                    raise ValueError('Retained audit draft source context is stale.')
+                draft = AuditScopeDraft.model_validate(retained['draft'])
+                entry['draft_origin'] = 'retained_unreviewed_draft'
+            else:
+                draft = complete_budget_output(gateway, messages, AuditScopeDraft, entry,
+                    audit_key='draft_output_attempts', token_limits=AUDIT_DRAFT_TOKEN_LIMITS, stage='report')
         except LLMStructuredOutputError as exc:
             feedback = schema_feedback(exc, AuditScopeDraft)
             feedback.update(corrective_kind='draft_output', target_contracts=contracts)
@@ -424,7 +443,7 @@ def _review_batch(gateway, context, record):
                     '(one draft output correction, at most three drafts): ' + (details or str(exc))) from exc
             correction_counts['draft_output'] += 1
             correction = format_correction_messages(feedback)
-            correction[-1]['content'] += ' ' + DISPOSITION_INSTRUCTIONS
+            correction[-1]['content'] += ' ' + DISPOSITION_INSTRUCTIONS + QUOTE_FORMAT_INSTRUCTIONS
             messages.extend(correction)
             continue
         entry['draft'] = draft.model_dump(mode='json')

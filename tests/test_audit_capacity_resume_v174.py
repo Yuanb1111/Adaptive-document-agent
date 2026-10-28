@@ -38,13 +38,23 @@ def test_capacity_identity_changes_with_exact_route_model_or_policy(field, value
     assert audit_capacity_identity(gateway, AUDIT_REQUEST_STRATEGY) != original
 
 
-def test_simple_task_optout_expires_capacity_failures_for_changed_audit_reasoning():
+def test_simple_editorial_setting_does_not_change_audit_reasoning_capacity():
     gateway = configured_gateway()
     original = audit_capacity_identity(gateway, AUDIT_REQUEST_STRATEGY)
     gateway.settings.simple_task_reasoning = 'provider_default'
-    assert audit_capacity_identity(gateway, AUDIT_REQUEST_STRATEGY) != original
+    assert audit_capacity_identity(gateway, AUDIT_REQUEST_STRATEGY) == original
     gateway.settings.simple_task_reasoning = 'reduced'
     assert audit_capacity_identity(gateway, AUDIT_REQUEST_STRATEGY) == original
+
+
+def test_previous_audit_reduction_expires_capacity_failures(monkeypatch):
+    from adaptive_document_agent.services.llm import reasoning_policy
+    gateway = configured_gateway()
+    current = audit_capacity_identity(gateway, AUDIT_REQUEST_STRATEGY)
+    monkeypatch.setattr(reasoning_policy, '_SIMPLE_OPERATIONS',
+        reasoning_policy._SIMPLE_OPERATIONS | {
+            ('report', 'AuditScopeDraft'), ('report', 'AuditScopeReview')})
+    assert audit_capacity_identity(gateway, AUDIT_REQUEST_STRATEGY) != current
 
 
 def test_capacity_identity_has_no_source_or_credentials_and_preserves_equivalent_routes(monkeypatch):

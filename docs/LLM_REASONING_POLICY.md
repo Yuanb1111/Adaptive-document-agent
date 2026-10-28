@@ -12,9 +12,18 @@ without changing prompts, response validation, routing, credentials or privacy:
   source validation and the 24-batch, 36-call ceiling remain required; incomplete
   coverage remains unresolved and cannot certify business acceptance.
 - `ExecutiveBriefPatch` uses the same reduction for its single targeted repair.
+- Since v212, `BriefMeaningReview` preserves provider-default reasoning too.
+  A real report continuation showed its reduced-reasoning reviewer assigning a
+  comparative column's unaudited qualifier to the next interim period despite
+  the supplied column inventory. Brief writing, quantity repair and deterministic
+  validation retain their existing policies and limits.
 - `AuditSourceDiscovery` in `report` uses the configured reduction for source
-  navigation. In v193, `AuditScopeDraft` and `AuditScopeReview` also honor the
-  configured reduction. Building and independently checking assurance bindings still reconcile
+  navigation. Since v212, `AuditScopeDraft` and `AuditScopeReview` preserve provider-default
+  reasoning, reversing their v193 inclusion in the simple-operation reduction.
+  Real `.209` retries repeatedly produced incorrect source ownership with reasoning
+  disabled; the same model and evidence passed with default reasoning. This changes
+  only these two request-policy identities, leaving unrelated caches and editorial
+  reductions intact. Building and independently checking assurance bindings still reconcile
   literal period/unit evidence, scope, table/column ownership and exact counterparts,
   including evidence against proposed unknown dispositions.
   Audit batches contain at most three exact target measures. Complete source
@@ -23,8 +32,8 @@ without changing prompts, response validation, routing, credentials or privacy:
   The reasoning change preserves output limits and correction budgets. In v194,
   reviewer format/ID repair is counted separately from substantive writer correction;
   each has one allowance per batch and drafts remain capped at three (see
-  [audit correction budgets](AUDIT_REVIEW_BUDGET_V194.md)). Provider-default
-  opt-out and exact route/capability checks still apply. The two assurance operations'
+  [audit correction budgets](AUDIT_REVIEW_BUDGET_V194.md)). No provider-specific
+  reasoning override is added for these two operations. Their
   identities change within policy v9; unrelated operation caches remain reusable.
   The existing strengthened unknown-review contract is unchanged. Approvals produced under it can be
   revalidated and reused independently of transport capacity failures.
@@ -37,7 +46,7 @@ without changing prompts, response validation, routing, credentials or privacy:
   source ownership, numerical checks and independent compact-part meaning review
   remain required.
 - In v147, initial owned-source synthesis, audience meaning
-  selection/correction, final briefing meaning review, physical-budget review
+  selection/correction, physical-budget review
   and incremental coverage decisions use the configured editorial reduction too.
   These operations still decide meaning through the model and retain their full
   independent source, quantity, qualification, coverage and physical-page gates.

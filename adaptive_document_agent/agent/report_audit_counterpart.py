@@ -3,7 +3,7 @@ import re
 import unicodedata
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from adaptive_document_agent.models.executive_brief import BriefQuote
 from adaptive_document_agent.services.source_quotes import normalize_quote
@@ -14,8 +14,38 @@ class AuditPageLabelQuote(BriefQuote):
     text: str = Field(min_length=1, max_length=100)
 
 
+class AuditUnitQuote(BriefQuote):
+    """A complete unit declaration can be shorter than supporting prose."""
+    text: str = Field(min_length=1, max_length=1800, description=
+        'Literal complete unit declaration for the exact row and column; short '
+        'unit labels are valid. Preserve source spelling, scale and currency.')
+
+    @field_validator('text')
+    @classmethod
+    def require_unit_text(cls, text):
+        if not _normal(text):
+            raise ValueError('Unit evidence cannot be empty or whitespace.')
+        return text
+
+
+class AuditScopeQuote(BriefQuote):
+    """Scope prose or a supporting printed marker, checked against its source."""
+    text: str = Field(min_length=1, max_length=1800, description=
+        'Literal scope prose, or a standalone printed page marker. Only printed '
+        'page markers may be shorter than 8 characters; they do not establish assurance.')
+
+    @field_validator('text')
+    @classmethod
+    def require_prose_or_marker(cls, text):
+        if not _normal(text):
+            raise ValueError('Scope evidence cannot be empty or whitespace.')
+        if len(text.strip()) < 8 and _address(_printed_label(text)) is None:
+            raise ValueError('Short scope evidence must be a printed page marker, not shortened prose.')
+        return text
+
+
 class AuditPageLabelError(ValueError):
-    """A reviewer-owned page marker needs correction, not a rewritten draft."""
+    """Recheck reviewer-owned page proof before deciding on writer correction."""
 
 
 class AuditPageCoverage(BaseModel):
@@ -33,7 +63,7 @@ class AuditCoveredSource(BaseModel):
     model_config = ConfigDict(extra='forbid')
     covered_value_quote: BriefQuote
     covered_header_quote: BriefQuote
-    covered_unit_quote: BriefQuote
+    covered_unit_quote: AuditUnitQuote
     page_coverage: list[AuditPageCoverage] = Field(min_length=1, max_length=3)
 
 
@@ -89,6 +119,19 @@ def _address(value):
     return (match[1], int(match[2])) if match else None
 
 
+def _printed_label(text):
+    return _label(text).strip('-–—()[]{}:.,')
+
+
+def literal_standalone_page_label(quote, pages):
+    """Check marker syntax and a whole source line; infer no page scope or status."""
+    printed = _printed_label(quote.text)
+    source = pages.get(quote.page, '')
+    return (_address(printed) is not None
+            and bool(_normal(quote.text)) and _normal(quote.text) in _normal(source)
+            and any(_printed_label(line) == printed for line in source.splitlines()))
+
+
 def _validate_page_coverage(coverage, binding, pages):
     scope = coverage.scope_quote
     if (not _normal(scope.text) or _normal(scope.text) not in _normal(pages.get(scope.page, ''))
@@ -106,7 +149,15 @@ def _validate_page_coverage(coverage, binding, pages):
     start, end, current = map(_address, label_fields[:3])
     if (None in (start, end, current) or start[0] != end[0] or start[0] != current[0]
             or not start[1] <= current[1] <= end[1]):
-        raise ValueError('The counterpart printed page label must lie within the same explicit covered page range.')
+        raise ValueError(
+            'The counterpart printed page label must lie within the same explicit covered page range. '
+            f'Physical page {coverage.page}: covered_page_label={coverage.covered_page_label!r}; '
+            f'claimed range={coverage.range_start_label!r} to {coverage.range_end_label!r}; '
+            f'page_label_quote.text={coverage.page_label_quote.text!r}. '
+            'This proposed counterpart is not covered by that range. Do not change its printed label '
+            'or infer assurance from a common entity, period or amount. The writer must select a '
+            'different exact covered source row or retain a source-specific unresolved disposition '
+            'for independent review. The reviewer must reject unsupported coverage, not relabel it.')
     # Range membership is arithmetic, never an inferred PDF/printed-page offset.
     scope_text = _label(scope.text)
     range_pattern = (r'(?<!\d)' + re.escape(_label(coverage.range_start_label))
@@ -115,17 +166,18 @@ def _validate_page_coverage(coverage, binding, pages):
     if not re.search(range_pattern, scope_text):
         raise ValueError('The assurance scope must literally state the proposed covered page range.')
     quote = coverage.page_label_quote
-    printed = _label(quote.text).strip('-–—()[]{}:.,')
-    if (quote.page != coverage.page or _normal(quote.text) not in _normal(pages.get(coverage.page, ''))
-            or printed != _label(coverage.covered_page_label)
-            or not any(_label(line).strip('-–—()[]{}:.,') == printed
-                       for line in pages.get(coverage.page, '').splitlines())):
+    printed = _printed_label(quote.text)
+    if (quote.page != coverage.page or not literal_standalone_page_label(quote, pages)
+            or printed != _label(coverage.covered_page_label)):
         raise AuditPageLabelError(
             'The counterpart page label must be a literal standalone source-page marker. '
             f'Physical page {coverage.page}: declared covered_page_label={coverage.covered_page_label!r}; '
             f'page_label_quote.page={quote.page}, page_label_quote.text={quote.text!r}. '
             'Recheck the original page footer/header and make the declared label and literal quote agree; '
-            'do not infer a printed label from the physical page number or change the proposed binding.')
+            'do not infer a printed label from the physical page number or change the proposed binding. '
+            'If the actual printed page is outside the quoted assurance range, reject this binding '
+            '(accepted=false, covered_source=null). Do not assign another page\'s label to make it fit; '
+            'a missing covered counterpart is a substantive rejection, not a page-label typo.')
 
 
 def validate_covered_sources(draft, review, context):
