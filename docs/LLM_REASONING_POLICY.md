@@ -17,8 +17,12 @@ without changing prompts, response validation, routing, credentials or privacy:
   comparative column's unaudited qualifier to the next interim period despite
   the supplied column inventory. Brief writing, quantity repair and deterministic
   validation retain their existing policies and limits.
-- `AuditSourceDiscovery` in `report` uses the configured reduction for source
-  navigation. Since v212, `AuditScopeDraft` and `AuditScopeReview` preserve provider-default
+- Since v213, `AuditSourceDiscovery` in `report` preserves provider-default reasoning.
+  Real `.935` continuation showed reduced-reasoning navigation selecting oversized
+  source ranges even after exact page-cost feedback. Its operation cache identity
+  changes without affecting other selectors. The page budget and one selection
+  correction remain unchanged.
+- Since v212, `AuditScopeDraft` and `AuditScopeReview` preserve provider-default
   reasoning, reversing their v193 inclusion in the simple-operation reduction.
   Real `.209` retries repeatedly produced incorrect source ownership with reasoning
   disabled; the same model and evidence passed with default reasoning. This changes

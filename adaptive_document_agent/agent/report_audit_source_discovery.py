@@ -10,6 +10,7 @@ from .presentation_budget_output import complete_budget_output
 from .prompting import untrusted_document_message
 from .report_audit_source_index import discovery_input, discovery_request
 from .structured_output_correction import schema_feedback
+from .audit_discovery_budget import AuditDiscoveryBudgetError, require_discovery_budget
 from .audit_discovery_references import (
     AuditDiscoveryReferenceError, REFERENCE_INSTRUCTIONS, resolve_selection,
 )
@@ -56,8 +57,7 @@ def _expanded_context(result, base, payload, selection, fingerprint):
     expanded = {**base, 'source_pages':[audit_source_page(pages[n]) for n in sorted(existing | selected)],
         'source_discovery':dict(contract=DISCOVERY_CONTRACT, input_fingerprint=fingerprint,
             selection=selection.model_dump(mode='json'), added_pages=sorted(selected-existing))}
-    from .report_audit_context_budget import require_audit_context_budget
-    require_audit_context_budget(expanded)
+    require_discovery_budget(expanded, base)
     return expanded
 
 
@@ -117,7 +117,9 @@ def discover_audit_sources(gateway, result, base, audit, *, progress=None):
             'Choose at most four ranges, each at most three consecutive physical pages inside one '
             'listed section, totaling at most twelve additional pages and fitting the remaining '
             'source-character budget. Selected pages will be read IN FULL; never select a prefix '
-            'or omit a table continuation needed to establish a binding. Use section IDs and physical '
+            'or budget only the navigation preview. Use complete_reading_chars where present '
+            '(full text plus retained layout), otherwise complete_text_chars, and allow for selection metadata. '
+            'Never omit a table continuation needed to establish a binding. Use section IDs and physical '
             'page numbers exactly as indexed. Explain the target IDs and reason for each range. '
             'Always include the required top-level rationale explaining the overall selection, '
             'as well as the reason inside every range. '
@@ -148,6 +150,8 @@ def discover_audit_sources(gateway, result, base, audit, *, progress=None):
                     failure['proposed_selection'] = entry['model_selection']
                     if isinstance(exc, AuditDiscoveryReferenceError):
                         failure['reference_issues'] = exc.issues
+                    if isinstance(exc, AuditDiscoveryBudgetError):
+                        failure['source_budget'] = exc.details
                 entry['correction_feedback'] = failure
                 if attempt:
                     entry['correction_budget_exhausted'] = True

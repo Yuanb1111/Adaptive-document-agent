@@ -22,7 +22,6 @@ _DEEPSEEK_THINKING_MODELS = frozenset({"deepseek-flash", "deepseek-v4-flash", "d
 # https://developers.openai.com/api/docs/models/gpt-6-luna
 _DOCUMENTED_OPENAI_LOW_EFFORT_MODELS = frozenset({"gpt-6-luna"})
 _SIMPLE_OPERATIONS = frozenset({("presentation", "IntroductionPages"), ("report", "BriefSourcePages"),
-                              ("report", "AuditSourceDiscovery"),
                               ("presentation", "TopicCoverageReview"),
                               ("presentation", "TopicCoverageDelta"),
                               ("presentation", "TakeawayCorrection"),

@@ -69,7 +69,12 @@ def test_exact_wire_boundary_is_admitted_but_one_character_over_still_blocks(mon
     encoded, _ = index.discovery_request(payload)
     monkeypatch.setattr(index, 'MAX_DISCOVERY_INPUT_CHARS', len(encoded))
     assert index.discovery_input(result, base)[0] == payload
-    monkeypatch.setattr(index, 'MAX_DISCOVERY_INPUT_CHARS', len(encoded) - 1)
+    # v213 can remove repeated navigation keys before rejecting the request.
+    wire, _ = reference_input(payload)
+    compact = json.dumps(index._columnar_navigation(wire), ensure_ascii=False, separators=(',', ':'))
+    monkeypatch.setattr(index, 'MAX_DISCOVERY_INPUT_CHARS', len(compact))
+    assert index.discovery_request(payload)[0] == compact
+    monkeypatch.setattr(index, 'MAX_DISCOVERY_INPUT_CHARS', len(compact) - 1)
 
     class NoCall:
         def generate_structured(self, *args, **kwargs):

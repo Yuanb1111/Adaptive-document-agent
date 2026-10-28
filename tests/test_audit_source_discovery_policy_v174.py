@@ -1,4 +1,4 @@
-"""Audit source navigation has an isolated configured selector policy identity."""
+"""Audit navigation preserves reasoning while unrelated selector caches remain stable."""
 import json
 from unittest.mock import Mock
 
@@ -20,16 +20,16 @@ def policy(settings, *, stage='report', operation='AuditSourceDiscovery'):
 
 
 @pytest.mark.parametrize('setting', ['reduced', 'provider_default'])
-def test_navigation_uses_configured_simple_policy_and_optout_without_changing_output_limits(monkeypatch, setting):
+def test_navigation_preserves_reasoning_under_both_editorial_settings(monkeypatch, setting):
     settings = LLMSettings(provider=ProviderName.DEEPSEEK, model='deepseek-flash', simple_task_reasoning=setting)
     provider = LiteLLMProvider(settings)
     complete = Mock(return_value=raw_response('{"ranges":[],"rationale":"No unread counterpart identified."}'))
     monkeypatch.setattr(provider, '_completion', complete)
     gateway = LLMGateway(provider, settings)
     gateway.generate_structured([], AuditSourceDiscovery, stage='report', allow_repair=False, max_tokens=8192)
-    assert ('extra_body' in complete.call_args.kwargs) is (setting == 'reduced')
+    assert 'extra_body' not in complete.call_args.kwargs
     assert complete.call_args.kwargs['max_tokens'] == 8192
-    assert gateway.usage[-1]['reasoning_policy']['intent'] == ('reduce' if setting == 'reduced' else 'preserve')
+    assert gateway.usage[-1]['reasoning_policy']['intent'] == 'preserve'
 
 
 @pytest.mark.parametrize('provider,endpoint,model', [
@@ -42,14 +42,14 @@ def test_navigation_uses_configured_simple_policy_and_optout_without_changing_ou
 ])
 def test_navigation_cannot_infer_capabilities_on_custom_local_or_unknown_routes(provider, endpoint, model):
     value = policy(LLMSettings(provider=provider, base_url=endpoint, model=model))
-    assert value['status'] == 'unsupported' and value['options'] == {}
+    assert value['status'] == 'provider_default' and value['options'] == {}
 
 
 @pytest.mark.parametrize('capable', [False, True])
-def test_navigation_still_requires_positive_loaded_capability_metadata(monkeypatch, capable):
+def test_navigation_does_not_inject_reduction_even_when_provider_supports_it(monkeypatch, capable):
     fake_litellm(monkeypatch, capable=capable)
     settings = LLMSettings(provider=ProviderName.OPENAI, model='capable-model')
-    assert policy(settings)['options'] == ({'reasoning_effort': 'low'} if capable else {})
+    assert policy(settings)['options'] == {}
     settings.base_url = 'https://proxy.example/v1'
     assert policy(settings)['options'] == {}
 
@@ -60,7 +60,8 @@ def test_complex_analysis_and_wrong_stage_keep_provider_default():
                              ('presentation', 'AuditSourceDiscovery')]:
         value = policy(settings, stage=stage, operation=operation)
         assert value['intent'] == 'preserve' and value['options'] == {}
-    assert policy(settings)['options'] == policy(settings, operation='BriefSourcePages')['options']
+    assert policy(settings)['options'] == {}
+    assert policy(settings, operation='BriefSourcePages')['options'] == {'extra_body': {'thinking': {'type': 'disabled'}}}
 
 
 def test_only_new_navigation_identity_changes_preserving_policy_version_and_audit_caches(monkeypatch, tmp_path):
@@ -80,7 +81,8 @@ def test_only_new_navigation_identity_changes_preserving_policy_version_and_audi
     gateway = LLMGateway(provider, settings, cache=DiskCache(tmp_path))
     current = reasoning_policy._SIMPLE_OPERATIONS
     schemas = (AuditSourceDiscovery, AuditScopeDraft, AuditScopeReview, BriefSourcePages)
-    monkeypatch.setattr(reasoning_policy, '_SIMPLE_OPERATIONS', current - {('report', 'AuditSourceDiscovery')})
+    assert ('report', 'AuditSourceDiscovery') not in current
+    monkeypatch.setattr(reasoning_policy, '_SIMPLE_OPERATIONS', current | {('report', 'AuditSourceDiscovery')})
     before = {schema.__name__: policy(settings, operation=schema.__name__) for schema in schemas}
     for schema in schemas:
         gateway.generate_structured([], schema, stage='report', allow_repair=False, max_tokens=8192)
@@ -91,4 +93,4 @@ def test_only_new_navigation_identity_changes_preserving_policy_version_and_audi
         assert (before[schema.__name__] != policy(settings, operation=schema.__name__)) is (schema is AuditSourceDiscovery)
         gateway.generate_structured([], schema, stage='report', allow_repair=False, max_tokens=8192)
     assert complete.call_count == 5
-    assert complete.call_args.kwargs['extra_body'] == {'thinking': {'type': 'disabled'}}
+    assert 'extra_body' not in complete.call_args.kwargs

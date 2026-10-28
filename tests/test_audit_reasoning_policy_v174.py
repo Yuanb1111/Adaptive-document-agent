@@ -99,7 +99,7 @@ def test_audit_default_reasoning_invalidates_only_changed_operation_caches(monke
     before = {schema.__name__: policy(settings, schema) for schema in schemas}
     assert before['AuditScopeDraft']['intent'] == 'reduce'
     assert before['AuditScopeReview']['intent'] == 'reduce'
-    assert before['AuditSourceDiscovery']['intent'] == 'reduce'
+    assert before['AuditSourceDiscovery']['intent'] == 'preserve'
     for schema in schemas:
         gateway.generate_structured([], schema, stage='report', allow_repair=False, max_tokens=12000)
     assert complete.call_count == len(schemas)

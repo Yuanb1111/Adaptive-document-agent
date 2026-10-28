@@ -9,11 +9,37 @@ from .source_coverage import inventory
 MAX_DISCOVERY_INPUT_CHARS = 260_000
 
 
+def _columnar_navigation(wire):
+    """Remove repeated index keys only; every source value remains unchanged."""
+    columns = ['page', 'navigation_preview', 'complete_text_chars',
+               'literal_raw_value_target_indices', 'complete_reading_chars']
+    rows = []
+    for page in wire['page_index']:
+        if not set(columns[:4]) <= page.keys() or not page.keys() <= set(columns):
+            raise ValueError('Unknown audit navigation fields cannot be omitted from compact transport.')
+        row = [page[key] for key in columns[:4]]
+        if columns[4] in page:
+            row.append(page[columns[4]])
+        rows.append(row)
+    return {**wire, 'page_index': dict(columns=columns, rows=rows),
+        'navigation_notice': wire['navigation_notice'] +
+            ' page_index is a lossless column table: each row follows columns in order. '
+            'A four-value row omits only the optional final complete_reading_chars field. '
+            'All physical pages and all target-index hits are retained.'}
+
+
 def discovery_request(payload):
     """Bound the exact lossless wire payload, after replacing opaque addresses."""
     from .audit_discovery_references import reference_input
     wire, references = reference_input(payload)
     encoded = json.dumps(wire, ensure_ascii=False, separators=(',', ':'))
+    if len(encoded) > MAX_DISCOVERY_INPUT_CHARS:
+        # Large documents repeat the same navigation keys hundreds of times.
+        # A column header removes that overhead without selecting, summarising,
+        # truncating or changing any page, target, source check or source text.
+        compact = json.dumps(_columnar_navigation(wire), ensure_ascii=False, separators=(',', ':'))
+        if len(compact) < len(encoded):
+            encoded = compact
     if len(encoded) > MAX_DISCOVERY_INPUT_CHARS:
         raise ValueError('Complete audit source navigation exceeds its bounded input budget '
                          f'({len(encoded)} > {MAX_DISCOVERY_INPUT_CHARS} serialized characters); '
