@@ -149,6 +149,7 @@ def comparison_errors(comparison, item, *, pages=None, source_percentages=None):
 def meaning_validator(gateway, *, cancelled=None, result=None, source_context=None):
     """Run-owned memo; unchanged verified items do not incur another review."""
     checked = {}
+    capacity = {}
 
     def validate(brief):
         pending, errors = [], {}
@@ -296,11 +297,12 @@ def meaning_validator(gateway, *, cancelled=None, result=None, source_context=No
         for attempt in range(2):
             started = perf_counter()
             try:
-                from .presentation_budget_output import complete_budget_output
+                from .brief_meaning_capacity import complete_meaning_output
                 output_record = {}
-                response = complete_budget_output(gateway, messages, BriefMeaningReview, output_record,
-                    audit_key='output_attempts', token_limits=(16384, 24576), stage='report', cancelled=cancelled)
-                if result is not None and len(output_record['output_attempts']) > 1:
+                response = complete_meaning_output(gateway, messages, BriefMeaningReview, pending,
+                    output_record, capacity, cancelled=cancelled)
+                if result is not None and (len(output_record['output_attempts']) > 1
+                                          or output_record.get('single_item_batches')):
                     from adaptive_document_agent.models import ValidationIssue
                     result.validation_warnings.append(ValidationIssue(code='executive_brief_meaning_capacity_audit',
                         stage='report', severity='info', message=json.dumps(output_record)))
@@ -311,7 +313,8 @@ def meaning_validator(gateway, *, cancelled=None, result=None, source_context=No
                     result.validation_warnings.append(ValidationIssue(code='executive_brief_meaning_format_audit',
                         stage='report', severity='warning', message=json.dumps({'attempt': attempt + 1,
                         'indices': [r['index'] for r in pending], 'error': str(exc),
-                        'validation_detail': str(exc.__cause__ or exc), 'raw_response': exc.response.text})))
+                        'validation_detail': str(exc.__cause__ or exc), 'raw_response': exc.response.text,
+                        'capacity_recovery': output_record})))
                 from .topic_review_output import is_truncated
                 if attempt or is_truncated(exc):
                     # A failed review cannot certify these claims or erase

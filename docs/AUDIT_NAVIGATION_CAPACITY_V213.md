@@ -47,3 +47,29 @@ selection under provider-default reasoning, then completed all 31 audit batches
 covering all 91 targets. Every batch passed independent review; no dispositions
 were supplied by the diagnostic driver. Earlier unsuccessful selections remain
 in separate private attempt logs. This audit result alone is not export success.
+
+## Briefing capacity follow-up
+
+The continuation passed audit and physical scope selection, then the five-item
+`BriefMeaningReview` exhausted both 16,384 and 24,576 output tokens entirely on
+reasoning without returning JSON. The existing writer correction encountered
+the same capacity failure. Provider-default reasoning remains required for
+source ownership; an empty or truncated response still supplies no approval.
+
+After a multi-item review exhausts those two existing output limits, review now
+partitions into single-item verdict requests. Every request retains the complete
+shared source context and whole current brief, plus the assigned item's exact
+source evidence, reference IDs and audit bindings. Every single-item call retains
+the same two output limits; there is no recursive splitting or approval fallback.
+The validator remembers this transport choice within its run, avoiding another
+oversized multi-item request after a writer correction. Format correction and
+semantic writer-repair limits remain unchanged. Joined verdicts still undergo
+source, arithmetic, period, assurance and independent audience-direction checks.
+One missing/wrong item ID or exhausted single-item request prevents acceptance.
+
+The focused briefing regression selection passes 102 tests, including shared
+context preservation, bounded exhaustion, privacy/cancellation propagation,
+exact index ownership, cache reuse and rejection of false endpoint arithmetic
+after successful partitioned model responses.
+The subsequent complete Windows suite passes 6126 tests with the same 14
+platform/opt-in/external-checkpoint skips and four dependency warnings.
