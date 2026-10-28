@@ -18,6 +18,9 @@ from .audit_discovery_references import (
 
 DISCOVERY_CONTRACT = 'report-audit-source-discovery-v174'
 MAX_ADDITIONAL_PAGES = 12
+# Navigation reconciles the complete index with every target under default
+# reasoning. Keep its output allowance separate from small selector responses.
+AUDIT_DISCOVERY_TOKEN_LIMITS = (16384, 32768)
 
 
 class AuditSourceRange(BaseModel):
@@ -134,7 +137,7 @@ def discover_audit_sources(gateway, result, base, audit, *, progress=None):
             selection = None
             try:
                 selection = complete_budget_output(gateway, messages, AuditSourceDiscovery, entry,
-                    audit_key='selection_output_attempts', token_limits=(8192, 16384), stage='report')
+                    audit_key='selection_output_attempts', token_limits=AUDIT_DISCOVERY_TOKEN_LIMITS, stage='report')
                 entry['model_selection'] = selection.model_dump(mode='json')
                 selection = resolve_selection(selection, references)
                 entry['selection'] = selection.model_dump(mode='json')
@@ -145,6 +148,10 @@ def discover_audit_sources(gateway, result, base, audit, *, progress=None):
                 entry['error'] = str(exc)
                 failure = dict(validation_error=str(exc))
                 if isinstance(exc, LLMStructuredOutputError):
+                    from .topic_review_output import is_truncated
+                    if is_truncated(exc):
+                        record['failure_kind'] = 'output_capacity_exhausted'
+                        raise  # No empty selection, partial JSON or format retry.
                     failure = schema_feedback(exc, AuditSourceDiscovery)
                 else:
                     failure['proposed_selection'] = entry['model_selection']

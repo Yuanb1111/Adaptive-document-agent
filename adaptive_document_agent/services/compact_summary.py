@@ -107,30 +107,21 @@ def compact_heading_errors(label):
 
 
 def compact_layout_errors(pages):
-    from .presentation_brief import BriefItem, _item_height, _heading_height, _copy_height, is_technical_copy
-    from .slide_compositor import _lines
-    from .pptx_export import _resolve_template_path
-    path=_resolve_template_path()
-    slide_width,slide_height=_template_dimensions(str(path),path.stat().st_mtime_ns)
-    full_width=slide_width-1.3
+    from .presentation_brief import is_technical_copy
+    from .summary_native_capacity import native_summary_capacity
     errors = []
     for page in pages:
-        errors.extend(compact_title_errors(page.title))
+        local = compact_title_errors(page.title)
         for item in page.items:
-            errors.extend(compact_heading_errors(item.label))
-        # Match the wide native text layout and reserve a wrapped template title.
-        top = max(1.45,.27 + len(_lines(page.title,min(8.91,slide_width-.75),32)) * (32/72*1.22) + .27)
-        capacity = compact_body_capacity(page.title, slide_width, slide_height)
-        items = [BriefItem(i.label,i.text,i.source_pages) for i in page.items]
-        needed = sum(_item_height(i,full_width) for i in items) + .12 * (len(items)-1)
-        grid_fits = False
-        if len(items) in {3,4}:
-            columns,rows = (3,1) if len(items)==3 else (2,2)
-            width = (full_width-.34*(columns-1))/columns
-            height = (slide_height-1.20-top-.18*(rows-1))/rows
-            grid_fits = all(len(_lines(i.title,width,18))<=2 and
-                _heading_height(i.title,width)+.06+_copy_height(i.text,width,16)+.08<=height for i in items)
-        if (needed > capacity and not grid_fits) or any(is_technical_copy(i.text) for i in items):
+            local.extend(compact_heading_errors(item.label))
+        if local:
+            errors.extend(local)
+            continue
+        if any(is_technical_copy(item.text) for item in page.items):
+            errors.append('Compact summary page needs shorter complete claims: ' + page.id)
+            continue
+        count, complete = native_summary_capacity(page)
+        if count != 1 or not complete:
             errors.append('Compact summary page needs shorter complete claims: ' + page.id)
     return errors
 

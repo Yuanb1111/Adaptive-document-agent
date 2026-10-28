@@ -107,7 +107,7 @@ def test_exhausted_truncation_never_triggers_format_correction():
     audit = {}
     with pytest.raises(LLMStructuredOutputError):
         discover_audit_sources(llm, result, base, audit)
-    assert [r[1]['max_tokens'] for r in client.requests] == [8192, 16384]
+    assert [r[1]['max_tokens'] for r in client.requests] == [16384, 32768]
     assert client.requests[0][0] == client.requests[1][0]
     attempts = audit['source_discovery']['attempts']
     assert len(attempts) == 1 and 'correction_feedback' not in attempts[0]
@@ -120,7 +120,7 @@ def test_capacity_retry_then_complete_format_error_still_has_one_selection_corre
                            response('{"ranges":[]}'), response(valid)])
     audit = {}
     discover_audit_sources(llm, result, base, audit)
-    assert [r[1]['max_tokens'] for r in client.requests] == [8192, 16384, 8192]
+    assert [r[1]['max_tokens'] for r in client.requests] == [16384, 32768, 16384]
     assert client.requests[0][0] == client.requests[1][0]
     assert len(audit['source_discovery']['attempts']) == 2
     assert audit['source_discovery']['status'] == 'complete'

@@ -151,6 +151,14 @@ def render_profile(presentation: Any, title: str, items: list[BriefItem], *, not
         structured = render_structured_profile_group(presentation, title, items, notes=notes)
         if structured is not None:
             return [structured]
+        # Independent plain paragraphs can use the established native grid
+        # before creating continuations. This keeps its lossless alternative
+        # available to both the capacity probe and actual export.
+        if 3 <= len(items) <= 4 and all(
+                item.display is None or item.display.layout == 'paragraphs' for item in items):
+            grid = _render_profile_grid(presentation, title, items, notes)
+            if grid is not None:
+                return [grid]
         if len(items) > 1:
             # Translation can change the best physical grouping. Try complete
             # contiguous item groups before the ordinary paragraph paginator;

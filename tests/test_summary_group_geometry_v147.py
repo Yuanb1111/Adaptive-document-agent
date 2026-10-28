@@ -24,12 +24,20 @@ def near_threshold(title='Reported service and activity measures'):
     return review, catalog, draft, pages
 
 
-def test_eleven_wrapped_body_lines_expose_the_near_one_slot_excess_before_pagination():
+def test_full_width_excess_is_diagnostic_when_native_columns_fit_one_page():
     review, catalog, draft, pages = near_threshold()
     before = deepcopy(draft)
     feedback = layout_feedback(draft, pages, review, catalog)
     group = feedback['groups'][0]
-    assert len(pages) == 2 and group['current_physical_slides'] == 2
+    # Full-width arithmetic remains useful feedback, but native columns can
+    # retain the same complete paragraphs on one actual physical slide.
+    assert len(pages) == 1 and group['current_physical_slides'] == 1
+    from adaptive_document_agent.services.summary_visual_layout import summary_brief_items
+    from adaptive_document_agent.services.presentation_brief import render_profile
+    from tests.test_presentation_brief import blank_deck
+    from types import SimpleNamespace
+    result = SimpleNamespace(profile=SimpleNamespace(report_requirements=None))
+    assert len(render_profile(blank_deck(), pages[0].title, summary_brief_items(result, pages[0]))) == 1
     assert group['title_lines'] == 1 and group['continuation_title_lines'] == 2
     assert group['current_body_wrapped_lines'] == 11
     assert [row['body_wrapped_lines'] for row in group['paragraphs']] == [6, 5]
@@ -43,7 +51,7 @@ def test_eleven_wrapped_body_lines_expose_the_near_one_slot_excess_before_pagina
     assert group['must_fit_one_slot_at_current_group_count'] is True
     pressure = feedback['group_slot_pressure']
     assert pressure['groups_exceeding_one_full_width_slot'] == ['g0']
-    assert pressure['diagnostic_unused_full_width_height_on_physical_slices_sum_inches'] > 0
+    assert pressure['diagnostic_unused_full_width_height_on_physical_slices_sum_inches'] == 0
     assert pressure['unused_slice_space_is_not_pooled_capacity'] is True
     assert draft == before and feedback['semantic_approval'] is False
 

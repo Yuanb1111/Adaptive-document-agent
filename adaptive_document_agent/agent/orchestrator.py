@@ -764,7 +764,6 @@ class DocumentOrchestrator:
                 - final_result.stage_details_ms.get('physical_presentation_budget', 0))
             notify('Analysis incomplete; diagnostics and retry checkpoint retained')
             return final_result
-        notify("Complete")
         from .report_localization import prepare_report_language
         from adaptive_document_agent.services.customization_checks import check_requirements
         with record_timing(timings, 'customization_review'):
@@ -779,6 +778,11 @@ class DocumentOrchestrator:
             if final_result.profile.report_requirements:
                 with record_timing(final_result.stage_details_ms, 'customization_checks'):
                     check_requirements(final_result)
+            from .final_presentation_layout import check_final_presentation_layout
+            with record_timing(final_result.stage_details_ms, 'final_presentation_layout'):
+                layout_passed = check_final_presentation_layout(final_result)
+        notify('Complete' if layout_passed else
+               'Analysis incomplete; final display layout diagnostics and retry checkpoint retained')
         final_result.llm_usage = list(self.gateway.usage) if self.gateway else []
         # Pydantic copies input dictionaries. Timings recorded after constructing
         # the result must be explicitly synchronized, including the 90% phase.

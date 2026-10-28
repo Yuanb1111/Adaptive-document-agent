@@ -19,9 +19,8 @@ def summary_brief_items(result, page):
     items = []
     for index, item in enumerate(page.items):
         text = summary_item_copy(result, page, index)
-        # Anchors address the exact writer copy. A translation has its own
-        # reviewed wording, so it can only receive mechanical paragraph breaks.
-        display = item.display if text == item.text and item.display else SummaryDisplay()
+        from .summary_display_copy import summary_display
+        display = summary_display(item, text)
         items.append(BriefItem(localized_label(result, item.label), text, item.source_pages, display=display))
     return items
 
