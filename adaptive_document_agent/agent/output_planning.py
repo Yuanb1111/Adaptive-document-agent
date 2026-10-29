@@ -33,6 +33,26 @@ def plan_outputs(
         except Exception as exc:
             return None, exc
 
+    from .retained_analysis import can_reuse, select_retained_analysis
+    if gateway is not None and can_reuse(gateway, result):
+        notify('Planning report from validated analysis findings')
+        report_plan = report()
+        result.report_plan = report_plan
+        try:
+            with record_timing(timings, 'retained_analysis_selection'):
+                select_retained_analysis(gateway, result)
+        except (PrivacyViolationError, CancelledError):
+            raise
+        except Exception as exc:
+            # A failed bounded selection cannot fall through to a second paid
+            # full-catalogue workflow or silently approve a fallback deck.
+            result.pipeline_state, result.retry_from = 'partial', 'reporting'
+            result.failed_stage = 'presentation_selection'
+            result.failure_details = dict(component='RetainedAnalysisSelection',
+                error_type=type(exc).__name__, message=str(exc))
+            return report_plan, None, exc
+        return report_plan, None, None
+
     if gateway is not None and gateway.discovery_workers > 1:
         notify('Planning report outline and selecting presentation questions')
         with ThreadPoolExecutor(max_workers=2, thread_name_prefix="output-planning") as pool:

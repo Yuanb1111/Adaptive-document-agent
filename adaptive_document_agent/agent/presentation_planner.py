@@ -21,6 +21,9 @@ class PresentationPlanner:
         self._on_topics_ready = on_topics_ready
 
     def plan(self, result: PipelineResult) -> PresentationPlan:
+        from .retained_analysis import selected_record, compile_retained_analysis
+        if selected_record(result) is not None:
+            return compile_retained_analysis(result)
         if result.presentation_topics and result.presentation_topics.topics:
             # The model has already chosen questions, order, takeaways, source
             # series and omissions. Compile these decisions once instead of

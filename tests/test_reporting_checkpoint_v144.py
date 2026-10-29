@@ -375,7 +375,7 @@ def _run_coverage_fixture(monkeypatch, source, raw, client, *, background=False,
         # This is still an in-memory MockLLMClient. Non-local settings exercise
         # the actual concurrent gateway path without credentials, SDK or network.
         gateway = LLMGateway(client, LLMSettings(provider=ProviderName.DEEPSEEK,
-            model='offline-memory-adapter', discovery_workers=4))
+            model='offline-memory-adapter', discovery_workers=4, presentation_strategy='full_catalog'))
     else:
         gateway = _gateway(client)
     assert (gateway.discovery_workers > 1) == background

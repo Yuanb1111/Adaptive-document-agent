@@ -52,6 +52,7 @@ _SIMPLE_OPERATIONS = frozenset({("presentation", "IntroductionPages"), ("report"
                               ("presentation", "IntroductionAudienceReview"),
                               ("presentation", "SummaryLayoutPages"),
                               ("presentation", "PhysicalBudgetSelection"),
+                              ("presentation", "RetainedAnalysisSelection"),
                               ("presentation", "IntroductionMeaningRevision"),
                               ("presentation", "IntroductionMeaningResolution"),
                               ("presentation", "SummaryCoverageReview"),

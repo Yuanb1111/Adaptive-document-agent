@@ -54,7 +54,8 @@ def _warnings(checkpoint, code):
 def _gateway(client):
     # The actual gateway, privacy, response and cache boundaries remain active.
     # This local adapter has no credentials or network-capable implementation.
-    return LLMGateway(client, LLMSettings(provider=ProviderName.MOCK, model='offline-report-checkpoint'))
+    return LLMGateway(client, LLMSettings(provider=ProviderName.MOCK, model='offline-report-checkpoint',
+                                         presentation_strategy='full_catalog'))
 
 
 def _decisions(parts):

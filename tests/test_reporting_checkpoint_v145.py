@@ -116,7 +116,7 @@ def test_external_v144_whole_retry_replays_two_drafts_then_stops_at_new_compress
     retry.pipeline_version = PIPELINE_VERSION
     client = RecordedLayoutCheckpointClient(source)
     gateway = LLMGateway(client, LLMSettings(provider=ProviderName.DEEPSEEK,
-        model='offline-memory-layout-replay', discovery_workers=4))
+        model='offline-memory-layout-replay', discovery_workers=4, presentation_strategy='full_catalog'))
     runner = DocumentOrchestrator(gateway)
     prepared, validations = _wait_at_real_validation_boundary(monkeypatch, runner, client)
     result = runner.analyse_pdf(raw, resume=retry)

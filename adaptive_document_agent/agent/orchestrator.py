@@ -358,6 +358,19 @@ class DocumentOrchestrator:
                 reporting = self._generate_report(document, profile, index, plan, results, issues, notify, analysis_focus,
                     gateway=editorial_gateway, output=checkpoint)
                 details.update(reporting.stage_details_ms)
+                if reporting.pipeline_state == 'partial':
+                    # Stop a failed bounded retained selection before buying
+                    # briefing/localization work for an unpublishable deck.
+                    with record_timing(timings, 'background_drain'):
+                        resources.close()
+                    from adaptive_document_agent.utils.pipeline_version import PIPELINE_VERSION
+                    reporting.pipeline_version = PIPELINE_VERSION
+                    reporting.llm_usage = list(self.gateway.usage) if self.gateway else []
+                    reporting.timings_ms = timings
+                    reporting.stage_details_ms = details
+                    reporting.pipeline_total_ms = int((perf_counter() - pipeline_started) * 1000)
+                    notify('Report selection incomplete; diagnostics retained before briefing')
+                    return reporting
                 if isinstance(editorial_gateway, IntroductionGuardedGateway):
                     editorial_gateway.check()
                 insights, report_plan = reporting.insights, reporting.report_plan
@@ -719,7 +732,14 @@ class DocumentOrchestrator:
                 refine_presentation_budget, FinalBudgetBriefError, FinalBudgetAuditError)
             final_stage = 'presentation_coverage'
             try:
-                require_topic_coverage(final_result)
+                from .retained_analysis import selected_record
+                # Retained pages receive their independent gate once final
+                # physical preparation, assurance and source integration settle.
+                if selected_record(final_result) is None:
+                    require_topic_coverage(final_result)
+                else:
+                    from adaptive_document_agent.services.topic_review_status import require_topic_review
+                    require_topic_review(final_result)
                 final_stage = 'report_audit_scope'
                 from .report_audit_scope import refresh_report_audit_scope, require_report_audit_scope
                 with record_timing(final_result.stage_details_ms, 'report_audit_scope'):
@@ -752,7 +772,16 @@ class DocumentOrchestrator:
                         final_result.executive_brief = review_supplementary_sources(
                             self.gateway, final_result, original_brief, progress=notify)
                 require_source_integration(final_result)
+                if selected_record(final_result) is not None:
+                    final_stage = 'presentation_budget'
+                    from .presentation_budget_refinement import measure
+                    from adaptive_document_agent.services.slide_budgets import require_exported_budgets
+                    deck, _ = measure(final_result)
+                    require_exported_budgets(deck, final_result)
                 final_stage = 'presentation_coverage'
+                from .retained_analysis_review import review_retained_analysis
+                with record_timing(final_result.stage_details_ms, 'retained_analysis_review'):
+                    review_retained_analysis(self.gateway, final_result, progress=notify)
                 require_topic_coverage(final_result)
                 final_stage = 'presentation_budget'
                 if final_result.executive_brief != original_brief:
@@ -878,7 +907,7 @@ class DocumentOrchestrator:
             insight_generator = InsightGenerator(gateway)
             insights = insight_generator.generate(results, index.observations, document=document)
             issues.extend(insight_generator.validation_issues)
-        notify("Selecting presentation questions before chart generation")
+        notify("Planning presentation evidence from validated analysis")
         output.insights = insights
         report_plan, topic_selection, topic_error = plan_outputs(gateway, output, timings=details, progress=notify)
         output.report_plan, output.presentation_topics = report_plan, topic_selection
@@ -897,7 +926,7 @@ class DocumentOrchestrator:
         if topic_error is not None:
             issues.append(ValidationIssue(
                 code="presentation_topic_selection_failed",
-                message="Question-first presentation selection was unavailable: "
+                message="Evidence-bound presentation selection was unavailable: "
                         + " ".join(str(topic_error).split())[:800],
                 severity="warning", stage="presentation",
             ))

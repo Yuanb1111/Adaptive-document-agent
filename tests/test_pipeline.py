@@ -171,7 +171,7 @@ def test_missing_introduction_stops_after_semantic_selection_without_purchasing_
                 "start_duration_months": 12, "end_duration_months": 12}]}]},
     ]
     client = MockLLMClient(responses)
-    settings = LLMSettings(provider=ProviderName.MOCK, model="mock")
+    settings = LLMSettings(provider=ProviderName.MOCK, model="mock", presentation_strategy='full_catalog')
     result = DocumentOrchestrator(LLMGateway(client, settings)).analyse_pdf(pdf)
     assert result.profile.document_type == "Revenue performance report"
     assert result.analysis_plan

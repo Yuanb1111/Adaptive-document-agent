@@ -38,6 +38,7 @@ class LLMSettings(BaseModel):
     semantic_batch_size: int = Field(default=96, ge=24, le=128)
     discovery_thinking: Literal["disabled", "enabled", "provider_default"] = "disabled"
     simple_task_reasoning: Literal["reduced", "provider_default"] = "reduced"
+    presentation_strategy: Literal["retained_analysis", "full_catalog"] = "retained_analysis"
     # A range avoids guessing the provider's holiday / peak-time billing band.
     deepseek_price_band: Literal["range", "peak", "off_peak"] = "range"
 
@@ -87,6 +88,7 @@ class LLMSettings(BaseModel):
             semantic_batch_size=int(os.getenv("LLM_SEMANTIC_BATCH_SIZE", "96")),
             discovery_thinking=os.getenv("LLM_DISCOVERY_THINKING", "disabled"),
             simple_task_reasoning=os.getenv("LLM_SIMPLE_TASK_REASONING", "reduced"),
+            presentation_strategy=os.getenv("LLM_PRESENTATION_STRATEGY", "retained_analysis"),
             deepseek_price_band=os.getenv("LLM_DEEPSEEK_PRICE_BAND", "range"),
         )
 
