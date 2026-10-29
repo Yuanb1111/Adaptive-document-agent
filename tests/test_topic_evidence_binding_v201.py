@@ -107,6 +107,8 @@ def test_selector_independently_reviews_valid_known_ids(monkeypatch):
                         corrected.model_dump(), {'decisions': [decision('activity')]}])
     actual = PresentationTopicSelector(g).select(result)
     assert actual == corrected and len(client.calls) == 4
+    assert {'topic_initial_selection', 'topic_validation_repair', 'topic_source_review',
+            'topic_coverage_review', 'topic_caveat_review', 'topic_final_source_review'} <= result.stage_details_ms.keys()
 
 
 def test_identity_columns_remain_literal_when_repeated_cells_are_factored():

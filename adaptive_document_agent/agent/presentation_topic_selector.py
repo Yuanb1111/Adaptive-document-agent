@@ -143,6 +143,7 @@ class PresentationTopicSelector:
 
     def select(self, result: PipelineResult) -> PresentationTopicSelection:
         from adaptive_document_agent.services.company_discovery import CompanyProfileDiscovery
+        from adaptive_document_agent.utils.timing import record_timing
 
         directory, lookup = series_directory(result)
         if not directory:
@@ -229,11 +230,12 @@ class PresentationTopicSelector:
                 'in diagnostics. Data Index source references count separately under a body budget; '
                 'every analytical continuation still counts in the body, wherever it is placed. Never drop important caveats, '
                 'change claims or add topics merely to fill this budget.'})
-        selection = self.gateway.generate_structured(
-            messages,
-            PresentationTopicSelection,
-            stage="presentation",
-        )
+        with record_timing(result.stage_details_ms, 'topic_initial_selection'):
+            selection = self.gateway.generate_structured(
+                messages,
+                PresentationTopicSelection,
+                stage="presentation",
+            )
         from .topic_reference_binding import bind_topic_references
         bind_topic_references(selection, lookup, result)
         from adaptive_document_agent.services.presentation_ratio_definitions import prepare_topic_ratio_definitions
@@ -248,17 +250,22 @@ class PresentationTopicSelector:
         finally:
             result.presentation_topics = previous
         from .topic_selection_repair import retain_valid_topics
-        retained = retain_valid_topics(selection, lookup, primary_pages, result, self.gateway, self._validate)
+        with record_timing(result.stage_details_ms, 'topic_validation_repair'):
+            retained = retain_valid_topics(selection, lookup, primary_pages, result, self.gateway, self._validate)
         from .topic_evidence_review import review_topic_evidence
-        retained = review_topic_evidence(retained, lookup, result, self.gateway, self._validate,
-                                         primary_pages=primary_pages)
-        retained = review_topic_coverage(retained, result, lookup, primary_pages, payload,
-                                         self.gateway, self._validate)
+        with record_timing(result.stage_details_ms, 'topic_source_review'):
+            retained = review_topic_evidence(retained, lookup, result, self.gateway, self._validate,
+                                             primary_pages=primary_pages)
+        with record_timing(result.stage_details_ms, 'topic_coverage_review'):
+            retained = review_topic_coverage(retained, result, lookup, primary_pages, payload,
+                                             self.gateway, self._validate)
         from .topic_caveat_review import reconcile_caveats
-        reconcile_caveats(retained, directory, result, self.gateway)
+        with record_timing(result.stage_details_ms, 'topic_caveat_review'):
+            reconcile_caveats(retained, directory, result, self.gateway)
         prepare_topic_ratio_definitions(retained, lookup, result)
-        reviewed = review_topic_evidence(retained, lookup, result, self.gateway, self._validate,
-                                         primary_pages=primary_pages, allow_correction=False)
+        with record_timing(result.stage_details_ms, 'topic_final_source_review'):
+            reviewed = review_topic_evidence(retained, lookup, result, self.gateway, self._validate,
+                                             primary_pages=primary_pages, allow_correction=False)
         if reviewed != retained:
             raise ValueError('Coverage synthesis introduced unsupported topic meaning; source coverage needs review.')
         return reviewed
@@ -338,9 +345,11 @@ class PresentationTopicSelector:
                         if parsed is not None:
                             allowed.update(PresentationPlanValidator._numbers(f'{parsed.value}%'))
             from adaptive_document_agent.validation.source_label_numbers import without_source_label_annotations
+            from adaptive_document_agent.validation.topic_source_notation import without_topic_source_notation
             members = [item for sid in topic.series_ids for item in lookup[sid]]
             def numeric_claims(text):
-                return PresentationPlanValidator._numbers(without_source_label_annotations(text, members))
+                return PresentationPlanValidator._numbers(without_topic_source_notation(
+                    without_source_label_annotations(text, members), members))
             claimed = numeric_claims(" ".join(
                 (topic.title, topic.question, topic.rationale, topic.takeaway, *topic.caveats)
             ))

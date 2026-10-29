@@ -47,10 +47,17 @@ def review_batches(topics, *, payload, request, characters, record, on_failure):
     return decisions
 
 
-def review_request(gateway, messages, schema, record, budget):
+def review_request(gateway, messages, schema, record, budget, *, lock=None, cancelled=None):
+    from contextlib import nullcontext
+    from concurrent.futures import CancelledError
+
     def reserve():
-        if budget['calls'] >= MAX_REVIEW_CALLS:
-            raise ValueError('Topic semantic review call budget exhausted; remaining topics are unreviewed.')
-        budget['calls'] += 1
+        with lock if lock is not None else nullcontext():
+            if cancelled is not None and cancelled.is_set():
+                raise CancelledError('Topic evidence review cancelled')
+            if budget['calls'] >= MAX_REVIEW_CALLS:
+                raise ValueError('Topic semantic review call budget exhausted; remaining topics are unreviewed.')
+            budget['calls'] += 1
     return complete_budget_output(gateway, messages, schema, record,
-        audit_key='output_attempts', token_limits=REVIEW_TOKEN_LIMITS, before_attempt=reserve)
+        audit_key='output_attempts', token_limits=REVIEW_TOKEN_LIMITS, before_attempt=reserve,
+        cancelled=cancelled)
