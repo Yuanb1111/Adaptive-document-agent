@@ -10,6 +10,7 @@ from .introduction_audience import AUDIENCE_REASON_MAX_LENGTH, RequiredMeaning
 from .introduction_audience_review import current_meanings
 from .introduction_resolution_feedback import MeaningReferenceError, UnappliedMeaningCorrection, resolution_with_feedback
 from .prompting import untrusted_document_message
+from .introduction_meaning_merges import MeaningResolutionMerge, MERGE_INSTRUCTIONS, validate_merges
 
 
 class MeaningResolutionEdit(BaseModel):
@@ -49,6 +50,7 @@ class IntroductionMeaningResolution(BaseModel):
     edits: list[MeaningResolutionEdit] = Field(default_factory=list)
     additions: list[MeaningResolutionAddition] = Field(default_factory=list)
     inclusions: list[MeaningResolutionInclusion] = Field(default_factory=list)
+    merges: list[MeaningResolutionMerge] = Field(default_factory=list)
     finding_dispositions: list[FindingDisposition] = Field(min_length=1)
 
 
@@ -177,6 +179,8 @@ def apply_meaning_resolution(selection, response, findings, source, *, transport
             raise ValueError('Meaning resolution cannot mix append-only edits and explicit additions for the same part')
         additions[part_id] = new_meanings
     resolutions = _exact_dispositions(response, expected)
+    merged_targets = validate_merges(response, meanings, expected, resolutions, changed, seen_edits)
+    changed.update(merged_targets)
     for identifier, entry in resolutions.items():
         finding = expected[identifier]
         part_id = finding['part_id']
@@ -231,6 +235,8 @@ def apply_meaning_resolution(selection, response, findings, source, *, transport
         revised = []
         for index, meaning in enumerate(decision.required_meanings):
             identifier = f'{decision.part_id}:meaning-{index+1}'
+            if identifier in merged_targets:
+                continue  # Explicit model proposal; source preservation is independently reviewed.
             revised.extend(edits.get(identifier, [meaning]))
         revised.extend(additions.get(decision.part_id, []))
         decision.required_meanings = revised
@@ -272,6 +278,7 @@ def resolve_meaning_findings(gateway, source, selection, values, verdict, review
         'Split atomic assertions without separating a measure from its period, basis, attribution, '
         'conditions or uncertainty. Preserve every original intended selected assertion and necessary '
         'qualification, correcting unsupported stronger wording to its own source scope. '
+        + MERGE_INSTRUCTIONS +
         'Return edits ONLY for exact current meaning IDs named by meaning findings; every other '
         'existing meaning is mechanically protected. The editable_meaning_ids list names these '
         'addresses explicitly. Do not echo unchanged meanings in edits, or claim to remove them '
@@ -318,6 +325,7 @@ def resolve_meaning_findings(gateway, source, selection, values, verdict, review
         append_only_edits=record.get('append_only_edits', []),
         coalesced_unchanged_meaning_ids=record['coalesced_unchanged_meaning_ids'],
         inclusions=record['response']['inclusions'],
+        merges=record['response']['merges'],
         disposition_evidence_binding='exact_finding_owned_source_parts',
         reference_namespace='before_resolution_meanings', before_resolution_meanings=meanings,
         decisions_before=values, semantic_approval=False)

@@ -73,6 +73,7 @@ def resolution_with_feedback(gateway, messages, schema, validate, record, *, can
                     raise
                 correction_row['status'] = 'protocol_validated'
                 return corrected, draft
+            from .introduction_meaning_merges import MERGE_INSTRUCTIONS
             current_messages = messages + [untrusted_document_message(json.dumps(dict(
                 rejected_proposal=row['response'], validation_error=str(exc),
                 finding_id=exc.finding_id, required_current_meaning_id=exc.meaning_id), ensure_ascii=False)),
@@ -83,6 +84,7 @@ def resolution_with_feedback(gateway, messages, schema, validate, record, *, can
                  'BEFORE-RESOLUTION meaning_id and reference that ID in the disposition. '
                  'Repair the source defect; do not merely rephrase to manufacture a change. '
                  'For a part finding, supply the permitted owned addition or explicit inclusion. '
+                 + MERGE_INSTRUCTIONS +
                  'If no correction is justified, use a supported already_covered or '
                  'outside_selected_scope disposition under the original rules. Do not silently '
                  'relabel an unresolved necessary qualification or unsupported assertion. '
