@@ -6,6 +6,7 @@ import pytest
 
 from adaptive_document_agent.agent.brief_claim_direction import BriefClaimDirectionReview
 from adaptive_document_agent.agent.brief_meaning_review import BriefMeaningReview
+from adaptive_document_agent.agent.brief_context_review import BriefContextReview
 from adaptive_document_agent.agent.executive_brief import BriefSourcePages
 from adaptive_document_agent.agent.report_audit_scope import AuditScopeDraft, AuditScopeReview
 from adaptive_document_agent.agent.report_audit_source_discovery import AuditSourceDiscovery
@@ -16,7 +17,7 @@ from adaptive_document_agent.utils.caching import DiskCache
 from tests.test_llm_reasoning_policy import fake_litellm, raw_response
 
 
-AUDIT_SCHEMAS = (AuditScopeDraft, AuditScopeReview, BriefMeaningReview)
+AUDIT_SCHEMAS = (AuditScopeDraft, AuditScopeReview, BriefMeaningReview, BriefContextReview)
 RESPONSES = {
     'AuditScopeDraft': dict(bindings=[], unresolved_observation_ids=[], unresolved_reason=''),
     'AuditScopeReview': dict(verdicts=[], unresolved_accepted=True, unresolved_reason='No targets.'),
@@ -24,6 +25,7 @@ RESPONSES = {
     'BriefSourcePages': dict(pages=[1]),
     'BriefClaimDirectionReview': dict(items=[]),
     'BriefMeaningReview': dict(items=[]),
+    'BriefContextReview': dict(items=[]),
 }
 
 

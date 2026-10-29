@@ -25,7 +25,7 @@ State each selected view's scope in a useful subject label: identify the reporte
 
 Output only the requested structured schema. Do not include chart IDs or slide layouts; those come later.
 
-Copy each series ID in full, including its presentation_series_ or presentation_composition_ prefix. Do not abbreviate hashes, substitute observation IDs or invent aliases. Missing namespaces can invalidate an otherwise useful question.
+Copy each series ID in full exactly as supplied beside its metric in the catalog. Do not abbreviate an ID, substitute observation IDs or invent aliases. A changed identifier can invalidate an otherwise useful question.
 
 Read source_row_qualifications before naming a measure or describing its meaning. Preserve distinctions established by literal row footnotes, including cash versus non-cash scope, exclusions and working-capital adjustments. A qualified component must not be presented as an unqualified total. The same literal notes will accompany the chart.
 

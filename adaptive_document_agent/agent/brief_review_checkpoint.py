@@ -18,7 +18,7 @@ class BriefReviewUnavailable(RuntimeError):
 def context_key(brief, source_context, result):
     # Reuse requires unchanged whole-brief context, source values, evidence and
     # assurance decisions, not merely an unchanged sentence or item number.
-    values = dict(contract='brief-review-checkpoint-v1', brief=brief.model_dump(mode='json') if brief is not None else None,
+    values = dict(contract='brief-review-checkpoint-v2', brief=brief.model_dump(mode='json') if brief is not None else None,
                   source_context=source_context)
     if result is not None:
         for field in ('document', 'profile', 'observations', 'analysis_results', 'presentation_topics',

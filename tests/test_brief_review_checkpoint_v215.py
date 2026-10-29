@@ -117,7 +117,9 @@ def test_unreviewed_direction_cannot_be_checkpointed_as_approved():
     llm, _ = gateway([valid(0, 1, 2, 3, 4), LLMTransportError('offline direction review')])
     with pytest.raises(LLMTransportError):
         meaning_validator(llm, result=result, source_context=context)(brief)
-    assert not any(w.code == 'executive_brief_review_checkpoint' for w in result.validation_warnings)
+    checkpoint = latest(result)
+    assert checkpoint['checked'] == {} and checkpoint['semantic_approval'] is False
+    assert checkpoint['pending'] == list(range(5))
 
 
 def test_writer_resumes_only_unfinished_check_without_source_selection_or_draft():

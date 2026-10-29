@@ -199,13 +199,16 @@ class PresentationTopicSelector:
         }
         from .topic_coverage_review import source_period_views, review_topic_coverage
         payload["same_source_row_period_views"] = source_period_views(lookup)
-        from .coverage_review_context import compact_context, encode
+        from .topic_selection_references import selection_request, restore_selection, REFERENCE_INSTRUCTIONS
         # Reuse the complete-point encoding already used by coverage review.
         # No series or interior point is sampled away to shorten this request.
+        encoded, references = selection_request(payload)
         messages = [
             {"role": "system", "content": with_presentation_limits(load_prompt("presentation_topic_selection.txt"))},
-            untrusted_document_message(encode(compact_context(payload), factor_cells=True)),
+            untrusted_document_message(encoded),
         ]
+        if references:
+            messages[0]['content'] += '\n' + REFERENCE_INSTRUCTIONS
         from .report_requirements import instruction_messages
         messages[1:1] = instruction_messages(result.profile, purpose='topic selection and narrative detail')
         from adaptive_document_agent.services.slide_budgets import resolved_limits, introduction_limit
@@ -236,6 +239,7 @@ class PresentationTopicSelector:
                 PresentationTopicSelection,
                 stage="presentation",
             )
+        restore_selection(selection, references, result)
         from .topic_reference_binding import bind_topic_references
         bind_topic_references(selection, lookup, result)
         from adaptive_document_agent.services.presentation_ratio_definitions import prepare_topic_ratio_definitions

@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from adaptive_document_agent.services.source_quotes import normalize_quote
 from .prompting import untrusted_document_message
+from .brief_context_review import CONTEXT_INSTRUCTIONS
 
 
 class MeaningComparison(BaseModel):
@@ -278,21 +279,7 @@ def meaning_validator(gateway, *, cancelled=None, result=None, source_context=No
              'If a claim has no numeric comparison, comparisons may be empty, but still review its '
              'full meaning and conditions. Accept only a faithful, completely evidenced claim; '
              'uncertainty is a rejection. Do not rewrite or calculate. '
-             'When available_report_context is supplied on the first item, it applies to ALL items. '
-             'Also assess contextual completeness against those source blocks and the whole current brief. '
-             'Reject a materially misleading selection even if its quoted numbers are individually correct: '
-             'look for a later matched-period reversal, a related total or complementary outcome, an '
-             'alternative definition, reconciliation, scenario assumption, or source-attributed explanation '
-             'that materially changes this conclusion. These are reasoning relationships, never a document '
-             'or industry checklist. Do not demand every source row or force equal positive/negative findings. '
-             'If material context is missing, accepted=false and identify its exact block refs, relevant '
-             'measure/period and needed qualification in reason. A different basis is a separately labelled '
-             'counterpoint, not permission to compare incompatible quantities. A scenario must retain its '
-             'resource scope, base date and consumption assumption; a component is not its total. '
-             'Do not demand a qualification already explicitly supplied by a companion finding. '
-             'Broader context may establish an omission but cannot authorize an existing claim: all claim '
-             'values and comparison endpoints must still be supported by THAT item quotations. '
-             'A corrected item must cite its newly included source evidence and pass a fresh review.'},
+             + CONTEXT_INSTRUCTIONS},
             untrusted_document_message(json.dumps(pending, ensure_ascii=False))]
         from .brief_review_execution import execute_review
         return execute_review(gateway, brief=brief, pending=pending, messages=messages,
