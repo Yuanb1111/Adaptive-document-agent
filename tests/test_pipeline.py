@@ -217,7 +217,11 @@ def test_presentation_plan_failure_does_not_discard_completed_analysis(monkeypat
         {"title": "Revenue Analysis", "sections": [{"title": "Revenue", "purpose": "Explain the change.", "insight_ids": ["insight_mock"]}]},
     ]
     client = MockLLMClient(responses)
-    gateway = LLMGateway(client, LLMSettings(provider=ProviderName.MOCK, model="mock"))
+    # Exercise the legacy planner recovery stage deliberately. The default
+    # retained-analysis route stops earlier on an unavailable selection; its
+    # checkpoint/zero-downstream-call contract is tested in test_retained_analysis_v216.
+    gateway = LLMGateway(client, LLMSettings(provider=ProviderName.MOCK, model="mock",
+                                            presentation_strategy='full_catalog'))
     generate_report = DocumentOrchestrator._generate_report
     def audited_report(self, *args, **kwargs):
         output = generate_report(self, *args, **kwargs)
@@ -226,7 +230,9 @@ def test_presentation_plan_failure_does_not_discard_completed_analysis(monkeypat
         return output
     monkeypatch.setattr(DocumentOrchestrator, '_generate_report', audited_report)
 
+    planning_calls = []
     def fail_plan(self: PresentationPlanner, result: object) -> None:
+        planning_calls.append(result)
         result.validation_warnings.append(ValidationIssue(
             code="presentation_insight_recovery_rejected", stage="presentation",
             message="Original draft and evidence-scope rejection must survive the planning snapshot.",
@@ -236,6 +242,7 @@ def test_presentation_plan_failure_does_not_discard_completed_analysis(monkeypat
     monkeypatch.setattr(PresentationPlanner, "plan", fail_plan)
     result = DocumentOrchestrator(gateway).analyse_pdf(pdf)
 
+    assert len(planning_calls) == 1
     assert result.presentation_plan is not None
     assert result.report_markdown
     assert result.pipeline_state == 'partial' and result.retry_from == 'reporting'
