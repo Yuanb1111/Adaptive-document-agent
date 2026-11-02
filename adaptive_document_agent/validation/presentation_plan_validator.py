@@ -397,7 +397,14 @@ class PresentationPlanValidator:
                                 allowed_numbers.add(f"{float(magnitude.rstrip('%')):g}{suffix}")
                 block_titles = [re.sub(r"(?i)^(?:block|chart|panel)\s+\d+$", "", b.title.strip()) for b in slide.visual_blocks]
                 from .source_label_numbers import without_source_label_annotations
-                claim_text = " ".join((slide.title, slide.message, slide.analytical_question, slide.selection_reason, *slide.bullets, *block_titles))
+                copies = {}
+                if slide.slide_type == "analysis" and slide.insight_ids:
+                    from .presentation_numeric_evidence import mask_finding_amounts
+                    copies = mask_finding_amounts(slide, insight_by_id, insight_observation_ids,
+                                                  observation_by_id, calculations)
+                claim_text = " ".join((slide.title, copies.get(slide.message, slide.message),
+                                       slide.analytical_question, slide.selection_reason,
+                                       *(copies.get(b, b) for b in slide.bullets), *block_titles))
                 claim_text = without_source_label_annotations(claim_text,
                     [observation_by_id[oid] for oid in referenced_observation_ids if oid in observation_by_id])
                 claimed_numbers = self._numbers(claim_text)

@@ -139,6 +139,7 @@ def compile_retained_analysis(result):
     from .presentation_plan_recovery import PresentationPlanRecovery
     from adaptive_document_agent.services.presentation_evidence import calculation_catalog
     from adaptive_document_agent.services.presentation_editorial import stamp_editorial_review
+    from adaptive_document_agent.validation.presentation_numeric_evidence import checked_money_amounts
     # Reuse the existing structural cover/intro/summary/appendix compositor.
     # Its heuristic chart ranking does NOT select this route's analysis pages.
     plan = PresentationPlanRecovery().fallback(result, validate=False)
@@ -165,8 +166,13 @@ def compile_retained_analysis(result):
                 d.reason for d in selection.decisions if d.insight_id == iid))
         # All IDs are Python calculations, never arbitrary model expressions.
         numbers = PresentationPlanValidator._numbers(copy)
-        for cid, calc in calculations.items():
-            if set(calc['observation_ids']) <= ids and numbers & PresentationPlanValidator._numbers(str(calc['value']) + '; ' + calc['display']):
+        owned = [calc for calc in calculations.values() if set(calc['observation_ids']) <= ids]
+        display_calculations = set()
+        for _, _, matched_ids in checked_money_amounts(copy, observations, owned):
+            display_calculations.update(matched_ids)
+        for calc in owned:
+            cid = calc['id']
+            if cid in display_calculations or numbers & PresentationPlanValidator._numbers(str(calc['value']) + '; ' + calc['display']):
                 slide.calculation_ids.append(cid)
         if len(slide.calculation_ids) > 12:
             raise ValueError('Retained finding exceeds complete calculation capacity')

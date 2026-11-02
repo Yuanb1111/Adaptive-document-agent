@@ -6,53 +6,15 @@ import re
 
 from adaptive_document_agent.models import PresentationSlide, PresentationTheme, ValidationIssue
 from adaptive_document_agent.validation.claim_validator import ClaimValidator
+from adaptive_document_agent.validation.presentation_numeric_evidence import checked_money_amounts
 from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
 from adaptive_document_agent.validation.presentation_provenance import insight_inputs
 
 
 _GENERIC = re.compile(r"evidence.backed comparison|retained reported values|selected observations|"
                       r"supplied observations|paired observations exist|has observations for multiple periods", re.I)
-_MONEY = re.compile(
-    r"(?<!\w)(?P<currency>US\$|HK\$|S\$|RMB|CNY|CNH|USD|HKD|SGD|GBP|EUR|JPY|AUD|CAD|CHF|[$£€¥])?\s*"
-    r"(?P<number>[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s*"
-    r"(?P<scale>thousand|million|billion|bn|mn|[kmb])?(?!\w)", re.I)
-_MONEY_SCALES = {"": 1, "k": 1_000, "thousand": 1_000, "m": 1_000_000,
-                 "mn": 1_000_000, "million": 1_000_000, "b": 1_000_000_000,
-                 "bn": 1_000_000_000, "billion": 1_000_000_000}
 _PERCENT = re.compile(r"(?<!\w)(?P<number>[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s*"
                       r"(?P<unit>percentage\s+points?|percent\s+points?|pp\b|%|percent(?:age)?\b)", re.I)
-
-
-def _explicit_amounts_supported(text, observations, calculations):
-    """Return grounded amount spans, or None when currency/scale is unsupported."""
-    aliases = {"RMB": "CNY", "CNH": "CNY", "US$": "USD", "$": "USD", "HK$": "HKD",
-               "S$": "SGD", "£": "GBP", "€": "EUR", "¥": "CNY"}
-    currency_for = lambda value: aliases.get(str(value or "").upper(), str(value or "").upper())
-    sources = [(float(o.value), currency_for(o.currency)) for o in observations
-               if o.value is not None and o.currency]
-    sources += [(c["value"], currency_for(c.get("currency"))) for c in calculations.values() if c.get("currency")]
-    currencies = {currency for _, currency in sources}
-    spans = []
-    for match in _MONEY.finditer(text):
-        if not match["currency"] and not match["scale"]:
-            continue
-        currency = currency_for(match["currency"])
-        if not currency:
-            # A bare scale has no permission to mix multiple currency scopes.
-            if len(currencies) != 1:
-                return None
-            currency = next(iter(currencies))
-        scale = _MONEY_SCALES[(match["scale"] or "").casefold()]
-        literal = match["number"].replace(",", "")
-        places = len(literal.split(".", 1)[1]) if "." in literal else 0
-        claimed = abs(float(literal))
-        if not any(curr == currency and (claimed != 0 or value == 0)
-                   and math.isclose(round(abs(value) / scale, places), claimed,
-                                                     rel_tol=1e-12, abs_tol=1e-9)
-                   for value, curr in sources):
-            return None
-        spans.append(match.span())
-    return spans
 
 
 def _numeric_support(text, observations, computed_percentages=()):
@@ -65,9 +27,11 @@ def _numeric_support(text, observations, computed_percentages=()):
     from adaptive_document_agent.services.presentation_evidence import calculation_catalog
 
     calculations = calculation_catalog(observations)
-    spans = _explicit_amounts_supported(text, observations, calculations)
-    if spans is None:
-        return False
+    spans = []
+    for match, supported, _ in checked_money_amounts(text, observations, calculations.values()):
+        if not supported:
+            return False
+        spans.append(match.span())
     reported_rates = [o.value for o in observations if o.value is not None
                       and (o.unit in {"percent", "%"} or o.unit_family == "percentage")]
     derived_rates = [c["value"] for c in calculations.values() if c["unit"] == "percent"] + list(computed_percentages)

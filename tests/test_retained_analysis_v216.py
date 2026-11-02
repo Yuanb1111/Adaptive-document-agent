@@ -237,7 +237,7 @@ def test_new_source_review_preserves_reasoning_while_selection_reuses_existing_a
     assert reviewer['intent'] == 'preserve' and reviewer['options'] == {}
 
 
-@pytest.mark.parametrize('accepted', [True, False, 'selection_failure'])
+@pytest.mark.parametrize('accepted', [True, False, 'selection_failure', 'invalid_selected_page'])
 def test_default_route_runs_complete_reporting_with_real_gateway_and_export_gates(monkeypatch, accepted):
     from adaptive_document_agent.agent.orchestrator import DocumentOrchestrator
     from adaptive_document_agent.services.pipeline_completion import is_complete
@@ -259,9 +259,11 @@ def test_default_route_runs_complete_reporting_with_real_gateway_and_export_gate
                     from adaptive_document_agent.services.llm.exceptions import LLMResponseError
                     raise LLMResponseError('Synthetic bounded selection failure')
                 ids = [f['insight']['id'] for f in payload['findings'] if f['selectable']]
+                reason = ('Unsupported score of 987654321' if accepted == 'invalid_selected_page'
+                          else 'Synthetic selection of complete calculation inputs')
                 value = dict(decisions=[dict(insight_id=f['insight']['id'],
                     decision='include' if f['insight']['id'] in ids else 'omit',
-                    reason='Synthetic selection of complete calculation inputs') for f in payload['findings']],
+                    reason=reason) for f in payload['findings']],
                     ordered_insight_ids=ids)
             else:
                 value = dict(verdicts=[dict(slide_id=s['id'], accepted=accepted,
@@ -277,8 +279,16 @@ def test_default_route_runs_complete_reporting_with_real_gateway_and_export_gate
     monkeypatch.setattr(runner, '_load_document', lambda *args: source.document)
     result = runner.analyse_pdf(raw, resume=source)
     assert client.calls.count('RetainedAnalysisSelection') == 1
-    if accepted == 'selection_failure':
-        assert result.pipeline_state == 'partial' and result.failed_stage == 'presentation_selection'
+    if accepted in ('selection_failure', 'invalid_selected_page'):
+        assert result.pipeline_state == 'partial'
+        if accepted == 'invalid_selected_page':
+            assert result.failed_stage == 'presentation_planning'
+            assert '987654321' in result.failure_details['message']
+            assert reuse.selected_record(result)['selection']['ordered_insight_ids']
+            assert result.presentation_plan is None
+            assert not any(w.code == 'presentation_plan_fallback' for w in result.validation_warnings)
+        else:
+            assert result.failed_stage == 'presentation_selection'
         assert result.retry_from == 'reporting' and result.llm_usage
         assert result.observations == source.observations
         assert result.analysis_results == source.analysis_results

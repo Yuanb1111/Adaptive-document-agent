@@ -350,6 +350,22 @@ class DocumentOrchestrator:
                 attach_introduction, timings, details, pipeline_started, notify)
         editorial_gateway = (IntroductionGuardedGateway(self.gateway, attach_introduction)
                              if attach_introduction is not None else self.gateway)
+
+        def finish_partial_report(result, message):
+            from adaptive_document_agent.utils.pipeline_version import PIPELINE_VERSION
+            with record_timing(timings, 'background_drain'):
+                resources.close()
+                if attach_introduction is not None:
+                    attach_introduction.close()
+                    attach_introduction.copy_audit(result)
+            result.pipeline_version = PIPELINE_VERSION
+            result.llm_usage = list(self.gateway.usage) if self.gateway else []
+            result.timings_ms = timings
+            result.stage_details_ms = details
+            result.pipeline_total_ms = int((perf_counter() - pipeline_started) * 1000)
+            notify(message)
+            return result
+
         try:
             if isinstance(editorial_gateway, IntroductionGuardedGateway):
                 editorial_gateway.check()
@@ -361,16 +377,7 @@ class DocumentOrchestrator:
                 if reporting.pipeline_state == 'partial':
                     # Stop a failed bounded retained selection before buying
                     # briefing/localization work for an unpublishable deck.
-                    with record_timing(timings, 'background_drain'):
-                        resources.close()
-                    from adaptive_document_agent.utils.pipeline_version import PIPELINE_VERSION
-                    reporting.pipeline_version = PIPELINE_VERSION
-                    reporting.llm_usage = list(self.gateway.usage) if self.gateway else []
-                    reporting.timings_ms = timings
-                    reporting.stage_details_ms = details
-                    reporting.pipeline_total_ms = int((perf_counter() - pipeline_started) * 1000)
-                    notify('Report selection incomplete; diagnostics retained before briefing')
-                    return reporting
+                    return finish_partial_report(reporting, 'Report selection incomplete; diagnostics retained before briefing')
                 if isinstance(editorial_gateway, IntroductionGuardedGateway):
                     editorial_gateway.check()
                 insights, report_plan = reporting.insights, reporting.report_plan
@@ -452,6 +459,8 @@ class DocumentOrchestrator:
                                 gateway=editorial_gateway, output=checkpoint,
                             )
                             details.update({f"recovery_{name}": value for name, value in reporting.stage_details_ms.items()})
+                            if reporting.pipeline_state == 'partial':
+                                return finish_partial_report(reporting, 'Report selection incomplete after evidence recovery')
                             insights, report_plan = reporting.insights, reporting.report_plan
                             topic_selection, charts = reporting.presentation_topics, reporting.charts
                             markdown, issues = reporting.report_markdown, reporting.validation_warnings
@@ -552,6 +561,16 @@ class DocumentOrchestrator:
                                     stage="presentation",
                                 )
                             )
+                            from .retained_analysis import SELECTION_CODE
+                            if any(issue.code == SELECTION_CODE for issue in planning_result.validation_warnings):
+                                # Generic replacement pages cannot satisfy the retained selection.
+                                checkpoint.validation_warnings.append(issues[-1])
+                                checkpoint.failed_stage = 'presentation_planning'
+                                checkpoint.pipeline_state = 'partial'
+                                checkpoint.retry_from = 'reporting'
+                                checkpoint.failure_details = dict(component='RetainedAnalysisPlan',
+                                    error_type=type(exc).__name__, message=str(exc))
+                                return finish_partial_report(checkpoint, 'Selected analysis pages failed validation before briefing')
                             try:
                                 recovery = PresentationPlanRecovery()
                                 if topic_selection and topic_selection.topics:
