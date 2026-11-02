@@ -124,6 +124,32 @@ def assert_source_preserved(reading, original_parts, decisions):
             assert meaning['source_quote'] == sources[decision['part_id']]
 
 
+def test_late_qualification_on_another_meaning_with_the_same_source_gets_one_repair():
+    from adaptive_document_agent.agent.introduction_audience_review import IntroductionAudienceReview, current_meanings
+    from adaptive_document_agent.agent.introduction_recovery import IntroductionRepairBudget
+
+    _, reading = adaptive_recovery_fixture()
+    part = reading.parts[0]
+    values = [dict(part_id=part.id, include=True, reason="Service scope", required_meanings=[
+        dict(meaning=text, source_quote=part.source_text) for text in
+        ("The platform schedules appointments.", "Deployment is available.")])]
+    budget = IntroductionRepairBudget()
+
+    def can_repair(index, attempt):
+        row = current_meanings(values)[index]
+        verdict = IntroductionAudienceReview(accepted=False, reason="A condition is missing.",
+            findings=[dict(kind="meaning", issue_type="missing_qualification", part_id=part.id,
+                meaning_id=row["meaning_id"], current_meaning=row["meaning"],
+                source_quote=part.source_text, reason="Restore the applicable condition.")])
+        return budget.allow_repair(values, verdict, reading, attempt=attempt)
+
+    assert can_repair(0, 1)
+    values[0]["required_meanings"][0]["meaning"] += " Staff training is required."
+    assert can_repair(1, 2)
+    values[0]["required_meanings"].reverse()
+    assert not can_repair(0, 3)
+
+
 @pytest.mark.parametrize('outcome,review_count', [('accept', 4), ('two_late_rounds', 5)])
 def test_late_source_owned_findings_are_repaired_then_independently_accepted(outcome, review_count):
     result, reading = adaptive_recovery_fixture()
