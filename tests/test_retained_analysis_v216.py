@@ -121,14 +121,65 @@ def test_old_failure_is_never_erased_by_changing_routes():
         require_topic_coverage(result)
 
 
-def test_selection_rejects_unknown_and_duplicate_ids_without_retry():
+@pytest.mark.parametrize('explicit_omit', [False, True])
+def test_unavailable_finding_can_only_be_acknowledged_as_an_omission(explicit_omit):
     result = _linked_result()
-    invalid = selection(result)
-    invalid['decisions'] *= 2
-    gw = gateway([invalid])
-    with pytest.raises(ValueError):
+    unavailable = result.insights[0].model_copy(update={'id': 'unbound', 'evidence': []})
+    result.insights.append(unavailable)
+    response = selection(result)
+    if explicit_omit:
+        response['decisions'].append(dict(insight_id=unavailable.id, decision='omit',
+                                          reason='Lacks source evidence'))
+    gw = gateway([response])
+    reuse.select_retained_analysis(gw, result)
+    assert reuse.selected_record(result)['selection'] == response
+    result.presentation_plan = reuse.compile_retained_analysis(result)
+    pages = [s for s in result.presentation_plan.slides if s.slide_type == 'analysis']
+    assert [s.insight_ids for s in pages] == [[i] for i in response['ordered_insight_ids']]
+    context = review.review_context(result)
+    assert context['unavailable_findings'][0]['insight'] == unavailable.model_dump(mode='json')
+    assert context['selection_record']['selection'] == response
+    assert len(gw.client.calls) == 1
+
+
+@pytest.mark.parametrize(('decisions', 'order', 'diagnostic'), [
+    ([('bound', 'include')] * 2, ['bound'], 'duplicate decision'),
+    ([('bound', 'include'), ('unknown', 'omit')], ['bound'], 'unknown finding'),
+    ([], ['bound'], 'missing decision'),
+    ([('bound', 'include'), ('unbound', 'include')], ['bound', 'unbound'], 'cannot include'),
+    ([('bound', 'include')], ['bound', 'bound'], 'duplicate ordered'),
+    ([('bound', 'include'), ('unbound', 'omit')], ['unbound'], 'order must match'),
+])
+def test_selection_rejects_invalid_decisions_without_retry(decisions, order, diagnostic):
+    result = _linked_result()
+    result.insights[0].id = 'bound'
+    result.insights.append(result.insights[0].model_copy(update={'id': 'unbound', 'evidence': []}))
+    gw = gateway([dict(decisions=[dict(insight_id=i, decision=d, reason='Synthetic evidence scope')
+                                  for i, d in decisions], ordered_insight_ids=order)])
+    with pytest.raises(ValueError, match=diagnostic):
         reuse.select_retained_analysis(gw, result)
     assert len(gw.client.calls) == 1 and reuse.selected_record(result) is None
+
+
+def test_bound_finding_above_slide_capacity_still_requires_an_explicit_omit():
+    result = _linked_result()
+    response = selection(result)
+    extra_inputs = [result.observations[0].model_copy(update={'id': f'extra-{n}'}) for n in range(41)]
+    result.observations.extend(extra_inputs)
+    result.analysis_results.append(result.analysis_results[0].model_copy(update={
+        'task_id': 'large', 'input_observation_ids': [o.id for o in result.observations]}))
+    result.insights.append(result.insights[0].model_copy(update={'id': 'large-finding', 'result_ids': ['large']}))
+    with pytest.raises(ValueError, match='missing decisions.*large-finding'):
+        reuse.select_retained_analysis(gateway([response]), result)
+    decision = dict(insight_id='large-finding', decision='include', reason='Complete inputs exceed capacity')
+    response['decisions'].append(decision)
+    response['ordered_insight_ids'].append('large-finding')
+    with pytest.raises(ValueError, match='cannot include.*large-finding'):
+        reuse.select_retained_analysis(gateway([response]), result)
+    decision['decision'] = 'omit'
+    response['ordered_insight_ids'].remove('large-finding')
+    reuse.select_retained_analysis(gateway([response]), result)
+    assert reuse.selected_record(result)['selection'] == response
 
 
 def test_selection_invalidates_after_input_change():
