@@ -6,6 +6,7 @@ Python binds decisions to immutable drafts/facts; the gateway owns semantics.
 import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
 from contextvars import copy_context
 from threading import Event, Lock
 
@@ -28,6 +29,10 @@ class TopicEvidenceDecision(BaseModel):
 
 class TopicEvidenceReview(BaseModel):
     decisions: list[TopicEvidenceDecision] = Field(max_length=24)
+
+
+class CoverageTopicReviewError(ValueError):
+    """The completed coverage decisions cannot be published with these topics."""
 
 
 def evidence_payload(topics, lookup, result=None):
@@ -93,7 +98,18 @@ def require_topic_evidence_review(selection, lookup, result):
         raise ValueError('Selected topics require current source-row semantic review: ' + ', '.join(pending))
 
 
-def review_topic_evidence(selection, lookup, result, gateway, validate, *, primary_pages=None, allow_correction=True):
+def review_covered_topics(selection, lookup, result, gateway, validate, *, primary_pages=None):
+    """Keep the costly catalogue decision on retry, but evict a failed final wording/review."""
+    try:
+        with getattr(gateway, 'validated_cache_scope', nullcontext)():
+            return review_topic_evidence(selection, lookup, result, gateway, validate,
+                                         primary_pages=primary_pages, preserve_coverage=True)
+    except (LLMResponseError, ValueError) as exc:
+        raise CoverageTopicReviewError('Final topic source review failed: ' + str(exc)) from exc
+
+
+def review_topic_evidence(selection, lookup, result, gateway, validate, *, primary_pages=None,
+                          allow_correction=True, preserve_coverage=False):
     """Review, correct rejected topics once, then independently review corrections.
 
     Supported siblings survive. Corrections may choose known catalog IDs, but
@@ -208,7 +224,38 @@ def review_topic_evidence(selection, lookup, result, gateway, validate, *, prima
                 accepted[topic.id] = topic
             else:
                 rejected.append(topic)
-        if rejected and allow_correction:
+        if preserve_coverage and rejected and not unresolved:
+            # Coverage has already committed every series disposition. Give the
+            # writer the actual rows/pages and permit wording changes only.
+            candidates = []
+            for topic in rejected:
+                payload = evidence_payload([topic], lookup, result)
+                payload['rejection'] = decisions[topic.id].model_dump(mode='json')
+                record = dict(phase='coverage_wording_correction', topic_id=topic.id)
+                audit['attempts'].append(record)
+                revision = request(payload, PresentationTopicSelection,
+                    'Correct only the wording of this rejected topic using its exact selected rows and '
+                    'complete source pages. Address the rejection, including any missing qualifications '
+                    'or overstatement of scope. Return that one topic with its original ID and exact '
+                    'series_ids in order, and no omissions. Do not add a source category to the selection. '
+                    'If the evidence cannot support a correction, return no topics.', record)
+                record['response'] = revision.model_dump(mode='json')
+                if (revision.omissions or len(revision.topics) != 1 or revision.topics[0].id != topic.id
+                        or revision.topics[0].series_ids != topic.series_ids):
+                    raise ValueError(f'Correction did not preserve the covered evidence for {topic.id}: '
+                                     f'{decisions[topic.id].reason}')
+                validate(revision, lookup, primary_pages=primary_pages)
+                candidates.extend(revision.topics)
+            checked = review(candidates)
+            for topic in candidates:
+                verdict = checked.get(topic.id)
+                if verdict and verdict.supported:
+                    accepted[topic.id] = topic
+                elif verdict:
+                    unresolved[topic.id] = dict(topic_id=topic.id, title=topic.title,
+                        series_ids=topic.series_ids, binding=topic_binding(topic, lookup, result),
+                        reason=verdict.reason)
+        elif rejected and allow_correction and not preserve_coverage:
             try:
                 payload = dict(topics=[t.model_dump(mode='json') for t in rejected])
                 payload['findings'] = [decisions[t.id].model_dump(mode='json') for t in rejected]
@@ -252,8 +299,9 @@ def review_topic_evidence(selection, lookup, result, gateway, validate, *, prima
             except (LLMResponseError, LLMTransportError, ValueError) as exc:
                 audit['correction_error'] = str(exc)
         retained = [accepted[t.id] for t in selection.topics if t.id in accepted]
-        audit['accepted_bindings'] = [topic_binding(t, lookup, result) for t in retained if t.id in pending]
         audit['omitted_topic_ids'] = [t.id for t in topics if t.id not in accepted and t.id not in unresolved]
+        if preserve_coverage and unresolved:
+            raise ValueError('; '.join(f"{key}: {failure['reason']}" for key, failure in unresolved.items()))
         if not retained:
             raise ValueError('No topic passed source-row semantic review. ' +
                              '; '.join(dict.fromkeys(u['reason'] for u in unresolved.values())))
@@ -264,8 +312,16 @@ def review_topic_evidence(selection, lookup, result, gateway, validate, *, prima
         return reviewed
     except (LLMResponseError, LLMTransportError, ValueError) as exc:
         audit['error'] = str(exc)
+        if preserve_coverage:
+            for topic in topics:
+                if topic.id not in accepted and topic.id not in unresolved:
+                    unresolved[topic.id] = dict(topic_id=topic.id, title=topic.title,
+                        series_ids=topic.series_ids, binding=topic_binding(topic, lookup, result), reason=str(exc))
+            raise
         raise ValueError('Topic source-row semantic review failed: ' + str(exc)) from exc
     finally:
+        audit['accepted_bindings'] = [topic_binding(accepted[t.id], lookup, result)
+                                      for t in topics if t.id in accepted]
         audit['unresolved_topics'] = list(unresolved.values())
         audit['physical_calls'] = budget['calls']
         result.validation_warnings.append(ValidationIssue(code=AUDIT_CODE, stage='presentation',

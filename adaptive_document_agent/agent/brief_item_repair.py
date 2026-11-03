@@ -398,6 +398,17 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
     merged = [locked[index].model_dump(mode='json') if index in locked else value
               for index, value in enumerate(original['items'])]
     title = original.get('title', 'Key takeaways')
+
+    def review_patch(brief):
+        if semantic_validator:
+            from .brief_header_repair import repair_brief_headers
+            brief = repair_brief_headers(gateway, brief, invalid, result, excerpts, audit, cancelled=cancelled)
+        errors = [*validate_executive_brief(brief, result, excerpts=excerpts),
+                  *topic_coverage_errors(brief, topics)]
+        if not errors and semantic_validator:
+            errors.extend(error for reasons in semantic_validator(brief).values() for error in reasons)
+        return brief, errors
+
     try:
         patch = gateway.generate_structured(repair_messages, wire_patch_model, stage='report',
                                             allow_repair=False, max_tokens=12000, cancelled=cancelled)
@@ -422,10 +433,8 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
         merged.extend(patch_values.get('additions', []))
         title = patch_values.get('title', title)
         brief = ExecutiveBrief(title=title, items=merged)
-        errors = [*validate_executive_brief(brief, result, excerpts=excerpts),
-                  *topic_coverage_errors(brief, topics)]
-        if not errors and semantic_validator:
-            errors.extend(error for reasons in semantic_validator(brief).values() for error in reasons)
+        brief, errors = review_patch(brief)
+        merged = [item.model_dump(mode='json') for item in brief.items]
         if not brief.title.strip():
             errors.append('Brief title must be nonempty.')
         audit['repair_errors'] = errors
@@ -485,10 +494,8 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
                 merged.extend(valid_patch.get('additions', []))
                 title = valid_patch.get('title', title)
                 brief = ExecutiveBrief(title=title, items=merged)
-                errors = [*validate_executive_brief(brief, result, excerpts=excerpts),
-                          *topic_coverage_errors(brief, topics)]
-                if not errors and semantic_validator:
-                    errors.extend(error for reasons in semantic_validator(brief).values() for error in reasons)
+                brief, errors = review_patch(brief)
+                merged = [item.model_dump(mode='json') for item in brief.items]
                 if not brief.title.strip():
                     errors.append('Brief title must be nonempty.')
                 audit['repair_errors'] = errors

@@ -71,8 +71,10 @@ def execute(attempt, *, gateway_factory, orchestrator_factory, raw_pdf, scope_ke
                     'message': (str(AnalysisTimeLimitExceeded()) if result.failed_stage == 'analysis_time_limit' else
                         'Analysis is incomplete. Retry to continue from retained evidence; see the source and stage diagnostics.'),
                     'usage': list(gateway.usage)}
+                stage = result.failed_stage.replace('_', ' ') if result.failed_stage else attempt['stage']
+                message = stage if stage.startswith('Analysis incomplete') else 'Analysis incomplete: ' + stage
                 attempt['progress'].fail('15-minute analysis limit reached' if result.failed_stage == 'analysis_time_limit'
-                                         else 'Analysis incomplete: ' + attempt['stage'])
+                                         else message)
                 attempt['state'] = 'partial'
     except BaseException as exc:
         interrupted = not isinstance(exc, Exception)

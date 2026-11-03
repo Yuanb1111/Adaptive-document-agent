@@ -71,4 +71,10 @@ def plan_outputs(
         report_plan = report()
         notify('Selecting presentation questions before chart generation')
         selection, error = topics()
+    from .topic_evidence_review import CoverageTopicReviewError
+    if isinstance(error, CoverageTopicReviewError):
+        result.pipeline_state, result.retry_from = 'partial', 'reporting'
+        result.failed_stage = 'presentation_coverage'
+        result.failure_details = dict(component='TopicEvidenceReview', error_type=type(error).__name__,
+                                      message=str(error))
     return report_plan, selection, error

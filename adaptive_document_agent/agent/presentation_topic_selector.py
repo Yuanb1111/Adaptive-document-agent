@@ -256,7 +256,7 @@ class PresentationTopicSelector:
         from .topic_selection_repair import retain_valid_topics
         with record_timing(result.stage_details_ms, 'topic_validation_repair'):
             retained = retain_valid_topics(selection, lookup, primary_pages, result, self.gateway, self._validate)
-        from .topic_evidence_review import review_topic_evidence
+        from .topic_evidence_review import review_covered_topics, review_topic_evidence
         with record_timing(result.stage_details_ms, 'topic_source_review'):
             retained = review_topic_evidence(retained, lookup, result, self.gateway, self._validate,
                                              primary_pages=primary_pages)
@@ -268,11 +268,8 @@ class PresentationTopicSelector:
             reconcile_caveats(retained, directory, result, self.gateway)
         prepare_topic_ratio_definitions(retained, lookup, result)
         with record_timing(result.stage_details_ms, 'topic_final_source_review'):
-            reviewed = review_topic_evidence(retained, lookup, result, self.gateway, self._validate,
-                                             primary_pages=primary_pages, allow_correction=False)
-        if reviewed != retained:
-            raise ValueError('Coverage synthesis introduced unsupported topic meaning; source coverage needs review.')
-        return reviewed
+            return review_covered_topics(retained, lookup, result, self.gateway, self._validate,
+                                         primary_pages=primary_pages)
 
     @staticmethod
     def _validate(
