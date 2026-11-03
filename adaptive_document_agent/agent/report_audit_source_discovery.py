@@ -68,15 +68,22 @@ def _latest_discovery(result, fingerprint):
     latest = next((w for w in reversed(result.validation_warnings)
                    if w.code in {'report_audit_scope_review', 'report_audit_scope_unresolved'}), None)
     if latest is None:
-        return None
+        return None, []
     try:
-        record = json.loads(latest.message)['source_discovery']
+        audit = json.loads(latest.message)
+        record = audit['source_discovery']
         if (record['contract'] == DISCOVERY_CONTRACT and record['status'] == 'complete'
                 and record['input_fingerprint'] == fingerprint):
-            return deepcopy(record)
+            failures = []
+            if latest.code == 'report_audit_scope_unresolved' and not record.get('rediscovery_feedback'):
+                for batch in audit.get('batches', []):
+                    if batch.get('status') == 'failed':
+                        failures.extend(str(step['error'])[:1200] for step in batch.get('attempts', [])
+                            if step.get('corrective_kind') == 'independent_review' and step.get('error'))
+            return deepcopy(record), failures[:4]
     except (KeyError, TypeError, ValueError):
         pass
-    return None
+    return None, []
 
 
 def discover_audit_sources(gateway, result, base, audit, *, progress=None):
@@ -86,8 +93,8 @@ def discover_audit_sources(gateway, result, base, audit, *, progress=None):
     try:
         payload, fingerprint = discovery_input(result, base)
         record['input_fingerprint'] = fingerprint
-        cached = _latest_discovery(result, fingerprint)
-        if cached is not None:
+        cached, failures = _latest_discovery(result, fingerprint)
+        if cached is not None and not failures:
             selection = AuditSourceDiscovery.model_validate(cached['selection'])
             expanded = _expanded_context(result, base, payload, selection, fingerprint)
             audit['source_discovery'] = cached
@@ -101,7 +108,24 @@ def discover_audit_sources(gateway, result, base, audit, *, progress=None):
             return expanded
         if progress:
             progress('Locating additional source pages for exact audit qualifications')
-        encoded_payload, references = discovery_request(payload)
+        navigation = payload
+        if failures:
+            # Adjacent pages are navigation only. The model must select any new
+            # evidence and the full-page budget and independent reviews still apply.
+            selected = {n for span in cached['selection']['ranges']
+                        for n in range(span['start_page'], span['end_page'] + 1)}
+            neighbors = {n for p in selected for n in (p - 1, p + 1)} - selected
+            feedback = dict(errors=failures, previous_selected_pages=sorted(selected))
+            record['rediscovery_feedback'] = feedback
+            navigation = {**payload, 'previous_review': feedback, 'neighbor_previews': [
+                {'page':p.page_number, 'preview':p.text[:3000]} for p in result.document.pages if p.page_number in neighbors]}
+        try:
+            encoded_payload, references = discovery_request(navigation)
+        except ValueError:
+            if not failures:
+                raise
+            # Optional excerpts must not displace the complete navigation index.
+            encoded_payload, references = discovery_request({**payload, 'previous_review': feedback})
         record['serialized_input_characters'] = len(encoded_payload)
         record['reference_map'] = references
         messages = [dict(role='system', content=
@@ -113,7 +137,10 @@ def discover_audit_sources(gateway, result, base, audit, *, progress=None):
             'unavailable or irrelevant. Reassess their supplied text independently; their status '
             'does not establish assurance or excuse missing entity/period/scope definitions. '
             'Find actual counterpart statement/table rows and their full headers/units, continuation '
-            'pages, assurance scope and any applicable definitions. Matching raw-value hits are only '
+            'pages, assurance scope and any applicable definitions. When an opinion covers a printed '
+            'page range, select the page that literally states both endpoints as well as the opinion '
+            'and the required counterpart rows. A previous rejection or neighboring preview can guide '
+            'a new selection but never provides assurance on its own. Matching raw-value hits are only '
             'navigation clues; they are NOT metric matches or audit evidence. Same entity, year or '
             'a general opinion does not prove a detail amount. Inspect all target needs, including '
             'currently unknown measures, without assuming prior review was correct. '

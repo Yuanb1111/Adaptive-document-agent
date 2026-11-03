@@ -402,17 +402,20 @@ class PresentationPlanValidator:
                     from .presentation_numeric_evidence import mask_finding_amounts
                     copies = mask_finding_amounts(slide, insight_by_id, insight_observation_ids,
                                                   observation_by_id, calculations)
+                selected_observations = [observation_by_id[oid] for oid in referenced_observation_ids if oid in observation_by_id]
+                from .presentation_numeric_evidence import check_selection_confidence
+                reason, confidence_errors = check_selection_confidence(
+                    slide.selection_reason, selected_observations, result.document)
+                errors.extend(f"slide {slide.id} {error}" for error in confidence_errors)
                 claim_text = " ".join((slide.title, copies.get(slide.message, slide.message),
-                                       slide.analytical_question, slide.selection_reason,
+                                       slide.analytical_question, reason,
                                        *(copies.get(b, b) for b in slide.bullets), *block_titles))
-                claim_text = without_source_label_annotations(claim_text,
-                    [observation_by_id[oid] for oid in referenced_observation_ids if oid in observation_by_id])
+                claim_text = without_source_label_annotations(claim_text, selected_observations)
                 claimed_numbers = self._numbers(claim_text)
                 unsupported_numbers = claimed_numbers - allowed_numbers
                 if unsupported_numbers:
                     errors.append(f"slide {slide.id} contains unsupported numeric claims: {sorted(unsupported_numbers)}")
                 from .scoped_narrative_values import scoped_value_errors
-                selected_observations = [observation_by_id[oid] for oid in referenced_observation_ids if oid in observation_by_id]
                 errors.extend(scoped_value_errors(slide, selected_observations, result.observations))
                 from .claim_validator import ClaimValidator
                 from .presentation_direction_evidence import validate_displayed_claims

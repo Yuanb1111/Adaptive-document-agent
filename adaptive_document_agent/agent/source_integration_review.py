@@ -14,7 +14,8 @@ from .prompting import untrusted_document_message
 from .presentation_budget_output import complete_budget_output
 from .structured_output_correction import schema_feedback, format_correction_messages
 from .source_integration_output import review_output, SourceReviewContractError
-from .source_integration_bindings import MERGED_BRIEF_INSTRUCTIONS, merged_review_context
+from .source_integration_bindings import MERGED_BRIEF_INSTRUCTIONS, keep_accepted_dispositions, merged_review_context
+from .source_integration_quotes import bind_source_quotes, numbered_source_pages
 
 # Reserve room for both reasoning and the complete evidence-bound answer on the
 # first request; the independent reviewer and all rejection gates stay intact.
@@ -90,7 +91,9 @@ def _validate(draft, result, brief, checks):
         for quote in decision.evidence:
             if (quote.page not in checks[sid].pages
                     or normalize_quote(quote.text) not in normalize_quote(pages.get(quote.page, ''))):
-                raise ValueError('Supplementary disposition needs a literal quotation on its own source pages.')
+                raise ValueError(f'{sid}: expected a literal quotation on PDF page {quote.page} within '
+                                 f'section pages {checks[sid].pages}. Could not bind {quote.text[:180]!r}. '
+                                 'Select exact source lines separately if table columns interrupt the passage.')
         if decision.disposition == 'omit':
             if decision.brief_item_indexes:
                 raise ValueError('An omitted finding cannot claim a brief binding.')
@@ -130,7 +133,10 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None):
         pages = {p['page']: p['text'] for p in context['source_pages']}
         if any(not pages.get(p, '').strip() for c in checks.values() for p in c.pages):
             raise ValueError('Complete supplementary source text is unavailable.')
-        encoded = json.dumps(context, ensure_ascii=False)
+        encoded = json.dumps({**context, 'source_pages': numbered_source_pages(context['source_pages'])},
+                             ensure_ascii=False)
+        if len(encoded) > 120_000:
+            encoded = json.dumps(context, ensure_ascii=False)
         if len(encoded) > 120_000:
             raise ValueError('Complete supplementary evidence exceeds the bounded review context.')
         if progress:
@@ -144,7 +150,13 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None):
             'indexes. Include requires a necessary new conclusion in additions and its zero-based index in the merged '
             'brief (original items followed by additions). Omit requires an explicit reason why the evidence does not '
             'change the conclusions, not just page pressure. Quote literal evidence from the section pages for every '
-            'decision. Preserve all original conclusions unchanged; add only material missing findings or qualifications. '
+            'decision. When lines are numbered, prefer a page and set the entire evidence text field to '
+            'a single reference such as "@lines[4]" or "@lines[4-6]", without appending a transcription. '
+            'Each reference copies one contiguous span of original lines. '
+            'Use separate references for discontinuous text in table columns. Read surrounding context and '
+            'include the source lines for each stated date, condition and qualification. You may also copy '
+            'a literal substring of the page, excluding line-number prefixes. '
+            'Preserve all original conclusions unchanged; add only material missing findings or qualifications. '
             'Keep numbers, units, audit scope, conditions and uncertainty exact. No calculations, invented facts, '
             'whole-document absence claims or boilerplate review-status text. Return at most seven merged brief items. '
             'Each added item text must be at most 550 characters; preserve material qualifications concisely.'},
@@ -152,6 +164,7 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None):
             untrusted_document_message(encoded)]
         budget = dict(review_format=0)
         audit['corrections_used'] = budget
+        prior_review = None
         for attempt in range(2):
             entry = {}
             audit['attempts'].append(entry)
@@ -159,7 +172,15 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None):
             try:
                 draft = complete_budget_output(gateway, messages, SourceIntegrationDraft, entry,
                     audit_key='draft_output_attempts', token_limits=SOURCE_OUTPUT_TOKEN_LIMITS, stage='report')
+                submitted = draft.model_dump(mode='json')
+                entry['draft'] = submitted
+                draft = bind_source_quotes(draft, pages)
+                if prior_review is not None:
+                    entry['preserved_sections'] = keep_accepted_dispositions(
+                        *prior_review, draft, len(brief.items))
                 entry['draft'] = draft.model_dump(mode='json')
+                if submitted != entry['draft']:
+                    entry['submitted_draft'] = submitted
                 merged = _validate(draft, result, brief, checks)
                 review_context = merged_review_context(context, draft, merged)
                 entry['resolved_source_bindings'] = review_context['resolved_source_bindings']
@@ -180,6 +201,7 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None):
                 if len(verdicts) != len(review.verdicts) or set(verdicts) != set(checks):
                     raise ValueError('Independent review must judge every supplementary source.')
                 if any(not v.accepted for v in verdicts.values()):
+                    prior_review = draft, verdicts
                     raise ValueError('; '.join(v.reason for v in verdicts.values() if not v.accepted))
                 audit.update(draft=entry['draft'], review=entry['review'], fingerprint=_fingerprint(result, merged))
                 result.validation_warnings.append(ValidationIssue(code='source_integration_review', stage='report',
@@ -195,6 +217,11 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None):
                     feedback = schema_feedback(exc, SourceIntegrationDraft)
                     entry['format_failure'] = feedback
                     if attempt:
+                        schema_errors = feedback.get('schema_errors', [])
+                        if schema_errors:
+                            detail = '; '.join(
+                                f'{".".join(map(str, e["loc"]))}: {e["msg"]}' for e in schema_errors[:5])
+                            raise ValueError(f'Supplementary draft failed validation: {detail}') from exc
                         raise
                     messages += format_correction_messages(feedback)
                     continue
@@ -205,7 +232,12 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None):
                 correction = {key: entry[key] for key in ('draft', 'review', 'error') if key in entry}
                 messages += [untrusted_document_message(json.dumps(correction, ensure_ascii=False)),
                              {'role': 'user', 'content': 'Correct the rejected source bindings or semantic findings. '
-                              'Preserve the original brief and use only the complete source evidence above.'}]
+                              'Preserve the original brief and accepted material. For a broad source check, '
+                              'split distinct material conclusions into separate additions and bind their merged '
+                              'indexes in its single decision. A decision needs at most four representative '
+                              'source quotations; each addition has its own one to four exact quotes. '
+                              'Each addition text has a hard 550-character limit. Use at most four additions '
+                              'and seven merged items. Use the complete source evidence above.'}]
     except (ValueError, LLMResponseError) as exc:
         audit['reason'] = str(exc)
         result.validation_warnings.append(ValidationIssue(code='source_integration_unresolved', stage='report',

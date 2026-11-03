@@ -73,6 +73,36 @@ def test_same_full_source_discovery_can_resume_from_latest_failed_checkpoint():
     assert replay['source_discovery'] == audit['source_discovery']
 
 
+def test_failed_independent_scope_review_can_reselect_sources_once_on_explicit_retry():
+    result = unread_case()
+    base, audit = _context(result), {}
+    discover_audit_sources(SelectionGateway(), result, base, audit)
+    audit['batches'] = [dict(status='failed', attempts=[dict(
+        corrective_kind='independent_review', error='Missing the literal printed page range.')])]
+    result.validation_warnings.append(ValidationIssue(code='report_audit_scope_unresolved',
+        severity='warning', stage='report', message=json.dumps(audit)))
+    class RetryGateway(SelectionGateway):
+        def generate_structured(self, messages, schema, **kwargs):
+            payload = json.loads(messages[1]['content'].split('\n', 1)[1].rsplit('\n', 1)[0])
+            assert payload['previous_review']['errors'] == ['Missing the literal printed page range.']
+            assert [p['page'] for p in payload['neighbor_previews']] == [7]
+            draft = super().generate_structured(messages, schema, **kwargs)
+            draft.ranges[0].start_page = 7
+            return draft
+    retry = {}
+    expanded = discover_audit_sources(RetryGateway(), result, base, retry)
+    assert expanded['source_discovery']['added_pages'] == [8, 9]
+    assert retry['source_discovery']['selection']['ranges'][0]['start_page'] == 7
+    validate_audit_source_discovery(result, expanded, retry['source_discovery'])
+    retry['batches'] = audit['batches']
+    result.validation_warnings.append(ValidationIssue(code='report_audit_scope_unresolved',
+        severity='warning', stage='report', message=json.dumps(retry)))
+    class NoExtraCall:
+        def generate_structured(self, *args, **kwargs):
+            raise AssertionError('Do not repeat exhausted source navigation.')
+    assert discover_audit_sources(NoExtraCall(), result, base, {}) == expanded
+
+
 def test_unread_source_body_change_expires_discovery_even_if_navigation_preview_does_not_change():
     result = unread_case()
     base, audit = _context(result), {}

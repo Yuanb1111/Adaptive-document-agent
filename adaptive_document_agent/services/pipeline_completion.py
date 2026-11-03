@@ -1,4 +1,18 @@
 """Completion checks also recognize older diagnostic-only cached results."""
+import json
+
+
+def _latest_review_failure(result, reviewed, unresolved):
+    latest = next((w for w in reversed(result.validation_warnings) if w.code in {reviewed, unresolved}), None)
+    if latest and latest.code == unresolved:
+        try:
+            audit = json.loads(latest.message)
+            reason = audit.get('reason') if isinstance(audit, dict) else None
+            if isinstance(reason, str):
+                return reason.strip()[:1500]
+        except ValueError:
+            pass  # Older checkpoints may contain plain-text warnings.
+    return ''
 
 
 def is_reporting_ready(result) -> bool:
@@ -24,8 +38,10 @@ def source_review_complete(result) -> bool:
 
 def require_source_integration(result) -> None:
     if not source_review_complete(result):
+        reason = _latest_review_failure(result, 'source_integration_review', 'source_integration_unresolved')
         raise ValueError('Supplementary source integration review is incomplete or stale. '
-                         'Retry reporting before completing the analysis or exporting PowerPoint.')
+                         'Retry reporting before completing the analysis or exporting PowerPoint.'
+                         + (f' Last review: {reason}' if reason else ''))
 
 
 def topic_coverage_complete(result) -> bool:
@@ -41,20 +57,10 @@ def require_topic_coverage(result) -> None:
     from .topic_review_status import require_topic_review
     require_topic_review(result)
     if not topic_coverage_complete(result):
-        import json
-        latest = next((issue for issue in reversed(result.validation_warnings)
-            if issue.code in {'presentation_topic_coverage_review', 'presentation_topic_coverage_unresolved'}), None)
-        diagnostic = ''
-        if latest and latest.code == 'presentation_topic_coverage_unresolved':
-            try:
-                audit = json.loads(latest.message)
-                reason = audit.get('reason') if isinstance(audit, dict) else None
-                if isinstance(reason, str) and reason.strip():
-                    diagnostic = ' Original coverage failure: ' + reason[:1500]
-            except (ValueError, TypeError):
-                pass  # Older checkpoints may contain only plain-text warnings.
+        reason = _latest_review_failure(result, 'presentation_topic_coverage_review', 'presentation_topic_coverage_unresolved')
         raise ValueError('Presentation source coverage review is incomplete or stale. '
-                         'Retry reporting before completing the analysis or exporting PowerPoint.' + diagnostic)
+                         'Retry reporting before completing the analysis or exporting PowerPoint.'
+                         + (f' Original coverage failure: {reason}' if reason else ''))
 
 
 def is_complete(result) -> bool:

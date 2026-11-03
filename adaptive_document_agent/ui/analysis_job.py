@@ -66,12 +66,19 @@ def execute(attempt, *, gateway_factory, orchestrator_factory, raw_pdf, scope_ke
                 attempt['progress'].update('Complete')
                 attempt['state'] = 'complete'
             else:
+                if getattr(getattr(gateway, 'settings', None), 'presentation_strategy', None) == 'full_catalog':
+                    result.failure_details['retry_strategy'] = 'full_catalog'
+                stage = result.failed_stage.replace('_', ' ') if result.failed_stage else attempt['stage']
+                reason = result.failure_details.get('message')
+                detail = ' '.join(reason.split())[:1400] if isinstance(reason, str) else ''
+                message = f'Analysis stopped during {stage}.'
+                if detail:
+                    message += f' {detail.rstrip(".")}.'
                 attempt['failure'] = {
                     'scope_key': scope_key, 'scope': scope,
                     'message': (str(AnalysisTimeLimitExceeded()) if result.failed_stage == 'analysis_time_limit' else
-                        'Analysis is incomplete. Retry to continue from retained evidence; see the source and stage diagnostics.'),
+                        f'{message} Retry to continue from retained evidence.'),
                     'usage': list(gateway.usage)}
-                stage = result.failed_stage.replace('_', ' ') if result.failed_stage else attempt['stage']
                 message = stage if stage.startswith('Analysis incomplete') else 'Analysis incomplete: ' + stage
                 attempt['progress'].fail('15-minute analysis limit reached' if result.failed_stage == 'analysis_time_limit'
                                          else message)

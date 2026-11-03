@@ -91,6 +91,40 @@ def test_forged_quote_is_rejected_before_independent_approval():
     assert review_supplementary_sources(gateway, result, original) == original
     assert all(schema is SourceIntegrationDraft for _, schema in gateway.calls)
     assert not resolved_source_check_ids(result, original)
+    from adaptive_document_agent.services.pipeline_completion import require_source_integration
+    with pytest.raises(ValueError, match=r'contracts: expected a literal quotation on PDF page 12'):
+        require_source_integration(result)
+
+
+def test_review_uses_original_pdf_text_for_numbered_line_ranges():
+    result, constraint = fixture()
+    result.document.pages[11].text = f'Adjacent heading\r\n{constraint}\r\nSeparate column'
+    class LineGateway(Gateway):
+        def generate_structured(self, messages, schema, **kwargs):
+            output = super().generate_structured(messages, schema, **kwargs)
+            if schema is SourceIntegrationDraft:
+                assert '2 | ' + constraint in messages[-1]['content']
+                output.decisions[0].evidence[0].text = '@lines[2-2]'
+                output.additions[0].evidence[0].text = '@lines[2] ' + constraint
+            return output
+    gateway = LineGateway(constraint)
+    result.executive_brief = review_supplementary_sources(gateway, result, result.executive_brief)
+    assert resolved_source_check_ids(result, result.executive_brief) == {'contracts'}
+    assert result.executive_brief.items[-1].evidence[0].text == constraint
+    reviewer = gateway.calls[-1][0]
+    assert '@lines[' not in reviewer[-1]['content'] and constraint in reviewer[-1]['content']
+    audit = json.loads(result.validation_warnings[-1].message)
+    assert audit['attempts'][0]['submitted_draft']['decisions'][0]['evidence'][0]['text'] == '@lines[2-2]'
+
+
+@pytest.mark.parametrize('reference', ['@lines[0]', '@lines[99]', '@lines[2-1]'])
+def test_invalid_source_line_references_stop_before_review(reference):
+    result, constraint = fixture()
+    gateway = Gateway(constraint, quote=reference)
+    original = result.executive_brief.model_copy(deep=True)
+    assert review_supplementary_sources(gateway, result, original) == original
+    assert all(schema is SourceIntegrationDraft for _, schema in gateway.calls)
+    assert 'Invalid evidence range' in json.loads(result.validation_warnings[-1].message)['reason']
 
 
 def test_literal_quote_does_not_override_rejected_semantic_review():

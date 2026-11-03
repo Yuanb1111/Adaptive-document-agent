@@ -89,3 +89,34 @@ def test_invalid_addresses_never_reach_the_independent_reviewer(mutation):
     assert review_supplementary_sources(gateway, result, original) == original
     assert gateway.calls == 2
     assert not resolved_source_check_ids(result, original)
+
+
+@pytest.mark.parametrize('shared', [False, True])
+def test_revised_draft_keeps_only_separately_accepted_additions(shared):
+    result, draft = case()
+    revision = draft.model_copy(deep=True)
+    revision.additions[0].text += ' Unsupported figure 9999.'
+    if shared:
+        revision.decisions[1].brief_item_indexes.append(3)
+    class Gateway:
+        drafts = 0
+        reviews = 0
+        def generate_structured(self, messages, schema, **kwargs):
+            if schema is SourceIntegrationDraft:
+                self.drafts += 1
+                return draft if self.drafts == 1 else revision
+            self.reviews += 1
+            return schema(verdicts=[dict(section_id=d.section_id,
+                accepted=(self.reviews == 2 or d.section_id == 'contracts'),
+                reason='Independently assessed source support.') for d in draft.decisions])
+    gateway = Gateway()
+    original = result.executive_brief
+    merged = review_supplementary_sources(gateway, result, original)
+    audit = json.loads(result.validation_warnings[-1].message)
+    last = audit['attempts'][-1]
+    if shared:
+        assert merged == original and gateway.reviews == 1 and last['preserved_sections'] == []
+    else:
+        assert merged.items[3] == draft.additions[0] and gateway.reviews == 2
+        assert last['preserved_sections'] == ['contracts']
+        assert last['submitted_draft']['additions'][0]['text'] == revision.additions[0].text

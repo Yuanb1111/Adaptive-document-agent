@@ -58,7 +58,7 @@ def flow(monkeypatch):
             self.gateway = gateway
 
         def analyse_pdf(self, raw_pdf, *, scope, **kwargs):
-            attempts.append({"raw_pdf": raw_pdf, "scope": scope, "gateway": self.gateway})
+            attempts.append({"raw_pdf": raw_pdf, "scope": scope, "gateway": self.gateway, "resume": kwargs.get("resume")})
             self.gateway.usage.append({"stage": "discovery", "operation": "ChunkDiscovery",
                                        "output_tokens": len(attempts), "estimated_cost": .01})
             outcome = outcomes.popleft()
@@ -121,6 +121,43 @@ def test_explicit_retry_uses_model_cache_then_successful_reruns_reuse_result(flo
     app.run_app()
     assert len(flow.attempts) == 2
     assert flow.st.session_state["analysis_result_reused"] is True
+
+
+def test_partial_failure_shows_the_stage_and_retained_cause(flow):
+    partial = flow.result.model_copy(update={'pipeline_state': 'partial', 'retry_from': 'reporting',
+        'failed_stage': 'presentation_planning', 'failure_details': {'message': 'Unsupported numeric claim 0.731'}})
+    flow.outcomes.clear()
+    flow.outcomes.append(partial)
+    app.run_app()
+    message = flow.st.session_state['analysis_failure']['message']
+    assert 'presentation planning' in message and 'Unsupported numeric claim 0.731' in message
+    assert flow.st.session_state['analysis_partial'] is partial
+
+
+def test_rejected_omissions_offer_an_explicit_catalog_retry_on_the_same_checkpoint(flow):
+    import json
+    from adaptive_document_agent.models import ValidationIssue
+    from adaptive_document_agent.agent.retained_analysis_review import REVIEW_CODE
+    partial = flow.result.model_copy(update={'pipeline_version': app.PIPELINE_VERSION, 'pipeline_state': 'partial',
+        'retry_from': 'reporting', 'failed_stage': 'presentation_coverage',
+        'failure_details': {'component': 'PresentationCoverage'}, 'validation_warnings': [
+            ValidationIssue(code=REVIEW_CODE, stage='presentation', severity='info', message=json.dumps({
+                'contract': 1, 'review': {'omissions_accepted': False, 'omission_reason': 'Missing liquidity coverage.',
+                                         'verdicts': [dict(slide_id='expenses', accepted=True, reason='Bound source values.')]}}))]})
+    flow.outcomes.clear()
+    flow.outcomes.extend([partial, flow.result])
+    app.run_app()
+    app.run_app()
+    assert len(flow.attempts) == 1
+    label = 'Retry with full metric catalog (additional model requests)'
+    assert any(call.args[0] == label for call in flow.st.button.call_args_list)
+    flow.pressed.add(label)
+    app.run_app()
+    settings = flow.attempts[-1]['gateway'].settings
+    assert flow.attempts[-1]['resume'] is partial
+    assert settings.presentation_strategy == 'full_catalog' and flow.settings.presentation_strategy == 'retained_analysis'
+    assert settings.privacy_mode == PrivacyMode.LOCAL_ONLY
+    assert app._analysis_scope_key(b'pdf', '', settings) != app._analysis_scope_key(b'pdf', '', flow.settings)
 
 
 @pytest.mark.parametrize("change", ["document", "focus", "model"])

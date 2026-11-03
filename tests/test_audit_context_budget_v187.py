@@ -26,6 +26,21 @@ def large_aggregate():
     return result, binding
 
 
+def test_oversized_transport_can_compact_padding_only_with_original_geometry():
+    from adaptive_document_agent.services.source_quotes import normalize_quote
+    text = ('Inventories      2023       155,296\nUnaudited       comparative\n' * 3000)
+    source = dict(source_pages=[dict(page=1, text=text, layout_lines=[
+        ['Unaudited', 10.5, 90.5, 100.5]])])
+    original = deepcopy(source)
+    compact = json.loads(serialize_audit_context(source))
+    assert len(serialize_audit_context(source)) < MAX_AUDIT_CONTEXT_CHARS
+    assert normalize_quote(compact['source_pages'][0]['text']) == normalize_quote(text)
+    assert compact['source_pages'][0]['layout_lines'] == source['source_pages'][0]['layout_lines']
+    assert source == original
+    source['source_pages'][0].pop('layout_lines')
+    assert json.loads(serialize_audit_context(source)) == source
+
+
 def test_63_targets_above_aggregate_limit_complete_all_21_independent_batches():
     result, binding = large_aggregate()
     original = deepcopy((result.document, result.observations, result.analysis_results))

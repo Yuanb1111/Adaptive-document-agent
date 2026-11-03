@@ -541,6 +541,9 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
                     return corrected
                 for position, original_index in enumerate(source_valid):
                     merged[original_index] = corrected.items[position].model_dump(mode='json')
+            else:
+                for position, value in final_meaning.get('source_valid_candidates', {}).items():
+                    merged[source_valid[int(position)]] = value
         except LLMTransportError:
             raise
         except (LLMResponseError, ValueError) as exc:

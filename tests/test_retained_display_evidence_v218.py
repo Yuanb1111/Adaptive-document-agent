@@ -7,6 +7,59 @@ from adaptive_document_agent.validation.presentation_plan_validator import Prese
 from tests.test_retained_analysis_v216 import _linked_result, gateway, selection, verdict
 
 
+def _confidence_plan(score_text):
+    from adaptive_document_agent.models.table import ExtractedTable
+    result = _linked_result()
+    page = result.document.pages[0]
+    table = ExtractedTable(table_id='source-table', page=page.page_number, confidence=.73)
+    page.tables = [table]
+    for obs in result.observations:
+        obs.table_id = table.table_id
+        obs.evidence = [obs.evidence[0].model_copy(update={'page': page.page_number, 'table_id': table.table_id})]
+    response = selection(result)
+    reason = 'Relevant annual change; the reported table extraction confidence is ' + score_text + '.'
+    response['decisions'][0]['reason'] = reason
+    retained.select_retained_analysis(gateway([response]), result)
+    plan = retained.compile_retained_analysis(result)
+    slide = next(s for s in plan.slides if s.slide_type == 'analysis')
+    assert slide.selection_reason == reason
+    return result, plan, slide
+
+
+@pytest.mark.parametrize('score_text', ['0.73', '73%'])
+def test_retained_reason_can_cite_its_source_table_confidence(score_text):
+    result, plan, slide = _confidence_plan(score_text)
+    slide.message += ' The reported margin was 0.73.'
+    with pytest.raises(ValueError, match=r'unsupported numeric claims.*0\.73'):
+        PresentationPlanValidator().validate(plan, result)
+
+
+@pytest.mark.parametrize('change', ['score', 'missing_score', 'table', 'page', 'missing_evidence', 'mixed', 'collision'])
+def test_confidence_requires_exact_owners_even_if_a_financial_number_matches(change):
+    result, plan, slide = _confidence_plan('0.73')
+    page = result.document.pages[0]
+    table = page.tables[0]
+    if change == 'score':
+        table.confidence = .72
+    elif change == 'missing_score':
+        page.tables = [type(table).model_validate(table.model_dump(exclude={'confidence'}))]
+        slide.selection_reason = 'Table extraction confidence is 0.5.'
+    elif change == 'table':
+        table.table_id = 'unrelated'
+    elif change == 'page':
+        table.page += 1
+    elif change == 'missing_evidence':
+        result.observations[0].evidence = []
+    elif change == 'mixed':
+        page.tables.append(table.model_copy(update={'table_id': 'different', 'confidence': .75}))
+        result.observations[0].table_id = 'different'
+        result.observations[0].evidence[0].table_id = 'different'
+    else:
+        slide.selection_reason = f'Table extraction confidence is {result.observations[0].raw_value}.'
+    with pytest.raises(ValueError, match='no matching extraction confidence'):
+        PresentationPlanValidator().validate(plan, result)
+
+
 def _display_result(movement):
     result = _linked_result()
     result.charts = []

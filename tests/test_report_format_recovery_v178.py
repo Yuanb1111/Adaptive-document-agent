@@ -108,6 +108,21 @@ def test_draft_format_correction_cannot_bypass_literal_evidence_or_borrow_semant
     assert 'literal quotation' in _audit(result)[1]['reason']
 
 
+def test_overlong_source_revision_reports_failed_fields_without_another_request():
+    result, constraint = fixture()
+    draft, review = _outputs(constraint)
+    review.verdicts[0].accepted = False
+    invalid = draft.model_dump()
+    invalid['additions'][0]['text'] = 'x' * 551
+    invalid['decisions'][0]['evidence'] *= 5
+    llm, client = gateway([response(draft), response(review), response(json.dumps(invalid))])
+    original = deepcopy(result.executive_brief)
+    assert review_supplementary_sources(llm, result, original) == original
+    reason = _audit(result)[1]['reason']
+    assert 'additions.0.text' in reason and 'decisions.0.evidence' in reason
+    assert len(client.requests) == 3
+
+
 @pytest.mark.parametrize('recover', [True, False])
 def test_audit_writer_format_error_preserves_binding_validation_budget(recover):
     result, _ = audit_fixture()

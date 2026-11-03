@@ -11,6 +11,24 @@ from .retained_analysis import selected_record, selection_context, fingerprint, 
 REVIEW_CODE = 'presentation_retained_analysis_review'
 
 
+def needs_catalog_retry(result):
+    if result is None or result.pipeline_state != 'partial':
+        return False
+    if result.failure_details.get('retry_strategy') == 'full_catalog':
+        return True
+    if result.failed_stage != 'presentation_coverage' or result.failure_details.get('component') != 'PresentationCoverage':
+        return False
+    latest = next((w for w in reversed(result.validation_warnings) if w.code == REVIEW_CODE), None)
+    if latest:
+        try:
+            record = json.loads(latest.message)
+            review = RetainedAnalysisReview.model_validate(record['review'])
+            return record['contract'] == 1 and bool(review.verdicts) and not review.omissions_accepted
+        except (ValueError, KeyError, TypeError):
+            pass
+    return False
+
+
 class RetainedSlideVerdict(BaseModel):
     model_config = ConfigDict(extra='forbid')
     slide_id: str
@@ -145,4 +163,9 @@ def _review_retained_analysis(gateway, result, *, progress=None):
     result.validation_warnings.append(ValidationIssue(code=REVIEW_CODE, stage='presentation',
         severity='info', message=json.dumps(dict(contract=1, fingerprint=fingerprint(context),
             review=review.model_dump(mode='json')), ensure_ascii=False)))
+    reasons = [f'{v.slide_id}: {v.reason}' for v in review.verdicts if not v.accepted]
+    if not review.omissions_accepted:
+        reasons.insert(0, 'Omitted findings: ' + review.omission_reason)
+    if reasons:
+        raise ValueError('Retained-analysis evidence review rejected the report. ' + ' '.join(reasons))
     require_retained_review(result)

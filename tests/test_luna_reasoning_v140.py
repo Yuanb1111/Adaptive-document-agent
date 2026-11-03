@@ -134,10 +134,22 @@ def test_bounded_coverage_sends_low_to_completion_and_records_actual_attempt(mon
     assert request['model'] == 'openai/gpt-6-luna' and request['custom_llm_provider'] == 'openai'
     assert request['api_base'] == 'https://api.openai.com/v1'
     assert request['reasoning_effort'] == 'low' and request['max_tokens'] == 8192
+    assert request['response_format'] == {'type': 'json_object'}
     row = gateway.usage[0]
     assert row['reasoning_policy']['requested'] == row['reasoning_policy']['applied'] == {'reasoning_effort': 'low'}
     assert row['attempts'][0]['reasoning_parameters'] == {'reasoning_effort': 'low'}
     assert 'synthetic-test-key' not in json.dumps(gateway.usage)
+
+
+def test_json_mode_is_scoped_to_structured_calls_and_keeps_plain_text_requests(monkeypatch):
+    module = _sdk(monkeypatch)
+    settings = _settings(api_key=SecretStr('synthetic-test-key'))
+    client = LiteLLMProvider(settings)
+    gateway = LLMGateway(client, settings)
+    gateway.generate_structured([], IntroductionPages, stage='presentation')
+    assert module.completion.call_args.kwargs['response_format'] == {'type': 'json_object'}
+    gateway.generate_text([{'role': 'user', 'content': 'Write a heading.'}], stage='report')
+    assert 'response_format' not in module.completion.call_args.kwargs
 
 
 def test_real_sdk_temperature_rejection_preserves_luna_low_effort_and_its_audit(monkeypatch):

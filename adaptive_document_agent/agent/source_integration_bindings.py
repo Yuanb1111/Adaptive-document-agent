@@ -36,3 +36,27 @@ def merged_review_context(context: dict, draft: SourceIntegrationDraft, merged: 
             items=[dict(index=index, origin='original' if index < original_count else 'addition')
                    for index in decision.brief_item_indexes]) for decision in draft.decisions])
     return review
+
+
+def keep_accepted_dispositions(previous, verdicts, revised, original_count):
+    """Keep independently accepted items only at unchanged, exclusively owned addresses."""
+    old = {d.section_id: d for d in previous.decisions}
+    kept = []
+    for index, decision in enumerate(revised.decisions):
+        sid = decision.section_id
+        prior = old.get(sid)
+        if sid not in verdicts or not verdicts[sid].accepted or prior is None:
+            continue
+        if decision.brief_item_indexes != prior.brief_item_indexes:
+            continue
+        additions = {i for i in prior.brief_item_indexes if i >= original_count}
+        if any(i - original_count >= len(revised.additions) for i in additions):
+            continue
+        if any(additions.intersection(d.brief_item_indexes)
+               for draft in (previous, revised) for d in draft.decisions if d.section_id != sid):
+            continue
+        revised.decisions[index] = prior.model_copy(deep=True)
+        for i in additions:
+            revised.additions[i - original_count] = previous.additions[i - original_count].model_copy(deep=True)
+        kept.append(sid)
+    return kept

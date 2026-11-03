@@ -46,6 +46,37 @@ def test_meaning_repair_can_fix_rejected_label_but_cannot_add_label_quantities(i
         assert len(reviewed) == 2
 
 
+def test_a_failed_meaning_sibling_retains_source_valid_candidates_for_fresh_salvage_review():
+    from adaptive_document_agent.agent.brief_item_repair import _salvage
+    source = 'Loss was USD 12 million in 2023 and USD 24 million in 2024.'
+    result = result_for([source])
+    brief = ExecutiveBrief.model_validate(payload(source))
+    brief.items[0].label = 'Incorrect first label'
+    brief.items.append(brief.items[0].model_copy(update={
+        'label': 'Incorrect second label', 'text': 'Reported loss was USD 12 million in 2023.'}))
+    brief.items.append(brief.items[0].model_copy(update={
+        'label': 'Risk', 'text': 'The source reports annual losses.'}))
+    def meaning(value):
+        return {i: ['Incorrect label.'] for i, item in enumerate(value.items) if item.label.startswith('Incorrect')}
+    class Client:
+        def generate_structured(self, messages, schema, **kwargs):
+            return schema(item_0=dict(text=source, label='Loss widened'),
+                          item_1=dict(text=source, label='Loss widened to USD 99 million'))
+    audit = {}
+    assert correct_new_meaning_errors(Client(), brief, result=result, excerpts={1: source},
+        topics=[], source_context={}, evidence_catalog=None, semantic_validator=meaning, audit=audit) is None
+    candidates = audit['post_source_meaning_correction']['source_valid_candidates']
+    assert set(candidates) == {'0'}
+    merged = brief.model_dump(mode='json')['items']
+    merged[0] = candidates['0']
+    checked = []
+    def independent(value):
+        checked.append(value)
+        return meaning(value)
+    kept, rejected = _salvage(merged, {2: brief.items[2]}, brief.title, result, {1: source}, [], independent)
+    assert kept.items[0].label == 'Loss widened' and rejected == [1] and checked
+
+
 @pytest.mark.parametrize('valid', [True, False])
 def test_post_source_meaning_patch_is_bounded_locks_good_items_and_rechecks_sources(valid):
     source = 'Revenue was USD 12 million in 2024, unaudited.'

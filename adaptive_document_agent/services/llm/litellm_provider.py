@@ -270,6 +270,9 @@ class LiteLLMProvider(LLMClient):
         try:
             policy = self.request_policy(stage=_stage.get(), operation=_operation.get(), model=model or self.settings.model)
             options = policy.pop("options")
+            if (self.settings.provider == ProviderName.OPENAI and self.capabilities.json_mode
+                    and _operation.get() != 'text'):
+                options['response_format'] = {'type': 'json_object'}
             output_limit = max_tokens if max_tokens is not None else policy.get('output_token_limit')
             raw = self._completion(messages, temperature=temperature, max_tokens=output_limit, model=model, **options)
             # "applied" records controls on the successful LiteLLM call; actual
@@ -311,7 +314,8 @@ class LiteLLMProvider(LLMClient):
             "role": "system",
             "content": "Return only valid JSON matching this schema: " + json.dumps(response_model.model_json_schema(), ensure_ascii=False, separators=(",", ":")),
         }
-        response = self.generate_text([schema_instruction, *messages], temperature=temperature, model=model)
+        with self.operation_context(operation=response_model.__name__):
+            response = self.generate_text([schema_instruction, *messages], temperature=temperature, model=model)
         if response.usage and response.usage.finish_reason == "length":
             raise LLMStructuredOutputError("Structured response was truncated by the model output limit.", response=response)
         try:

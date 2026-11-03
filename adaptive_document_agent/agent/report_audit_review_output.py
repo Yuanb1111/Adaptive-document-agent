@@ -53,7 +53,11 @@ UNKNOWN_REVIEW_INSTRUCTIONS = (
     'the scope definition together. An unaudited marker belongs only to its own table and period column; '
     'never move a nearby table marker or comparative-year qualifier onto this observation. If any '
     'unknown has sufficient exact evidence, set unresolved_accepted=false and explain which observation '
-    'and literal source row/header/unit/scope permit correction. Do not infer assurance from a matching '
+    'and literal source row/header/unit/scope permit correction. Apply exactly the same page-coverage '
+    'standard to rejecting an unknown as to accepting a binding: identify the literal covered range '
+    'and the counterpart page marker, or a direct table/period qualification. An opinion referring to '
+    'information “set out below” cannot by itself locate a particular counterpart page. '
+    'Do not infer assurance from a matching '
     'number, year or entity alone. Derived/adjusted measures and ratios still require unknown disposition '
     'under this amount-binding contract. Missing or conflicting evidence remains unknown with a '
     'source-specific reason; never invent a counterpart. ')

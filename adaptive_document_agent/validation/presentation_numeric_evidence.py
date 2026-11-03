@@ -88,6 +88,39 @@ def checked_money_amounts(text, observations, calculations=()):
         yield match, bool(matches), set() if None in matches else matches
 
 
+_TABLE_CONFIDENCE = re.compile(
+    r"\btable(?:[\s-]+extraction)?[\s-]+confidence\b(?:\s+score\b)?\s*"
+    r"(?:(?:is|was|of)\s+|[:=]\s*)?"
+    r"(?P<score>[+-]?(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+))(?P<percent>\s*%)?"
+    r"(?=\s*(?:$|[;!?)]|[.,](?!\d)))", re.I)
+
+
+def check_selection_confidence(reason, observations, document):
+    """Verify explicit table scores in the rationale without licensing numbers in other claims."""
+    matches = list(_TABLE_CONFIDENCE.finditer(reason))
+    if not matches:
+        return reason, []
+    owners = {(e.page, e.table_id) for o in observations for e in o.evidence}
+    tables = [(p.page_number, t) for p in document.pages for t in p.tables
+              if t.page == p.page_number and (p.page_number, t.table_id) in owners]
+    all_inputs_cited = all(o.evidence and
+        (not o.table_id or any(e.table_id == o.table_id for e in o.evidence)) for o in observations)
+    complete = (bool(owners) and all_inputs_cited
+                and owners == {(page, t.table_id) for page, t in tables}
+                and all('confidence' in t.model_fields_set for _, t in tables))
+    scores = {Decimal(str(t.confidence)) for _, t in tables}
+    masked, errors = list(reason), []
+    for match in matches:
+        multiplier = 100 if match['percent'] else 1
+        claimed = Decimal(match['score'].replace(',', ''))
+        if complete and {score * multiplier for score in scores} == {claimed}:
+            start, end = match.span('score')
+            masked[start:end] = ' ' * (end - start)
+        else:
+            errors.append(f"selection reason has no matching extraction confidence for all cited tables: {match[0]}")
+    return ''.join(masked), errors
+
+
 def mask_finding_amounts(slide, insights, inputs, observations, calculations):
     """Mask grounded occurrences only in verbatim copies of their owning finding."""
     copies = {}

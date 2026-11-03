@@ -157,4 +157,14 @@ def correct_new_meaning_errors(gateway, brief, *, result, excerpts, topics, sour
             errors.extend(error for reasons in semantic_validator(corrected).values() for error in reasons)
         record.update(errors_after=errors, changed=corrected != brief,
                       status='rejected' if errors or corrected == brief else 'accepted')
+        if errors:
+            # A failed sibling must not discard a separate source-valid patch.
+            # These candidates still require the caller's independent salvage
+            # review and complete briefing/topic gates before delivery.
+            record['source_valid_candidates'] = {
+                str(i): corrected.items[i].model_dump(mode='json') for i in failed
+                if f'item_{i}' not in feedback and corrected.items[i] != brief.items[i]
+                and not validate_executive_brief(
+                    ExecutiveBrief(items=[corrected.items[i]]), result, excerpts=excerpts)
+                and not audit_status_errors(corrected.items[i], result, inventory=inventories[i])}
         return corrected if not errors and corrected != brief else None

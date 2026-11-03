@@ -41,6 +41,8 @@ def _analysis_scope_key(raw_pdf: bytes, analysis_focus: str, settings) -> str:
                 str(settings.discovery_chunk_tokens),
                 str(settings.semantic_batch_size),
                 str(settings.deepseek_price_band),
+                # Keep existing default checkpoints addressable on upgrade.
+                *(('full_catalog',) if settings.presentation_strategy == 'full_catalog' else ()),
             )
         ).encode("utf-8")
     )
@@ -77,9 +79,20 @@ def _render_analysis_failure(st, failure, progress=None):
         render_costs(st, failure["usage"])
 
 
+def _retry_checkpoint(st, scope_key):
+    result = st.session_state.get('analysis_partial') if st.session_state.get('analysis_partial_key') == scope_key else None
+    if result is not None and result.pipeline_version == PIPELINE_VERSION and not any(
+            p.table_extraction_status == 'failed' for p in result.document.pages):
+        return result
+    return None
+
+
 def _retry_analysis_button(st, scope_key):
+    from adaptive_document_agent.agent.retained_analysis_review import needs_catalog_retry
     active=st.session_state.get('analysis_attempts',{}).get(scope_key,{})
-    return st.button("Retry analysis (reuse successful cache)", key=f"retry_analysis_{scope_key}",
+    full_catalog = needs_catalog_retry(_retry_checkpoint(st, scope_key))
+    label = 'Retry with full metric catalog (additional model requests)' if full_catalog else 'Retry analysis (reuse successful cache)'
+    return st.button(label, key=f"retry_analysis_{scope_key}",
                      disabled=active.get('state')=='running')
 
 
@@ -173,12 +186,11 @@ def _analyse_upload(st, raw_pdf, *, scope_key, analysis_focus, settings, cache, 
     pending_scope = st.session_state.get("analysis_scope_usage_pending")
     scope_usage = (list(pending_scope["records"]) if scope is not None and pending_scope
                    and pending_scope["key"] == scope_key else [])
-    resume = (st.session_state.get('analysis_partial')
-              if retry and not force and st.session_state.get('analysis_partial_key') == scope_key else None)
-    if resume is not None and (resume.pipeline_version != PIPELINE_VERSION
-                              or any(p.table_extraction_status == 'failed' for p in resume.document.pages)):
-        resume = None
+    resume = _retry_checkpoint(st, scope_key) if retry and not force else None
     worker_settings = settings.model_copy(deep=True)
+    from adaptive_document_agent.agent.retained_analysis_review import needs_catalog_retry
+    if needs_catalog_retry(resume):
+        worker_settings.presentation_strategy = 'full_catalog'
     # Streamlit may overlap script runners during a rerun. Claim the attempt
     # after cache lookup, before the first UI write that can interrupt it.
     with _ATTEMPT_LOCK:
