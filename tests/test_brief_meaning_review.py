@@ -61,7 +61,10 @@ def test_writer_repairs_only_the_false_comparison_and_rechecks_the_patch(valid_p
                               'comparisons': [comparison().model_dump(mode='json')]}]}
     final_review = {'items': [{'index': 0, 'accepted': True, 'numeric_comparison': True, 'reason': 'Source-bound comparison',
         'comparisons': [comparison(corrected.text, direction='increase' if valid_patch else 'decrease').model_dump(mode='json')]}]}
-    g, client = gateway([original, wrong_review, {'item_0': corrected.model_dump(mode='json')}, final_review])
+    replies = [original, wrong_review, {'item_0': corrected.model_dump(mode='json')}, final_review]
+    if not valid_patch:
+        replies.append({'item_0': {'text': corrected.text}})
+    g, client = gateway(replies)
     result = result_for([item().evidence[0].text])
     if valid_patch:
         assert ExecutiveBriefWriter(g).generate(result).items[0].text == corrected.text
@@ -70,7 +73,9 @@ def test_writer_repairs_only_the_false_comparison_and_rechecks_the_patch(valid_p
             ExecutiveBriefWriter(g).generate(result)
     audit = json.loads(next(w.message for w in result.validation_warnings if w.code == 'executive_brief_repair_audit'))
     assert audit['locked_indices'] == [] and 'Meaning review' in str(audit['initial_errors'])
-    assert len(client.calls) == (5 if valid_patch else 4)
+    assert len(client.calls) == 5
+    if not valid_patch:
+        assert audit['post_source_meaning_correction']['status'] == 'rejected'
 
 
 def test_accounting_parentheses_and_long_summary_quotes_keep_signs_and_headers():

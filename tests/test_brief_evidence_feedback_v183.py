@@ -7,7 +7,7 @@ from adaptive_document_agent.agent.brief_source_reference_repair import owned_ev
 from adaptive_document_agent.agent.brief_source_repair import correct_residual_source_errors
 from adaptive_document_agent.agent.brief_period_clarification import period_clarification_options
 from adaptive_document_agent.agent.brief_status_conflict import retryable_status_conflict
-from adaptive_document_agent.models.executive_brief import ExecutiveBrief
+from adaptive_document_agent.models.executive_brief import BRIEF_EVIDENCE_LIMIT, ExecutiveBrief
 from adaptive_document_agent.services.executive_brief import validate_executive_brief
 from tests.test_executive_brief import result_for, payload
 from tests.test_brief_targeted_contract_v147 import comparison_case, Replies
@@ -61,7 +61,8 @@ def test_forged_catalog_text_still_fails_literal_source_gate():
 def test_additions_cannot_exceed_original_quote_limit():
     _, brief, catalog = reference_case()
     item = brief.items[0]
-    item.evidence.extend(item.evidence[0].model_copy(update={'text': f'Existing source passage {i}.'}) for i in range(3))
+    item.evidence.extend(item.evidence[0].model_copy(update={'text': f'Existing source passage {i}.'})
+                         for i in range(BRIEF_EVIDENCE_LIMIT - 1))
     with pytest.raises(ValueError):
         append_owned_evidence(item, ['head'], owned_evidence_options(item, catalog))
 

@@ -24,6 +24,30 @@ def audited(result):
                            if issue.code == 'executive_brief_repair_audit'))
 
 
+@pytest.mark.parametrize('selection_accepted', [False, True])
+def test_discarding_a_meaning_failure_requires_fresh_review_of_the_final_selection(selection_accepted):
+    from adaptive_document_agent.agent.brief_item_repair import _salvage
+    from adaptive_document_agent.models.executive_brief import ExecutiveBriefItem
+    text = 'Revenue was 12. Costs were 8. Cash was 4.'
+    result = result_for([text])
+    values = [item(sentence, label=label) for sentence, label in [
+        ('Revenue was 12.', 'Revenue'), ('Costs were 8.', 'Costs'), ('Cash was 4.', 'Cash')]]
+    locked = {i: ExecutiveBriefItem.model_validate(values[i]) for i in (0, 1)}
+    reviewed, diagnostics = [], {}
+    def review(brief):
+        reviewed.append([i.label for i in brief.items])
+        if len(brief.items) == 3:
+            return {2: ['The cash finding fails independent meaning review.']}
+        return {} if selection_accepted else {0: ['The final selection omits material context.']}
+    brief, rejected = _salvage(values, locked, 'Summary', result, {1: text}, [], review, diagnostics)
+    assert reviewed == [['Revenue', 'Costs', 'Cash'], ['Revenue', 'Costs']]
+    assert (brief is not None) is selection_accepted
+    if selection_accepted:
+        assert rejected == [2]
+    else:
+        assert diagnostics['selection_meaning_errors'] == {'0': ['The final selection omits material context.']}
+
+
 def capture_schemas(gateway):
     captured = []
     generate = gateway.generate_structured

@@ -12,9 +12,13 @@ class NativeQuantityReference(BaseModel):
     quantity_ref: str = Field(min_length=1, max_length=30)
 
 
-NativeQuantityBriefItem = create_model('NativeQuantityBriefItem', __base__=ReferencedBriefItem,
-    text=(list[str | NativeQuantityReference] | str, Field(
-        description='Use prose/reference segments for exact native quantity repairs. Legacy literal text remains subject to all unchanged source checks.')))
+def _quantity_item(base):
+    return create_model('NativeQuantityBriefItem', __base__=base,
+        text=(list[str | NativeQuantityReference] | str, Field(
+            description='Use prose/reference segments for exact native quantity repairs. Legacy literal text remains subject to all unchanged source checks.')))
+
+
+NativeQuantityBriefItem = _quantity_item(ReferencedBriefItem)
 
 
 def quantity_patch_fields(fields, native_options, errors):
@@ -34,7 +38,9 @@ def quantity_patch_fields(fields, native_options, errors):
             if amount not in catalog.values():
                 catalog[f'q{len(catalog)}'] = amount
         if catalog:
-            fields[key] = (NativeQuantityBriefItem, ...)
+            # Preserve the caller's evidence contract. A no-catalog legacy
+            # patch uses literal quotes; a catalog patch can select IDs only.
+            fields[key] = (_quantity_item(fields[key][0]), ...)
             catalogs[key] = catalog
     return fields, catalogs
 

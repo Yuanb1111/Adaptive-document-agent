@@ -46,7 +46,8 @@ def test_unproven_context_never_acquires_a_header(case):
     elif case == 'unresolved':
         page.tables[0].rows[0].alignment_status = 'ambiguous'
     else:
-        item['evidence'] *= 4
+        from adaptive_document_agent.models.executive_brief import BRIEF_EVIDENCE_LIMIT
+        item['evidence'] *= BRIEF_EVIDENCE_LIMIT
     before = deepcopy(item)
     assert bind_table_headers(item, result, excerpts) == (before, [])
 

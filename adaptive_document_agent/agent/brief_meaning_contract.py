@@ -14,7 +14,8 @@ def displayed_quantity_contract(item):
             for currency, value, unit in sorted(_quantities(item.text) | _quantities(item.label))]
 
 
-def check_meaning_contract(original, candidate, indices, *, result, excerpts, inventories, periods):
+def check_meaning_contract(original, candidate, indices, *, result, excerpts, inventories, periods,
+                           assurance_bindings=None):
     """Return exact violations and whether one narrow protocol correction is possible.
 
     A quoted but newly enumerated table cell remains forbidden. Its presence in
@@ -51,7 +52,8 @@ def check_meaning_contract(original, candidate, indices, *, result, excerpts, in
             quoted.update(canonical_quantity(*q) for quote in before.evidence for q in _quantities(quote.text))
             recoverable &= all((currency or unit) and quantity in quoted
                                for quantity in introduced for currency, _, unit in [quantity])
-        statuses = audit_status_errors(item, result, inventory=inventories[index])
+        statuses = audit_status_errors(item, result, inventory=inventories[index],
+            bindings=(assurance_bindings or {}).get(index))
         placements = misplaced_parenthetical_statuses(item, result, inventory=inventories[index])
         if statuses:
             item_errors.extend(statuses)

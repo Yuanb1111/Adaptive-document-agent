@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from adaptive_document_agent.services.source_quotes import normalize_quote
 from .prompting import untrusted_document_message
 from .brief_context_review import CONTEXT_INSTRUCTIONS
+from .brief_assurance_bindings import BriefAssuranceBinding, assurance_catalog
 
 
 class MeaningComparison(BaseModel):
@@ -46,6 +47,7 @@ class MeaningVerdict(BaseModel):
         'source-bound comparisons. Independently dated facts without such an assertion '
         'use false and an empty comparisons list. Reassess this flag when correcting bindings.')
     comparisons: list[MeaningComparison] = Field(default_factory=list, max_length=12)
+    assurance_bindings: list[BriefAssuranceBinding] = Field(default_factory=list, max_length=20)
 
 
 class BriefMeaningReview(BaseModel):
@@ -180,6 +182,7 @@ def meaning_validator(gateway, *, cancelled=None, result=None, source_context=No
                 {'ref': ref, 'text': text} for ref, text in catalogs[row['index']].items()]}
             from .brief_audit_scope import source_audit_scope
             row['source_audit_scope'] = source_audit_scope(item, result)
+            row['source_assurance_catalog'] = assurance_catalog(row['source_audit_scope'])
         if source_context is not None:
             pending[0]['available_report_context'] = {
                 'evidence_blocks': source_context.get('evidence_blocks', {}),
@@ -192,11 +195,23 @@ def meaning_validator(gateway, *, cancelled=None, result=None, source_context=No
              'Review item.label and item.text independently and together: the label is an audience-facing '
              'conclusion, not a decorative heading. Its metric, period scope and asserted direction must '
              'agree with the body and evidence. A directional label still asserts a numeric comparison '
-             'when the numeric values appear only in the body. Do not accept a false label merely because '
+             'when the numeric values appear only in the body. A relational label describing mixed '
+             'or divergent outcomes across distinct measures does not assign one increase/decrease '
+             'direction to that whole phrase. Verify its meaning against each actual body comparison; '
+             'do not bind the same relational phrase to incompatible endpoint pairs. A claim about a '
+             'defined gap widening or narrowing still asserts that gap\'s own numeric direction. '
+             'Do not accept a false label merely because '
              'the body is accurate. Bind every comparison.claim to one contiguous exact substring of '
              'either item.label or item.text, never a concatenation across their boundary. '
              'The supplied source_audit_scope retains the source table column bindings lost in flattened '
              'header text. An audited/unaudited label qualifies ONLY its explicitly bound period columns. '
+             'For every date/status assertion, return assurance_bindings: claim is the exact body '
+             'clause identifying its measure, period and status; source_refs are source_assurance_catalog '
+             'IDs for ALL measures that clause qualifies. Choose the exact source row and column, '
+             'not another measure sharing that date. Unknown never grants a status. Other quoted '
+             'rows outside the asserted measure do not cancel its own supported status. A blanket '
+             'period-wide qualification must bind every affected measure. Reject an ambiguous scope '
+             'rather than narrowing its meaning by silently selecting a convenient source reference. '
              'Never extend a label to adjacent periods or all interim data. Unknown means no supported '
              'audit-status assertion; do not infer either audited or unaudited, and do not demand an '
              'unsupported qualification as a correction. Source bindings are evidence, not acceptance. '
@@ -206,7 +221,12 @@ def meaning_validator(gateway, *, cancelled=None, result=None, source_context=No
              'or equality. Separately dated reported values without a change assertion are facts, '
              'not an inferred trend. Do not manufacture an increase/decrease entry merely because '
              'one reported number exceeds another. In a finding containing both actual changes and '
-             'separately dated facts, list only its asserted changes. Still verify all dated facts, '
+             'separately dated facts, list only its asserted changes. Approximate stability, '
+             'including an attributed "relatively stable" description, is not an exact equality '
+             'assertion and needs no endpoint comparison for that phrase alone. Verify the source '
+             'attribution and qualified meaning; never force its distinct balances to be equal. '
+             'An actual explicit equal/unchanged assertion still requires exact comparison checks. '
+             'Still verify all dated facts, '
              'units, period associations and qualifications in the item verdict. '
              'Read ALL supplied owned evidence, including narrative passages after a table. A directly '
              'stated narrative total can support the same total claim even when the table presents '

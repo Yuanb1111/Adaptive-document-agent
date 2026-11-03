@@ -2,6 +2,8 @@
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from typing import Literal
 
+BRIEF_EVIDENCE_LIMIT = 6
+
 
 class BriefQuote(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -36,7 +38,7 @@ class ExecutiveBriefItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
     label: str = Field(min_length=1, max_length=60)
     text: str = Field(min_length=1, max_length=550)
-    evidence: list[BriefQuote] = Field(min_length=1, max_length=4)
+    evidence: list[BriefQuote] = Field(min_length=1, max_length=BRIEF_EVIDENCE_LIMIT)
     quantity_representations: list[BriefQuantityRepresentation] = Field(default_factory=list, max_length=20)
     comparison_table: BriefComparisonTable | None = None
 

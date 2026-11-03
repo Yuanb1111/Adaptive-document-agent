@@ -279,10 +279,8 @@ class DocumentOrchestrator:
                 if issue.code in {'report_audit_scope_review', 'report_audit_scope_unresolved'}), None)
             if audit_checkpoint is not None:
                 issues.append(audit_checkpoint.model_copy(deep=True))
-            brief_checkpoint = next((issue for issue in reversed(resume.validation_warnings)
-                if issue.code == 'executive_brief_review_checkpoint'), None)
-            if brief_checkpoint is not None:
-                issues.append(brief_checkpoint.model_copy(deep=True))
+            from .brief_review_checkpoint import retry_checkpoints
+            issues.extend(retry_checkpoints(resume))
             from .brief_retry_feedback import retain_feedback
             if (feedback := retain_feedback(resume)) is not None:
                 issues.append(feedback)

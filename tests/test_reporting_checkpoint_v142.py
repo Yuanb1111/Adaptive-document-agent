@@ -223,7 +223,18 @@ class CheckpointClient(SchemaReplayClient):
                                        for quote in item.evidence))
             return self._response(schema, dict(pages=pages), 'synthetic_transport_from_saved_brief_pages')
         if name == 'ExecutiveBrief':
-            return self._response(schema, self.checkpoint.executive_brief.model_dump(mode='json'),
+            value = self.checkpoint.executive_brief.model_dump(mode='json')
+            catalog = payloads[-1]['evidence_blocks']
+            from adaptive_document_agent.services.source_quotes import normalize_quote
+            for item in value['items']:
+                refs = []
+                for quote in item['evidence']:
+                    matches = [ref for ref, block in catalog.items() if block['page'] == quote['page']
+                               and normalize_quote(quote['text']) in normalize_quote(block['text'])]
+                    assert matches, 'Recorded quotation must match an actual supplied block'
+                    refs.extend({'ref': ref} for ref in matches[:1] if {'ref': ref} not in refs)
+                item['evidence'] = refs
+            return self._response(schema, value,
                                   'saved_validated_artifact')
         if name == 'BriefMeaningReview':
             return self._meaning_response(payloads[0], schema)
@@ -295,10 +306,11 @@ class SyntheticReportingClient(SchemaReplayClient):
         elif name == 'VisualSelection':
             value = dict(suggestions=[])
         elif name == 'ExecutiveBrief':
+            catalog = values[-1]['evidence_blocks']
             value = dict(title='Key takeaways', items=[dict(label=f'Subject {letter}',
                 text=self.source.document.pages[position].text,
-                evidence=[dict(page=self.source.document.pages[position].page_number,
-                               text=self.source.document.pages[position].text)])
+                evidence=[dict(ref=ref) for ref, block in catalog.items()
+                          if block['page'] == self.source.document.pages[position].page_number])
                 for letter, position in [('A', 0), ('B', 2)]])
         elif name == 'BriefMeaningReview':
             value = dict(items=[dict(index=row['index'], accepted=True,

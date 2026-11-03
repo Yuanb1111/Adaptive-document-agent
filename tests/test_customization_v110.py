@@ -201,7 +201,8 @@ def test_failed_patch_meaning_does_not_erase_verified_findings_or_relax_topic_ga
              evidence=[dict(page=1,text=f'Customers {n}.')]) for n in (10,20,30)]
     values = [i.model_dump() for i in items]
     kwargs = dict(result=result, excerpts={1:result.document.pages[0].text},
-                  semantic_validator=lambda brief: {2:['Review unavailable']})
+                  semantic_validator=lambda brief: {i:['Unverified patched finding']
+                      for i, item in enumerate(brief.items) if item.text == 'Customers 30.'})
     retained, discarded = _salvage(values, {0:items[0],1:items[1]}, 'Customers', topics=[], **kwargs)
     assert retained.items == items[:2] and discarded == [2]
     retained, _ = _salvage(values, {0:items[0],1:items[1]}, 'Customers',

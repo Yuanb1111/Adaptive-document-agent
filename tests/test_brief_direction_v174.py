@@ -55,6 +55,28 @@ class Gateway:
         return self.audience
 
 
+@pytest.mark.parametrize('exact,source_accepted', [(False, True), (False, False), (True, True)])
+def test_qualified_source_stability_is_not_exact_equality_and_cannot_bypass_either_gate(exact, source_accepted):
+    source_text = ('Net assets were USD1,250 thousand in FY2022 and USD1,475 thousand in FY2023. '
+                   'Management described these balances as relatively stable.')
+    body = (source_text if not exact else 'Net assets were equal at USD1,250 thousand in FY2022 '
+            'and USD1,475 thousand in FY2023.')
+    brief = ExecutiveBrief(items=[ExecutiveBriefItem(label='Reported balances', text=body,
+        evidence=[BriefQuote(page=1, text=source_text)])])
+    comparisons = [dict(claim=body, start_value='1250', end_value='1475', direction='equal',
+        start_context=source_text, end_context=source_text)] if exact else []
+    source_review = BriefMeaningReview(items=[dict(index=0, accepted=source_accepted,
+        reason='The source attribution is supported.' if source_accepted else 'Attribution remains unsupported.',
+        numeric_comparison=exact, comparisons=comparisons)])
+    audience = BriefClaimDirectionReview(items=[dict(index=0, comparisons=[], omitted_directional_claims=[])])
+    errors = meaning_validator(Gateway(source_review, audience), result=result_for([source_text]))(brief)
+    assert bool(errors) is (exact or not source_accepted)
+    if exact:
+        assert any('direction contradicts' in e for e in errors[0])
+    elif not source_accepted:
+        assert 'Attribution remains unsupported.' in errors[0]
+
+
 @pytest.mark.parametrize(('wrong_label', 'wrong_body'), [(False, True), (True, False), (True, True)])
 def test_observed_narrowing_cannot_borrow_increase_from_the_source_arithmetic(wrong_label, wrong_body):
     brief, result, source, audience = observed_loss(wrong_label=wrong_label, wrong_body=wrong_body)

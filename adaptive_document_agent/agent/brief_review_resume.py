@@ -22,27 +22,41 @@ def resume_brief_review(gateway, result, *, cancelled=None):
             if key in seen:
                 continue
             seen.add(key)
-            if not record.get('unavailable') or not record.get('source_context'):
+            checks = record.get('checked', {})
+            complete_rejection = (isinstance(checks, dict) and not record.get('pending')
+                and not record.get('unavailable') and any(checks.values()))
+            if not (record.get('unavailable') or complete_rejection) or not record.get('source_context'):
                 continue
             if environment is None:
                 environment = context_key(None, None, result)
             if record.get('environment_key') != environment:
                 continue
             candidate = ExecutiveBrief.model_validate(record['candidate'])
+            if complete_rejection and (set(checks) != {str(i) for i in range(len(candidate.items))}
+                    or not all(isinstance(reasons, list) and all(isinstance(reason, str) for reason in reasons)
+                               for reasons in checks.values())):
+                continue
             context = record['source_context']
             if context_key(candidate, context, result) != record['context_key']:
                 continue
             topics = [(t['title'], t['pages']) for t in context.get('selected_analysis_topics', [])]
             maximum = context.get('output_limits', {}).get('maximum_findings', 7)
-            if (len(candidate.items) > maximum or validate_executive_brief(candidate, result)
+            if (not candidate.title.strip() or len(candidate.items) > maximum or validate_executive_brief(candidate, result)
                     or topic_coverage_errors(candidate, topics)):
                 return None
         except (ValueError, KeyError, TypeError):
             continue
-        report_brief_progress('resuming unfinished checks for the unchanged saved briefing')
-        errors = meaning_validator(gateway, result=result, source_context=context,
-                                   cancelled=cancelled)(candidate)
+        report_brief_progress('repairing the unchanged rejected briefing' if complete_rejection
+                              else 'resuming unfinished checks for the unchanged saved briefing')
+        validator = meaning_validator(gateway, result=result, source_context=context, cancelled=cancelled)
+        errors = validator(candidate)
         if errors:
+            if complete_rejection:
+                from .brief_rejected_resume import correct_saved_rejection
+                corrected = correct_saved_rejection(gateway, result, candidate, context, topics, errors,
+                    validator, cancelled=cancelled)
+                record_uncited_checks(result, corrected)
+                return corrected
             # Genuine semantic rejection still needs normal authoring/repair.
             # This checkpoint never grants permission to drop or accept it.
             return None

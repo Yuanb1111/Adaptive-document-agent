@@ -151,6 +151,35 @@ def test_slide_replaces_obsolete_blanket_status_but_retains_unrelated_limitation
     assert any('Margin: audit status is not established' in note for note in notes)
 
 
+@pytest.mark.parametrize('caveat', [
+    'The six-month reporting periods are unaudited.',
+    '2024-10-31 observations are unaudited; the audit status of earlier selected balance-date observations is unknown.',
+])
+def test_reviewed_measure_status_replaces_only_a_complete_obsolete_assurance_clause(caveat):
+    result, binding = fixture()
+    result.presentation_plan.themes[0].caveats = [caveat, 'Figures exclude acquisitions.']
+    slide = result.presentation_plan.slides[0]
+    index = {o.id:o for o in result.observations}
+    assert caveat in slide_context_notes(result, slide, [], index)
+    review_report_audit_scope(Gateway(binding), result)
+    notes = slide_context_notes(result, slide, [], index)
+    assert caveat not in notes
+    assert 'Figures exclude acquisitions.' in notes
+    assert any('Revenue: audited' in note for note in notes)
+    assert any('Margin: audit status is not established' in note for note in notes)
+    assert result.presentation_plan.themes[0].caveats[0] == caveat
+
+
+@pytest.mark.parametrize('text', [
+    'The six-month reporting periods are unaudited; figures exclude acquisitions.',
+    'Interim results are unaudited unless specified otherwise.',
+    'The audit status of earlier observations is unknown and estimates remain conditional.',
+])
+def test_assurance_note_replacement_cannot_remove_an_extra_analytical_limitation(text):
+    from adaptive_document_agent.services.report_audit_scope import pure_audit_caveat
+    assert not pure_audit_caveat(text)
+
+
 def test_no_qualifier_or_source_checks_requires_no_new_model_call():
     result, binding = fixture()
     result.presentation_plan.themes[0].caveats = []

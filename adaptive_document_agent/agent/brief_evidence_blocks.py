@@ -3,7 +3,7 @@ from copy import deepcopy
 import re
 
 from pydantic import BaseModel, ConfigDict, Field, create_model
-from adaptive_document_agent.models.executive_brief import BriefQuote, ExecutiveBriefItem, ExecutiveBrief
+from adaptive_document_agent.models.executive_brief import BRIEF_EVIDENCE_LIMIT, ExecutiveBriefItem, ExecutiveBrief
 
 
 class EvidenceReference(BaseModel):
@@ -11,10 +11,11 @@ class EvidenceReference(BaseModel):
     ref: str = Field(min_length=1, max_length=80)
 
 
-# Literal quotes remain accepted for compatible clients, but the prompt asks
-# for IDs. Both paths pass the same source, unit, period and condition gates.
+# Generated copy selects source IDs; it cannot transcribe or concatenate table
+# rows into a purported literal quote. Persisted/legacy literal briefs still use
+# ExecutiveBriefItem and pass the unchanged source and meaning gates.
 ReferencedBriefItem = create_model('ReferencedBriefItem', __base__=ExecutiveBriefItem,
-    evidence=(list[EvidenceReference | BriefQuote], Field(min_length=1, max_length=4)))
+    evidence=(list[EvidenceReference], Field(min_length=1, max_length=BRIEF_EVIDENCE_LIMIT)))
 ReferencedBrief = create_model('ExecutiveBrief', __base__=ExecutiveBrief,
     items=(list[ReferencedBriefItem], Field(min_length=1, max_length=7)))
 

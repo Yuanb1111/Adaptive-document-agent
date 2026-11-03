@@ -15,6 +15,6 @@ def append_owned_evidence(item, refs, options):
     evidence = [*item.evidence, *(BriefQuote.model_validate(options[ref]) for ref in refs)]
     if len({(q.page, q.text) for q in evidence}) != len(evidence):
         raise ValueError('Evidence additions cannot duplicate an existing quotation.')
-    # Enforce the original item schema, including the four-quotation ceiling.
+    # Enforce the item schema, including the bounded quotation ceiling.
     # Literal page/excerpt verification and independent meaning review follow.
     return ExecutiveBriefItem.model_validate({**item.model_dump(), 'evidence': evidence})

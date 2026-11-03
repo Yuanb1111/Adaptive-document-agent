@@ -27,7 +27,8 @@ def retain_feedback(previous):
             issues=audit.get('repair_errors', []),
             context_questions=audit.get('post_source_meaning_correction', {}).get('errors', {}),
             initial_questions=audit.get('initial_errors', {}),
-            salvage_questions=audit.get('salvage', {}).get('meaning_errors', {}),
+            salvage_questions=(audit.get('salvage', {}).get('selection_meaning_errors')
+                or audit.get('salvage', {}).get('meaning_errors', {})),
             failure=previous.failure_details.get('message', ''))
         # Older checkpoints recorded the last independent verdict separately
         # from the repair audit. Recover questions only, never its approvals.

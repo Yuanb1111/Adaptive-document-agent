@@ -231,7 +231,7 @@ def _assertions(text, columns):
     return assertions
 
 
-def audit_status_errors(item, result, *, inventory=None):
+def audit_status_errors(item, result, *, inventory=None, bindings=None, defer_scope_review=False):
     """Reject explicit date/status assertions contradicted by their bound grid.
 
     Only immediate temporal qualifiers enter this deterministic check. General
@@ -268,6 +268,15 @@ def audit_status_errors(item, result, *, inventory=None):
         if applicable and all((status[0].casefold(), key) in prose for key in applicable):
             continue
         statuses = {c['status'] for c in columns if re.sub(r'\s+', '', c['period']).upper() in keys}
+        if len(statuses) > 1 and status[0].casefold() in statuses:
+            from .brief_assurance_bindings import bound_assertion
+            if bound_assertion(item, status, period, keys, inventory, bindings):
+                continue
+            # A copy-only contract cannot infer a measure from prose. Defer
+            # this mixed scope to the mandatory fresh structured review; its
+            # default strict check below still requires exact source bindings.
+            if defer_scope_review:
+                continue
         if not keys or statuses != {status[0].casefold()}:
             errors.append(f"Audit status '{status[0]}' for '{period[0]}' lacks unambiguous "
                           'source column support; unmarked columns remain unknown, not audited or unaudited.')

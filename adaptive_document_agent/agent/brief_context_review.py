@@ -21,9 +21,18 @@ CONTEXT_INSTRUCTIONS = (
     'alternative definition, reconciliation, scenario assumption, or source-attributed explanation '
     'that materially changes this conclusion. These are reasoning relationships, never a document '
     'or industry checklist. Do not demand every source row or force equal positive/negative findings. '
+    'A concise finding is not an exhaustive account of every component in its quoted table. '
+    'Complete rows may be quoted to preserve source bindings; their presence alone does not require '
+    'enumerating them in the body. Do not reject a scoped finding merely because another component '
+    'moves in the same direction as the stated total or primary explanation. Require omitted '
+    'context only when it materially changes interpretation of the actual stated conclusion; '
+    'explain that specific effect, rather than asking for general balance or more detail. '
     'If material context is missing, accepted=false and identify its exact block refs, relevant '
     'measure/period and needed qualification in reason. A different basis is a separately labelled '
-    'counterpoint, not permission to compare incompatible quantities. A scenario must retain its '
+    'counterpoint. When two related measures move differently and the source explains their '
+    'reconciliation or excluded components, that basis is material to their stated contrast. '
+    'A generic warning that the measures have limitations does not explain their different basis. '
+    'Different labels are not permission to compare incompatible quantities. A scenario must retain its '
     'resource scope, base date and consumption assumption; a component is not its total. '
     'Do not demand a qualification already explicitly supplied by a companion finding. '
     'Broader context may establish an omission but cannot authorize an existing claim: all claim '
@@ -56,11 +65,11 @@ def split_context_review(messages, pending):
     rows = deepcopy(pending)
     for row in rows:
         row.pop('available_report_context', None)
-    rows[0]['available_report_context'] = {'current_brief': deepcopy(shared['current_brief'])}
     claim_messages = [dict(messages[0], content=messages[0]['content'].replace(
         CONTEXT_INSTRUCTIONS,
-        'The whole current brief is supplied to check companion qualifications. '
-        'Check all assigned literal claims, their conditions and audit ownership. '
+        'Check every assigned item independently against ONLY its owned quotations and source bindings. '
+        'It must carry its own factual qualifications; never borrow evidence, assumptions or status '
+        'from another item. Check all assigned literal claims, conditions and audit ownership. '
         'A separate mandatory review reads ALL shared source blocks for omitted material context; '
         'its verdict cannot authorize a claim, value or comparison. Do not infer missing sources.')),
         untrusted_document_message(json.dumps(rows, ensure_ascii=False))]

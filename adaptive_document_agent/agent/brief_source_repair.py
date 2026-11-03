@@ -2,7 +2,7 @@
 import json
 import re
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError, create_model
-from adaptive_document_agent.models.executive_brief import ExecutiveBrief
+from adaptive_document_agent.models.executive_brief import ExecutiveBrief, BRIEF_EVIDENCE_LIMIT
 from adaptive_document_agent.services.executive_brief import validate_executive_brief
 from .prompting import untrusted_document_message
 from .summary_repair_progress import source_failure_keys
@@ -12,14 +12,15 @@ class SourceTextCorrection(BaseModel):
     model_config = ConfigDict(extra='forbid')
     text: str = Field(min_length=1, max_length=550)
     remove_quantity_representation_indices: list[StrictInt] = Field(default_factory=list, max_length=20)
-    append_evidence_refs: list[str] = Field(default_factory=list, max_length=4)
+    append_evidence_refs: list[str] = Field(default_factory=list, max_length=BRIEF_EVIDENCE_LIMIT)
 
 
 def _remove_unused_magnitude_bindings(item, indices, *, native_options):
     """Execute only explicit model choices with the same displayed signed value.
 
     Python never decides a magnitude meaning, changes a source sign or silently
-    cleans metadata. A positive displayed quantity still needs its annotation.
+    cleans metadata. A magnitude of a negative source still needs its annotation;
+    a source-reported positive amount must not acquire an invented negative one.
     """
     from decimal import Decimal, InvalidOperation
     from adaptive_document_agent.models.executive_brief import brief_claim_text
@@ -42,6 +43,15 @@ def _remove_unused_magnitude_bindings(item, indices, *, native_options):
         currency, value, unit = next(iter(values))
         try:
             source = Decimal(PresentationPlanValidator._normalize_number(binding.source_value))
+            # A model may add an invalid negative-magnitude declaration to a
+            # positive amount literally reported by the source. Execute its
+            # explicit removal only when that unchanged positive quantity is
+            # itself an exact owned source-native amount. Final numeric and
+            # independent measure/period meaning checks remain mandatory.
+            positive = (currency, Decimal(value), unit)
+            if (positive in native and positive in {(c, Decimal(v), u) for c, v, u in displayed}
+                    and Decimal(value) > 0 and source == -Decimal(value)):
+                continue
             expected = (currency, source, unit)
             signed = {(c, Decimal(v), u) for c, v, u in displayed}
             # A malformed old annotation may mix a rounded display scale with
@@ -65,15 +75,18 @@ def _remove_unused_magnitude_bindings(item, indices, *, native_options):
 
 
 def correct_residual_source_errors(gateway, brief, *, result, excerpts, initial_errors, audit, cancelled=None,
-                                   evidence_catalog=None):
+                                   evidence_catalog=None, previously_source_valid=None):
     """Freeze valid findings and retain each independently source-valid correction.
 
     This accepts source bindings only. A partial result still contains the
     unchanged rejected siblings and must pass the caller's item selection,
     whole-brief and fresh independent meaning gates before it can be returned.
     """
-    before = [error for errors in initial_errors.values() for error in errors
-              if not error.startswith('Meaning review:')]
+    # Recovering a compatible literal response from the reference-only wire
+    # schema is not progress on an item's rejected source claims. Otherwise a
+    # schema diagnostic would buy an extra paid patch for unchanged bad copy.
+    before = [error for key, errors in initial_errors.items() for error in errors
+              if re.fullmatch(r'item_\d+', key) and not error.startswith('Meaning review:')]
     remaining = validate_executive_brief(brief, result, excerpts=excerpts)
     if not remaining:
         return None
@@ -91,7 +104,20 @@ def correct_residual_source_errors(gateway, brief, *, result, excerpts, initial_
     # Correcting a rounded amount to its native coefficient changes its token
     # even if one residual sign check remains. Fewer failed original items is
     # also strict progress; introducing a failure in a new item is not.
-    if not (set(failed) < original_failed or source_failure_keys(remaining) < source_failure_keys(before)):
+    def failure_keys(errors):
+        return source_failure_keys([re.sub(
+            r'^[^:\n]+: (?=unsupported numeric claims|amount changes a source|quote not found on cited page)',
+            '', error) for error in errors])
+    before_keys, remaining_keys = failure_keys(before), failure_keys(remaining)
+    # A patch can resolve every original source error but introduce a distinct
+    # sign/date error in the same editable item. It gets this existing single
+    # correction, not a whole-report regeneration or a repeated bad-claim loop.
+    replaced_errors = (bool(before_keys) and set(failed) <= original_failed
+                       and not before_keys.intersection(remaining_keys))
+    new_patch_errors = bool(previously_source_valid) and set(failed) <= set(previously_source_valid) and all(
+        brief.items[i] != previously_source_valid[i] and not validate_executive_brief(
+            ExecutiveBrief(items=[previously_source_valid[i]]), result, excerpts=excerpts) for i in failed)
+    if not (set(failed) < original_failed or remaining_keys < before_keys or replaced_errors or new_patch_errors):
         return None
     # Reuse the registered targeted-patch operation so the gateway applies the
     # caller's configured simple-task reasoning policy and output budget.
@@ -112,7 +138,10 @@ def correct_residual_source_errors(gateway, brief, *, result, excerpts, initial_
         'findings are locked. Existing quantity annotations cannot be added or rebound. If you '
         'choose an explicit signed native amount, select its obsolete positive-magnitude annotation '
         'by zero-based index in remove_quantity_representation_indices. Remove only unused existing '
-        'annotations whose SAME signed native amount remains in your text; a positive magnitude '
+        'annotations whose SAME signed native amount remains in your text. An invalid negative '
+        'declaration may also be explicitly removed when your unchanged positive amount is '
+        'itself literally reported with that same coefficient, currency and scale in the source. '
+        'Never invent a negative source value for a source-reported positive amount. A positive magnitude '
         'still needs its exact existing annotation. Use an empty removal list otherwise. '
         'Preserve supported facts and qualifications. '
         'Use the exact signed source-native amount spellings in the supplied options. A negative '
@@ -122,7 +151,7 @@ def correct_residual_source_errors(gateway, brief, *, result, excerpts, initial_
         'denominators and periods; add source-supported audit-status caveats. Do not add new '
         'facts. If a claim lacks its supporting quotation, append_evidence_refs may select exact '
         'IDs from that item\'s same-page evidence_options. Existing quotations cannot be removed '
-        'or replaced; total quotations must remain at most four. Use [] when no addition is needed. '
+        f'or replaced; total quotations must remain at most {BRIEF_EVIDENCE_LIMIT}. Use [] when no addition is needed. '
         'Do not use another item\'s references or add a new source page. If no supplied reference '
         'supports a claim, correct the claim using existing evidence. Text limit is 550 characters. Full source and independent meaning '
         'checks follow this correction; an unchanged or still invalid result fails.'},

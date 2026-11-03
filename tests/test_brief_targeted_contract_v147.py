@@ -51,6 +51,25 @@ def run(result, brief, replies, *, audit=None, reviewed=None):
     return corrected, audit['post_source_meaning_correction']
 
 
+@pytest.mark.parametrize('changed,accepted', [(False, True), (True, True), (True, False)])
+def test_changed_source_valid_copy_can_use_one_final_correction_without_shrinking_failed_indices(changed, accepted):
+    result, brief = comparison_case()
+    previous = brief.items[0].model_copy(deep=True)
+    if changed:
+        brief.items[0].text = brief.items[0].text.replace('were USD', 'amounted to USD')
+    replies, reviewed = Replies([{'item_0': {'text': GOOD}}]), []
+    def review(value):
+        reviewed.append(deepcopy(value))
+        return {} if accepted and 'unaudited' in value.items[0].text else {0: ['A qualification is missing.']}
+    corrected = correct_new_meaning_errors(replies, brief, result=result,
+        excerpts={p.page_number:p.text for p in result.document.pages}, topics=[], source_context={},
+        evidence_catalog=None, semantic_validator=review, audit={}, editable_indices={0},
+        require_progress=True, previous_failed_items={0: previous})
+    assert (corrected is not None) is (changed and accepted)
+    assert len(replies.calls) == int(changed)
+    assert len(reviewed) == 1 + int(changed)
+
+
 @pytest.mark.parametrize('prior', ['six months ended June 30, 2023', '6M2023', '1H2023'])
 def test_explicit_source_bound_prior_year_date_can_qualify_existing_comparison(prior):
     result, brief = comparison_case()

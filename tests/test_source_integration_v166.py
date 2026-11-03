@@ -127,6 +127,25 @@ def test_invalid_source_line_references_stop_before_review(reference):
     assert 'Invalid evidence range' in json.loads(result.validation_warnings[-1].message)['reason']
 
 
+def test_numbered_pages_offer_only_size_valid_literal_ranges_without_dropping_source():
+    from adaptive_document_agent.agent.source_integration_quotes import numbered_source_pages, bind_source_quotes
+    from adaptive_document_agent.agent.source_integration_review import SourceIntegrationDraft
+    text = '\n'.join(f'Condition {i}: obligations and limitations stay in the original evidence.' for i in range(90))
+    page = numbered_source_pages([dict(page=12, text=text)])[0]
+    assert [line.split(' | ', 1)[1] for line in page['lines']] == text.splitlines()
+    assert len(page['evidence_reference_options']) > 1
+    for option in page['evidence_reference_options']:
+        draft = SourceIntegrationDraft(decisions=[dict(section_id='conditions', disposition='omit',
+            reason='Representative original source.', evidence=[dict(page=12, text=option['ref'])])])
+        resolved = bind_source_quotes(draft, {12: text}).decisions[0].evidence[0].text
+        assert resolved in text and len(resolved) == option['characters']
+        assert 8 <= len(resolved) <= 1800
+    oversized = SourceIntegrationDraft(decisions=[dict(section_id='conditions', disposition='omit',
+        reason='Too broad source.', evidence=[dict(page=12, text='@lines[1-90]')])])
+    with pytest.raises(ValueError, match='has .* characters'):
+        bind_source_quotes(oversized, {12: text})
+
+
 def test_literal_quote_does_not_override_rejected_semantic_review():
     result, constraint = fixture()
     result.executive_brief = ExecutiveBrief.model_validate(payload(constraint, 12, 'Contract risk'))

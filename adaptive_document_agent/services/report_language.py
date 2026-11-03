@@ -10,10 +10,14 @@ def original_language(language):
     return language.strip().casefold() in {'original', 'source', 'original language', '原文', '原始语言'}
 
 
-def text_frames(presentation):
+def text_frames(presentation, *, exclude_summary_items=False):
     for slide in presentation.slides:
         for shape in slide.shapes:
             if shape.has_text_frame:
+                properties = shape.element.xpath('.//p:cNvPr')
+                if (exclude_summary_items and properties
+                        and properties[0].get('descr', '').startswith('ADA_SUMMARY_ITEM_V2:')):
+                    continue
                 if (shape.name in {'customization:source_section', 'customization:table_label'}
                         or shape.name.startswith('customization:source_footnote:')):
                     continue
@@ -37,8 +41,9 @@ def translatable(text):
         and not re.fullmatch(r'(?:RMB|USD|HKD|EUR|GBP|CNY|US\$|HK\$|[$€£¥])?\s*[-+()\d.,]+\s*[mbx%]?', text))
 
 
-def audience_copy(presentation):
-    values = [frame.text for frame, _, _ in text_frames(presentation)]
+def audience_copy(presentation, *, exclude_summary_items=False):
+    values = [frame.text for frame, _, _ in text_frames(presentation,
+        exclude_summary_items=exclude_summary_items)]
     values.extend(element.text or '' for element in chart_display_strings(presentation))
     return list(dict.fromkeys(display_text(value) for value in values if value.strip() and translatable(value)))
 

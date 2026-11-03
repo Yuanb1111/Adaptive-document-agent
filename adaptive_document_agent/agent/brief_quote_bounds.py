@@ -1,6 +1,7 @@
 """Split complete literal model quotations without dropping source words."""
 from copy import deepcopy
 from adaptive_document_agent.services.source_quotes import normalize_quote
+from adaptive_document_agent.models.executive_brief import BRIEF_EVIDENCE_LIMIT
 
 
 def bounded_quote_item(value, excerpts):
@@ -8,7 +9,7 @@ def bounded_quote_item(value, excerpts):
 
     The original model envelope is retained by the caller's audit. A quote is
     eligible only when the complete passage is on the exact supplied page.
-    Splitting cannot add evidence, trim a qualification or exceed four quotes.
+    Splitting cannot add evidence, trim a qualification or exceed the quote budget.
     """
     if not isinstance(value, dict) or not isinstance(value.get('evidence'), list):
         return value
@@ -37,7 +38,7 @@ def bounded_quote_item(value, excerpts):
         if any(len(part) < 8 for part in parts) or normalize_quote(' '.join(parts)) != normalize_quote(text):
             return value
         quotes.extend({'page': page, 'text': part} for part in parts)
-    if len(quotes) > 4:
+    if len(quotes) > BRIEF_EVIDENCE_LIMIT:
         return value
     result['evidence'] = quotes
     return result

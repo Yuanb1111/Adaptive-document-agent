@@ -45,6 +45,17 @@ def execute_review(gateway, *, brief, pending, messages, catalogs, errors, check
         context_work = prepared_context_review(gateway, context_messages,
             [row['index'] for row in pending], context_record, cancelled=cancelled)
         record['review_strategy'] = 'independent-claim-and-context-v215'
+    # Literal checks in the split contract depend only on the item's own
+    # evidence and immutable source environment. Whole-brief contextual
+    # sufficiency is NEVER reused when a companion changes.
+    literal_checks = capacity.setdefault('literal_source_checks', {}) if split is not None else None
+    literal_keys = {}
+    if literal_checks is not None:
+        import hashlib
+        environment = context_key(None, None, result)
+        literal_keys = {row['index']: hashlib.sha256(json.dumps(dict(environment=environment,
+            row={k:v for k,v in row.items() if k != 'available_report_context'}),
+            ensure_ascii=False, sort_keys=True).encode()).hexdigest() for row in pending}
 
     last_checkpoint = None
 
@@ -71,6 +82,9 @@ def execute_review(gateway, *, brief, pending, messages, catalogs, errors, check
                               + ', '.join(str(i + 1) for i in sorted(ids)))
         failures = validate_meaning_response(gateway, response, brief=brief, pending=rows,
             messages=request, catalogs={i: catalogs[i] for i in ids}, result=result, cancelled=cancelled)
+        if literal_checks is not None:
+            for i in ids:
+                literal_checks[literal_keys[i]] = list(failures.get(i, []))
         context_errors = finish_context()
         for i in ids:
             reasons = [*failures.get(i, []), *context_errors.get(i, [])]
@@ -86,8 +100,26 @@ def execute_review(gateway, *, brief, pending, messages, catalogs, errors, check
     initial_direction = result.stage_details_ms.get('executive_brief_direction_review', 0) if result is not None else 0
     try:
         with context_work as finish_context:
-            complete_meaning_output(gateway, messages, BriefMeaningReview, pending, record,
-                capacity, cancelled=cancelled, on_complete=complete)
+            requested = pending
+            if literal_checks is not None:
+                cached = [row['index'] for row in pending if literal_keys[row['index']] in literal_checks]
+                requested = [row for row in pending if row['index'] not in cached]
+                if cached:
+                    record['reused_literal_checks'] = cached
+            if requested:
+                request_messages = [messages[0], untrusted_document_message(json.dumps(requested, ensure_ascii=False)),
+                                    *messages[2:]]
+                complete_meaning_output(gateway, request_messages, BriefMeaningReview, requested, record,
+                    capacity, cancelled=cancelled, on_complete=complete)
+            if literal_checks is not None and cached:
+                context_errors = finish_context()
+                for i in cached:
+                    reasons = [*literal_checks[literal_keys[i]], *context_errors.get(i, [])]
+                    completed[i] = reasons
+                    checked[memo_key(brief.items[i])] = reasons
+                    if reasons:
+                        errors[i] = reasons
+                checkpoint()
     except BriefReviewUnavailable as exc:
         unavailable.update(exc.failures)
         blocked[key] = dict(unavailable)  # No repeated automatic recovery for this context.

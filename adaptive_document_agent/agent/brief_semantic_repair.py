@@ -12,6 +12,7 @@ from .brief_audit_scope import (
 )
 from .brief_period_clarification import period_clarification_options
 from .brief_meaning_contract import check_meaning_contract, displayed_quantity_contract
+from .brief_assurance_bindings import BriefAssuranceBinding, assurance_catalog
 
 
 class MeaningTextCorrection(BaseModel):
@@ -19,16 +20,24 @@ class MeaningTextCorrection(BaseModel):
     text: str = Field(min_length=1, max_length=550)
     label: str | None = Field(default=None, min_length=1, max_length=60,
         description='Correct the failed item label when its meaning contradicts evidence or corrected text; null retains it.')
+    assurance_bindings: list[BriefAssuranceBinding] = Field(default_factory=list, max_length=20)
 
 
 def correct_new_meaning_errors(gateway, brief, *, result, excerpts, topics, source_context,
-                              evidence_catalog, semantic_validator, audit, cancelled=None):
+                              evidence_catalog, semantic_validator, audit, cancelled=None,
+                              editable_indices=None, require_progress=False, previous_failed_items=None):
     from .brief_item_repair import topic_coverage_errors
-    if validate_executive_brief(brief, result, excerpts=excerpts) or topic_coverage_errors(brief, topics):
+    if (not brief.title.strip() or validate_executive_brief(brief, result, excerpts=excerpts)
+            or topic_coverage_errors(brief, topics)):
         return None
     failed = semantic_validator(brief)
     if not failed:
         return brief
+    changed_failed = bool(previous_failed_items) and any(
+        i in previous_failed_items and brief.items[i] != previous_failed_items[i] for i in failed)
+    if editable_indices is not None and (not set(failed) <= editable_indices
+            or (require_progress and not set(failed) < editable_indices and not changed_failed)):
+        return None  # No repeated unchanged failure or edit of an original lock.
     inventories = {i: source_audit_scope(brief.items[i], result) for i in failed}
     periods = {i: period_clarification_options(brief.items[i], result, inventory=inventories[i]) for i in failed}
     record = {'errors': failed, 'locked_indices': [i for i in range(len(brief.items)) if i not in failed]}
@@ -63,6 +72,11 @@ def correct_new_meaning_errors(gateway, brief, *, result, excerpts, topics, sour
         'Bind each status to its own explicit measure and period. If different cited measures have '
         'conflicting status for the same period, qualify the named supported measure within its '
         'clause, not the bare period or all later measures. '
+        'For date/status clauses, also return assurance_bindings selecting exact IDs from '
+        'source_assurance_catalog. Each claim is the literal body clause including the measure, '
+        'date and status; source_refs must cover every measure qualified by that clause. '
+        'Unknown cannot lend a status. These choices pass exact source checks and a fresh '
+        'independent semantic review; your bindings grant no approval. '
         'Do not put a status in a parenthesis after one period while explaining a different '
         'period inside it: that ambiguously qualifies the preceding period. '
         'Repeat the source-bound qualification for each affected measure, or explicitly introduce '
@@ -87,12 +101,14 @@ def correct_new_meaning_errors(gateway, brief, *, result, excerpts, topics, sour
             source_audit_scope={f'item_{i}': inventories[i] for i in failed},
             source_status_options={f'item_{i}': audit_status_options(brief.items[i], result,
                 inventory=inventories[i]) for i in failed},
+            source_assurance_catalog={f'item_{i}': assurance_catalog(inventories[i]) for i in failed},
             source_status_scope_rule=AUDIT_STATUS_SCOPE_RULE,
             period_clarifications={f'item_{i}': periods[i] for i in failed},
             errors={f'item_{i}': reasons for i, reasons in failed.items()}), ensure_ascii=False))]
     original_messages = list(messages)
     editable = list(failed)
     working = brief.model_copy(deep=True)
+    assurance_bindings = {}
     # Format repair and source-contract correction share this same two-request
     # budget. Neither creates another independent semantic-review loop.
     for attempt in range(2):
@@ -122,13 +138,14 @@ def correct_new_meaning_errors(gateway, brief, *, result, excerpts, topics, sour
             items[i].text = values[f'item_{i}']['text']
             if values[f'item_{i}'].get('label') is not None:
                 items[i].label = values[f'item_{i}']['label']
+            assurance_bindings[i] = values[f'item_{i}']['assurance_bindings']
         corrected, contract_errors, feedback, recoverable = check_meaning_contract(
             brief, working.model_copy(update={'items': items}), failed, result=result, excerpts=excerpts,
-            inventories=inventories, periods=periods)
+            inventories=inventories, periods=periods, assurance_bindings=assurance_bindings)
         other_errors = [*validate_executive_brief(corrected, result, excerpts=excerpts),
                         *topic_coverage_errors(corrected, topics),
                         *[error for i, item in enumerate(corrected.items) if i not in failed
-                          for error in audit_status_errors(item, result)]]
+                          for error in audit_status_errors(item, result, defer_scope_review=True)]]
         errors = [*contract_errors, *other_errors]
         record.update(errors_after=errors, changed=corrected != brief, status='rejected')
         if errors and not attempt and recoverable and not other_errors:
@@ -168,5 +185,6 @@ def correct_new_meaning_errors(gateway, brief, *, result, excerpts, topics, sour
                 if f'item_{i}' not in feedback and corrected.items[i] != brief.items[i]
                 and not validate_executive_brief(
                     ExecutiveBrief(items=[corrected.items[i]]), result, excerpts=excerpts)
-                and not audit_status_errors(corrected.items[i], result, inventory=inventories[i])}
+                and not audit_status_errors(corrected.items[i], result, inventory=inventories[i],
+                                            bindings=assurance_bindings.get(i))}
         return corrected if not errors and corrected != brief else None

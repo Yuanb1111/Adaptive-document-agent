@@ -71,14 +71,11 @@ def prepare_report_language(gateway, result, *, progress=None):
             presentation = presentation_for_copy(result)
             presentation._ada_translation_name_evidence = evidence
             units = summary_copy_units(result)
-            parts = {language_copy_key(text) for unit in units for _, text in unit['parts']}
             # Inventory complete introductory claims, not their native subdivisions.
-            for slide in presentation.slides:
-                for shape in slide.shapes:
-                    properties = shape.element.xpath('.//p:cNvPr')
-                    if shape.has_text_frame and properties and properties[0].get('descr', '').startswith('ADA_SUMMARY_ITEM_V2:'):
-                        parts.add(language_copy_key(shape.text))
-            strings = list(dict.fromkeys([*[s for s in audience_copy(presentation) if language_copy_key(s) not in parts],
+            # Exclude by actual bound shape role, never by shared text value:
+            # the same paragraph may also appear in an ordinary briefing box
+            # and needs its own reviewed display-copy binding there.
+            strings = list(dict.fromkeys([*audience_copy(presentation, exclude_summary_items=True),
                                          *[text for page in (result.presentation_plan.company.summary_pages
                                              if result.presentation_plan else []) for text in
                                              (page.title, *[item.label for item in page.items]) if text.strip()],

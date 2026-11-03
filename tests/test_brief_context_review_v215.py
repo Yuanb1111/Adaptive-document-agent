@@ -66,7 +66,7 @@ def test_full_context_retained_and_both_gates_run_under_gateway_concurrency(work
     claim_rows, context_rows = payload(claims), payload(broad)
     assert context_rows[0]['available_report_context']['evidence_blocks'] == context['evidence_blocks']
     assert context_rows[0]['available_report_context']['current_brief'] == brief.model_dump(mode='json')
-    assert claim_rows[0]['available_report_context'] == {'current_brief': brief.model_dump(mode='json')}
+    assert all('available_report_context' not in row for row in claim_rows)
     assert [r['item'] for r in claim_rows] == [r['item'] for r in context_rows]
     assert [r['source_audit_scope'] for r in claim_rows] == [r['source_audit_scope'] for r in context_rows]
     assert len(claims[1]['content']) < len(broad[1]['content']) / 4
@@ -86,6 +86,44 @@ def test_either_gate_rejection_blocks_approval_and_is_memoized(rejected_gate):
     count = len(llm.calls)
     assert validate(brief) == errors and len(llm.calls) == count
     assert latest(result)['semantic_approval'] is False
+
+
+def test_owned_literal_checks_survive_companion_edits_but_never_replace_whole_context_review():
+    brief, result, context = large_fixture()
+    requests, reject = [], set()
+    class Gate:
+        def generate_structured(self, messages, schema, **kwargs):
+            rows = payload(messages)
+            indices = [row['index'] for row in rows]
+            requests.append((schema.__name__, indices))
+            if schema is BriefContextReview:
+                assert rows[0]['available_report_context']['current_brief']['items']
+                return schema(items=[dict(index=i, accepted=i not in reject,
+                    reason='A removed companion supplied the required counterpoint.' if i in reject
+                           else 'The whole current brief is sufficient.') for i in indices])
+            assert all('available_report_context' not in row for row in rows)
+            if schema.__name__ == 'BriefClaimDirectionReview':
+                return schema(items=[dict(index=i, comparisons=[]) for i in indices])
+            return schema(items=[dict(index=i, accepted=True, reason='Exact owned evidence checked.',
+                numeric_comparison=False) for i in indices])
+    validate = meaning_validator(Gate(), result=result, source_context=context)
+    assert validate(brief) == {}
+    brief.items[4].label = 'Clarified source finding'
+    assert validate(brief) == {}
+    assert [ids for name, ids in requests if name == 'BriefMeaningReview'] == [list(range(5)), [4]]
+    assert [ids for name, ids in requests if name == 'BriefContextReview'] == [list(range(5))] * 2
+    # All remaining items have verified literal evidence, but removing their
+    # companion MUST still get a new full context verdict and can reject them.
+    brief.items.pop()
+    reject.add(0)
+    assert set(validate(brief)) == {0}
+    assert latest(result)['semantic_approval'] is False
+    assert [ids for name, ids in requests if name == 'BriefMeaningReview'] == [list(range(5)), [4]]
+    assert [ids for name, ids in requests if name == 'BriefContextReview'][-1] == list(range(4))
+    # Source-environment changes revoke the literal memo as well.
+    result.document.pages[0].text += '\nNew literal source context.'
+    assert set(validate(brief)) == {0}
+    assert [ids for name, ids in requests if name == 'BriefMeaningReview'][-1] == list(range(4))
 
 
 def test_context_failure_never_certifies_claims_that_already_passed():

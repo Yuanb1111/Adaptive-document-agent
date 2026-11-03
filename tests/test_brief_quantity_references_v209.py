@@ -6,6 +6,7 @@ import pytest
 
 from adaptive_document_agent.agent.brief_quantity_references import quantity_patch_fields, expand_quantity_patch
 from adaptive_document_agent.agent.executive_brief import ExecutiveBriefWriter
+from adaptive_document_agent.models.executive_brief import ExecutiveBriefItem
 from tests.test_executive_brief import gateway, result_for
 
 
@@ -26,7 +27,7 @@ def test_reference_patch_restores_native_amount_through_existing_source_gates():
 
 
 def test_exact_negative_sign_scale_and_denominator_are_not_recomputed():
-    fields, catalogs = quantity_patch_fields({'item_0': (object, ...)}, {'item_0': [
+    fields, catalogs = quantity_patch_fields({'item_0': (ExecutiveBriefItem, ...)}, {'item_0': [
         dict(amount_text='RMB -59883 thousand', literal_basis=['unit'])]},
         {'item_0': ['amount changes a source currency or magnitude']})
     before = deepcopy(catalogs)

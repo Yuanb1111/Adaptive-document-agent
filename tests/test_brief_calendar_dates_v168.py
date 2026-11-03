@@ -54,3 +54,23 @@ def test_day_first_flow_alias_preserves_duration_and_exact_closing_date():
     assert quantity_text_with_bound_dates(changed, [], [], original_periods=identities) == changed
     item.text = 'Programme fees in the six months ended 31 June 2023 (unaudited).'
     assert audit_status_errors(item, result)
+
+
+def test_iso_calendar_spelling_preserves_exact_source_date_and_year():
+    from adaptive_document_agent.services.executive_brief import validate_executive_brief
+    from adaptive_document_agent.models.executive_brief import ExecutiveBrief
+    from tests.test_executive_brief import result_for, payload
+    source = 'Cash was USD 12 million as of June 30, 2024.'
+    result = result_for([source])
+    brief = ExecutiveBrief.model_validate(payload(source))
+    brief.items[0].text = source.replace('June 30, 2024', '2024-06-30')
+    assert not validate_executive_brief(brief, result)
+    for changed in ('2024-10-31', '2030-06-30', '2024-06-29'):
+        brief.items[0].text = source.replace('June 30, 2024', changed)
+        assert validate_executive_brief(brief, result)
+
+
+@pytest.mark.parametrize('text', ['2023-02-29', '2024-13-01', '2024-06-31', 'SKU2024-06-30'])
+def test_invalid_dates_and_identifiers_do_not_gain_calendar_authority(text):
+    from adaptive_document_agent.services.calendar_claims import split_calendar_dates
+    assert split_calendar_dates(text) == (text, set())

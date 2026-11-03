@@ -6,7 +6,8 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from adaptive_document_agent.models import ValidationIssue
-from adaptive_document_agent.models.executive_brief import BriefQuote, ExecutiveBrief, ExecutiveBriefItem
+from adaptive_document_agent.models.executive_brief import (BRIEF_EVIDENCE_LIMIT, BriefQuote,
+    ExecutiveBrief, ExecutiveBriefItem)
 from adaptive_document_agent.services.executive_brief import validate_executive_brief
 from adaptive_document_agent.services.source_quotes import normalize_quote
 from adaptive_document_agent.services.llm.exceptions import LLMResponseError, LLMStructuredOutputError
@@ -153,6 +154,11 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None):
             'decision. When lines are numbered, prefer a page and set the entire evidence text field to '
             'a single reference such as "@lines[4]" or "@lines[4-6]", without appending a transcription. '
             'Each reference copies one contiguous span of original lines. '
+            'evidence_reference_options lists premeasured valid ranges and their character counts. '
+            'Select representative ranges from those options when useful; do not join them into '
+            'one oversized range. Each quote must resolve to 8–1800 characters, and each decision '
+            f'may cite at most four quotes; an addition may cite at most {BRIEF_EVIDENCE_LIMIT}. Full source lines remain available for '
+            'meaning and materiality; this directory does not select what matters. '
             'Use separate references for discontinuous text in table columns. Read surrounding context and '
             'include the source lines for each stated date, condition and qualification. You may also copy '
             'a literal substring of the page, excluding line-number prefixes. '
@@ -235,7 +241,7 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None):
                               'Preserve the original brief and accepted material. For a broad source check, '
                               'split distinct material conclusions into separate additions and bind their merged '
                               'indexes in its single decision. A decision needs at most four representative '
-                              'source quotations; each addition has its own one to four exact quotes. '
+                              f'source quotations; each addition has its own one to {BRIEF_EVIDENCE_LIMIT} exact quotes. '
                               'Each addition text has a hard 550-character limit. Use at most four additions '
                               'and seven merged items. Use the complete source evidence above.'}]
     except (ValueError, LLMResponseError) as exc:

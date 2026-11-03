@@ -15,7 +15,8 @@ def review_evidence_errors(response, *, brief, pending, catalogs, result=None, b
         item = brief.items[verdict.index]
         failed = [*binding_errors.get(verdict.index, []), *([] if verdict.accepted else [verdict.reason])]
         failed.extend(audit_status_errors(item, result, inventory=next(
-            row['source_audit_scope'] for row in pending if row['index'] == verdict.index)))
+            row['source_audit_scope'] for row in pending if row['index'] == verdict.index),
+            bindings=verdict.assurance_bindings))
         if verdict.numeric_comparison and not verdict.comparisons:
             failed.append('Every asserted numeric change needs source-bound comparison endpoints')
         for comparison in verdict.comparisons:

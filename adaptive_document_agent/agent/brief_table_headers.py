@@ -5,6 +5,7 @@ import re
 from adaptive_document_agent.extraction.numeric_parser import parse_number
 from adaptive_document_agent.services.source_quotes import normalize_quote
 from adaptive_document_agent.services.brief_table_evidence import _quoted_complete_row
+from adaptive_document_agent.models.executive_brief import BRIEF_EVIDENCE_LIMIT
 
 
 def _literal_header(table, page, excerpt):
@@ -34,14 +35,14 @@ def bind_table_headers(value, result, excerpts):
     """Add source context, never values, author copy or a validation verdict.
 
     Partial rows and competing grids cannot acquire a table's dates or units.
-    Existing quotations are immutable; the normal four-quote limit and every
+    Existing quotations are immutable; the bounded quote budget and every
     source/meaning gate still apply. Return bindings for the transport audit.
     """
     if not isinstance(value, dict) or not isinstance(value.get('evidence'), list):
         return value, []
     pages = {page.page_number: page for page in result.document.pages}
     evidence = value['evidence']
-    if not 1 <= len(evidence) < 4:
+    if not 1 <= len(evidence) < BRIEF_EVIDENCE_LIMIT:
         return value, []
     additions, bindings = [], []
     for quote in evidence:
@@ -80,7 +81,7 @@ def bind_table_headers(value, result, excerpts):
             additions.append({'page': page.page_number, 'text': header})
             bindings.append({'page': page.page_number, 'table_id': table.table_id,
                              'header_text': header, 'basis': 'complete_ordered_literal_row'})
-    if not additions or len(evidence) + len(additions) > 4:
+    if not additions or len(evidence) + len(additions) > BRIEF_EVIDENCE_LIMIT:
         return value, []
     bound = deepcopy(value)
     bound['evidence'].extend(additions)

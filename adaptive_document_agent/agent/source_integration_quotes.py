@@ -4,8 +4,25 @@ from adaptive_document_agent.services.source_quotes import normalize_quote
 
 
 def numbered_source_pages(pages):
-    return [{'page': p['page'], 'lines': [
-        f'{n} | {line}' for n, line in enumerate(p['text'].splitlines(), 1)]} for p in pages]
+    output = []
+    for page in pages:
+        lines = page['text'].splitlines(keepends=True)
+        options = []
+        start = 0
+        while start < len(lines):
+            end = start + 1
+            while end < len(lines) and len(''.join(lines[start:end + 1]).strip()) <= 1800:
+                end += 1
+            length = len(''.join(lines[start:end]).strip())
+            if 8 <= length <= 1800:
+                options.append(dict(ref=f'@lines[{start + 1}-{end}]', characters=length))
+            # An individually overlong source line remains in full below;
+            # only a literal substring, not an invalid whole-line option, fits.
+            start = end
+        output.append(dict(page=page['page'], lines=[
+            f'{n} | {line}' for n, line in enumerate(page['text'].splitlines(), 1)],
+            evidence_reference_options=options))
+    return output
 
 
 def bind_source_quotes(draft, pages):
@@ -25,7 +42,10 @@ def bind_source_quotes(draft, pages):
                 raise ValueError(f'Transcription differs from {locator} on PDF page {quote.page}. '
                                  'Choose the correct range and return the line reference alone.')
             if not 8 <= len(literal) <= 1800:
+                quote_limit = type(item).model_json_schema()['properties']['evidence']['maxItems']
                 raise ValueError(f'Evidence range {locator} on PDF page {quote.page} '
-                                 'must resolve to 8–1800 literal characters.')
+                                 f'has {len(literal)} characters; it must resolve to 8–1800 literal characters. '
+                                 'Choose a shorter evidence_reference_options span or a smaller exact range; '
+                                 f'at most {quote_limit} representative quotations fit this object.')
             quote.text = literal
     return bound

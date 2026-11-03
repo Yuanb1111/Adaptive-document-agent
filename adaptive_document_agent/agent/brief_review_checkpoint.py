@@ -18,7 +18,7 @@ class BriefReviewUnavailable(RuntimeError):
 def context_key(brief, source_context, result):
     # Reuse requires unchanged whole-brief context, source values, evidence and
     # assurance decisions, not merely an unchanged sentence or item number.
-    values = dict(contract='brief-review-checkpoint-v2', brief=brief.model_dump(mode='json') if brief is not None else None,
+    values = dict(contract='brief-review-checkpoint-v6-independent-literal-context', brief=brief.model_dump(mode='json') if brief is not None else None,
                   source_context=source_context)
     if result is not None:
         for field in ('document', 'profile', 'observations', 'analysis_results', 'presentation_topics',
@@ -54,6 +54,25 @@ def load_checks(result, key, count):
         except (ValueError, KeyError, TypeError, AttributeError):
             continue
     return {}
+
+
+def retry_checkpoints(previous, *, limit=4):
+    """Retain bounded draft lineage, not only a rejected truncated selection."""
+    retained, seen = [], set()
+    for warning in reversed(previous.validation_warnings):
+        if warning.code != 'executive_brief_review_checkpoint':
+            continue
+        try:
+            key = json.loads(warning.message)['context_key']
+        except (ValueError, KeyError, TypeError):
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        retained.append(warning.model_copy(deep=True))
+        if len(retained) == limit:
+            break
+    return list(reversed(retained))
 
 
 def save_checks(result, key, brief, checked, unavailable, source_context):

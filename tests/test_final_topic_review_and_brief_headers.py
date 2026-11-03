@@ -5,6 +5,7 @@ import pytest
 from adaptive_document_agent.agent.brief_audit_scope import audit_status_errors
 from adaptive_document_agent.agent.brief_header_repair import repair_brief_headers
 from adaptive_document_agent.agent.presentation_topic_selector import PresentationTopicSelector
+from adaptive_document_agent.models.executive_brief import BRIEF_EVIDENCE_LIMIT
 from adaptive_document_agent.agent.topic_evidence_review import (
     CoverageTopicReviewError, review_covered_topics, unreviewed_topics,
 )
@@ -54,6 +55,7 @@ def _header_case():
     page = result.document.pages[0]
     quotes = ['Programme fees . . . 1,250 1,475', 'A statement of scope.',
               'A separate historical passage.', 'Additional source discussion.']
+    quotes.extend(f'Additional context passage {i}.' for i in range(BRIEF_EVIDENCE_LIMIT - len(quotes)))
     page.text += '\n' + '\n'.join(quotes[1:])
     item.evidence = [item.evidence[0].model_copy(update={'text': q}) for q in quotes]
     item.text = 'Programme fees were USD1,250 thousand in unaudited 6M2023.'
@@ -76,7 +78,7 @@ def test_retry_does_not_reuse_an_invalid_coverage_wording_change(tmp_path):
 
 
 @pytest.mark.parametrize('choice', [0, None, 99])
-def test_header_choice_keeps_page_rows_and_four_quote_limit(choice):
+def test_header_choice_keeps_page_rows_and_quote_limit(choice):
     result, brief, excerpts = _header_case()
     item = brief.items[0]
     before = brief.model_dump()
@@ -85,7 +87,7 @@ def test_header_choice_keeps_page_rows_and_four_quote_limit(choice):
     audit = {}
     updated = repair_brief_headers(gw, brief, [0], result, excerpts, audit)
     assert bool(audit_status_errors(updated.items[0], result)) == (choice != 0)
-    assert len(updated.items[0].evidence) == 4
+    assert len(updated.items[0].evidence) == BRIEF_EVIDENCE_LIMIT
     assert updated.items[0].evidence[0] == item.evidence[0]
     assert updated.items[0].text == item.text
     if choice == 99:

@@ -8,7 +8,8 @@ from typing import Annotated, Any
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, create_model
 
 from adaptive_document_agent.models import PipelineResult, ValidationIssue
-from adaptive_document_agent.models.executive_brief import ExecutiveBrief, ExecutiveBriefItem, brief_claim_text
+from adaptive_document_agent.models.executive_brief import (BRIEF_EVIDENCE_LIMIT, ExecutiveBrief,
+    ExecutiveBriefItem, brief_claim_text)
 from adaptive_document_agent.services.executive_brief import normalized, validate_executive_brief
 from adaptive_document_agent.services.llm import LLMGateway
 from adaptive_document_agent.services.llm.exceptions import (
@@ -170,6 +171,17 @@ def _salvage(values: list[Any], locked: dict[int, ExecutiveBriefItem], title: An
         if not 2 <= len(retained) <= 7:
             return None, []
         brief = brief.model_copy(update={'items': list(retained.values())})
+        if failed:
+            # Companion facts may have made a surviving item acceptable. A
+            # verdict over the larger draft cannot approve their removal.
+            # Review the final selection once; never start another drop loop.
+            selected_errors = semantic_validator(brief)
+            if diagnostics is not None:
+                diagnostics['selection_meaning_errors'] = {
+                    str(list(retained)[p]): reasons for p, reasons in selected_errors.items()
+                    if type(p) is int and 0 <= p < len(retained)}
+            if selected_errors:
+                return None, []
     if not brief.title.strip() or validate_executive_brief(brief, result, excerpts=excerpts):
         brief = brief.model_copy(update={'title': 'Executive Summary'})
     if (validate_executive_brief(brief, result, excerpts=excerpts)
@@ -188,7 +200,7 @@ def _retain_cited_context(value, original, excerpts):
     if not isinstance(value, dict) or not isinstance(previous, dict):
         return value
     old, new = previous.get('evidence'), value.get('evidence')
-    if not isinstance(old, list) or not isinstance(new, list) or not new or len(old) > 4:
+    if not isinstance(old, list) or not isinstance(new, list) or not new or len(old) > BRIEF_EVIDENCE_LIMIT:
         return value
     if (not all(isinstance(q, dict) and set(q) == {'page', 'text'}
                 and type(q['page']) is int and isinstance(q['text'], str)
@@ -203,17 +215,20 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
                              result: PipelineResult, excerpts: dict[int, str],
                              topics: list[tuple[str, list[int]]], source_context: dict[str, Any],
                              evidence_catalog: dict | None = None, cancelled=None,
-                             semantic_validator=None) -> ExecutiveBrief:
+                             semantic_validator=None, initial_brief: ExecutiveBrief | None = None) -> ExecutiveBrief:
     """One source patch and, when newly needed, one independent meaning patch."""
     audit: dict[str, Any] = {'original': None, 'original_response': None, 'locked_indices': [],
                              'initial_errors': {}, 'patch': None, 'patch_response': None,
                              'repair_errors': [], 'discarded_indices': []}
+    if initial_brief is not None:
+        audit['retry_strategy'] = 'source-matched-rejected-draft-fresh-review'
     maximum_findings = source_context.get('output_limits', {}).get('maximum_findings', 7)
     if type(maximum_findings) is not int or not 2 <= maximum_findings <= 7:
         raise ValueError('Initial brief capacity must be between two and seven findings.')
     try:
-        brief = gateway.generate_structured(messages, ReferencedBrief if evidence_catalog is not None else ExecutiveBrief,
-                                            stage='report', allow_repair=False, cancelled=cancelled)
+        brief = (ExecutiveBrief.model_validate(initial_brief.model_dump()) if initial_brief is not None else
+            gateway.generate_structured(messages, ReferencedBrief if evidence_catalog is not None else ExecutiveBrief,
+                                        stage='report', allow_repair=False, cancelled=cancelled))
         original = brief.model_dump(mode='json')
     except LLMStructuredOutputError as exc:
         audit['original_response'] = exc.response.text
@@ -382,7 +397,10 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
          'date. A supplied period_clarification can spell out an already-bound prior-year comparison '
          'when needed to attach its qualification. Do not enumerate unrelated dates or extra table cells. '
          'Apply the source-bound status to EVERY affected measure/period: repeat it for each '
-         'comparison or explicitly state one common period/status scope covering all following '
+         'comparison. For a qualitative causal explanation without its own displayed numeric '
+         'endpoints or change amount, explicitly attribute the explanation to the source or its '
+         'speaker. Do not turn such an explanation into an unqualified new numerical comparison. '
+         'Alternatively explicitly state one common period/status scope covering all following '
          'comparisons. A status beside the first measure alone does not qualify a later implicit-date '
          'clause. Check all owned narrative evidence as well as tables before changing a literal '
          'total; do not add component figures merely because reviewer feedback preferred a breakdown. '
@@ -413,8 +431,9 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
         return brief, errors
 
     try:
-        patch = gateway.generate_structured(repair_messages, wire_patch_model, stage='report',
-                                            allow_repair=False, max_tokens=12000, cancelled=cancelled)
+        from .brief_patch_partitions import generate_patch
+        patch = generate_patch(gateway, repair_messages, wire_patch_model, repair_context, audit,
+                               cancelled=cancelled)
         # Revalidate even custom gateways; unknown keys cannot acquire an edit route.
         supplied = patch.model_dump()
         audit['quantity_reference_patch'] = supplied
@@ -507,14 +526,16 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
                     return brief
             except (ValueError, TypeError, ValidationError):
                 pass
-    if had_source_failures and semantic_validator and audit.get('patch'):
+    if semantic_validator and audit.get('patch'):
         from .brief_source_repair import correct_residual_source_errors
         from .brief_semantic_repair import correct_new_meaning_errors
         try:
             candidate = ExecutiveBrief(title=title, items=merged)
             source_corrected = correct_residual_source_errors(gateway, candidate, result=result,
                 excerpts=excerpts, initial_errors=audit['initial_errors'], audit=audit, cancelled=cancelled,
-                evidence_catalog=evidence_catalog)
+                evidence_catalog=evidence_catalog, previously_source_valid={i: ExecutiveBriefItem.model_validate(
+                    bounded_quote_item(original['items'][i], excerpts)) for i in invalid
+                    if all(error.startswith('Meaning review:') for error in invalid[i])})
             if source_corrected is not None:
                 candidate = source_corrected
                 merged = [item.model_dump(mode='json') for item in candidate.items]
@@ -528,9 +549,15 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
                 'items': [candidate.items[i] for i in source_valid]}) if source_valid else None
             if len(source_valid) != len(candidate.items):
                 audit['meaning_source_indices'] = source_valid
+            meaning_progress = had_source_failures or [item.model_dump(mode='json') for item in candidate.items] != original['items']
             corrected = correct_new_meaning_errors(gateway, meaning_candidate, result=result, excerpts=excerpts,
                 topics=topics, source_context=source_context, evidence_catalog=evidence_catalog,
-                semantic_validator=semantic_validator, audit=audit, cancelled=cancelled) if meaning_candidate else None
+                semantic_validator=semantic_validator, audit=audit, cancelled=cancelled,
+                # This final gate has freshly rechecked the CURRENT whole
+                # brief. A changed companion can revoke an earlier lock's
+                # contextual sufficiency. Only newly rejected items enter the
+                # correction schema; all currently passing items stay frozen.
+                editable_indices=None) if meaning_candidate and meaning_progress else None
             final_meaning = audit.get('post_source_meaning_correction', {})
             if 'errors_after' in final_meaning:
                 audit['pre_meaning_correction_errors'] = audit['repair_errors']
@@ -565,7 +592,8 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
         ))
         return salvaged
     _audit(result, audit, 'rejected')
-    errors = [*(error for reasons in salvage_diagnostics.get('meaning_errors', {}).values() for error in reasons),
+    errors = [*(error for reasons in salvage_diagnostics.get('selection_meaning_errors', {}).values() for error in reasons),
+              *(error for reasons in salvage_diagnostics.get('meaning_errors', {}).values() for error in reasons),
               *audit['repair_errors']]
     raise ValueError('Executive brief failed evidence checks: ' + '; '.join(dict.fromkeys(errors)))
 

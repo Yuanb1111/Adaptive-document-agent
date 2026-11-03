@@ -58,7 +58,7 @@ class UnsupportedParamsError(Exception):
 @pytest.mark.parametrize('setting', ['reduced', 'provider_default'])
 @pytest.mark.parametrize('stage,operation,response', [
     ('report', 'ExecutiveBrief', {'title': 'Findings', 'items': [{'label': 'Activity', 'text': 'Source activity.',
-        'evidence': [{'page': 1, 'text': 'Source activity.'}]}]}),
+        'evidence': [{'ref': 'p1_b1'}]}]}),
     ('report', 'ReportPlan', {'title': 'Report', 'sections': []}),
     ('presentation', 'VisualSelection', {'suggestions': []}),
 ])

@@ -6,7 +6,7 @@ import pytest
 
 from adaptive_document_agent.agent.brief_quote_bounds import bounded_quote_item
 from adaptive_document_agent.agent.executive_brief import ExecutiveBriefWriter
-from adaptive_document_agent.models.executive_brief import ExecutiveBrief
+from adaptive_document_agent.models.executive_brief import BRIEF_EVIDENCE_LIMIT, ExecutiveBrief
 from adaptive_document_agent.services.executive_brief import validate_executive_brief
 from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
 from tests.test_brief_item_repair import audited, item
@@ -42,7 +42,8 @@ def test_quote_reformatting_never_trims_or_invents_support(mutation):
     value['evidence'][0]['text'] = source
     if mutation == 'wrong_page': value['evidence'][0]['page'] = 2
     if mutation == 'missing_words': source = source.replace('conditional on delivery', 'conditional on audited delivery')
-    if mutation == 'capacity': value['evidence'] += [{'page': 1, 'text': 'Revenue was USD 12 million.'}] * 3
+    if mutation == 'capacity':
+        value['evidence'] += [{'page': 1, 'text': 'Revenue was USD 12 million.'}] * (BRIEF_EVIDENCE_LIMIT - 1)
     if mutation == 'extra_field': value['evidence'][0]['unknown'] = True
     before = copy.deepcopy(value)
     assert bounded_quote_item(value, {1: source}) == before

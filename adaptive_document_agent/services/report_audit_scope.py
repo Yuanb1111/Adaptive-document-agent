@@ -6,9 +6,13 @@ def pure_audit_caveat(text):
     """Only replace standalone assurance clauses; preserve unrelated limitations."""
     clauses = re.split(r'[;.]+\s*', text.strip().rstrip('.'))
     period = r'(?:FY\d{4}|\d{1,2}M\d{4}|\d{4}-\d{2}-\d{2})'
+    qualifiers = r'(?:(?:earlier|later|selected|annual|interim|six-month|balance-date|reporting)\s+)*'
+    category = rf'{qualifiers}(?:periods|results|observations|columns)'
+    subject = rf'(?:the\s+)?(?:{period}(?:\s+{category})?|{category})'
     return bool(clauses) and all(re.fullmatch(
-        rf'{period}(?:\s+(?:is|are))?\s+(?:unaudited|audited)|'
-        rf'{period}\s+audit status (?:is )?unknown', part.strip(), re.I)
+        rf'{subject}(?:\s+(?:is|are))?\s+(?:unaudited|audited)|'
+        rf'{subject}\s+audit status (?:is )?unknown|'
+        rf'(?:the\s+)?audit status of {subject}\s+(?:is\s+)?unknown', part.strip(), re.I)
         for part in clauses if part.strip())
 
 
