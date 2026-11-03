@@ -46,9 +46,9 @@ def test_bounded_coverage_output_keeps_reasoning_inside_existing_opt_out_policy(
     assert correction['options'] == options
     assert correction['output_token_limit'] == 2000
     assert request_reasoning_policy(settings, stage='report', operation='ExecutiveBriefPatch',
-                                    model='deepseek-flash')['options'] == options
+                                    model='deepseek-flash')['options'] == {}
     assert request_reasoning_policy(settings, stage='report', operation='ExecutiveBrief',
-                                     model='deepseek-flash')['options'] == options
+                                     model='deepseek-flash')['options'] == {}
 
 
 class UnsupportedParamsError(Exception):
@@ -73,9 +73,10 @@ def test_editorial_operations_use_actual_schema_route_and_audit(monkeypatch, set
     monkeypatch.setattr(client, '_completion', complete)
     gateway = LLMGateway(client, settings)
     gateway.generate_structured([], schema, stage=stage, allow_repair=False)
-    assert ('extra_body' in complete.call_args.kwargs) == (setting == 'reduced')
+    assert ('extra_body' in complete.call_args.kwargs) == (setting == 'reduced' and operation != 'ExecutiveBrief')
     assert gateway.usage[0]['reasoning_policy']['operation'] == operation
-    assert gateway.usage[0]['reasoning_policy']['intent'] == ('reduce' if setting == 'reduced' else 'preserve')
+    assert gateway.usage[0]['reasoning_policy']['intent'] == (
+        'reduce' if setting == 'reduced' and operation != 'ExecutiveBrief' else 'preserve')
 
 
 def raw_response(text='{"pages":[1,3]}'):

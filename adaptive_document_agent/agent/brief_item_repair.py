@@ -129,7 +129,7 @@ def _audit(result: PipelineResult, audit: dict[str, Any], outcome: str) -> None:
 
 
 def _salvage(values: list[Any], locked: dict[int, ExecutiveBriefItem], title: Any,
-             result: PipelineResult, excerpts: dict[int, str], topics, semantic_validator=None):
+             result: PipelineResult, excerpts: dict[int, str], topics, semantic_validator=None, diagnostics=None):
     """Preserve every lock; a patch can never displace it through duplication."""
     retained = {}
     seen = {normalized(brief_claim_text(item, include_label=False)) for item in locked.values()}
@@ -155,6 +155,9 @@ def _salvage(values: list[Any], locked: dict[int, ExecutiveBriefItem], title: An
     if semantic_validator:
         failed = semantic_validator(brief)
         positions = list(retained)
+        if diagnostics is not None:
+            diagnostics['meaning_errors'] = {str(positions[p]): reasons for p, reasons in failed.items()
+                if type(p) is int and 0 <= p < len(positions)}
         # The reviewer decides which candidate claims fail. A rejected patch
         # cannot erase independent, previously verified findings. Never return
         # an unreviewed patch or relax the final topic/source/count gates.
@@ -548,7 +551,9 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
             raise
         except (LLMResponseError, ValueError) as exc:
             audit['post_source_meaning_correction_error'] = str(exc)
-    salvaged, discarded = _salvage(merged, locked, title, result, excerpts, topics, semantic_validator)
+    salvage_diagnostics = audit['salvage'] = {}
+    salvaged, discarded = _salvage(merged, locked, title, result, excerpts, topics, semantic_validator,
+                                  salvage_diagnostics)
     if salvaged is not None:
         audit['discarded_indices'] = discarded
         _audit(result, audit, 'salvaged')
@@ -560,7 +565,9 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
         ))
         return salvaged
     _audit(result, audit, 'rejected')
-    raise ValueError('Executive brief failed evidence checks: ' + '; '.join(audit['repair_errors']))
+    errors = [*(error for reasons in salvage_diagnostics.get('meaning_errors', {}).values() for error in reasons),
+              *audit['repair_errors']]
+    raise ValueError('Executive brief failed evidence checks: ' + '; '.join(dict.fromkeys(errors)))
 
 
 def _unique_patch_pairs(pairs):

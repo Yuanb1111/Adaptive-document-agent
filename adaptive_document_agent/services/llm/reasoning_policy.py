@@ -25,10 +25,9 @@ _SIMPLE_OPERATIONS = frozenset({("presentation", "IntroductionPages"), ("report"
                               ("presentation", "TopicCoverageReview"),
                               ("presentation", "TopicCoverageDelta"),
                               ("presentation", "TakeawayCorrection"),
-                              ("report", "ExecutiveBriefPatch"),
                               # Editorial operations consume already validated analysis.
                               # Preserve deep reasoning in scoring, insights and topic selection.
-                              ("report", "ExecutiveBrief"), ("report", "ReportPlan"),
+                              ("report", "ReportPlan"),
                               ("presentation", "VisualSelection"),
                               ("presentation", "ReportRequirements"),
                               ("presentation", "SectionBindings"),

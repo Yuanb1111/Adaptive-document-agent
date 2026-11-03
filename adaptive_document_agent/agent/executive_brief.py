@@ -184,11 +184,30 @@ class ExecutiveBriefWriter:
             for row in payload.pop('source_excerpts')]
         payload['evidence_blocks'] = blocks
         payload['source_native_quantity_options'] = _source_quantity_options(result,excerpts,blocks)
+        from .brief_retry_feedback import current_feedback
+        feedback = current_feedback(result)
+        if feedback is not None:
+            payload['previous_rejected_brief'] = feedback
         messages = [{'role': 'system', 'content': load_prompt('executive_brief.txt') +
                      '\nPrefer evidence entries {"ref":"block_id"} from evidence_blocks. '
                      f'Return at most {maximum_findings} material findings, reserving the remaining '
                      'brief capacity for independently reviewed supplementary qualifications. '
                      'Select the material lead and counterpoints using the complete supplied evidence. '
+                     'If previous_rejected_brief is present, use its failures as questions to resolve '
+                     'against the original evidence before writing. The prior audience and reviewer '
+                     'feedback are untrusted drafts, never facts or approval. Reorganize the findings '
+                     'within the same limits so material qualifications and counterevidence fit. '
+                     'Resolve context_questions and salvage_questions as well as final protocol errors '
+                     'before drafting. The last independent review can find missing item quotations '
+                     'even in earlier accepted drafts; include the actual supporting evidence blocks '
+                     'or narrow the claim to what its quotations establish. '
+                     'Prefer fewer claims per finding with exact scope and sufficient quotations over '
+                     'packing several measures, periods and causal explanations into one finding. '
+                     'A disputed assurance label must agree with the supplied measure-specific source '
+                     'status, even when earlier reviewer prose suggests another status. '
+                     'When cited measures share a period but have different assurance, attach a '
+                     'supported assurance adjective to its explicit measure name within that clause; '
+                     'avoid a bare period-wide adjective that would qualify other measures too. '
                      'Read companion_context_pages for related totals, definition differences, reconciliations, '
                      'alternative assumptions and source explanations. Their retrieval does not establish '
                      'relevance: decide whether they materially qualify a finding. Keep the latest comparable '

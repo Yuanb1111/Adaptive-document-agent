@@ -69,10 +69,12 @@ without changing prompts, response validation, routing, credentials or privacy:
 - `SemanticCandidateScores` uses the opt-out reduction for bounded ranking of
   the supplied evidence-backed candidate set. Global context, explicit rationales,
   incomplete-decision quarantine and LLM semantic selection remain unchanged.
-- `ExecutiveBrief` and `ReportPlan` in `report`, and `VisualSelection` in
-  `presentation`, use reduced reasoning after the user chose lighter writing
-  and layout on 2026-10-09. Complete numeric, unit, quote, source and qualification
-  checks remain in place. Models, prompts and semantic selection stay unchanged.
+- `ReportPlan` in `report` and `VisualSelection` in `presentation` use reduced reasoning.
+  `ExecutiveBrief` and `ExecutiveBriefPatch` preserve provider-default reasoning.
+  These operations reconcile new source claims, assurance ownership and material
+  counterevidence during source-bound report retries. Their existing source, numerical and
+  independent meaning checks still apply. Per-operation cache identities capture
+  the changed policy without invalidating unrelated analytical caches.
 - Semantic resolution, analytical topic selection, insight generation,
   `IntroductionDraft`, unknown operations and plain text generation keep defaults
 - The existing `discovery_thinking` setting remains independent and unchanged

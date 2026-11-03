@@ -106,6 +106,7 @@ def test_other_providers_cannot_borrow_static_openai_capability(monkeypatch, pro
     ('semantic', 'SemanticResolution'), ('planner', 'AnalysisPlan'), ('insight', 'InsightList'),
     ('presentation', 'PresentationTopicSelection'), ('presentation', 'IntroductionDraft'),
     ('presentation', 'PresentationPlan'), ('presentation', 'UnknownOperation'),
+    ('report', 'ExecutiveBrief'), ('report', 'ExecutiveBriefPatch'),
     ('planner', 'IntroductionPages'), ('report', 'text'),
 ])
 def test_luna_analytical_and_unknown_operations_preserve_defaults(monkeypatch, stage, operation):

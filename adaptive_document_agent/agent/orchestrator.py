@@ -283,6 +283,9 @@ class DocumentOrchestrator:
                 if issue.code == 'executive_brief_review_checkpoint'), None)
             if brief_checkpoint is not None:
                 issues.append(brief_checkpoint.model_copy(deep=True))
+            from .brief_retry_feedback import retain_feedback
+            if (feedback := retain_feedback(resume)) is not None:
+                issues.append(feedback)
         else:
             notify("Generating analysis candidates")
             if attach_introduction is not None and attach_introduction.failed():
