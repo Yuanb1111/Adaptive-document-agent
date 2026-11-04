@@ -119,6 +119,7 @@ class DocumentOrchestrator:
         raw = bytes(file) if isinstance(file, (bytes, bytearray)) else file.read()
         digest = sha256_bytes(raw)
 
+        requested_focus = analysis_focus
         if resume is not None:
             from adaptive_document_agent.utils.pipeline_version import PIPELINE_VERSION
             if (resume.pipeline_version != PIPELINE_VERSION or resume.document.sha256 != digest
@@ -329,10 +330,12 @@ class DocumentOrchestrator:
             candidates_images = ChartExtractor().candidates(selected_pages)
         if candidates_images and self.gateway:
             vision_warning = VisionAdapter(self.gateway).unavailable_message()
-            if vision_warning:
+            if vision_warning and vision_warning not in profile.data_quality_notes:
                 profile.data_quality_notes.append(vision_warning)
         elif candidates_images:
-            profile.data_quality_notes.append("Chart candidates were detected; no vision model is configured.")
+            warning = "Chart candidates were detected; no vision model is configured."
+            if warning not in profile.data_quality_notes:
+                profile.data_quality_notes.append(warning)
 
         if attach_introduction is not None and attach_introduction.failed():
             return failed_introduction_result(attach_introduction,
@@ -370,10 +373,17 @@ class DocumentOrchestrator:
         try:
             if isinstance(editorial_gateway, IntroductionGuardedGateway):
                 editorial_gateway.check()
-            notify("Generating insights and dynamic report")
             with record_timing(timings, "reporting"):
-                reporting = self._generate_report(document, profile, index, plan, results, issues, notify, analysis_focus,
-                    gateway=editorial_gateway, output=checkpoint)
+                from .brief_reporting_resume import retained_brief_reporting
+                reporting = retained_brief_reporting(resume, checkpoint, self.gateway, requested_focus, scope)
+                retained_plan = reporting.presentation_plan if reporting is not None else None
+                if reporting is None:
+                    notify("Generating insights and dynamic report")
+                    reporting = self._generate_report(document, profile, index, plan, results, issues, notify, analysis_focus,
+                        gateway=editorial_gateway, output=checkpoint)
+                else:
+                    checkpoint = reporting
+                    notify('Retrying briefing with validated retained report selection and presentation plan')
                 details.update(reporting.stage_details_ms)
                 if reporting.pipeline_state == 'partial':
                     # Stop a failed bounded retained selection before buying
@@ -411,7 +421,7 @@ class DocumentOrchestrator:
                     len(re.findall(r"\b\d+(?:\.\d+)?%?\b", f"{ins.title} {ins.narrative}"))
                     for ins in insights
                 )
-                if (not charts or len(index.observations) < 4) and (quantitative_claim_count >= 2 or len(insights) >= 2):
+                if retained_plan is None and (not charts or len(index.observations) < 4) and (quantitative_claim_count >= 2 or len(insights) >= 2):
                     notify("Evidence unexpectedly sparse; triggering multi-strategy extraction recovery pass")
                     from adaptive_document_agent.extraction.borderless_table_extractor import BorderlessTableExtractor
                     from adaptive_document_agent.extraction.table_candidate_selector import TableCandidateSelector
@@ -483,8 +493,8 @@ class DocumentOrchestrator:
             prepared_brief = None
             deferred_brief = False
 
-            presentation_plan = None
-            if self.gateway:
+            presentation_plan = retained_plan
+            if self.gateway and retained_plan is None:
                 notify("Planning presentation narrative")
                 with record_timing(timings, "presentation_planning"):
                     planning_result = PipelineResult(
@@ -659,7 +669,9 @@ class DocumentOrchestrator:
                             )
 
             checkpoint.presentation_plan = presentation_plan
-            executive_brief = None
+            executive_brief = checkpoint.executive_brief if retained_plan is not None else None
+            if executive_brief is not None:
+                notify('Retrying source integration with the exact source-checked briefing')
             from .brief_budget_schedule import native_briefing_waits_for_budget
             from .report_audit_scope import defer_brief_for_audit
             audit_deferred = defer_brief_for_audit(checkpoint, prepared_brief)
@@ -678,13 +690,15 @@ class DocumentOrchestrator:
                     stage='report', severity='info', message=
                     'The selected draft already exceeds a slide limit. Deferred the briefing until '
                     'model-owned physical selection is stable, avoiding a disposable first briefing.'))
-            if self.gateway and not deferred_brief:
+            if self.gateway and not deferred_brief and executive_brief is None:
                 notify("Writing the evidence-bound executive briefing")
                 from .prepared_executive_brief import current_executive_brief
                 with record_timing(timings, "executive_brief"):
                     snapshot = PipelineResult(document=document, profile=profile,
                         observations=index.observations, insights=insights, analysis_results=results,
-                        presentation_plan=presentation_plan, presentation_topics=topic_selection)
+                        presentation_plan=presentation_plan, presentation_topics=topic_selection,
+                        validation_warnings=[w for w in issues if w.code in {
+                            'executive_brief_retry_feedback', 'executive_brief_review_checkpoint', 'report_audit_scope_review'}])
                     try:
                         from .brief_review_progress import brief_progress
                         with brief_progress(notify):
@@ -772,6 +786,14 @@ class DocumentOrchestrator:
                     if refresh_report_audit_scope(self.gateway, final_result, progress=notify):
                         deferred_brief = True
                     final_stage = 'presentation_budget'
+                    if (retained_plan is not None and reporting.executive_brief is not None
+                            and final_result.executive_brief == reporting.executive_brief):
+                        # Native preparation can change the plan or source coverage. The
+                        # saved pre-integration verdict must still match the final inputs.
+                        from .brief_reporting_resume import checked_integration_input
+                        if checked_integration_input(resume, final_result) is None:
+                            final_result.executive_brief = None
+                            deferred_brief = True
                     if deferred_brief:
                         from .brief_budget_schedule import complete_deferred_brief
                         complete_deferred_brief(self.gateway, final_result, progress=notify)

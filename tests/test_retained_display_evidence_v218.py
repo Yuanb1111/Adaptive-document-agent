@@ -7,6 +7,56 @@ from adaptive_document_agent.validation.presentation_plan_validator import Prese
 from tests.test_retained_analysis_v216 import _linked_result, gateway, selection, verdict
 
 
+def test_retained_selection_citation_does_not_license_an_amount_with_the_same_digits():
+    result = _linked_result()
+    response = selection(result)
+    rationale = 'The reported annual figures on page 234 provide a comparable basis.'
+    response['decisions'][0]['reason'] = rationale
+    retained.select_retained_analysis(gateway([response]), result)
+    plan = retained.compile_retained_analysis(result)
+    slide = next(s for s in plan.slides if s.slide_type == 'analysis')
+    assert slide.selection_reason == rationale and slide.source_pages == [234]
+    slide.selection_reason += ' The reported total was 234.'
+    with pytest.raises(ValueError, match=r'unsupported numeric claims.*234'):
+        PresentationPlanValidator().validate(plan, result)
+    slide.selection_reason = 'The reported total is supported on page 2023.'
+    with pytest.raises(ValueError, match='page outside its retained slide references'):
+        PresentationPlanValidator().validate(plan, result)
+
+
+def test_citations_need_every_page_in_a_range_and_preserve_other_numeric_spans():
+    from adaptive_document_agent.validation.presentation_numeric_evidence import check_selection_page_references
+    reason, errors = check_selection_page_references('See pp. 12–14, 17. The change was 17%.', {12, 13, 14, 17})
+    assert not errors and '17%' in reason
+    assert check_selection_page_references('See pp. 12–14, 17.', {12, 14, 17})[1]
+    assert check_selection_page_references('See pages 14-12.', {12, 13, 14})[1]
+    for text in ('On page 12, 17 people enrolled.', 'On pages 12, 17 people enrolled.'):
+        masked, errors = check_selection_page_references(text, {12, 17})
+        assert not errors and '17 people' in masked
+    assert check_selection_page_references('See page 1,234.', {1, 234})[1]
+
+
+@pytest.mark.parametrize('citation', [
+    'pages 12 and 99', 'pages 12, 99 and 14', 'pp. 12, 99, and 14',
+    'pages 12–14 AND 99', 'pp. 12, 14, and 1,099',
+])
+def test_closed_conjoined_citations_validate_every_page_without_licensing_later_values(citation):
+    from adaptive_document_agent.validation.presentation_numeric_evidence import check_selection_page_references
+    source = f'See {citation}. The result was 99.'
+    mask, errors = check_selection_page_references(source, {12, 13, 14, 99, 1099})
+    assert mask == 'See  . The result was 99.' and not errors
+    assert check_selection_page_references(source, {12, 13, 14})[1]
+
+
+def test_ambiguous_trailing_amounts_are_not_consumed_as_citations():
+    from adaptive_document_agent.validation.presentation_numeric_evidence import check_selection_page_references
+    for text in ('On pages 12 and 17 people enrolled.', 'On pages 12, 14, and 17 people enrolled.'):
+        masked, errors = check_selection_page_references(text, {12})
+        assert not errors and '17 people enrolled.' in masked
+    masked, errors = check_selection_page_references('On pages 12 and 14, 17 people enrolled.', {12, 14})
+    assert not errors and masked == 'On  , 17 people enrolled.'
+
+
 def _confidence_plan(score_text):
     from adaptive_document_agent.models.table import ExtractedTable
     result = _linked_result()

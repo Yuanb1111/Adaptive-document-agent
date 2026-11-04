@@ -27,12 +27,13 @@ def complete_topic_coverage(gateway, result):
         same_source_row_period_views=source_period_views(lookup))
     primary = {p for start, end in result.profile.analysis_page_ranges for p in range(start, end + 1)}
     from .topic_evidence_review import review_covered_topics, review_topic_evidence
+    validate = PresentationTopicSelector.validator_for(result)
     selected = review_topic_evidence(result.presentation_topics, lookup, result, gateway,
-        PresentationTopicSelector._validate, primary_pages=primary)
+        validate, primary_pages=primary)
     revised = review_topic_coverage(selected, result, lookup, primary,
-                                   payload, gateway, PresentationTopicSelector._validate)
+                                   payload, gateway, validate)
     result.presentation_topics = review_covered_topics(revised, lookup, result, gateway,
-        PresentationTopicSelector._validate, primary_pages=primary)
+        validate, primary_pages=primary)
     if coverage_review_pending(result):
         raise ValueError('Source coverage remains unresolved; inspect the retained review audit.')
     return result.presentation_topics

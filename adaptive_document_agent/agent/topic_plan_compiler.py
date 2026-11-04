@@ -27,7 +27,7 @@ def compile_topic_plan(result: PipelineResult) -> PresentationPlan:
     """
     lookup = reconcile_topic_source_scope(result)
     scope = {page for start, end in result.profile.analysis_page_ranges for page in range(start, end + 1)}
-    PresentationTopicSelector._validate(result.presentation_topics, lookup, primary_pages=scope)
+    PresentationTopicSelector._validate(result.presentation_topics, lookup, primary_pages=scope, result=result)
     plan = PresentationPlanRecovery().from_selected_topics(result, origin="topic_compilation")
     compiled_topics = {theme.id for theme in plan.themes}
     missing = [topic.id for topic in result.presentation_topics.topics if topic.id not in compiled_topics]

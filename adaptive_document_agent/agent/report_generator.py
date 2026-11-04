@@ -1,10 +1,37 @@
 """Markdown report rendering with facts, calculations, coverage, and citations."""
 
 from collections import defaultdict
+import json
 
 from adaptive_document_agent.document_model import display_metric_name, is_meaningful_metric, metric_key, period_sort_key
 from adaptive_document_agent.models import ChartPlan, DocumentProfile, Insight, Observation, ReportPlan, ValidationIssue
 from adaptive_document_agent.validation.coverage_validator import assess_coverage
+
+
+# These codes store review history, including superseded drafts and retry keys.
+# A structured message under any other code can be an actual source limitation.
+_REVIEW_RECEIPTS = {
+    'company_introduction_repair_audit', 'company_introduction_selection_audit',
+    'company_introduction_summary_audit', 'executive_brief_binding_audit',
+    'executive_brief_candidate_resume_skipped', 'executive_brief_comparison_correction_audit',
+    'executive_brief_direction_audit', 'executive_brief_meaning_audit',
+    'executive_brief_meaning_capacity_audit', 'executive_brief_repair_audit',
+    'executive_brief_retry_feedback', 'executive_brief_review_checkpoint',
+    'presentation_audit_scope_repaired', 'presentation_caveat_note_review',
+    'presentation_insight_recovery', 'presentation_physical_budget_review',
+    'presentation_reference_binding', 'presentation_reference_repair',
+    'presentation_retained_analysis_review', 'presentation_retained_analysis_selection',
+    'presentation_topic_coverage_review', 'presentation_topic_evidence_review',
+    'presentation_topic_reference_map', 'presentation_topic_takeaway_repair',
+    'report_audit_scope_review', 'report_localization_audit', 'source_integration_review',
+}
+
+_REVIEW_LIMITATIONS = {
+    'presentation_closing_claim_withheld': 'A closing statement was withheld because its source evidence did not support it.',
+    'presentation_topic_coverage_unresolved': 'A topic coverage review could not verify the omissions from the presentation.',
+    'report_audit_scope_unresolved': 'A report review could not verify the audit scope against the selected source evidence.',
+    'source_integration_unresolved': 'A brief review could not verify how additional source findings were incorporated.',
+}
 
 
 class ReportGenerator:
@@ -19,6 +46,7 @@ class ReportGenerator:
         charts: list[ChartPlan] | None = None,
     ) -> str:
         by_id = {insight.id: insight for insight in insights}
+        display_warnings = self._display_warnings(warnings)
         lines = [f"# {plan.title}", "", f"**Document purpose:** {profile.document_purpose}", ""]
         if profile.document_summary.strip():
             pages = ", ".join(map(str, sorted(set(profile.document_summary_pages))))
@@ -32,7 +60,7 @@ class ReportGenerator:
             if section.title == "Data Quality and Limitations":
                 for note in profile.data_quality_notes:
                     lines.append(f"- {note}")
-                for warning in self._display_warnings(warnings):
+                for warning in display_warnings:
                     lines.append(f"- [{warning.severity.upper()}] {warning.message}")
                 lines.append("")
                 continue
@@ -44,9 +72,9 @@ class ReportGenerator:
                 pages = sorted({source.page for source in insight.evidence})
                 source = f" (Sources: pages {', '.join(map(str, pages))})" if pages else ""
                 lines.extend([f"### {insight.title}", "", f"**{label}.** {insight.narrative}{source}", ""])
-        if warnings and not any(section.title == "Data Quality and Limitations" for section in plan.sections):
+        if display_warnings and not any(section.title == "Data Quality and Limitations" for section in plan.sections):
             lines.extend(["## Validation Warnings", ""])
-            lines.extend(f"- [{warning.severity.upper()}] {warning.message}" for warning in self._display_warnings(warnings))
+            lines.extend(f"- [{warning.severity.upper()}] {warning.message}" for warning in display_warnings)
             lines.append("")
         return "\n".join(lines).strip() + "\n"
 
@@ -183,6 +211,15 @@ class ReportGenerator:
                 warning = warning.model_copy(update={"message":
                     "A ratio description was reconciled with its explicit source definition. "
                     "The original wording and source evidence remain in the technical audit."})
+            elif warning.code in _REVIEW_RECEIPTS or warning.code in _REVIEW_LIMITATIONS:
+                try:
+                    record = json.loads(warning.message)
+                except ValueError:
+                    record = None  # A plain-language notice under the same code stays visible.
+                if isinstance(record, (dict, list)):
+                    if warning.code in _REVIEW_RECEIPTS:
+                        continue
+                    warning = warning.model_copy(update={'message': _REVIEW_LIMITATIONS[warning.code]})
             count = counts.get(warning.code, 0)
             if count < maximum_per_code:
                 output.append(warning)

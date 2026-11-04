@@ -27,7 +27,7 @@ def recover_audited_topics(result):
         if topic.id in retained or counts[topic.id] != 1:
             continue
         try:
-            PresentationTopicSelector._validate(PresentationTopicSelection(topics=[topic]), lookup)
+            PresentationTopicSelector._validate(PresentationTopicSelection(topics=[topic]), lookup, result=result)
         except (ValueError, KeyError, TypeError):
             continue
         retained.add(topic.id)

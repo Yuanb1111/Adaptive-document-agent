@@ -55,7 +55,7 @@ def validate_subset(draft, original, lookup, result):
     selection = canonical_budget_selection(draft, original)
     from .presentation_topic_selector import PresentationTopicSelector
     primary = {p for start,end in result.profile.analysis_page_ranges for p in range(start,end+1)}
-    PresentationTopicSelector._validate(selection,lookup,primary_pages=primary)
+    PresentationTopicSelector._validate(selection,lookup,primary_pages=primary,result=result)
     return selection
 
 
@@ -244,7 +244,7 @@ def refine_presentation_budget(gateway, result, *, progress=None):
                 primary = {p for start,end in result.profile.analysis_page_ranges for p in range(start,end+1)}
                 proposed = canonical_budget_selection(draft, original)
                 repaired = retain_valid_topics(proposed,lookup,primary,repair_snapshot,gateway,
-                                               PresentationTopicSelector._validate)
+                                               PresentationTopicSelector.validator_for(repair_snapshot))
                 if ({t.id: set(t.series_ids) for t in repaired.topics}
                         != {t.id:set(t.series_ids) for t in draft.topics}):
                     raise ValueError('Budget source correction changed selected evidence scope')
@@ -264,7 +264,7 @@ def refine_presentation_budget(gateway, result, *, progress=None):
                 before_review = len(candidate.validation_warnings)
                 try:
                     checked = review_topic_evidence(selection, lookup, candidate, gateway,
-                        PresentationTopicSelector._validate, allow_correction=False)
+                        PresentationTopicSelector.validator_for(candidate), allow_correction=False)
                 finally:
                     # The candidate is discarded on rejection. Retain the exact
                     # reviewer reasons in the bounded next proposal's feedback,

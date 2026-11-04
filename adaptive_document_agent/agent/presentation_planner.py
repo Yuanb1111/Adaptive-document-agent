@@ -36,7 +36,7 @@ class PresentationPlanner:
                 from .presentation_topic_selector import PresentationTopicSelector
                 lookup = reconcile_topic_source_scope(result)
                 checked = review_topic_evidence(result.presentation_topics, lookup, result,
-                    self.gateway, PresentationTopicSelector._validate, allow_correction=False)
+                    self.gateway, PresentationTopicSelector.validator_for(result), allow_correction=False)
                 if checked != result.presentation_topics:
                     raise ValueError('Selected topics changed source meaning; rerun topic selection and coverage review.')
             compiled = compile_topic_plan(result)

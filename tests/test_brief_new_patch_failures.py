@@ -69,3 +69,34 @@ def test_fresh_whole_review_can_reopen_only_its_newly_rejected_item(accept_final
     assert replies.calls[-1][1] == {'item_0'}
     assert audited(result)['post_source_meaning_correction']['locked_indices'] == [1]
     assert original['items'][0]['text'] == 'Revenue was 12.'
+
+
+@pytest.mark.parametrize('accept_selection', [True, False])
+def test_sibling_failure_keeps_reviewed_revision_of_reopened_lock(accept_selection):
+    source = 'Revenue was 12. Cash was 4. Costs were 8.'
+    result = result_for([source])
+    original = dict(title='Summary', items=[
+        item('Revenue was 12.', label='Revenue'), item('Cash was 4.', label='Cash'),
+        item('Costs were 8.', label='Costs')])
+    cash_patch = {**original['items'][1], 'text':'Reported cash was 4.'}
+    replies = Replies([original, {'item_1':cash_patch}, {
+        'item_0':{'text':'Reported revenue was 12.'}, 'item_1':{'text':'The cash balance was 4.'}}])
+    selections = []
+    def review(brief):
+        if len(brief.items) == 2:
+            selections.append([i.text for i in brief.items])
+            return {} if accept_selection else {0:['Selection lacks a necessary counterpoint.']}
+        errors = {1:['Cash qualification still needs review.']}
+        if brief.items[1].text != 'Cash was 4.' and brief.items[0].text != 'Reported revenue was 12.':
+            errors[0] = ['Clarify revenue in the revised briefing.']
+        return errors
+    def run():
+        return generate_with_item_repair(replies, [dict(role='system', content='Use the source.')],
+            result=result, excerpts={1:source}, topics=[], source_context={}, semantic_validator=review)
+    if accept_selection:
+        assert [i.text for i in run().items] == ['Reported revenue was 12.', 'Costs were 8.']
+    else:
+        with pytest.raises(ValueError, match='necessary counterpoint'):
+            run()
+    assert selections == [['Reported revenue was 12.', 'Costs were 8.']]
+    assert audited(result)['updated_salvage_locks'] == [0]

@@ -35,6 +35,33 @@ def test_reporting_retry_retains_untrusted_audience_and_failed_questions():
     assert current_feedback(current) is None
 
 
+def test_budgeted_failure_feedback_is_bound_to_candidate_selection():
+    from adaptive_document_agent.models import PresentationTopicSelection
+    result = sample()
+    topics = PresentationTopicSelection(topics=[])
+    result.presentation_topics = None
+    result.validation_warnings.append(ValidationIssue(code='presentation_budget_brief_failed',
+        stage='report', message=json.dumps(dict(applied_selection=topics.model_dump(),
+            brief_audits=[result.validation_warnings[-1].model_dump()]))))
+    issue = retain_feedback(result)
+    result.validation_warnings = [issue]
+    assert current_feedback(result) is None
+    result.presentation_topics = topics
+    assert current_feedback(result)['issues'] == ['Retain the non-comparability condition.']
+
+
+def test_budget_retry_uses_latest_nested_draft_lineage():
+    from adaptive_document_agent.agent.brief_review_checkpoint import retry_checkpoints
+    result = sample()
+    def checkpoint(key):
+        return ValidationIssue(code='executive_brief_review_checkpoint', stage='report',
+            message=json.dumps({'context_key': key}))
+    older, latest = checkpoint('before-budget'), checkpoint('within-budget')
+    result.validation_warnings += [older, ValidationIssue(code='presentation_budget_brief_failed',
+        stage='report', message=json.dumps({'brief_audits': [latest.model_dump()]}))]
+    assert retry_checkpoints(result) == [latest]
+
+
 @pytest.mark.parametrize('change', ['stage', 'invalid_audit'])
 def test_unrelated_or_invalid_failures_do_not_become_editorial_feedback(change):
     result = sample()

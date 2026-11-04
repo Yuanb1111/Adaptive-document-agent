@@ -16,6 +16,10 @@ MERGED_BRIEF_INSTRUCTIONS = (
     'its index is at or above original_brief_item_count. A covered decision binds an original '
     'item. resolved_source_bindings supplies the already validated addresses for each section. '
     'These addresses establish only which text to inspect, never semantic approval: independently '
+    'assess material coverage of each section against the pages enumerated in its check.pages. '
+    'Require every material qualification on those pages. When judging an omission, identify the '
+    'section page that supplies it. Other pages quoted by the original brief can explain existing '
+    'claims but do not enlarge the chosen section range or require new conclusions from those pages. '
     'check whether those exact items carry the source meaning and whether additions are material '
     'and supported. Do not reinterpret include as covered or look up addition indices in the '
     'shorter original brief. ')

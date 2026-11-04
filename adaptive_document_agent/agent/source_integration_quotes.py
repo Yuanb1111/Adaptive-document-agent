@@ -1,5 +1,8 @@
 """Resolve model-selected line ranges to continuous text on their physical PDF page."""
 import re
+from bisect import bisect_left, bisect_right
+from functools import lru_cache
+from itertools import accumulate
 from adaptive_document_agent.services.source_quotes import normalize_quote
 
 
@@ -25,12 +28,56 @@ def numbered_source_pages(pages):
     return output
 
 
+def _literal_parts(literal, slots):
+    """Use the fewest slots; prefer physical lines, then whole-word boundaries.
+
+    All parts are slices of the same selected range. Even its interior
+    whitespace is retained. Never cut a source token or discard a short tail.
+    """
+    size = len(literal)
+    if size < 8 or size > 1800 * slots:
+        return None
+    if size <= 1800:
+        return [literal]
+    if any(len(word) > 1800 for word in literal.split()):
+        return None
+    line_ends = list(accumulate(len(line) for line in literal.splitlines(keepends=True)))[:-1]
+    word_boundaries = sorted({offset for match in re.finditer(r'\s+', literal) for offset in match.span()})
+
+    @lru_cache(None)
+    def split(start, available):
+        if size - start <= 1800:
+            return (size,) if len(literal[start:].strip()) >= 8 else None
+        if available < 2:
+            return None
+        low = max(start + 8, size - (available - 1) * 1800)
+        high = min(start + 1800, size - 8)
+        for boundaries in (line_ends, word_boundaries):
+            candidates = boundaries[bisect_left(boundaries, low):bisect_right(boundaries, high)]
+            for cut in reversed(candidates):
+                if len(literal[start:cut].strip()) < 8:
+                    continue
+                tail = split(cut, available - 1)
+                if tail is not None:
+                    return (cut, *tail)
+        return None
+
+    for capacity in range((size + 1799) // 1800, slots + 1):
+        cuts = split(0, capacity)
+        if cuts is not None:
+            return [literal[start:end] for start, end in zip((0, *cuts[:-1]), cuts)]
+    return None
+
+
 def bind_source_quotes(draft, pages):
     bound = draft.model_copy(deep=True)
     for item in [*bound.decisions, *bound.additions]:
-        for quote in item.evidence:
+        evidence = []
+        quote_limit = type(item).model_json_schema()['properties']['evidence']['maxItems']
+        for position, quote in enumerate(item.evidence):
             reference = re.fullmatch(r'(@lines\[(\d{1,6})(?:-(\d{1,6}))?\])(?:\s+(.+))?', quote.text, re.S)
             if not reference:
+                evidence.append(quote)
                 continue
             locator, first, last, transcription = reference.groups()
             start, end = int(first), int(last or first)
@@ -41,11 +88,14 @@ def bind_source_quotes(draft, pages):
             if transcription and normalize_quote(transcription) != normalize_quote(literal):
                 raise ValueError(f'Transcription differs from {locator} on PDF page {quote.page}. '
                                  'Choose the correct range and return the line reference alone.')
-            if not 8 <= len(literal) <= 1800:
-                quote_limit = type(item).model_json_schema()['properties']['evidence']['maxItems']
+            # Reserve at least one quotation for every later submitted source.
+            remaining = len(item.evidence) - position - 1
+            parts = _literal_parts(literal, quote_limit - len(evidence) - remaining)
+            if parts is None:
                 raise ValueError(f'Evidence range {locator} on PDF page {quote.page} '
                                  f'has {len(literal)} characters; it must resolve to 8–1800 literal characters. '
                                  'Choose a shorter evidence_reference_options span or a smaller exact range; '
                                  f'at most {quote_limit} representative quotations fit this object.')
-            quote.text = literal
+            evidence.extend(type(quote)(page=quote.page, text=part) for part in parts)
+        item.evidence = evidence
     return bound

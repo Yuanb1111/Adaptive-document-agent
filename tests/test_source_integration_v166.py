@@ -140,10 +140,56 @@ def test_numbered_pages_offer_only_size_valid_literal_ranges_without_dropping_so
         resolved = bind_source_quotes(draft, {12: text}).decisions[0].evidence[0].text
         assert resolved in text and len(resolved) == option['characters']
         assert 8 <= len(resolved) <= 1800
-    oversized = SourceIntegrationDraft(decisions=[dict(section_id='conditions', disposition='omit',
-        reason='Too broad source.', evidence=[dict(page=12, text='@lines[1-90]')])])
-    with pytest.raises(ValueError, match='has .* characters'):
-        bind_source_quotes(oversized, {12: text})
+    whole = SourceIntegrationDraft(decisions=[dict(section_id='conditions', disposition='omit',
+        reason='Keep every selected condition.', evidence=[dict(page=12, text='@lines[1-90]')])])
+    pieces = bind_source_quotes(whole, {12: text}).decisions[0].evidence
+    assert len(pieces) == 4 and all(q.page == 12 and 8 <= len(q.text) <= 1800 for q in pieces)
+    assert ''.join(q.text for q in pieces) == text
+    assert all(q.text.endswith('\n') for q in pieces[:-1])
+    assert whole.decisions[0].evidence[0].text == '@lines[1-90]'
+
+
+def test_split_reference_preserves_siblings_when_the_minimum_split_needs_a_word_boundary():
+    from adaptive_document_agent.agent.source_integration_quotes import bind_source_quotes
+    from adaptive_document_agent.agent.source_integration_review import SourceIntegrationDraft
+    text = '\r\n'.join(['A' * 1000, 'middle ' * 200, 'B' * 1000])
+    quotes = [dict(page=1, text='@lines[1-3]'), dict(page=2, text='Original sibling.'),
+              dict(page=3, text='@lines[1]')]
+    draft = SourceIntegrationDraft(decisions=[dict(section_id='source', disposition='omit',
+        reason='Complete source choice.', evidence=quotes)])
+    resolved = bind_source_quotes(draft, {1:text, 3:'Last sibling.'}).decisions[0].evidence
+    assert [q.page for q in resolved] == [1, 1, 2, 3]
+    assert resolved[0].text + resolved[1].text == text
+    assert [q.text for q in resolved[2:]] == ['Original sibling.', 'Last sibling.']
+
+
+def test_addition_and_disposition_keep_their_own_capacity_for_identical_selected_lines():
+    from adaptive_document_agent.agent.source_integration_quotes import bind_source_quotes
+    from adaptive_document_agent.agent.source_integration_review import SourceIntegrationDraft
+    text = '\n'.join([str(i) * 1500 for i in range(6)])
+    evidence = [dict(page=1, text='@lines[1-6]')]
+    draft = SourceIntegrationDraft(decisions=[], additions=[
+        dict(label='Finding', text='The source is qualified.', evidence=evidence)])
+    pieces = bind_source_quotes(draft, {1:text}).additions[0].evidence
+    assert len(pieces) == 6 and ''.join(q.text for q in pieces) == text
+    small = SourceIntegrationDraft(decisions=[dict(section_id='scope', disposition='omit',
+        reason='Complete source choice.', evidence=evidence)])
+    with pytest.raises(ValueError, match='at most 4'):
+        bind_source_quotes(small, {1:text})
+
+
+@pytest.mark.parametrize('locator,source,error', [
+    ('@lines[1] Different transcription.', 'Original passage. ' * 120, 'Transcription differs'),
+    ('@lines[1]', 'X' * 1801, 'has 1801 characters'),
+    ('@lines[1]', 'short', 'has 5 characters'),
+])
+def test_subdivision_cannot_repair_a_wrong_transcription_or_invalid_literal(locator, source, error):
+    from adaptive_document_agent.agent.source_integration_quotes import bind_source_quotes
+    from adaptive_document_agent.agent.source_integration_review import SourceIntegrationDraft
+    draft = SourceIntegrationDraft(decisions=[dict(section_id='scope', disposition='omit',
+        reason='Complete source choice.', evidence=[dict(page=1, text=locator)])])
+    with pytest.raises(ValueError, match=error):
+        bind_source_quotes(draft, {1:source})
 
 
 def test_literal_quote_does_not_override_rejected_semantic_review():

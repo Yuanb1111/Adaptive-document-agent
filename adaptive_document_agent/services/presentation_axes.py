@@ -70,8 +70,7 @@ def label_source_dates(chart, dates, *, width=6, precision=None):
     series = chart.series[0]
     for i, (point, day, value) in enumerate(zip(series.points, dates, series.values)):
         label = point.data_label
-        label.position = (XL_DATA_LABEL_POSITION.RIGHT if width < 5 and i == 0 else
-                          XL_DATA_LABEL_POSITION.ABOVE if i % 2 == 0 else XL_DATA_LABEL_POSITION.BELOW)
+        label.position = XL_DATA_LABEL_POSITION.ABOVE if i % 2 == 0 else XL_DATA_LABEL_POSITION.BELOW
         # The plotted values are already scaled; labels use that same unit.
         amount = (f'{value:,.{precision}f}' if precision is not None
                   else f'{value:,.2f}'.rstrip('0').rstrip('.'))

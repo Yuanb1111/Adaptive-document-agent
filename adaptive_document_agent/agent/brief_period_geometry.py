@@ -28,6 +28,16 @@ def quoted_table_period_identities(item, result, inventory):
         return set()
     pages = {p.page_number: p for p in result.document.pages}
     passages = continuous_quote_passages(item.evidence, {n: p.text for n, p in pages.items()})
+    return _header_identities(pages, inventory, [(q.page, q.text) for q in passages])
+
+
+def table_flow_closings(page, table):
+    """Use the literal physical page and its independently aligned header tiers."""
+    return _header_identities({page.page_number: page},
+        [{'page': page.page_number, 'table_id': table.table_id}], [(page.page_number, page.text)])
+
+
+def _header_identities(pages, inventory, passages):
     compact = lambda text: ''.join(normalize_quote(text).split())
     identities = set()
     for entry in inventory:
@@ -45,7 +55,7 @@ def quoted_table_period_identities(item, result, inventory):
         if not words:
             continue
         lines = source_lines(page, page.text, str.strip, words=words)
-        quoted = [compact(q.text) for q in passages if q.page == page.page_number]
+        quoted = [compact(text) for number, text in passages if number == page.page_number]
         raw_headers = {compact(raw) for raw in table.raw_header_lines}
         candidates = [i for i, line in enumerate(lines) if len(_YEAR.findall(line.text)) >= 2
                       and compact(line.text) in raw_headers and line.bottom is not None

@@ -122,7 +122,7 @@ def repair_withheld_takeaways(gateway: LLMGateway, result: PipelineResult,
                     from .topic_evidence_review import review_topic_evidence
                     from .presentation_topic_selector import PresentationTopicSelector
                     reviewed = review_topic_evidence(snapshot.presentation_topics, lookup, snapshot, gateway,
-                        PresentationTopicSelector._validate, allow_correction=False)
+                        PresentationTopicSelector.validator_for(snapshot), allow_correction=False)
                     if reviewed != snapshot.presentation_topics:
                         raise ValueError('Takeaway correction failed independent source-row semantic review.')
                 candidate = compile_topic_plan(snapshot)

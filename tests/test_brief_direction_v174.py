@@ -55,6 +55,35 @@ class Gateway:
         return self.audience
 
 
+@pytest.mark.parametrize('start,end,source_basis,source_direction,audience_basis,accepted', [
+    ('-36,817', '-13,586', True, 'decrease', 'unsigned_activity', True),
+    ('36,817', '13,586', False, 'decrease', 'unsigned_activity', True),
+    ('-36,817', '0', True, 'decrease', 'unsigned_activity', True),
+    ('-36,817', '13,586', True, 'decrease', 'unsigned_activity', False),
+    ('-36,817', '-13,586', False, 'increase', 'unsigned_activity', False),
+    ('-13,586', '-36,817', True, 'increase', 'unsigned_activity', False),
+    ('-36,817', '-13,586', True, 'decrease', False, False),
+])
+def test_unsigned_activity_has_a_source_checked_sign_convention(start, end, source_basis,
+        source_direction, audience_basis, accepted):
+    source_text = f'Income tax paid (thousands): FY2023 {start}, FY2024 {end}.'
+    claim = 'The company reported lower income tax paid.'
+    item = ExecutiveBriefItem(label='Payments', text=claim, evidence=[BriefQuote(page=1, text=source_text)])
+    source = BriefMeaningReview(items=[dict(index=0, accepted=True, reason='The source records payments.',
+        numeric_comparison=True, comparisons=[dict(claim='lower income tax paid', start_value=start,
+            end_value=end, direction=source_direction, absolute_magnitude=source_basis,
+            start_ref='i0_q0', end_ref='i0_q0', start_duration_months=12, end_duration_months=12)])])
+    audience = BriefClaimDirectionReview(items=[dict(index=0, comparisons=[dict(comparison_index=0,
+        claim='lower income tax paid', predicate='lower', direction='decrease', absolute_magnitude=audience_basis,
+        reason='The audience describes the amount paid.')])])
+    errors = meaning_validator(Gateway(source, audience), result=result_for([source_text]))(
+        ExecutiveBrief(items=[item]))
+    assert (not errors) is accepted
+    if audience_basis is False:
+        assert any('lower income tax paid' in error and '-36,817' in error and '-13,586' in error
+                   for error in errors[0])
+
+
 @pytest.mark.parametrize('exact,source_accepted', [(False, True), (False, False), (True, True)])
 def test_qualified_source_stability_is_not_exact_equality_and_cannot_bypass_either_gate(exact, source_accepted):
     source_text = ('Net assets were USD1,250 thousand in FY2022 and USD1,475 thousand in FY2023. '

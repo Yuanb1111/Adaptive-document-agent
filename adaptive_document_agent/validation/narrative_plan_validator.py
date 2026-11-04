@@ -55,8 +55,11 @@ def validate_narrative_plan(plan, result, calculations=None) -> list[str]:
         for insight_id in theme.insight_ids:
             if insight_id in insights:
                 allowed_numbers.update(PresentationPlanValidator._numbers(insights[insight_id].narrative))
-        claimed = " ".join([theme.title, theme.question, theme.rationale, *theme.caveats])
-        unsupported = PresentationPlanValidator._numbers(claimed) - allowed_numbers
+        from .flow_date_notation import normalize_bound_flow_dates
+        members = [observations[i] for i in ids if i in observations]
+        claimed = set().union(*(PresentationPlanValidator._numbers(normalize_bound_flow_dates(text, members, result))
+                                for text in (theme.title, theme.question, theme.rationale, *theme.caveats)))
+        unsupported = claimed - allowed_numbers
         if unsupported:
             errors.append(f"theme {theme.id} contains unsupported numeric claims: {sorted(unsupported)}")
         signature = (frozenset(ids), frozenset(theme.insight_ids))

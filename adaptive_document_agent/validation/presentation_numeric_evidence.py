@@ -95,6 +95,36 @@ _TABLE_CONFIDENCE = re.compile(
     r"(?=\s*(?:$|[;!?)]|[.,](?!\d)))", re.I)
 
 
+_PAGE_NUMBER = r'(?:[1-9]\d{0,2}(?:,\d{3})+|[1-9]\d*)'
+_PAGE_SPAN = rf'{_PAGE_NUMBER}(?:\s*[-–—]\s*{_PAGE_NUMBER})?'
+_PAGE_LIST_END = r'(?=\s*(?:$|[);:!?]|\.(?!\d)))'
+_PAGE_AND = r'(?:,\s+|\s+)and\s+'
+_PAGE_LIST = (
+    rf'{_PAGE_SPAN}(?:(?:,\s+{_PAGE_SPAN})*{_PAGE_AND}{_PAGE_SPAN}(?:{_PAGE_LIST_END}|(?=,\s+))'
+    rf'|(?:,\s+{_PAGE_SPAN})+{_PAGE_LIST_END})')
+_PAGE_CITATION = re.compile(
+    # A single reference must not absorb the amount in "on page 12, 17 people ...".
+    # Only a plural marker and a closed list denote several comma-separated references.
+    rf'\b(?:(?:pages\s+|pp\.\s*)(?P<list>{_PAGE_LIST})|(?:pages?\s+|pp?\.\s*)(?P<span>{_PAGE_SPAN}))'
+    r'(?![\w%]|[.,]\d|[-–—]\d)', re.I)
+
+
+def check_selection_page_references(reason, cited_pages):
+    """Validate physical PDF citations in the rationale without licensing their digits elsewhere."""
+    errors = []
+
+    def mask_reference(match):
+        for span in re.split(rf'{_PAGE_AND}|,\s+', match['list'] or match['span'], flags=re.I):
+            ends = [int(n.replace(',', '')) for n in re.split(r'[-–—]', span)]
+            first, last = ends[0], ends[-1]
+            if first > last or sum(first <= page <= last for page in cited_pages) != last - first + 1:
+                errors.append(f'selection reason cites a page outside its retained slide references: {match[0]}')
+                break
+        return ' '
+
+    return _PAGE_CITATION.sub(mask_reference, reason), errors
+
+
 def check_selection_confidence(reason, observations, document):
     """Verify explicit table scores in the rationale without licensing numbers in other claims."""
     matches = list(_TABLE_CONFIDENCE.finditer(reason))

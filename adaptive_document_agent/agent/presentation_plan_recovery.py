@@ -237,6 +237,9 @@ class PresentationPlanRecovery:
             ))
 
             def supported(text: str) -> bool:
+                from adaptive_document_agent.validation.flow_date_notation import normalize_bound_flow_dates
+                text = normalize_bound_flow_dates(text,
+                    [observations[oid] for oid in referenced_ids if oid in observations], result)
                 return not (PresentationPlanValidator._numbers(text) - allowed_numbers)
 
             safe_title = topic.takeaway if topic.takeaway and supported(topic.takeaway) else topic.title
@@ -282,7 +285,7 @@ class PresentationPlanRecovery:
                                       for e in observation_by_id[oid].evidence})
                 from adaptive_document_agent.validation.topic_period_consistency import continuation_copy
                 local_question, local_reason = continuation_copy(safe_question, safe_reason,
-                    [observation_by_id[oid] for oid in sorted(local_ids) if oid in observation_by_id])
+                    [observation_by_id[oid] for oid in sorted(local_ids) if oid in observation_by_id], result=result)
                 analysis_slides.append(PresentationSlide(
                     id=f"topic_{topic.id}" if part == 0 else f"topic_{topic.id}_part_{part + 1}",
                     slide_type="analysis", title=local_question if paginate else safe_title,

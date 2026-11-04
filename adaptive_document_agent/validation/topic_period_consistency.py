@@ -14,13 +14,14 @@ from adaptive_document_agent.models import ValidationIssue
 from .direction_scope import _PERIOD, _RANGE
 
 
-def shared_question_range(topic):
+def shared_question_range(topic, *, question=None):
     """Recognise one explicit range; independently labelled ranges stay separate."""
-    matches = list(_RANGE.finditer(topic.question))
+    question = topic.question if question is None else question
+    matches = list(_RANGE.finditer(question))
     if len(matches) != 1:
         return None
     match = matches[0]
-    prefix, suffix = topic.question[:match.start()], topic.question[match.end():]
+    prefix, suffix = question[:match.start()], question[match.end():]
     # Recognition is deliberately bounded to a shared terminal comparison in
     # one question clause. A range followed by a separately reported panel, or
     # a range inside a subordinate/independent clause, must not reselect it.
@@ -35,7 +36,7 @@ def shared_question_range(topic):
                 or re.search(rf'\b{_PERIOD}\b', tail, re.I)):
             return None
     # Another endpoint belongs to a different panel, not the shared range.
-    remainder = topic.question[:match.start()] + topic.question[match.end():]
+    remainder = question[:match.start()] + question[match.end():]
     if re.search(rf'\b{_PERIOD}\b', remainder, re.I):
         return None
     normalize = lambda s: re.sub(r'\s+', '', s).upper()
@@ -75,8 +76,8 @@ def _covers(group, scope, topic):
     return all(any(_period_matches(label, item, year_end=year_end) for item in group) for label in scope)
 
 
-def topic_period_errors(topic, lookup):
-    scope = shared_question_range(topic)
+def topic_period_errors(topic, lookup, *, question=None):
+    scope = shared_question_range(topic, question=question)
     if scope is None:
         return []
     return [f"Topic {topic.id} period range {scope[0]} to {scope[1]} is not supported by selected series {sid}."
@@ -115,7 +116,9 @@ def reconcile_topic_periods(result, lookup):
             by_row[key].append(sid)
     changed = set()
     for topic in selection.topics:
-        scope = shared_question_range(topic)
+        from .flow_date_notation import normalize_bound_flow_dates
+        members = [item for sid in topic.series_ids for item in lookup.get(sid, [])]
+        scope = shared_question_range(topic, question=normalize_bound_flow_dates(topic.question, members, result))
         if scope is None or any(sid not in lookup for sid in topic.series_ids):
             continue
         replacements = {}
@@ -148,7 +151,7 @@ def reconcile_topic_periods(result, lookup):
     return changed
 
 
-def continuation_copy(question, reason, observations):
+def continuation_copy(question, reason, observations, *, result=None):
     """A continuation cannot borrow periods or numbers from another page."""
     from .presentation_plan_validator import PresentationPlanValidator
     from adaptive_document_agent.document_model import period_sort_key
@@ -156,6 +159,8 @@ def continuation_copy(question, reason, observations):
     allowed = set().union(*(PresentationPlanValidator._numbers(str(value)) for item in observations
         for value in (item.value,item.raw_value,item.period,item.entity,item.dimensions) if value is not None))
     def supported(text):
+        from .flow_date_notation import normalize_bound_flow_dates
+        text = normalize_bound_flow_dates(text, observations, result)
         year_end = bool(re.search(r'\byear[- ]end\b', text, re.I))
         periods_supported = all(any(_period_matches(re.sub(r'\s+', '', match.group()).upper(), item,
             year_end=year_end) for item in observations)

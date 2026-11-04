@@ -574,6 +574,14 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
             else:
                 for position, value in final_meaning.get('source_valid_candidates', {}).items():
                     merged[source_valid[int(position)]] = value
+            # A fresh whole-brief verdict can reopen an original lock. If
+            # another item failed, salvage must preserve the reviewed revision
+            # of that lock. The resulting selection still needs its own verdict.
+            for position in final_meaning.get('reviewed_correction_indices', []):
+                index = source_valid[position]
+                if index in locked and merged[index] != locked[index].model_dump(mode='json'):
+                    locked[index] = ExecutiveBriefItem.model_validate(merged[index])
+                    audit.setdefault('updated_salvage_locks', []).append(index)
         except LLMTransportError:
             raise
         except (LLMResponseError, ValueError) as exc:

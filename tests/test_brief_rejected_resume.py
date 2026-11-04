@@ -55,6 +55,28 @@ def test_stale_source_context_does_not_reuse_or_patch_a_saved_candidate(monkeypa
     assert not gateway.calls and not reviewed
 
 
+def test_newer_completed_draft_gets_fresh_review_before_an_older_rejection(monkeypatch):
+    result, candidate, gateway, reviewed = fixture(monkeypatch)
+    context = json.loads(result.validation_warnings[-1].message)['source_context']
+    candidate.items[0].text = 'Revenue was 12 in 2024, excluding pilot customers.'
+    save_checks(result, context_key(candidate, context, result), candidate, {0: [], 1: []}, {}, context)
+    assert resume_brief_review(gateway, result) == candidate
+    assert reviewed == [candidate] and not gateway.calls
+
+
+def test_explicit_retry_after_failed_text_only_patch_returns_to_source_repair(monkeypatch):
+    from adaptive_document_agent.agent.brief_retry_feedback import retain_feedback
+    result, _, gateway, reviewed = fixture(monkeypatch, accepted=False)
+    with pytest.raises(ValueError, match='Saved executive briefing correction failed'):
+        resume_brief_review(gateway, result)
+    result.failed_stage = 'executive_brief'
+    result.validation_warnings.append(retain_feedback(result))
+    gateway.calls.clear()
+    reviewed.clear()
+    assert resume_brief_review(gateway, result) is None
+    assert not gateway.calls and not reviewed
+
+
 def test_rejected_correction_cannot_fall_back_to_silent_full_regeneration(monkeypatch):
     result, _, gateway, reviewed = fixture(monkeypatch, accepted=False)
     with pytest.raises(ValueError, match='Saved executive briefing correction failed'):

@@ -134,10 +134,14 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None):
         pages = {p['page']: p['text'] for p in context['source_pages']}
         if any(not pages.get(p, '').strip() for c in checks.values() for p in c.pages):
             raise ValueError('Complete supplementary source text is unavailable.')
-        encoded = json.dumps({**context, 'source_pages': numbered_source_pages(context['source_pages'])},
-                             ensure_ascii=False)
+        structured_pages = {page.page_number for page in result.document.pages if page.tables}
+        def source_payload(source_pages):
+            return json.dumps({**context, 'source_pages': [
+                {**page, 'has_structured_tables': page['page'] in structured_pages}
+                for page in source_pages]}, ensure_ascii=False)
+        encoded = source_payload(numbered_source_pages(context['source_pages']))
         if len(encoded) > 120_000:
-            encoded = json.dumps(context, ensure_ascii=False)
+            encoded = source_payload(context['source_pages'])
         if len(encoded) > 120_000:
             raise ValueError('Complete supplementary evidence exceeds the bounded review context.')
         if progress:
@@ -151,7 +155,9 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None):
             'indexes. Include requires a necessary new conclusion in additions and its zero-based index in the merged '
             'brief (original items followed by additions). Omit requires an explicit reason why the evidence does not '
             'change the conclusions, not just page pressure. Quote literal evidence from the section pages for every '
-            'decision. When lines are numbered, prefer a page and set the entire evidence text field to '
+            'decision. A section disposition may cite only pages listed in that check.pages. '
+            'Pages cited by the existing brief or another check can supply context, but cannot be '
+            'submitted as evidence for this section. When lines are numbered, prefer a page and set the entire evidence text field to '
             'a single reference such as "@lines[4]" or "@lines[4-6]", without appending a transcription. '
             'Each reference copies one contiguous span of original lines. '
             'evidence_reference_options lists premeasured valid ranges and their character counts. '
@@ -162,6 +168,13 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None):
             'Use separate references for discontinuous text in table columns. Read surrounding context and '
             'include the source lines for each stated date, condition and qualification. You may also copy '
             'a literal substring of the page, excluding line-number prefixes. '
+            'Each addition needs its own evidence for its dates and units. A header quoted by another '
+            'item does not bind this item. In flattened schedules and matrices, adjacent text can come '
+            'from different columns. Use a monetary estimate only when its coefficient, unit and '
+            'measure are explicit together in narrative or verified by a structured source row and '
+            'column. A page with has_structured_tables=false has no such table binding. True only '
+            'indicates a table exists, not that any particular amount belongs to it. Otherwise state '
+            'the source-supported plan, assumption or limitation qualitatively. '
             'Preserve all original conclusions unchanged; add only material missing findings or qualifications. '
             'Keep numbers, units, audit scope, conditions and uncertainty exact. No calculations, invented facts, '
             'whole-document absence claims or boilerplate review-status text. Return at most seven merged brief items. '
@@ -237,7 +250,11 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None):
                     raise
                 correction = {key: entry[key] for key in ('draft', 'review', 'error') if key in entry}
                 messages += [untrusted_document_message(json.dumps(correction, ensure_ascii=False)),
-                             {'role': 'user', 'content': 'Correct the rejected source bindings or semantic findings. '
+                             {'role': 'user', 'content': 'Correct the specific rejected source bindings or semantic findings. '
+                              'For a locator error, repair the references for the existing conclusions. For an '
+                              'unsupported date, cite the date header in that same addition or remove the date. '
+                              'For an amount without a provable unit/column, retain the material qualitative '
+                              'finding using its literal source and omit the unbound figure. '
                               'Preserve the original brief and accepted material. For a broad source check, '
                               'split distinct material conclusions into separate additions and bind their merged '
                               'indexes in its single decision. A decision needs at most four representative '

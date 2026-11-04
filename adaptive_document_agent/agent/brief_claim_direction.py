@@ -1,5 +1,6 @@
 """Read audience predicates independently of source values and reviewer arithmetic."""
 import json
+from decimal import Decimal, InvalidOperation
 from time import perf_counter
 from typing import Literal
 
@@ -17,7 +18,10 @@ class ClaimDirection(BaseModel):
     claim: str = Field(min_length=1, max_length=550)
     predicate: str = Field(max_length=200)
     direction: Literal['increase', 'decrease', 'equal', 'not_asserted', 'uncertain']
-    absolute_magnitude: bool
+    absolute_magnitude: bool | Literal['unsigned_activity'] = Field(description=
+        'Use true for an explicit size/magnitude, false for a signed or ordinary level, '
+        'and unsigned_activity for the nonnegative amount of an activity whose source '
+        'sign convention is not stated by the audience (for example, how much was paid).')
     reason: str = Field(min_length=1, max_length=300)
 
 
@@ -62,6 +66,13 @@ _INSTRUCTIONS = (
     'the sentence lists a larger ending loss. Loss widening '
     'asserts an INCREASE in magnitude. Signed values rising or falling are different from an '
     'outflow, shortfall, deficit, distance or gap becoming larger or smaller in absolute magnitude. '
+    'When the comparison names how much was paid, spent, consumed or transferred, '
+    'and the words compare that activity amount without asserting a signed level, use '
+    'absolute_magnitude="unsigned_activity". For example, "less water discharged" and '
+    '"lower income tax paid" each assert a decrease in an amount of activity. The reader '
+    'need not know whether the source records that amount as positive or as an outflow. '
+    'Do not use unsigned_activity for a signed balance, net result, ratio or temperature. '
+    'An explicit loss magnitude or narrowing deficit still uses true. '
     'Set absolute_magnitude from the measure and wording, never by reversing a direction to match '
     'numbers. Reported BY/OF changes retain the direction of the audience predicate. For '
     'not_asserted, predicate may be empty. For other directions, predicate must be a literal '
@@ -108,6 +119,28 @@ _INSTRUCTIONS = (
 )
 
 
+def _endpoint_basis_agrees(audience_basis, comparison):
+    if audience_basis != 'unsigned_activity':
+        return audience_basis == comparison.absolute_magnitude
+    # The blind reviewer classifies the audience measure; it cannot see the
+    # source sign convention. Source ownership, periods, units, endpoint
+    # arithmetic and the independently asserted direction are still checked.
+    if comparison.measure_basis != 'flow_total':
+        return False
+    from .brief_reported_delta import _quantity
+    try:
+        start_currency, start, start_unit = _quantity(comparison.start_value)
+        end_currency, end, end_unit = _quantity(comparison.end_value)
+        start, end = Decimal(start), Decimal(end)
+        if ((start_currency, start_unit) != (end_currency, end_unit)
+                or start_unit == '%' or not start.is_finite() or not end.is_finite()):
+            return False
+        return (min(start, end) >= 0 or
+                (max(start, end) <= 0 and comparison.absolute_magnitude))
+    except (InvalidOperation, ValueError):
+        return False
+
+
 def direction_errors(response, *, requested, verdicts, correction_eligible=None):
     """Cross-check two independent semantic bindings; never infer language in Python."""
     expected = {row['index']: row for row in requested}
@@ -152,8 +185,12 @@ def direction_errors(response, *, requested, verdicts, correction_eligible=None)
                                     + repr(claim.predicate) + ' asserts ' + claim.direction
                                     + ', not ' + comparison.direction)
                     other_failure = True
-                if comparison.comparison_kind == 'endpoints' and claim.absolute_magnitude != comparison.absolute_magnitude:
-                    failures.append('Audience magnitude basis contradicts the source-bound comparison')
+                if comparison.comparison_kind == 'endpoints' and not _endpoint_basis_agrees(claim.absolute_magnitude, comparison):
+                    failures.append('Audience magnitude basis contradicts the source-bound comparison: '
+                                    f'comparison_index={claim.comparison_index}, claim={bound!r}, '
+                                    f'audience_basis={claim.absolute_magnitude!r}, '
+                                    f'source_absolute_magnitude={comparison.absolute_magnitude}, '
+                                    f'source_endpoints=({comparison.start_value!r}, {comparison.end_value!r})')
                     other_failure = True
         for missing in row.omitted_directional_claims:
             if not missing.strip() or not any(missing in expected[row.index][field] for field in ('label', 'text')):

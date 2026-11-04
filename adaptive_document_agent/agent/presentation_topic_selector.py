@@ -1,6 +1,7 @@
 """Select evidence-bound presentation questions before choosing any charts."""
 
 import json
+from functools import partial
 
 from adaptive_document_agent.models import PipelineResult, PresentationTopicSelection
 from adaptive_document_agent.services.llm import LLMGateway
@@ -141,6 +142,11 @@ class PresentationTopicSelector:
     def __init__(self, gateway: LLMGateway) -> None:
         self.gateway = gateway
 
+    @classmethod
+    def validator_for(cls, result: PipelineResult):
+        """Validate against the source document belonging to this selection."""
+        return partial(cls._validate, result=result)
+
     def select(self, result: PipelineResult) -> PresentationTopicSelection:
         from adaptive_document_agent.services.company_discovery import CompanyProfileDiscovery
         from adaptive_document_agent.utils.timing import record_timing
@@ -254,28 +260,29 @@ class PresentationTopicSelector:
         finally:
             result.presentation_topics = previous
         from .topic_selection_repair import retain_valid_topics
+        validate = self.validator_for(result)
         with record_timing(result.stage_details_ms, 'topic_validation_repair'):
-            retained = retain_valid_topics(selection, lookup, primary_pages, result, self.gateway, self._validate)
+            retained = retain_valid_topics(selection, lookup, primary_pages, result, self.gateway, validate)
         from .topic_evidence_review import review_covered_topics, review_topic_evidence
         with record_timing(result.stage_details_ms, 'topic_source_review'):
-            retained = review_topic_evidence(retained, lookup, result, self.gateway, self._validate,
+            retained = review_topic_evidence(retained, lookup, result, self.gateway, validate,
                                              primary_pages=primary_pages)
         with record_timing(result.stage_details_ms, 'topic_coverage_review'):
             retained = review_topic_coverage(retained, result, lookup, primary_pages, payload,
-                                             self.gateway, self._validate)
+                                             self.gateway, validate)
         from .topic_caveat_review import reconcile_caveats
         with record_timing(result.stage_details_ms, 'topic_caveat_review'):
             reconcile_caveats(retained, directory, result, self.gateway)
         prepare_topic_ratio_definitions(retained, lookup, result)
         with record_timing(result.stage_details_ms, 'topic_final_source_review'):
-            return review_covered_topics(retained, lookup, result, self.gateway, self._validate,
+            return review_covered_topics(retained, lookup, result, self.gateway, validate,
                                          primary_pages=primary_pages)
 
     @staticmethod
     def _validate(
         selection: PresentationTopicSelection,
         lookup: dict[str, list],
-        *, primary_pages: set[int] | None = None,
+        *, primary_pages: set[int] | None = None, result: PipelineResult | None = None,
     ) -> None:
         from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
 
@@ -348,27 +355,28 @@ class PresentationTopicSelector:
             from adaptive_document_agent.validation.source_label_numbers import without_source_label_annotations
             from adaptive_document_agent.validation.topic_source_notation import without_topic_source_notation
             members = [item for sid in topic.series_ids for item in lookup[sid]]
+            from adaptive_document_agent.validation.flow_date_notation import normalize_bound_flow_dates
             def numeric_claims(text):
+                text = normalize_bound_flow_dates(text, members, result)
                 return PresentationPlanValidator._numbers(without_topic_source_notation(
                     without_source_label_annotations(text, members), members))
-            claimed = numeric_claims(" ".join(
-                (topic.title, topic.question, topic.rationale, topic.takeaway, *topic.caveats)
-            ))
-            if claimed - allowed:
-                fields = {'title': topic.title, 'question': topic.question,
-                          'rationale': topic.rationale, 'takeaway': topic.takeaway,
-                          **{f'caveats[{i}]': text for i, text in enumerate(topic.caveats)}}
-                rejected = {name: text for name, text in fields.items()
-                            if numeric_claims(text) - allowed}
+            fields = {'title': topic.title, 'question': topic.question,
+                      'rationale': topic.rationale, 'takeaway': topic.takeaway,
+                      **{f'caveats[{i}]': text for i, text in enumerate(topic.caveats)}}
+            missing = {name: numeric_claims(text) - allowed for name, text in fields.items()}
+            unsupported = set().union(*missing.values())
+            if unsupported:
+                rejected = {name: fields[name] for name, tokens in missing.items() if tokens}
                 periods = sorted({item.period for sid in topic.series_ids for item in lookup[sid] if item.period})
-                raise ValueError(f"Topic {topic.id} contains unsupported numeric claims: {sorted(claimed - allowed)}; "
+                raise ValueError(f"Topic {topic.id} contains unsupported numeric claims: {sorted(unsupported)}; "
                                  f"rejected fields: {json.dumps(rejected, ensure_ascii=False)}; "
                                  f"selected source periods: {periods}. Correct every rejected field, including caveats; "
                                  "remove unsupported dates/values entirely from this topic. Negating them as "
                                  "'not covered' or 'unavailable' still repeats the unsupported token. "
                                  "Use a general scope qualification without that date/value, or cite only the listed source periods.")
             from adaptive_document_agent.validation.topic_period_consistency import topic_period_errors
-            period_errors = topic_period_errors(topic, lookup)
+            period_errors = topic_period_errors(topic, lookup,
+                question=normalize_bound_flow_dates(topic.question, members, result))
             if period_errors:
                 raise ValueError(" ".join(period_errors))
             selected.update(topic.series_ids)

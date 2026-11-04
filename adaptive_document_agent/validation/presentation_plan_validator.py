@@ -403,15 +403,19 @@ class PresentationPlanValidator:
                     copies = mask_finding_amounts(slide, insight_by_id, insight_observation_ids,
                                                   observation_by_id, calculations)
                 selected_observations = [observation_by_id[oid] for oid in referenced_observation_ids if oid in observation_by_id]
-                from .presentation_numeric_evidence import check_selection_confidence
+                from .presentation_numeric_evidence import check_selection_confidence, check_selection_page_references
                 reason, confidence_errors = check_selection_confidence(
                     slide.selection_reason, selected_observations, result.document)
                 errors.extend(f"slide {slide.id} {error}" for error in confidence_errors)
-                claim_text = " ".join((slide.title, copies.get(slide.message, slide.message),
-                                       slide.analytical_question, reason,
-                                       *(copies.get(b, b) for b in slide.bullets), *block_titles))
-                claim_text = without_source_label_annotations(claim_text, selected_observations)
-                claimed_numbers = self._numbers(claim_text)
+                reason, citation_errors = check_selection_page_references(
+                    reason, referenced_pages.intersection(slide.source_pages, valid_pages))
+                errors.extend(f"slide {slide.id} {error}" for error in citation_errors)
+                from .flow_date_notation import normalize_bound_flow_dates
+                fields = (slide.title, copies.get(slide.message, slide.message), slide.analytical_question,
+                          reason, *(copies.get(b, b) for b in slide.bullets), *block_titles)
+                claimed_numbers = set().union(*(self._numbers(normalize_bound_flow_dates(
+                    without_source_label_annotations(field, selected_observations), selected_observations, result))
+                    for field in fields))
                 unsupported_numbers = claimed_numbers - allowed_numbers
                 if unsupported_numbers:
                     errors.append(f"slide {slide.id} contains unsupported numeric claims: {sorted(unsupported_numbers)}")

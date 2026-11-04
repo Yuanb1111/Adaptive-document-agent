@@ -49,6 +49,8 @@ def correct_new_meaning_errors(gateway, brief, *, result, excerpts, topics, sour
         'title, quotations and order are immutable. Return {text: ..., label: ...} for each requested '
         'item; label may be null to retain it. A rejected label is editable: correct any false '
         'direction, amount or assurance in that label consistently with the source-checked body. '
+        'If a label combines distinct comparisons, replace it with a short subject label. '
+        'Keep each supported outcome and its own measure in the body. '
         'Use only quantities already displayed in that item; do not introduce more table values '
         'or normalize their presentation. displayed_quantity_contract lists the current signed '
         'coefficients, currency and unit tokens: copy amount_text for amounts you retain. '
@@ -173,7 +175,10 @@ def correct_new_meaning_errors(gateway, brief, *, result, excerpts, topics, sour
                  'shared format/contract retry, not a new briefing or a new review loop.'}]
             continue
         if not errors:
-            errors.extend(error for reasons in semantic_validator(corrected).values() for error in reasons)
+            meaning_errors = semantic_validator(corrected)
+            errors.extend(error for reasons in meaning_errors.values() for error in reasons)
+            record['reviewed_correction_indices'] = [
+                i for i in failed if i not in meaning_errors and corrected.items[i] != brief.items[i]]
         record.update(errors_after=errors, changed=corrected != brief,
                       status='rejected' if errors or corrected == brief else 'accepted')
         if errors:
