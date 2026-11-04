@@ -59,6 +59,31 @@ def test_material_source_finding_is_added_only_after_independent_review():
     assert len(gateway.calls) == 2
 
 
+def test_first_overlong_addition_keeps_sources_through_copy_and_independent_review():
+    from adaptive_document_agent.services.llm.base import LLMResponse
+    from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
+    result, constraint = fixture()
+
+    class CopyGateway(Gateway):
+        def generate_structured(self, messages, schema, **kwargs):
+            if not self.calls:
+                raw = super().generate_structured(messages, schema, **kwargs).model_dump()
+                raw['additions'][0]['text'] *= 60
+                raw['additions'][0]['label'] *= 12
+                raise LLMStructuredOutputError('Overlong addition', response=LLMResponse(text=json.dumps(raw)))
+            if schema.__name__ == 'SourceAdditionCopy':
+                self.calls.append((messages, schema))
+                return schema(addition_0_label='Contract risk', addition_0_text=constraint)
+            return super().generate_structured(messages, schema, **kwargs)
+
+    gateway = CopyGateway(constraint)
+    merged = review_supplementary_sources(gateway, result, result.executive_brief)
+    assert [s.__name__ for _, s in gateway.calls] == [
+        'SourceIntegrationDraft', 'SourceAdditionCopy', 'SourceIntegrationReview']
+    assert resolved_source_check_ids(result, merged) == {'contracts'}
+    assert merged.items[1].evidence[0].text == constraint
+
+
 @pytest.mark.parametrize('same_context', [False, True])
 def test_retry_revalidates_proposal_and_requires_fresh_section_verdicts(same_context):
     saved, constraint = fixture()

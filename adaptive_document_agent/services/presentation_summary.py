@@ -1,6 +1,6 @@
 """Paginate selected summary findings without changing their meaning or priority."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import re
 from typing import Any
 
@@ -35,7 +35,7 @@ def _rows(items: list[BriefItem], width: float, columns: int, *, body_pt: int = 
             _Cell(item, .65 + sum(widths[:column]) + column * .30, cell_width,
                   _heading_height(item.title, cell_width),
                   _copy_height(item.text, cell_width, body_pt) + (.03 if compact else .08),
-                  .04 if compact else .06)
+                  (.04 if item.title else .01) if compact else .06)
             for column, (item, cell_width) in enumerate(zip(group, widths))
         ])
     return rows
@@ -103,7 +103,7 @@ def _balanced_single_column(items, width, capacity):
 
 
 def render_complete_summary(presentation: Any, title: str, items: list[BriefItem], *,
-                            notes: str = "", single_column: bool = False) -> list[Any]:
+                            notes: str = "", single_column: bool = False, fit_page_budget: bool = False) -> list[Any]:
     """Keep every selected finding visible at the template's readable text sizes.
 
     Layout depends only on copy length and available space. Five concise findings
@@ -121,7 +121,7 @@ def render_complete_summary(presentation: Any, title: str, items: list[BriefItem
         authored = '\n\nOriginal finding order:\n' + '\n'.join(item.title for item in items)
         plain = [item for item in items if not item.table]
         slides = render_complete_summary(presentation, title, plain, notes=notes + authored,
-                                         single_column=single_column) if plain else []
+                                         single_column=single_column, fit_page_budget=fit_page_budget) if plain else []
         for item in items:
             if item.table:
                 slides.extend(render_comparison(presentation, title, item, notes=notes + authored))
@@ -133,6 +133,8 @@ def render_complete_summary(presentation: Any, title: str, items: list[BriefItem
     slides = []
     width = presentation.slide_width.inches - 1.3
     balanced = None
+    planned_capacity = None
+    use_title_space = False
     while remaining or not slides:
         slide, top = _base(presentation, title + (" (continued)" if slides else ""), "")
         bottom = presentation.slide_height.inches - 1.02
@@ -144,8 +146,31 @@ def render_complete_summary(presentation: Any, title: str, items: list[BriefItem
         # readable sizes from largest to smallest and use one shared column
         # split across rows; never shorten evidence or its qualifications.
         if single_column:
-            if balanced is None:
+            # Title-only pages normally reserve a subtitle band. Use that
+            # space only when it saves a whole page of complete findings.
+            header_bottom = max((shape.top.inches + shape.height.inches for shape in slide.placeholders
+                                 if shape.has_text_frame and shape.text.strip()), default=top)
+            tight_top = min(top, header_bottom + .10)
+            if fit_page_budget and not slides:
                 balanced = _balanced_single_column(remaining, width, capacity)
+                tight = _balanced_single_column(remaining, width, bottom - tight_top)
+                if tight and (not balanced or len(tight[1]) < len(balanced[1])):
+                    balanced, use_title_space = tight, True
+                # Keep headings on separate lines unless a run-in label saves
+                # a complete page. Retain the exact heading and reviewed body
+                # together in one editable, independently localized paragraph.
+                if balanced is None or len(balanced[1]) > 1:
+                    run_in = [replace(item, title="", text=" — ".join(filter(None, (item.title, item.text))))
+                              for item in remaining]
+                    compact = _balanced_single_column(run_in, width, bottom - tight_top)
+                    if compact and (not balanced or len(compact[1]) < len(balanced[1])):
+                        remaining, balanced, use_title_space = run_in, compact, True
+            if use_title_space:
+                top = tight_top
+                capacity = bottom - top
+            if balanced is None or (planned_capacity is not None and planned_capacity != capacity):
+                balanced = _balanced_single_column(remaining, width, capacity)
+            planned_capacity = capacity
             if balanced and balanced[1]:
                 body_pt, counts = balanced
                 selected_count = counts.pop(0)
@@ -180,7 +205,7 @@ def render_complete_summary(presentation: Any, title: str, items: list[BriefItem
                                     size=HEADING_PT, bold=True, color=FOURIER_PURPLE)
                     heading.name = "brief:heading"
                     heading.text_frame.paragraphs[0].line_spacing = Pt(HEADING_PT * LINE_HEIGHT_FACTOR)
-                body = _text(slide, cell.item.text, cell.left, y + cell.heading_height + .04,
+                body = _text(slide, cell.item.text, cell.left, y + cell.heading_height + min(.04, cell.padding),
                              cell.width, cell.body_height, size=body_pt, color=FOURIER_DARK)
                 body.name = "brief:body"
                 # Match _copy_height's point-based budget. A proportional value

@@ -72,6 +72,36 @@ def test_summary_serializes_exact_point_leading_for_every_text_size(case):
     assert sizes == {16, 18}
 
 
+def test_budgeted_summary_uses_empty_subtitle_space_and_preserves_all_visible_copy():
+    items = [BriefItem(f"Finding {i}", COPY * 3, [i + 1]) for i in range(3)]
+    deck = blank_deck()
+    slides = render_complete_summary(deck, "Selected findings", items, single_column=True, fit_page_budget=True)
+    assert len(slides) == 1
+    bodies = [s for s in slides[0].shapes if s.name == 'brief:body']
+    assert [body.text for body in bodies] == [item.text for item in items]
+    assert all(body.text_frame.paragraphs[0].font.size.pt >= 14 for body in bodies)
+    assert bodies[-1].top.inches + bodies[-1].height.inches <= deck.slide_height.inches - 1.02 + .001
+
+
+def test_budgeted_run_in_labels_keep_qualified_findings_and_page_references():
+    items = [BriefItem(f"Finding {i}", (COPY * 4)[:size].rstrip() + " (estimated).", [i + 2])
+             for i, size in enumerate((425, 478, 488, 293, 535, 501, 467))]
+    deck = blank_deck()
+    slides = render_complete_summary(deck, "Conclusion", items, single_column=True, fit_page_budget=True)
+    assert len(slides) == 2
+    from adaptive_document_agent.services.pptx_export import _source_footer
+    offset = 0
+    for slide in slides:
+        bodies = [shape for shape in slide.shapes if shape.name == "brief:body"]
+        group = items[offset:offset + len(bodies)]
+        assert [body.text for body in bodies] == [f"{item.title} — {item.text}" for item in group]
+        assert all(body.text_frame.paragraphs[0].font.size.pt >= 14 for body in bodies)
+        footer = _source_footer([page for item in group for page in item.pages])
+        assert footer in [shape.text for shape in slide.shapes if shape.has_text_frame]
+        offset += len(bodies)
+    assert offset == len(items)
+
+
 def test_old_proportional_spacing_build_cache_is_not_reused(monkeypatch):
     from adaptive_document_agent.services.pptx_export import _resolve_template_path
     from adaptive_document_agent.utils.pipeline_version import PIPELINE_VERSION

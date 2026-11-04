@@ -35,6 +35,11 @@ def check_final_presentation_layout(result):
             for page in result.presentation_plan.company.summary_pages]
         verify_summary_export(deck, result)
         require_exported_budgets(deck, result)
+        latest_language = next((w for w in reversed(result.validation_warnings)
+                                if w.code == 'report_localization_audit'), None)
+        if latest_language and latest_language.severity == 'warning':
+            from adaptive_document_agent.services.presentation_language import require_consistent_language
+            require_consistent_language(deck, result)
         record['status'] = 'passed'
     except (CancelledError, PrivacyViolationError):
         raise

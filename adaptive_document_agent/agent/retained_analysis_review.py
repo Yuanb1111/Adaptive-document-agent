@@ -16,6 +16,9 @@ def needs_catalog_retry(result):
         return False
     if result.failure_details.get('retry_strategy') == 'full_catalog':
         return True
+    from .catalog_topic_resume import topic_review_failure
+    if topic_review_failure(result):
+        return True
     if result.failed_stage == 'analysis_time_limit' and result.presentation_topics and result.presentation_topics.topics:
         # A full catalog selection already exists, including in older timeouts
         # which did not persist the worker's strategy label.

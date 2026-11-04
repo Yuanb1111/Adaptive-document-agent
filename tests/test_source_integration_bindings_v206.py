@@ -96,6 +96,8 @@ def test_revised_draft_keeps_only_separately_accepted_additions(shared):
     result, draft = case()
     revision = draft.model_copy(deep=True)
     revision.additions[0].text += ' Unsupported figure 9999.'
+    revision.decisions[0].disposition = 'covered'
+    revision.decisions[0].brief_item_indexes.insert(0, 0)
     if shared:
         revision.decisions[1].brief_item_indexes.append(3)
     class Gateway:
@@ -120,3 +122,28 @@ def test_revised_draft_keeps_only_separately_accepted_additions(shared):
         assert merged.items[3] == draft.additions[0] and gateway.reviews == 2
         assert last['preserved_sections'] == ['contracts']
         assert last['submitted_draft']['additions'][0]['text'] == revision.additions[0].text
+
+
+def test_reopened_unchanged_section_gets_its_first_correction_after_companion_changes():
+    result, draft = case()
+    class Gateway:
+        drafts = reviews = 0
+        def generate_structured(self, messages, schema, **kwargs):
+            if schema.__name__ == 'ReopenedSourceAdditions':
+                assert set(schema.model_fields) == {'item_3'}
+                return schema(item_3=draft.additions[0].model_copy(update={'label': 'Cancellation scope'}))
+            if schema is SourceIntegrationDraft:
+                self.drafts += 1
+                value = draft.model_copy(deep=True)
+                if self.drafts >= 2:
+                    value.additions[1].label = 'Forecast scope'
+                return value
+            self.reviews += 1
+            return schema(verdicts=[dict(section_id=d.section_id,
+                accepted=self.reviews == 3 or i == self.reviews - 1, reason='Scope independently reviewed.')
+                for i, d in enumerate(draft.decisions)])
+    gateway = Gateway()
+    merged = review_supplementary_sources(gateway, result, result.executive_brief)
+    assert gateway.reviews == 3
+    assert resolved_source_check_ids(result, merged) == {'contracts', 'outlook'}
+    assert [item.label for item in merged.items[-2:]] == ['Cancellation scope', 'Forecast scope']

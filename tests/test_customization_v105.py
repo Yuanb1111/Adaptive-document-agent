@@ -157,6 +157,10 @@ def test_localization_repairs_only_failed_copy_and_preserves_verified_translatio
         payload = next(json.loads(m['content'].split('\n', 1)[1].rsplit('\n', 1)[0])
                        for m in messages if m['content'].startswith('<UNTRUSTED_DOCUMENT_CONTENT>'))
         calls.append((model.__name__, [row['id'] for row in payload]))
+        if len(calls) == 3:
+            feedback = json.loads(messages[-2]['content'].split('\n', 1)[1].rsplit('\n', 1)[0])['previous_failures']
+            assert list(feedback['errors']) == ['1']
+            assert [row['id'] for row in feedback['previous_translations']] == [1]
         if model is CopyTranslations:
             return model(items=[{'id': row['id'], 'text': 'FY2025收入⟦Q0⟧' if row['id'] == 0 else
                 '负债稳定' if len(calls) > 2 else '负债稳定' * 100} for row in payload])

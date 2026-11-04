@@ -92,9 +92,14 @@ def keep_accepted_dispositions(previous, verdicts, revised, original_count):
         prior = old.get(sid)
         if sid not in verdicts or not verdicts[sid].accepted or prior is None:
             continue
-        if decision.brief_item_indexes != prior.brief_item_indexes:
-            continue
         additions = {i for i in prior.brief_item_indexes if i >= original_count}
+        if decision.brief_item_indexes != prior.brief_item_indexes:
+            # Original items are immutable. Extra references to them cannot
+            # move a previously accepted, separately owned addition.
+            extra = set(decision.brief_item_indexes) - set(prior.brief_item_indexes)
+            if (not additions or not extra or any(i < 0 or i >= original_count for i in extra)
+                    or not set(prior.brief_item_indexes) <= set(decision.brief_item_indexes)):
+                continue
         if any(i - original_count >= len(revised.additions) for i in additions):
             continue
         if any(additions.intersection(d.brief_item_indexes)

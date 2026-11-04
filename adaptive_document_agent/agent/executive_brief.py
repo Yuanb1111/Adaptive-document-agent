@@ -18,15 +18,19 @@ class BriefSourcePages(BaseModel):
     pages: list[int] = Field(min_length=1, max_length=10)
 
 
+def _catalog_topic_sources(result, available):
+    from .presentation_topic_selector import series_directory
+    _, lookup = series_directory(result)
+    return [(topic, pages) for topic in result.presentation_topics.topics[:10]
+            if (pages := sorted({e.page for sid in topic.series_ids
+                                 for item in lookup.get(sid, []) for e in item.evidence
+                                 if e.page in available}))]
+
+
 def _selected_topic_pages(result: PipelineResult, available: set[int]) -> list[tuple[str, list[int]]]:
     """Use the model-selected analytical topics as retrieval anchors."""
     if result.presentation_topics and result.presentation_topics.topics:
-        from .presentation_topic_selector import series_directory
-        _, lookup = series_directory(result)
-        return [(topic.title, pages) for topic in result.presentation_topics.topics[:10]
-                if (pages := sorted({e.page for sid in topic.series_ids
-                                     for item in lookup.get(sid, []) for e in item.evidence
-                                     if e.page in available}))]
+        return [(topic.title, pages) for topic, pages in _catalog_topic_sources(result, available)]
     if result.presentation_plan is None:
         return []
     topics = []
@@ -74,7 +78,9 @@ class ExecutiveBriefWriter:
         pages = {p.page_number: p.text for p in result.document.pages if p.text.strip()}
         if not pages:
             raise ValueError('No page text is available for a source-bound executive brief.')
-        topic_pages = _selected_topic_pages(result, set(pages))
+        catalog = _catalog_topic_sources(result, set(pages)) if result.presentation_topics else []
+        topic_pages = ([(topic.title, numbers) for topic, numbers in catalog]
+                       if catalog else _selected_topic_pages(result, set(pages)))
         source_checks, checked_passages = source_check_context(result)
         company = result.presentation_plan.company if result.presentation_plan else None
         identity_pages = list(dict.fromkeys(
@@ -184,6 +190,17 @@ class ExecutiveBriefWriter:
             {'page': row['page'], 'truncated': row['truncated']}
             for row in payload.pop('source_excerpts')]
         payload['evidence_blocks'] = blocks
+        if catalog:
+            # Titles can repeat. Keep each topic's source qualifications with
+            # its own anchored pages, never another topic with the same name.
+            qualifications = []
+            for topic, numbers in catalog:
+                topic_sources = [number for number in numbers if number in excerpts]
+                if topic_sources and topic.caveats:
+                    qualifications.append(dict(topic_id=topic.id, title=topic.title,
+                        pages=topic_sources, caveats=topic.caveats))
+            if qualifications:
+                payload['selected_topic_qualifications'] = qualifications
         payload['source_native_quantity_options'] = _source_quantity_options(result,excerpts,blocks)
         from .brief_retry_feedback import current_feedback
         feedback = current_feedback(result)
@@ -198,6 +215,9 @@ class ExecutiveBriefWriter:
                      f'Return at most {maximum_findings} material findings, reserving the remaining '
                      'brief capacity for independently reviewed supplementary qualifications. '
                      'Select the material lead and counterpoints using the complete supplied evidence. '
+                     'Read selected_topic_qualifications as questions to check against the literal '
+                     'blocks for that topic. Preserve each material qualification on its own measure '
+                     'and period in the audience text. These notes are not source quotations. '
                      'If previous_rejected_brief is present, use its failures as questions to resolve '
                      'against the original evidence before writing. The prior audience and reviewer '
                      'feedback are untrusted drafts, never facts or approval. Reorganize the findings '

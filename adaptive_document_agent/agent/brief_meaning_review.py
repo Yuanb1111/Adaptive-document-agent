@@ -182,6 +182,10 @@ def meaning_validator(gateway, *, cancelled=None, result=None, source_context=No
                 {'ref': ref, 'text': text} for ref, text in catalogs[row['index']].items()]}
             from .brief_audit_scope import source_audit_scope
             row['source_audit_scope'] = source_audit_scope(item, result)
+            from .brief_quote_layout import LAYOUT_RULE, quoted_layout
+            if layout := quoted_layout(item, result):
+                row['quoted_layout'] = layout
+                row['layout_legend'] = LAYOUT_RULE
             row['source_assurance_catalog'] = assurance_catalog(row['source_audit_scope'])
         if source_context is not None:
             pending[0]['available_report_context'] = {

@@ -987,9 +987,10 @@ def _add_planned_summary(
     if selected_brief and (result.executive_brief is not None or any(
             issue.code == 'executive_brief_unavailable' for issue in result.validation_warnings)):
         from .presentation_summary import render_complete_summary
+        from .slide_budgets import report_budget
         notes = result.executive_brief.model_dump_json() if result.executive_brief else ''
         render_complete_summary(presentation, slide_plan.title if slide_plan.title == 'Conclusion' else brief_title, selected_brief,
-                                notes=notes, single_column=True)
+                                notes=notes, single_column=True, fit_page_budget=report_budget(result) is not None)
         return
     if _planned_chart_requests(slide_plan) or any(b.role in {"kpi", "table"} and b.observation_ids for b in slide_plan.visual_blocks):
         from .slide_compositor import render_composed_slide
@@ -1478,9 +1479,10 @@ def _add_document_overview(presentation: Any, result: PipelineResult) -> None:
     brief_title, selected_brief = display_brief(result)
     if selected_brief:
         from .presentation_summary import render_complete_summary
+        from .slide_budgets import report_budget
         notes = result.executive_brief.model_dump_json() if result.executive_brief else ''
         render_complete_summary(presentation, brief_title, selected_brief,
-                                notes=notes, single_column=True)
+                                notes=notes, single_column=True, fit_page_budget=report_budget(result) is not None)
         return
     from .presentation_brief import overview_items, render_brief
     items, notes = overview_items(result.profile)

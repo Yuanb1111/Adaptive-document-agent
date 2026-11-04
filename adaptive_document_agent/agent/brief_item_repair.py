@@ -366,12 +366,18 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
             'source_audit_scope': inventory,
             'source_status_options': audit_status_options(item, result, inventory=inventory),
             'period_clarifications': period_clarification_options(item, result, inventory=inventory)}
+        from .brief_quote_layout import LAYOUT_RULE, quoted_layout
+        if layout := quoted_layout(item, result):
+            qualification_options[f'item_{index}'].update(quoted_layout=layout, layout_legend=LAYOUT_RULE)
     repair_context['source_qualification_options'] = qualification_options
     repair_messages = [
         {'role': 'system', 'content': messages[0]['content'] + '\nRepair only the requested invalid item_N '
          'fields (zero-based original positions), and title only when present in the response schema. '
          'Verified locked_items are immutable; never return them or a whole briefing. '
          'Keep the original lead and material counterpoints in the invalid positions. '
+         'Preserve the literal measurement basis of every metric you compare or use to explain a change. '
+         'If a source separates a before-adjustment component from the adjusted total, name that basis '
+         'in the same clause. For timelines use the dated column positions in quoted_layout when available. '
          'For every unsupported or rescaled monetary amount, use the exact signed coefficient, '
          'currency and source_scale from that item\'s source_native_money_options when available. '
          'These are source-native spellings, not rounded million/billion equivalents. '

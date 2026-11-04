@@ -266,7 +266,11 @@ class PresentationPreflight:
         if sub_ph and sub_ph.has_text_frame and sub_ph.text.strip():
             content_min_top = max(content_min_top, sub_ph.top.inches + sub_ph.height.inches + 0.06)
         elif title_ph and title_ph.has_text_frame and title_ph.text.strip():
-            content_min_top = max(content_min_top, title_ph.top.inches + title_ph.height.inches + 0.06)
+            title_clearance = title_ph.top.inches + title_ph.height.inches + 0.06
+            if slide.element.cSld.get('name') == 'ada:conclusion':
+                content_min_top = title_clearance
+            else:
+                content_min_top = max(content_min_top, title_clearance)
 
         for shape in self._shapes(slide):
             if (shape.name == "decoration:title_rule" and shape.height.inches <= .05

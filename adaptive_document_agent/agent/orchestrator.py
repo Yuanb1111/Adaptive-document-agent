@@ -385,6 +385,11 @@ class DocumentOrchestrator:
                     from .catalog_timeout_resume import catalog_timeout_reporting
                     reporting = catalog_timeout_reporting(resume, checkpoint, editorial_gateway, requested_focus, scope)
                 if reporting is None:
+                    from .catalog_topic_resume import retry_catalog_topics
+                    reporting = retry_catalog_topics(resume, checkpoint, editorial_gateway, requested_focus, scope)
+                    if reporting is not None and reporting.pipeline_state != 'partial':
+                        self._finish_report(reporting, index, reporting.validation_warnings, None, analysis_focus, notify)
+                if reporting is None:
                     notify("Generating insights and dynamic report")
                     reporting = self._generate_report(document, profile, index, plan, results, issues, notify, analysis_focus,
                         gateway=editorial_gateway, output=checkpoint)
@@ -987,6 +992,13 @@ class DocumentOrchestrator:
         # Scoped topic corrections retain their complete rejected drafts and
         # validation errors on the reporting snapshot, including partial success.
         issues.extend(issue for issue in output.validation_warnings if issue not in issues)
+        return self._finish_report(output, index, issues, topic_error, analysis_focus, notify)
+
+    def _finish_report(self, output, index, issues, topic_error, analysis_focus, notify):
+        """Build charts and markdown from the actual selected topics, including on retry."""
+        topic_selection, report_plan = output.presentation_topics, output.report_plan
+        insights, profile = output.insights, output.profile
+        plan, results = output.analysis_plan, output.analysis_results
         requested_series = []
         if topic_selection is not None:
             _, series_by_id = series_directory(output)
@@ -1017,7 +1029,6 @@ class DocumentOrchestrator:
         output.charts = charts
         output.report_markdown = markdown
         output.validation_warnings = issues
-        output.stage_details_ms = details
         return output
 
     def preview_scope(

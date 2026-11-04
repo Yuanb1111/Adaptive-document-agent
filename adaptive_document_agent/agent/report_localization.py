@@ -70,6 +70,8 @@ def prepare_report_language(gateway, result, *, progress=None):
         with record_timing(details, 'localization_copy_inventory'):
             presentation = presentation_for_copy(result)
             presentation._ada_translation_name_evidence = evidence
+            from adaptive_document_agent.services.presentation_language import language_key
+            presentation._ada_source_language = language_key(result.profile.language or '')
             units = summary_copy_units(result)
             # Inventory complete introductory claims, not their native subdivisions.
             # Exclude by actual bound shape role, never by shared text value:
@@ -214,14 +216,28 @@ def _translate_batch(gateway, batch, language, presentation, *, failures=None, t
         untrusted_document_message(json.dumps(transport, ensure_ascii=False)),
     ]
     if failures:
-        messages.append(untrusted_document_message(json.dumps({'previous_failures': failures}, ensure_ascii=False)))
+        feedback = {'errors': {str(i): failures.get('errors', {}).get(str(i), []) for i in sorted(ids)},
+                    'previous_translations': [row for row in failures.get('prepared_response', {}).get('items', [])
+                                              if row['id'] in ids]}
+        if failures.get('error'):
+            feedback['request_error'] = failures['error']
+        messages.append(untrusted_document_message(json.dumps({'previous_failures': feedback}, ensure_ascii=False)))
         messages.append({'role': 'user', 'content': 'Repair only the supplied failed IDs using their '
-                         'original copy. Correct each stated language, numeric or text-fit failure.'})
+                         'original copy. Correct each stated language, numeric or text-fit failure. '
+                         'If the original already fits and reads correctly in the requested language, '
+                         'return it exactly as supplied. Return only these IDs: ' + str(sorted(ids))})
     active_timer = None
     try:
         started = perf_counter()
         active_timer = ('localization_translation_requests', started)
-        response = gateway.generate_structured(messages, CopyTranslations, stage='presentation', allow_repair=False)
+        if (failures and ids <= set(failures.get('fit_only_ids', ()))
+                and language == getattr(presentation, '_ada_source_language', None)):
+            # The source already has native geometry. Propose its exact text
+            # for a new language/meaning verdict instead of another paraphrase.
+            response = CopyTranslations(items=[CopyTranslation(id=row['id'], text=row['text']) for row in batch])
+            audit['source_copy_proposed_for_review'] = sorted(ids)
+        else:
+            response = gateway.generate_structured(messages, CopyTranslations, stage='presentation', allow_repair=False)
         _add_time(timings, 'localization_translation_requests', started)
         active_timer = None
         audit['response'] = response.model_dump(mode='json')
@@ -286,7 +302,10 @@ def _translate_batch(gateway, batch, language, presentation, *, failures=None, t
             errors.extend([] if verdict.accepted else [verdict.reason])
             errors.extend(translation_errors(by_id[item.id], item.text))
             errors.extend(requested_language_errors(item.text, language))
-            errors.extend(copy_fit_errors(presentation, by_id[item.id], item.text))
+            fit_errors = copy_fit_errors(presentation, by_id[item.id], item.text)
+            if fit_errors and not errors:
+                audit.setdefault('fit_only_ids', []).append(item.id)
+            errors.extend(fit_errors)
             if errors:
                 failed.append(item.id)
                 audit['errors'][str(item.id)] = errors

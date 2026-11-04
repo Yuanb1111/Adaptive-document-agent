@@ -55,7 +55,15 @@ def _context(result, brief):
     coverage = result.profile.source_coverage
     checks = list(coverage.checks) if coverage else []
     pages = {page for check in checks for page in check.pages}
-    return dict(checks=[check.model_dump(mode='json') for check in checks],
+    sections = {s.id: s for s in coverage.sections} if coverage else {}
+    check_rows = []
+    for check in checks:
+        row = check.model_dump(mode='json')
+        section = sections.get(check.section_id)
+        if section:
+            row['section_extent'] = [section.start_page, section.end_page]
+        check_rows.append(row)
+    return dict(checks=check_rows,
         source_pages=[dict(page=p.page_number, text=p.text) for p in result.document.pages if p.page_number in pages],
         current_brief=brief.model_dump(mode='json'),
         topics=result.presentation_topics.model_dump(mode='json') if result.presentation_topics else None,
@@ -232,6 +240,13 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
             'indicates a table exists, not that any particular amount belongs to it. Otherwise state '
             'the source-supported plan, assumption or limitation qualitatively. '
             'Preserve all original conclusions unchanged; add only material missing findings or qualifications. '
+            'Compare each check.finding with the exact audience text bound to that check. Recheck its '
+            'material qualifications against the pages, including timing, dependencies and limits of '
+            'coverage. Carry the supported qualifications into the bound brief items themselves. '
+            'A detail in your decision.reason or in a cited page alone will not appear in the briefing. '
+            'When check.pages covers only part of section_extent, scope any list or breakdown to the '
+            'supplied pages. If the excerpt leaves a material remainder undisclosed, state that limit '
+            'without guessing the remainder. Shared dates do not establish sequence. '
             'For statements about relationships or conflicts, preserve who made the statement, its '
             'subject, counterpart and effective time. Keep numbers, units, audit scope, conditions and uncertainty exact. No calculations, invented facts, '
             'whole-document absence claims or boilerplate review-status text. Return at most seven merged brief items. '
@@ -252,7 +267,7 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
                     'counterevidence. Keep supported material from the proposal. If needed use separate '
                     'additions for distinct findings within the available slots. Prior feedback is not evidence.')]
             retained = None
-        from .source_integration_copy import overlong_additions, shorten_additions
+        from .source_integration_copy import overlong_additions, shorten_additions, revise_reopened_additions
         pending_copy = None
         # One semantic correction may itself need one schema-only repair.
         # A second semantic rejection or repeated format failure stays terminal.
@@ -261,7 +276,10 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
             audit['attempts'].append(entry)
             draft = None
             try:
-                if pending_copy is not None:
+                if attempt and (reopened := audit['attempts'][-2].get('reopened_sections')):
+                    draft = revise_reopened_additions(gateway, messages, prior_review[0], reopened,
+                                                      len(brief.items), entry)
+                elif pending_copy is not None:
                     draft = shorten_additions(gateway, messages, SourceIntegrationDraft, pending_copy, entry, len(brief.items))
                     pending_copy = None
                 elif attempt == 0 and retained is not None:
@@ -301,6 +319,13 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
                 if len(verdicts) != len(review.verdicts) or set(verdicts) != set(checks):
                     raise ValueError('Independent review must judge every supplementary source.')
                 if any(not v.accepted for v in verdicts.values()):
+                    rejected = {sid for sid, verdict in verdicts.items() if not verdict.accepted}
+                    if (attempt == 1 and rejected <= set(entry.get('preserved_sections', []))
+                            and merged != _validate(prior_review[0], result, brief, checks)):
+                        # The whole-brief review reopened unchanged copy only
+                        # after a companion changed. These sections have not
+                        # yet had a chance to address their own objections.
+                        entry['reopened_sections'] = sorted(rejected)
                     prior_review = draft, verdicts
                     raise ValueError('; '.join(v.reason for v in verdicts.values() if not v.accepted))
                 audit.update(draft=entry['draft'], review=entry['review'], fingerprint=_fingerprint(result, merged))
@@ -316,7 +341,8 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
                         raise  # Reviewer capacity/refusal failure must not regenerate the writer.
                     feedback = schema_feedback(exc, SourceIntegrationDraft)
                     entry['format_failure'] = feedback
-                    if (attempt == 0 and notes) or (attempt == 1 and prior_review is not None):
+                    multiple_fields = len(feedback.get('schema_errors', [])) > 1
+                    if (attempt == 0 and (notes or multiple_fields)) or (attempt == 1 and prior_review is not None):
                         pending_copy = overlong_additions(exc, feedback, SourceIntegrationDraft)
                     if attempt and pending_copy is None:
                         schema_errors = feedback.get('schema_errors', [])
@@ -330,7 +356,10 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
                     continue
                 if draft is None:
                     raise
-                if attempt:
+                # A format-only correction has not yet used the single
+                # source/meaning correction for a complete proposal.
+                if attempt and not (entry.get('reopened_sections')
+                        or (attempt == 1 and 'shortened_fields' in entry and 'review' in entry)):
                     raise
                 correction = {key: entry[key] for key in ('draft', 'review', 'error') if key in entry}
                 messages += [untrusted_document_message(json.dumps(correction, ensure_ascii=False)),

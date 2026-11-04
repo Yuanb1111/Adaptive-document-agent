@@ -5,6 +5,39 @@ from adaptive_document_agent.models.executive_brief import ExecutiveBrief
 from tests.test_executive_brief import result_for, payload
 
 
+def test_rotated_quote_coordinates_keep_same_column_events_together_without_uncited_text():
+    from adaptive_document_agent.agent.brief_quote_layout import quoted_layout
+    source = '2028 Partner trials Start production'
+    result = result_for([source])
+    page = result.document.pages[0]
+    page.reading_rotation = 90
+    page.text_blocks = [{'lines': None}, {'lines': [
+        {'bbox': box, 'text': text} for box, text in [
+            ([10, 35, 15, 45], '2028'), ([20, 32, 25, 50], 'Partner trials'),
+            ([30, 32, 35, 50], 'Start production'), ([30, 0, 35, 10], 'Uncited text')]]}]
+    item = ExecutiveBrief.model_validate(payload(source)).items[0]
+    lines = quoted_layout(item, result)[0]['lines']
+    assert [line[3] for line in lines] == ['2028', 'Partner trials', 'Start production']
+    assert lines[1][1:3] == lines[2][1:3] == [-50, -32]
+
+
+def test_review_can_restore_the_referenced_literal_qualification_without_changing_other_items():
+    from adaptive_document_agent.agent.brief_semantic_repair import _bind_reviewed_passages
+    from adaptive_document_agent.models.executive_brief import BRIEF_EVIDENCE_LIMIT
+    brief = ExecutiveBrief.model_validate(payload('The measure is 15 in 2024.'))
+    brief.items.append(brief.items[0].model_copy(deep=True))
+    catalog = {'p2_b3': {'page': 2, 'text': 'The measure excludes trial participants.'},
+               'p2_b4': {'page': 2, 'text': 'This wording is absent from the source.'}}
+    excerpts = {2: catalog['p2_b3']['text']}
+    issues = {1: ['Check p2_b3 and p2_b4. See p2_b3 also.']}
+    changed, refs = _bind_reviewed_passages(brief, issues, catalog, excerpts)
+    assert refs == {1: ['p2_b3']} and changed.items[0] == brief.items[0]
+    assert changed.items[1].evidence[:-1] == brief.items[1].evidence
+    assert changed.items[1].evidence[-1].model_dump() == catalog['p2_b3']
+    brief.items[1].evidence *= BRIEF_EVIDENCE_LIMIT
+    assert _bind_reviewed_passages(brief, issues, catalog, excerpts) == (brief, {})
+
+
 def test_displayed_quantity_contract_keeps_signed_source_scale_without_conversion():
     from adaptive_document_agent.agent.brief_meaning_contract import displayed_quantity_contract
     brief = ExecutiveBrief.model_validate(payload('Cash outflow was RMB -70414 thousand in 1H2024.'))
@@ -30,10 +63,15 @@ def test_meaning_repair_can_fix_rejected_label_but_cannot_add_label_quantities(i
         return {0: ['Label contradicts loss magnitude.']} if value.items[0].label == 'Loss narrowed' else {}
     class Client:
         def generate_structured(self, messages, schema, **kwargs):
+            import json
+            context = json.loads(messages[-1]['content'].split('\n', 1)[1].rsplit('\n', 1)[0])
+            assert context['earlier_review_questions'] == {'item_0': ['Meaning review: Preserve the reconciliation.']}
             assert set(schema.model_fields) == {'item_0'}
             return schema(item_0=dict(text=source,
                 label='Loss widened to USD 99 million' if invented_label else 'Loss widened'))
-    audit = {}
+    audit = {'meaning_source_indices': [1, 2], 'initial_errors': {
+        'item_0': ['Meaning review: A different finding.'],
+        'item_1': ['Meaning review: Preserve the reconciliation.', 'Unrelated format error.']}}
     corrected = correct_new_meaning_errors(Client(), brief, result=result, excerpts={1: source},
         topics=[], source_context={}, evidence_catalog=None, semantic_validator=meaning, audit=audit)
     if invented_label:

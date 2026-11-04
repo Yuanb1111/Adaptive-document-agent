@@ -121,7 +121,7 @@ def refine_presentation_budget(gateway, result, *, progress=None):
     notify('Refining analytical priorities using actual physical slide costs')
     from .presentation_topic_selector import series_directory
     directory, lookup = series_directory(result)
-    from .presentation_budget_geometry import measured_native_groups
+    from .presentation_budget_geometry import measured_native_groups, visible_topic_notes
     counts = {**counts, 'native_groups': measured_native_groups(result, lookup)}
     original = result.presentation_topics.model_copy(deep=True)
     wanted = {sid for t in original.topics for sid in t.series_ids}
@@ -133,7 +133,7 @@ def refine_presentation_budget(gateway, result, *, progress=None):
     context = {'original_topics':[topic.model_dump(mode='json') for topic in original.topics],
                'editable_series_inventory':editable_series_inventory(original),
                'historical_omissions_read_only':[item.model_dump(mode='json') for item in original.omissions],
-               'source_series':source,
+               'source_series':source, 'original_visible_notes':visible_topic_notes(deck, counts['native_groups']),
                'existing_audience_context':{
                    'introduction':[p.model_dump(mode='json') for p in result.presentation_plan.company.summary_pages],
                    'verified_brief':result.executive_brief.model_dump(mode='json') if result.executive_brief else None},
@@ -212,6 +212,13 @@ def refine_presentation_budget(gateway, result, *, progress=None):
     messages = [{'role':'system','content':rules}, *instruction_messages(result.profile,purpose='physical budget refinement'),
                 untrusted_document_message(json.dumps(context,ensure_ascii=False))]
     attempts = []
+    from .presentation_budget_scope import last_rejected_whole_scope
+    prior_scope = last_rejected_whole_scope(result, original, counts)
+    if prior_scope:
+        messages += [untrusted_document_message(json.dumps(prior_scope, ensure_ascii=False)),
+            dict(role='user', content='On this retry, use the complete original sources to address the '
+                 'previous independent objections. Retain required source qualifications in the relevant '
+                 'topics. All proposed changes will be independently checked and measured again.')]
     failed_projections = {}
     from .topic_repair_memo import RejectedTopicRepairMemo
     rejected_takeaway_repairs = RejectedTopicRepairMemo()
@@ -224,7 +231,8 @@ def refine_presentation_budget(gateway, result, *, progress=None):
             notify(f'Budget proposal {attempt+1}/2: choosing evidence priorities')
             started = perf_counter()
             from .presentation_budget_scope import choose_whole_topic_scope
-            draft = choose_whole_topic_scope(gateway, messages, context, original, record)
+            draft = choose_whole_topic_scope(gateway, messages, context, original, record,
+                prior=attempts[-2] if len(attempts) > 1 else prior_scope)
             if draft is None:
                 draft = complete_budget_output(gateway,messages,PhysicalBudgetSelection,record,
                     audit_key='selection_output_attempts',token_limits=SELECTION_TOKEN_LIMITS)
@@ -259,12 +267,21 @@ def refine_presentation_budget(gateway, result, *, progress=None):
             candidate = result.model_copy(deep=True)
             candidate.presentation_topics = selection
             if candidate.pipeline_version:
-                from .topic_evidence_review import review_topic_evidence
+                from .topic_evidence_review import review_covered_topics, review_topic_evidence
                 from .presentation_topic_selector import PresentationTopicSelector
                 before_review = len(candidate.validation_warnings)
                 try:
-                    checked = review_topic_evidence(selection, lookup, candidate, gateway,
-                        PresentationTopicSelector.validator_for(candidate), allow_correction=False)
+                    validator = PresentationTopicSelector.validator_for(candidate)
+                    if record.get('revising_rejected_scope') or record.get('scope_choice', {}).get('additional_qualifications'):
+                        # This slot explicitly revises a rejected fixed-scope proposal.
+                        # Wording can be repaired, but each topic must keep exactly
+                        # the proposed rows and pass a new independent review.
+                        checked = review_covered_topics(selection, lookup, candidate, gateway, validator)
+                        candidate.presentation_topics = selection = checked
+                        record['applied_selection'] = checked.model_dump(mode='json')
+                    else:
+                        checked = review_topic_evidence(selection, lookup, candidate, gateway,
+                            validator, allow_correction=False)
                 finally:
                     # The candidate is discarded on rejection. Retain the exact
                     # reviewer reasons in the bounded next proposal's feedback,
@@ -330,6 +347,10 @@ def refine_presentation_budget(gateway, result, *, progress=None):
                                                      decisions=draft.decisions)
             validate_subset(review_target, original, lookup, candidate)
             record['review_target'] = review_target.model_dump(mode='json')
+            record['projected_visible_notes'] = visible_topic_notes(projected, projected_counts['native_groups'])
+            review_evidence = {'source': context, 'proposal': record['review_target']}
+            if record['projected_visible_notes']:
+                review_evidence['projected_visible_notes'] = record['projected_visible_notes']
             record['applied_selection'] = candidate.presentation_topics.model_dump(mode='json')
             notify(f'Budget proposal {attempt+1}/2: independently reviewing scope and omissions')
             started = perf_counter()
@@ -340,13 +361,16 @@ def refine_presentation_budget(gateway, result, *, progress=None):
                  'counterevidence, altered periods or scope, misleading selection and unsupported '
                  'interpretation. Judge actual retained claims and revised scope; do not require '
                  'every old metric merely because an earlier model draft question mentioned it. '
+                 'Read projected_visible_notes as part of the actual slide on the named topic and page. '
+                 'A source definition or caveat visibly present there need not be duplicated in the '
+                 'topic object. Do not transfer a note to another topic or assume an original note survived. '
                  'Read the existing source-checked introduction and brief as audience context, '
                  'without assuming a future briefing will add omitted material. Whole lower-priority '
                  'topics may be omitted when priority reasons are defensible and the resulting story '
                  'is still honest. A page budget never overrides source truth. Do not approve merely '
                  'because fewer series were selected or the physical projection fits. Return accepted and reason.'},
                 *instruction_messages(result.profile,purpose='physical budget omission review'),
-                untrusted_document_message(json.dumps({'source':context,'proposal':record['review_target']},ensure_ascii=False))],
+                untrusted_document_message(json.dumps(review_evidence,ensure_ascii=False))],
                 PhysicalBudgetReview,record,audit_key='review_output_attempts',token_limits=REVIEW_TOKEN_LIMITS)
             record['timings_ms']['independent_review'] = int((perf_counter()-started)*1000)
             record['independent_review'] = verdict.model_dump(mode='json')

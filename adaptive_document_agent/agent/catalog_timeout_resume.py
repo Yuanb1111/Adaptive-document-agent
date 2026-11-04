@@ -11,7 +11,8 @@ def catalog_timeout_reporting(previous, current, gateway, focus, scope):
     if (previous is None or previous.pipeline_state != 'partial'
             or not (previous.failed_stage == 'analysis_time_limit' or
                     ((previous.failed_stage, previous.failure_details.get('component')) in
-                     {('executive_brief', 'ExecutiveBrief'), ('source_integration', 'SourceIntegration')}
+                     {('executive_brief', 'ExecutiveBrief'), ('source_integration', 'SourceIntegration'),
+                      ('presentation_budget', 'PresentationBudget')}
                      and previous.presentation_plan is not None))
             or previous.retry_from != 'reporting' or not previous.presentation_topics
             or not previous.presentation_topics.topics or not previous.report_plan

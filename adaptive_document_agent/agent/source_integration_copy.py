@@ -27,6 +27,31 @@ class SourceCopyPart(BaseModel):
     text: str = Field(min_length=1, max_length=550)
 
 
+def revise_reopened_additions(gateway, messages, previous, sections, original_count, entry):
+    """Edit only additions exclusively owned by newly reopened section decisions."""
+    from adaptive_document_agent.models.executive_brief import ExecutiveBriefItem
+    from .presentation_budget_output import complete_budget_output
+    from .source_integration_review import SOURCE_OUTPUT_TOKEN_LIMITS
+    targets = {i for d in previous.decisions if d.section_id in sections
+               for i in d.brief_item_indexes if i >= original_count}
+    if not targets or any(targets.intersection(d.brief_item_indexes)
+                          for d in previous.decisions if d.section_id not in sections):
+        raise ValueError('A reopened source section must own its additions exclusively.')
+    fields = {f'item_{i}': (ExecutiveBriefItem, ...) for i in sorted(targets)}
+    schema = create_model('ReopenedSourceAdditions', __config__=ConfigDict(extra='forbid'), **fields)
+    request = [*messages, dict(role='user', content='Return only the specified merged item keys. '
+        'Keep the scope of each addition. Correct its missing qualifications and cite their exact '
+        'source lines. Other additions and dispositions are locked and will be merged locally. '
+        'Keep each body under 450 characters to leave room for source-bound dates and conditions.')]
+    patch = complete_budget_output(gateway, request, schema, entry, audit_key='copy_output_attempts',
+                                   token_limits=SOURCE_OUTPUT_TOKEN_LIMITS, stage='report')
+    revised = previous.model_copy(deep=True)
+    for i in targets:
+        revised.additions[i - original_count] = getattr(patch, f'item_{i}')
+    entry['edited_addition_indexes'] = sorted(targets)
+    return revised
+
+
 def shorten_additions(gateway, messages, schema, pending, entry, original_count):
     draft, errors = pending
     fields = {}

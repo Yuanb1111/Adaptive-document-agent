@@ -60,6 +60,37 @@ def topic_binding(topic, lookup, result=None):
     return hashlib.sha256(encoded.encode('utf-8')).hexdigest()
 
 
+def review_payload(topics, lookup, result):
+    """Index the supplied observations by literal table and period for header navigation."""
+    payload = evidence_payload(topics, lookup, result)
+    statuses = {}
+    for series in payload['series']:
+        for row in series['observations']:
+            for evidence in row['evidence']:
+                if evidence['table_id'] and row['period']:
+                    key = (evidence['page'], evidence['table_id'], row['period'])
+                    statuses.setdefault(key, set()).add(row['audited_status'])
+    qualified_tables = {(p, t) for (p, t, _), values in statuses.items() if values != {'unknown'}}
+    if not qualified_tables:
+        return payload
+    payload['selected_table_period_statuses'] = [
+        dict(page=p, table_id=t, period=period, observed_statuses=sorted(values))
+        for (p, t, period), values in statuses.items() if (p, t) in qualified_tables]
+    # This is a duplicate navigation aid. It must never displace original facts
+    # or make a previously reviewable single topic exceed the context bound.
+    if len(json.dumps(payload, ensure_ascii=False, separators=(',', ':'))) > MAX_CONTEXT:
+        del payload['selected_table_period_statuses']
+    return payload
+
+
+AUDIT_SCOPE_GUIDANCE = (
+    'For audit qualifiers, selected_table_period_statuses indexes the selected rows by table and '
+    'period. Check the literal alignment of each marker under its own column group in the full PDF '
+    'page. A shared duration heading alone does not extend an audit marker to every period beneath it. '
+    'Unknown means no status established for that period, never audited. If alignment is ambiguous, '
+    'do not assert a different audit status or apply a neighbouring marker. ')
+
+
 def unreviewed_topics(selection, lookup, result):
     accepted, legacy_accepted, context_reviewed_rows = set(), set(), set()
     for issue in result.validation_warnings:
@@ -98,18 +129,18 @@ def require_topic_evidence_review(selection, lookup, result):
         raise ValueError('Selected topics require current source-row semantic review: ' + ', '.join(pending))
 
 
-def review_covered_topics(selection, lookup, result, gateway, validate, *, primary_pages=None):
+def review_covered_topics(selection, lookup, result, gateway, validate, *, primary_pages=None, recheck_ids=()):
     """Keep the costly catalogue decision on retry, but evict a failed final wording/review."""
     try:
         with getattr(gateway, 'validated_cache_scope', nullcontext)():
             return review_topic_evidence(selection, lookup, result, gateway, validate,
-                                         primary_pages=primary_pages, preserve_coverage=True)
+                                         primary_pages=primary_pages, preserve_coverage=True, recheck_ids=recheck_ids)
     except (LLMResponseError, ValueError) as exc:
         raise CoverageTopicReviewError('Final topic source review failed: ' + str(exc)) from exc
 
 
 def review_topic_evidence(selection, lookup, result, gateway, validate, *, primary_pages=None,
-                          allow_correction=True, preserve_coverage=False):
+                          allow_correction=True, preserve_coverage=False, recheck_ids=()):
     """Review, correct rejected topics once, then independently review corrections.
 
     Supported siblings survive. Corrections may choose known catalog IDs, but
@@ -117,12 +148,12 @@ def review_topic_evidence(selection, lookup, result, gateway, validate, *, prima
     Failed/unsupported revisions are omitted with the original draft retained.
     """
     validate(selection, lookup, primary_pages=primary_pages)
-    pending = set(unreviewed_topics(selection, lookup, result))
+    pending = set(unreviewed_topics(selection, lookup, result)).union(recheck_ids)
     if not pending:
         return selection
     topics = [t for t in selection.topics if t.id in pending]
     accepted = {t.id: t for t in selection.topics if t.id not in pending}
-    audit = dict(contract=SOURCE_CONTEXT_CONTRACT,
+    audit = dict(contract=SOURCE_CONTEXT_CONTRACT, column_scope_guidance=True,
         original_topics=[t.model_dump(mode='json') for t in topics], attempts=[], accepted_bindings=[],
         source_row_bindings={topic_binding(t, lookup): topic_binding(t, lookup, result) for t in topics})
     budget = {'calls': 0}
@@ -141,7 +172,7 @@ def review_topic_evidence(selection, lookup, result, gateway, validate, *, prima
             lock=budget_lock, cancelled=cancelled)
 
     def review_batch(drafts, batch_audit):
-        payload = evidence_payload(drafts, lookup, result)
+        payload = review_payload(drafts, lookup, result)
         batch_audit['source_row_bindings'].update({topic_binding(t, lookup): topic_binding(t, lookup, result) for t in drafts})
         record = dict(phase='independent_review', bindings=[topic_binding(t, lookup, result) for t in drafts])
         batch_audit['attempts'].append(record)
@@ -161,7 +192,8 @@ def review_topic_evidence(selection, lookup, result, gateway, validate, *, prima
             'A question also needs the metrics it proposes to analyze. Background rationale may describe '
             'relevance without pretending unavailable data is selected. Return exactly one supported decision '
             'and evidence-specific reason for every topic_id. Keep each reason concise, normally under 200 '
-            'characters. Do not repeat source tables. Do not rewrite topics or perform calculations.', record)
+            'characters. Do not repeat source tables. Do not rewrite topics or perform calculations. '
+            + AUDIT_SCOPE_GUIDANCE, record)
         record['response'] = reply.model_dump(mode='json')
         decisions = {d.topic_id: d for d in reply.decisions}
         if len(decisions) != len(reply.decisions) or set(decisions) != {t.id for t in drafts}:
@@ -181,7 +213,7 @@ def review_topic_evidence(selection, lookup, result, gateway, validate, *, prima
                 for topic in batch:
                     failures[index][topic.id] = dict(topic_id=topic.id, title=topic.title,
                         series_ids=topic.series_ids, binding=topic_binding(topic, lookup, result), reason=reason)
-            return review_batches(batches[index], payload=lambda batch: evidence_payload(batch, lookup, result),
+            return review_batches(batches[index], payload=lambda batch: review_payload(batch, lookup, result),
                 request=lambda batch: review_batch(batch, records[index]), characters=MAX_CONTEXT,
                 record=records[index], on_failure=failed)
 
@@ -229,7 +261,7 @@ def review_topic_evidence(selection, lookup, result, gateway, validate, *, prima
             # writer the actual rows/pages and permit wording changes only.
             candidates = []
             for topic in rejected:
-                payload = evidence_payload([topic], lookup, result)
+                payload = review_payload([topic], lookup, result)
                 payload['rejection'] = decisions[topic.id].model_dump(mode='json')
                 record = dict(phase='coverage_wording_correction', topic_id=topic.id)
                 audit['attempts'].append(record)
@@ -238,7 +270,7 @@ def review_topic_evidence(selection, lookup, result, gateway, validate, *, prima
                     'complete source pages. Address the rejection, including any missing qualifications '
                     'or overstatement of scope. Return that one topic with its original ID and exact '
                     'series_ids in order, and no omissions. Do not add a source category to the selection. '
-                    'If the evidence cannot support a correction, return no topics.', record)
+                    'If the evidence cannot support a correction, return no topics. ' + AUDIT_SCOPE_GUIDANCE, record)
                 record['response'] = revision.model_dump(mode='json')
                 if (revision.omissions or len(revision.topics) != 1 or revision.topics[0].id != topic.id
                         or revision.topics[0].series_ids != topic.series_ids):

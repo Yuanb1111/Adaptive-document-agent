@@ -25,6 +25,39 @@ def case():
     return original, options, choice
 
 
+def test_budget_reviews_only_native_source_notes_on_their_own_topic_pages():
+    from types import SimpleNamespace as Row
+    from adaptive_document_agent.agent.presentation_budget_geometry import visible_topic_notes
+    deck = Row(slides=[Row(shapes=[Row(name='source_context:definitions_and_limits',
+        has_text_frame=True, text='A conditional source definition.'), Row(name='unrelated')]),
+        Row(shapes=[])])
+    assert visible_topic_notes(deck, [dict(topic_id='a', physical_slide_numbers=[1]),
+        dict(topic_id='b', physical_slide_numbers=[2])]) == [
+        dict(topic_id='a', slide=1, text='A conditional source definition.')]
+
+
+def test_rejected_whole_topic_copy_can_be_reworded_on_measured_retry():
+    from types import SimpleNamespace
+    from adaptive_document_agent.agent.presentation_budget_scope import last_rejected_whole_scope
+    original, _, choice = case()
+    prior = dict(scope_choice=choice.model_dump(), independent_review=dict(accepted=False, reason='Missing caveat'))
+    counts = dict(analysis=11)
+    audit = dict(original_selection=original.model_dump(mode='json'), original_counts=counts, attempts=[prior])
+    saved = SimpleNamespace(validation_warnings=[
+        SimpleNamespace(code='presentation_physical_budget_failed', message=json.dumps(audit)),
+        SimpleNamespace(code='presentation_physical_budget_failed', message='Last refusal')])
+    assert last_rejected_whole_scope(saved, original, counts) == prior
+    assert last_rejected_whole_scope(saved, original, dict(analysis=8)) is None
+    from adaptive_document_agent.agent.presentation_budget_scope import TopicQualification
+    choice.additional_qualifications = [TopicQualification(topic_id='first', caveat='The later period is unaudited.')]
+    revised = bind_scope_choice(choice, case()[1], original)
+    assert revised.topics[0].caveats == [*original.topics[0].caveats, 'The later period is unaudited.']
+    assert revised.topics[0].series_ids == original.topics[0].series_ids
+    choice.additional_qualifications[0].topic_id = 'second'
+    with pytest.raises(ValueError, match='retained topic'):
+        bind_scope_choice(choice, case()[1], original)
+
+
 def test_binding_keeps_exact_selected_topics_and_shared_series_without_writing_copy():
     original, options, choice = case()
     before = deepcopy(original)

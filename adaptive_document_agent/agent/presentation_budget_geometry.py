@@ -56,3 +56,17 @@ def measured_native_groups(result, lookup):
                 for number in numbers if len(page_owners[number]) > 1],
             mapping_basis='Recorded renderer input scope, not claim-by-claim display proof or predicted subset cost.'))
     return groups
+
+
+def visible_topic_notes(deck, groups):
+    """Read the actual source-note text on each measured topic page."""
+    notes = []
+    slides = getattr(deck, 'slides', ())
+    for group in groups:
+        for number in group['physical_slide_numbers']:
+            if not 1 <= number <= len(slides):
+                continue
+            for shape in getattr(slides[number - 1], 'shapes', ()):
+                if shape.name == 'source_context:definitions_and_limits' and shape.has_text_frame and shape.text.strip():
+                    notes.append(dict(topic_id=group['topic_id'], slide=number, text=shape.text))
+    return notes
