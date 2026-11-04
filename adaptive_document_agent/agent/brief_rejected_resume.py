@@ -53,6 +53,11 @@ def source_matched_candidate(result, context, excerpts, topics):
                 continue
         except (ValueError, KeyError, TypeError, AttributeError):
             continue
+        if record.get('semantic_approval') is True and not any(checks.values()):
+            # A completed source-matched draft supersedes earlier, longer
+            # rejected drafts. The caller independently checks its items again.
+            if best is None or candidate == best:
+                return candidate
         # Preserve the model's complete proposed findings for current review.
         # A rejected smaller selection must not erase its missing counterpoints.
         # At equal size prefer the latest candidate. No verdict is reused.

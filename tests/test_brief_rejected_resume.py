@@ -64,6 +64,17 @@ def test_newer_completed_draft_gets_fresh_review_before_an_older_rejection(monke
     assert reviewed == [candidate] and not gateway.calls
 
 
+def test_source_matched_completed_draft_precedes_older_longer_rejected_draft(monkeypatch):
+    from adaptive_document_agent.agent.brief_rejected_resume import source_matched_candidate
+    result, candidate, _, _ = fixture(monkeypatch)
+    context = json.loads(result.validation_warnings[-1].message)['source_context']
+    longer = candidate.model_copy(deep=True)
+    longer.items.append(candidate.items[0].model_copy(deep=True))
+    save_checks(result, context_key(longer, context, result), longer, {0: [], 1: [], 2: ['Rejected']}, {}, context)
+    save_checks(result, context_key(candidate, context, result), candidate, {0: [], 1: []}, {}, context)
+    assert source_matched_candidate(result, context, {1: result.document.pages[0].text}, []) == candidate
+
+
 def test_explicit_retry_after_failed_text_only_patch_returns_to_source_repair(monkeypatch):
     from adaptive_document_agent.agent.brief_retry_feedback import retain_feedback
     result, _, gateway, reviewed = fixture(monkeypatch, accepted=False)

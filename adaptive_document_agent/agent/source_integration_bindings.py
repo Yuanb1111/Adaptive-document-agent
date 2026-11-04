@@ -22,7 +22,10 @@ MERGED_BRIEF_INSTRUCTIONS = (
     'claims but do not enlarge the chosen section range or require new conclusions from those pages. '
     'check whether those exact items carry the source meaning and whether additions are material '
     'and supported. Do not reinterpret include as covered or look up addition indices in the '
-    'shorter original brief. ')
+    'shorter original brief. Apply the same evidence rules as the writer. When a PDF table '
+    'is flattened, require a numerical estimate only if its measure, amount and unit are '
+    'unambiguously bound by the source. Otherwise assess whether the brief conveys the '
+    'material qualitative finding and uncertainty. Do not reconstruct cells from proximity. ')
 
 
 def merged_review_context(context: dict, draft: SourceIntegrationDraft, merged: ExecutiveBrief) -> dict:
@@ -40,6 +43,44 @@ def merged_review_context(context: dict, draft: SourceIntegrationDraft, merged: 
             items=[dict(index=index, origin='original' if index < original_count else 'addition')
                    for index in decision.brief_item_indexes]) for decision in draft.decisions])
     return review
+
+
+def bind_unique_inclusions(draft, checks, original_count):
+    """Recover an omitted address only for a one-to-one, exclusively cited section.
+
+    The writer already chose include and wrote the addition. The independent
+    reviewer still decides whether the proposed conclusion covers that section.
+    """
+    addresses = {}
+    claimed = {i for decision in draft.decisions for i in decision.brief_item_indexes}
+    exclusive = {}
+    for decision in draft.decisions:
+        sid = decision.section_id
+        if decision.disposition != 'include' or sid not in checks:
+            continue
+        owned = set(checks[sid].pages)
+        other = {p for key, check in checks.items() if key != sid for p in check.pages}
+        candidates = [(original_count + i, {q.page for q in item.evidence})
+                      for i, item in enumerate(draft.additions) if any(q.page in owned for q in item.evidence)]
+        if len(candidates) == 1:
+            index, pages = candidates[0]
+            if pages <= owned - other:
+                exclusive[sid] = index
+            if sid in exclusive and not decision.brief_item_indexes and index not in claimed:
+                decision.brief_item_indexes = [index]
+                addresses[sid] = index
+                claimed.add(index)
+    # Only a whole, bijective one-based ledger ending beyond the valid range
+    # establishes an alternate numbering convention. Never shift a mixed list.
+    expected = set(range(original_count, original_count + len(draft.additions)))
+    if (not addresses and expected and set(exclusive.values()) == expected
+            and len(exclusive) == len(expected) == len(draft.decisions)
+            and all(d.section_id in exclusive and d.brief_item_indexes == [exclusive[d.section_id] + 1]
+                    for d in draft.decisions)):
+        for decision in draft.decisions:
+            decision.brief_item_indexes = [exclusive[decision.section_id]]
+        return exclusive
+    return addresses
 
 
 def keep_accepted_dispositions(previous, verdicts, revised, original_count):

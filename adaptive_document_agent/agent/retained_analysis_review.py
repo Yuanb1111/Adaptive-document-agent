@@ -16,6 +16,10 @@ def needs_catalog_retry(result):
         return False
     if result.failure_details.get('retry_strategy') == 'full_catalog':
         return True
+    if result.failed_stage == 'analysis_time_limit' and result.presentation_topics and result.presentation_topics.topics:
+        # A full catalog selection already exists, including in older timeouts
+        # which did not persist the worker's strategy label.
+        return True
     if result.failed_stage != 'presentation_coverage' or result.failure_details.get('component') != 'PresentationCoverage':
         return False
     latest = next((w for w in reversed(result.validation_warnings) if w.code == REVIEW_CODE), None)

@@ -15,7 +15,8 @@ from .prompting import untrusted_document_message
 from .presentation_budget_output import complete_budget_output
 from .structured_output_correction import schema_feedback, format_correction_messages
 from .source_integration_output import review_output, SourceReviewContractError
-from .source_integration_bindings import MERGED_BRIEF_INSTRUCTIONS, keep_accepted_dispositions, merged_review_context
+from .source_integration_bindings import (MERGED_BRIEF_INSTRUCTIONS, bind_unique_inclusions,
+    keep_accepted_dispositions, merged_review_context)
 from .source_integration_quotes import bind_source_quotes, numbered_source_pages
 
 # Reserve room for both reasoning and the complete evidence-bound answer on the
@@ -118,7 +119,58 @@ def _validate(draft, result, brief, checks):
     return merged
 
 
-def review_supplementary_sources(gateway, result, brief, *, progress=None):
+def _retry_draft(previous, result, brief, checks, pages):
+    """Recover only a structurally valid proposal. The reviewer still reads every section."""
+    if (previous is None or previous.failed_stage != 'source_integration' or previous.executive_brief is None
+            or _fingerprint(previous, previous.executive_brief) != _fingerprint(result, brief)):
+        return None
+    issue = next((w for w in reversed(previous.validation_warnings)
+                  if w.code in {'source_integration_review', 'source_integration_unresolved'}), None)
+    if issue is None or issue.code != 'source_integration_unresolved':
+        return None
+    try:
+        attempts = json.loads(issue.message)['attempts']
+    except (ValueError, KeyError, TypeError):
+        return None
+    for entry in reversed(attempts if isinstance(attempts, list) else []):
+        try:
+            proposal = SourceIntegrationDraft.model_validate(entry['draft'])
+            bound = bind_source_quotes(proposal.model_copy(deep=True), pages)
+            bind_unique_inclusions(bound, checks, len(brief.items))
+            _validate(bound, result, brief, checks)
+            return proposal
+        except (ValueError, KeyError, TypeError):
+            continue
+    return None
+
+
+def _revision_notes(previous, context):
+    """Retain objections only for the same sections and source text. No verdict transfers."""
+    if previous is None or previous.failed_stage != 'source_integration' or previous.executive_brief is None:
+        return []
+    old = _context(previous, previous.executive_brief)
+    if any(old[k] != context[k] for k in ('checks', 'source_pages', 'topics', 'user_focus')):
+        return []
+    issue = next((w for w in reversed(previous.validation_warnings) if w.code in
+                  {'source_integration_review', 'source_integration_unresolved'}), None)
+    if issue is None or issue.code != 'source_integration_unresolved':
+        return []
+    notes = []
+    try:
+        audit = json.loads(issue.message)
+        notes.extend(n for n in audit.get('prior_objections', [])
+                     if isinstance(n, str) and 0 < len(n) <= 1000)
+        for entry in audit['attempts'][-3:]:
+            if 'review' in entry:
+                for verdict in SourceIntegrationReview.model_validate(entry['review']).verdicts:
+                    if not verdict.accepted and verdict.reason not in notes:
+                        notes.append(verdict.reason)
+    except (ValueError, KeyError, TypeError):
+        return []
+    return notes[-12:]
+
+
+def review_supplementary_sources(gateway, result, brief, *, progress=None, previous=None):
     """Two independent model passes; original conclusions and source facts survive."""
     coverage = result.profile.source_coverage
     checks = {c.section_id: c for c in coverage.checks} if coverage else {}
@@ -136,7 +188,8 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None):
             raise ValueError('Complete supplementary source text is unavailable.')
         structured_pages = {page.page_number for page in result.document.pages if page.tables}
         def source_payload(source_pages):
-            return json.dumps({**context, 'source_pages': [
+            return json.dumps({**context, 'original_brief_item_count': len(brief.items),
+                'first_addition_index': len(brief.items), 'source_pages': [
                 {**page, 'has_structured_tables': page['page'] in structured_pages}
                 for page in source_pages]}, ensure_ascii=False)
         encoded = source_payload(numbered_source_pages(context['source_pages']))
@@ -171,12 +224,16 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None):
             'Each addition needs its own evidence for its dates and units. A header quoted by another '
             'item does not bind this item. In flattened schedules and matrices, adjacent text can come '
             'from different columns. Use a monetary estimate only when its coefficient, unit and '
-            'measure are explicit together in narrative or verified by a structured source row and '
-            'column. A page with has_structured_tables=false has no such table binding. True only '
+            'measure are explicit together in narrative, verified by a structured source row and '
+            'column, or the original text has a standalone, unambiguous subtotal line consisting '
+            'of its measure and sole amount with an explicit unit header. Cite both the line and '
+            'header in the same addition for such a subtotal. A page with has_structured_tables=false '
+            'has no structured cells. True only '
             'indicates a table exists, not that any particular amount belongs to it. Otherwise state '
             'the source-supported plan, assumption or limitation qualitatively. '
             'Preserve all original conclusions unchanged; add only material missing findings or qualifications. '
-            'Keep numbers, units, audit scope, conditions and uncertainty exact. No calculations, invented facts, '
+            'For statements about relationships or conflicts, preserve who made the statement, its '
+            'subject, counterpart and effective time. Keep numbers, units, audit scope, conditions and uncertainty exact. No calculations, invented facts, '
             'whole-document absence claims or boilerplate review-status text. Return at most seven merged brief items. '
             'Each added item text must be at most 550 characters; preserve material qualifications concisely.'},
             *instruction_messages(result.profile, purpose='supplementary source integration'),
@@ -184,19 +241,43 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None):
         budget = dict(review_format=0)
         audit['corrections_used'] = budget
         prior_review = None
-        for attempt in range(2):
+        retained = _retry_draft(previous, result, brief, checks, pages)
+        notes = _revision_notes(previous, context)
+        if notes:
+            audit['prior_objections'] = notes
+            messages += [untrusted_document_message(json.dumps(dict(prior_objections=notes,
+                prior_proposal=retained.model_dump(mode='json') if retained else None), ensure_ascii=False)),
+                dict(role='user', content='Revise against the current brief and complete original pages. '
+                    'Check each prior objection directly, including exceptions to scope and missing '
+                    'counterevidence. Keep supported material from the proposal. If needed use separate '
+                    'additions for distinct findings within the available slots. Prior feedback is not evidence.')]
+            retained = None
+        from .source_integration_copy import overlong_additions, shorten_additions
+        pending_copy = None
+        # One semantic correction may itself need one schema-only repair.
+        # A second semantic rejection or repeated format failure stays terminal.
+        for attempt in range(3):
             entry = {}
             audit['attempts'].append(entry)
             draft = None
             try:
-                draft = complete_budget_output(gateway, messages, SourceIntegrationDraft, entry,
-                    audit_key='draft_output_attempts', token_limits=SOURCE_OUTPUT_TOKEN_LIMITS, stage='report')
+                if pending_copy is not None:
+                    draft = shorten_additions(gateway, messages, SourceIntegrationDraft, pending_copy, entry, len(brief.items))
+                    pending_copy = None
+                elif attempt == 0 and retained is not None:
+                    draft = retained
+                    entry['recovered_proposal'] = True
+                else:
+                    draft = complete_budget_output(gateway, messages, SourceIntegrationDraft, entry,
+                        audit_key='draft_output_attempts', token_limits=SOURCE_OUTPUT_TOKEN_LIMITS, stage='report')
                 submitted = draft.model_dump(mode='json')
                 entry['draft'] = submitted
                 draft = bind_source_quotes(draft, pages)
                 if prior_review is not None:
                     entry['preserved_sections'] = keep_accepted_dispositions(
                         *prior_review, draft, len(brief.items))
+                if addresses := bind_unique_inclusions(draft, checks, len(brief.items)):
+                    entry['inferred_addition_addresses'] = addresses
                 entry['draft'] = draft.model_dump(mode='json')
                 if submitted != entry['draft']:
                     entry['submitted_draft'] = submitted
@@ -231,18 +312,21 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None):
                 if isinstance(exc, SourceReviewContractError):
                     raise
                 if isinstance(exc, LLMStructuredOutputError):
-                    if draft is not None:
+                    if draft is not None or pending_copy is not None:
                         raise  # Reviewer capacity/refusal failure must not regenerate the writer.
                     feedback = schema_feedback(exc, SourceIntegrationDraft)
                     entry['format_failure'] = feedback
-                    if attempt:
+                    if (attempt == 0 and notes) or (attempt == 1 and prior_review is not None):
+                        pending_copy = overlong_additions(exc, feedback, SourceIntegrationDraft)
+                    if attempt and pending_copy is None:
                         schema_errors = feedback.get('schema_errors', [])
                         if schema_errors:
                             detail = '; '.join(
                                 f'{".".join(map(str, e["loc"]))}: {e["msg"]}' for e in schema_errors[:5])
                             raise ValueError(f'Supplementary draft failed validation: {detail}') from exc
                         raise
-                    messages += format_correction_messages(feedback)
+                    if pending_copy is None:
+                        messages += format_correction_messages(feedback)
                     continue
                 if draft is None:
                     raise

@@ -59,6 +59,66 @@ def test_material_source_finding_is_added_only_after_independent_review():
     assert len(gateway.calls) == 2
 
 
+@pytest.mark.parametrize('same_context', [False, True])
+def test_retry_revalidates_proposal_and_requires_fresh_section_verdicts(same_context):
+    saved, constraint = fixture()
+    review_supplementary_sources(Gateway(constraint, accept=False), saved, saved.executive_brief)
+    saved.failed_stage = 'source_integration'
+    audit = json.loads(saved.validation_warnings[-1].message)
+    for entry in audit['attempts']:
+        entry.pop('review')
+    saved.validation_warnings[-1].message = json.dumps(audit)
+    current = saved.model_copy(deep=True)
+    if not same_context:
+        current.executive_brief.title = 'Changed briefing'
+    gateway = Gateway(constraint)
+    merged = review_supplementary_sources(gateway, current, current.executive_brief, previous=saved)
+    assert resolved_source_check_ids(current, merged) == {'contracts'}
+    assert len(gateway.calls) == (1 if same_context else 2)
+    assert gateway.calls[-1][1].__name__ == 'SourceIntegrationReview'
+
+
+def test_rejected_source_proposal_carries_objections_into_revision_before_fresh_review():
+    saved, constraint = fixture()
+    review_supplementary_sources(Gateway(constraint, accept=False), saved, saved.executive_brief)
+    saved.failed_stage = 'source_integration'
+    current = saved.model_copy(deep=True)
+    gateway = Gateway(constraint)
+    merged = review_supplementary_sources(gateway, current, current.executive_brief, previous=saved)
+    assert gateway.calls[0][1] is SourceIntegrationDraft
+    assert 'The source limitation is not sufficiently represented.' in gateway.calls[0][0][-2]['content']
+    assert resolved_source_check_ids(current, merged) == {'contracts'}
+
+
+def test_missing_inclusion_address_only_binds_one_exclusively_owned_addition():
+    from types import SimpleNamespace as Row
+    from adaptive_document_agent.agent.source_integration_bindings import bind_unique_inclusions
+    decision = Row(section_id='alpha', disposition='include', brief_item_indexes=[])
+    addition = Row(evidence=[Row(page=2)])
+    draft = Row(decisions=[decision], additions=[addition])
+    checks = {'alpha': Row(pages=[2, 3]), 'beta': Row(pages=[2, 4])}
+    assert not bind_unique_inclusions(draft, checks, 4)
+    checks['beta'].pages = [4]
+    draft.additions.append(addition)
+    assert not bind_unique_inclusions(draft, checks, 4)
+    draft.additions.pop()
+    assert bind_unique_inclusions(draft, checks, 4) == {'alpha': 4}
+    assert decision.brief_item_indexes == [4]
+
+
+def test_only_unambiguous_whole_one_based_inclusion_ledger_is_normalized():
+    from types import SimpleNamespace as Row
+    from adaptive_document_agent.agent.source_integration_bindings import bind_unique_inclusions
+    decisions = [Row(section_id=str(i), disposition='include', brief_item_indexes=[i + 5]) for i in range(2)]
+    checks = {str(i): Row(pages=[i + 1]) for i in range(2)}
+    draft = Row(decisions=decisions, additions=[Row(evidence=[Row(page=p)]) for p in (1, 2)])
+    decisions[0].brief_item_indexes = [4]
+    assert not bind_unique_inclusions(draft, checks, 4)
+    decisions[0].brief_item_indexes = [5]
+    assert bind_unique_inclusions(draft, checks, 4) == {'0': 4, '1': 5}
+    assert [d.brief_item_indexes for d in decisions] == [[4], [5]]
+
+
 def test_independent_rejection_cannot_clear_scope_or_add_unapproved_copy():
     result, constraint = fixture()
     original = result.executive_brief.model_copy(deep=True)

@@ -347,7 +347,11 @@ class DocumentOrchestrator:
         checkpoint = PipelineResult(document=document, profile=profile, observations=index.observations,
             candidates=candidates, candidate_scores=scores, analysis_plan=plan,
             analysis_results=results, validation_warnings=issues)
-        run_state.update(result=checkpoint, reporting_ready=True, issues=issues)
+        # While reconstructing a timed-out reporting stage, keep the more
+        # complete prior checkpoint until its replacement has been validated.
+        if resume is None or resume.failed_stage != 'analysis_time_limit' or resume.retry_from != 'reporting':
+            run_state['result'] = checkpoint
+        run_state.update(reporting_ready=True, issues=issues)
         from .source_reading_checkpoint import incomplete_source_reads, retain_source_reading_failure
         if incomplete_source_reads(profile):
             return retain_source_reading_failure(checkpoint, self.gateway, resources,
@@ -378,12 +382,18 @@ class DocumentOrchestrator:
                 reporting = retained_brief_reporting(resume, checkpoint, self.gateway, requested_focus, scope)
                 retained_plan = reporting.presentation_plan if reporting is not None else None
                 if reporting is None:
+                    from .catalog_timeout_resume import catalog_timeout_reporting
+                    reporting = catalog_timeout_reporting(resume, checkpoint, editorial_gateway, requested_focus, scope)
+                if reporting is None:
                     notify("Generating insights and dynamic report")
                     reporting = self._generate_report(document, profile, index, plan, results, issues, notify, analysis_focus,
                         gateway=editorial_gateway, output=checkpoint)
+                    run_state['result'] = reporting
                 else:
                     checkpoint = reporting
-                    notify('Retrying briefing with validated retained report selection and presentation plan')
+                    run_state['result'] = checkpoint
+                    notify('Retrying briefing with validated retained report selection and presentation plan'
+                           if retained_plan is not None else 'Retrying presentation with verified catalog coverage')
                 details.update(reporting.stage_details_ms)
                 if reporting.pipeline_state == 'partial':
                     # Stop a failed bounded retained selection before buying
@@ -394,6 +404,7 @@ class DocumentOrchestrator:
                 insights, report_plan = reporting.insights, reporting.report_plan
                 topic_selection, charts = reporting.presentation_topics, reporting.charts
                 markdown, issues = reporting.report_markdown, reporting.validation_warnings
+                run_state['issues'] = issues
 
                 # Structured diagnostic metadata logging
                 import logging
@@ -492,6 +503,7 @@ class DocumentOrchestrator:
 
             prepared_brief = None
             deferred_brief = False
+            resumed_catalog_brief = False
 
             presentation_plan = retained_plan
             if self.gateway and retained_plan is None:
@@ -513,6 +525,7 @@ class DocumentOrchestrator:
                         validation_warnings=issues,
                     )
                     checkpoint = planning_result
+                    run_state['result'] = checkpoint
                     if editorial_gateway is not None and isinstance(editorial_gateway, IntroductionGuardedGateway):
                         editorial_gateway.check()
                     # Serial/local clients retain their existing request order.
@@ -702,7 +715,15 @@ class DocumentOrchestrator:
                     try:
                         from .brief_review_progress import brief_progress
                         with brief_progress(notify):
-                            executive_brief = current_executive_brief(editorial_gateway, snapshot, prepared_brief)
+                            if (resume is not None and resume.failed_stage == 'source_integration'
+                                    and topic_selection and topic_selection.topics and prepared_brief is None):
+                                from .brief_reporting_resume import checked_integration_input
+                                executive_brief = checked_integration_input(resume, snapshot)
+                                resumed_catalog_brief = executive_brief is not None
+                            if resumed_catalog_brief:
+                                notify('Restored the exact independently reviewed pre-integration briefing')
+                            else:
+                                executive_brief = current_executive_brief(editorial_gateway, snapshot, prepared_brief)
                     except (LLMResponseError, ValueError) as exc:
                         issues.append(ValidationIssue(code="executive_brief_unavailable", stage="report",
                             severity="warning", message="The final briefing could not be source-checked: " + str(exc)[:500]))
@@ -794,6 +815,14 @@ class DocumentOrchestrator:
                         if checked_integration_input(resume, final_result) is None:
                             final_result.executive_brief = None
                             deferred_brief = True
+                    if resumed_catalog_brief and final_result.executive_brief is not None:
+                        from .brief_review_checkpoint import context_key
+                        # The original approval matched the pre-linking snapshot.
+                        # Require exactly the same post-budget environment as on
+                        # that run, too. Otherwise review the current final plan.
+                        if context_key(None, None, final_result) != context_key(None, None, resume):
+                            final_result.executive_brief = None
+                            deferred_brief = True
                     if deferred_brief:
                         from .brief_budget_schedule import complete_deferred_brief
                         complete_deferred_brief(self.gateway, final_result, progress=notify)
@@ -812,7 +841,7 @@ class DocumentOrchestrator:
                     from .source_integration_review import review_supplementary_sources
                     with record_timing(final_result.stage_details_ms, 'source_integration_review'):
                         final_result.executive_brief = review_supplementary_sources(
-                            self.gateway, final_result, original_brief, progress=notify)
+                            self.gateway, final_result, original_brief, progress=notify, previous=resume)
                 require_source_integration(final_result)
                 if selected_record(final_result) is not None:
                     final_stage = 'presentation_budget'

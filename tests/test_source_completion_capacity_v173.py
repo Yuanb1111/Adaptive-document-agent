@@ -44,6 +44,26 @@ def _audit(result):
     return issue.code, json.loads(issue.message)
 
 
+def test_overlong_semantic_revision_gets_one_format_repair_and_fresh_review():
+    result, constraint = fixture()
+    draft, accepted = _outputs(constraint)
+    rejected = accepted.model_copy(deep=True)
+    rejected.verdicts[0].accepted = False
+    overlong = draft.model_dump(mode='json')
+    overlong['additions'][0]['text'] = 'x' * 551
+    llm, client = gateway([response(draft), response(rejected), response(json.dumps(overlong)),
+                           response(json.dumps({'addition_0_text': [
+                               dict(label='Cancellation rights', text=constraint),
+                               dict(label='Commitment period', text='The purchases do not require a long-term commitment.')]})),
+                           response(accepted)])
+    merged = review_supplementary_sources(llm, result, result.executive_brief)
+    assert resolved_source_check_ids(result, merged) == {'contracts'}
+    assert len(client.requests) == 5
+    entry = _audit(result)[1]['attempts'][-1]
+    assert entry['draft']['decisions'][0]['brief_item_indexes'] == [1, 2]
+    assert merged.items[1].evidence == merged.items[2].evidence
+
+
 @pytest.mark.parametrize("operation", ["draft", "review"])
 def test_length_retry_uses_complete_identical_prompt_and_preserves_approved_draft(operation):
     result, constraint = fixture()
