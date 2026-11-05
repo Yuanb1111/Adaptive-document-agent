@@ -3,6 +3,7 @@ import pytest
 
 from adaptive_document_agent.agent.retained_analysis import RetainedAnalysisSelection
 from adaptive_document_agent.agent.retained_selection_coverage import review_selection_coverage
+from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
 from tests.test_retained_analysis_v216 import _linked_result, gateway
 
 
@@ -43,6 +44,47 @@ def test_copy_feedback_must_reference_an_included_page(accepted, page_ids, valid
                                      for k in page_ids])])
     with pytest.raises(ValueError, match='Page corrections' if valid else 'exact omitted'):
         review_selection_coverage(mock, context, selection, result)
+
+
+@pytest.mark.parametrize('second_finish', ['stop', 'length'])
+def test_length_recovery_reuses_complete_review_packet_and_preserves_draft(monkeypatch, second_finish):
+    from adaptive_document_agent.agent import retained_analysis as retained
+    from adaptive_document_agent.agent.retained_selection_feedback import retain_selection_feedback
+    from tests.test_retained_source_citations import fixture
+
+    result, _, proposal = fixture()
+    accepted = dict(accepted=True, reason='Synthetic complete coverage verdict.')
+    mock = gateway([proposal.model_dump(), accepted, accepted])
+    generate_text = mock.client.generate_text
+    caps = []
+
+    def with_finish_reason(messages, **kwargs):
+        response = generate_text(messages, **kwargs)
+        if 'RetainedSelectionCoverage' in messages[0]['content']:
+            caps.append(kwargs['max_tokens'])
+            response.usage.finish_reason = 'length' if len(caps) == 1 else second_finish
+        return response
+
+    monkeypatch.setattr(mock.client, 'generate_text', with_finish_reason)
+    if second_finish == 'length':
+        with pytest.raises(LLMStructuredOutputError, match='truncated'):
+            retained.select_retained_analysis(mock, result)
+        assert retained.selected_record(result) is None
+        assert not any(w.code == 'retained_selection_coverage' for w in result.validation_warnings)
+        result.failed_stage = 'presentation_selection'
+        result.failure_details = dict(component='RetainedAnalysisSelection')
+        result.validation_warnings.append(retain_selection_feedback(result))
+        resume = gateway([accepted])
+        retained.select_retained_analysis(resume, result)
+        assert len(resume.client.calls) == 1  # Recheck the retained draft without rewriting it.
+    else:
+        retained.select_retained_analysis(mock, result)
+    assert caps == [12000, 20000]
+    assert mock.client.calls[1] == mock.client.calls[2]
+    assert [u['status'] for u in mock.usage if u['operation'] == 'RetainedSelectionCoverage'] == [
+        'truncated', 'truncated' if second_finish == 'length' else 'success']
+    assert retained.selected_record(result)['selection'] == proposal.model_dump(exclude_none=True)
+    assert not any(w.code == 'presentation_retained_analysis_review' for w in result.validation_warnings)
 
 
 def test_copy_and_coverage_errors_reach_the_same_bounded_correction(monkeypatch):

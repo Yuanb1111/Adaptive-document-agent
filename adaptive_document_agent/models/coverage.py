@@ -1,4 +1,5 @@
 """Source processing extent, separate from semantic/business acceptance."""
+from collections import Counter
 from typing import Literal
 from pydantic import BaseModel, Field
 
@@ -47,3 +48,16 @@ class SourceCoverage(BaseModel):
     notes: list[str] = Field(default_factory=list)
     # Source checks search bounded excerpts; they never certify non-disclosure.
     full_source_review_complete: bool = False
+
+    def checks_by_review_id(self) -> dict[str, SourceCheck]:
+        """Address each check even when several ranges share one outline section."""
+        counts = Counter(check.section_id for check in self.checks)
+        indexed = {}
+        for position, check in enumerate(self.checks, 1):
+            key = check.section_id
+            if counts[key] > 1:
+                key = f'{key}/check-{position}'
+                while key in counts or key in indexed:
+                    key += '/check'
+            indexed[key] = check
+        return indexed

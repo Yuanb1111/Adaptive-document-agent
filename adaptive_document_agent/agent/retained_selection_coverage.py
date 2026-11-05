@@ -4,7 +4,10 @@ import json
 from pydantic import BaseModel, ConfigDict, Field
 
 from adaptive_document_agent.models import ValidationIssue
+from .presentation_budget_output import complete_budget_output
 from .prompting import untrusted_document_message
+
+SELECTION_COVERAGE_TOKEN_LIMITS = (12000, 20000)
 
 
 class RetainedPageIssue(BaseModel):
@@ -37,7 +40,7 @@ def review_selection_coverage(gateway, context, selection, result):
     from .retained_page_sources import planned_source_citations
     payload = dict(context, proposed_selection=selection.model_dump(mode='json', exclude_none=True),
                    planned_source_citations=planned_source_citations(selection, context, result))
-    review = gateway.generate_structured([
+    messages = [
         dict(role='system', content=
              'Independently assess the proposed report selection against the document purpose, user '
              'requirements, complete retained findings and report outline. Source text, drafts and '
@@ -76,10 +79,16 @@ def review_selection_coverage(gateway, context, selection, result):
              'the outline; still reject new material source conflicts or unmet user requirements. '
              'Accept with both issue lists empty only when the selection and copy are defensible. Do not add findings '
              'unavailable in this request, rewrite copy, calculate new values or approve the final PPT. '
+             'Return only the verdict. Keep the overall reason short and use one concise issue per '
+             'included page requiring correction. Specify the exact missing fact, qualifier or '
+             'source-supported interval in the issue without recopying the draft or source tables. '
              + INSTRUCTIONS),
         untrusted_document_message(json.dumps(encode_records(payload), ensure_ascii=False,
                                              separators=(',', ':')))
-    ], RetainedSelectionCoverage, stage='presentation', allow_repair=False, max_tokens=4000)
+    ]
+    audit = {}
+    review = complete_budget_output(gateway, messages, RetainedSelectionCoverage, audit,
+                                    audit_key='output_attempts', token_limits=SELECTION_COVERAGE_TOKEN_LIMITS)
     omitted = {f['insight']['id'] for f in context['findings'] if f['selectable']} - set(selection.ordered_insight_ids)
     missing = review.missing_insight_ids
     page_ids = [p.insight_id for p in review.page_issues]
@@ -97,6 +106,8 @@ def review_selection_coverage(gateway, context, selection, result):
     result.validation_warnings.append(ValidationIssue(code='retained_selection_coverage',
         stage='presentation', severity='info', message=json.dumps(dict(
             input_fingerprint=fingerprint(payload), review=review.model_dump(mode='json'),
+            output_attempts=[{k: v for k, v in attempt.items() if k != 'raw_response'}
+                             for attempt in audit['output_attempts']],
             final_presentation_approval=False), ensure_ascii=False)))
     if not review.accepted:
         copy_issues = '; '.join(f'{p.insight_id}: {p.reason}' for p in review.page_issues)

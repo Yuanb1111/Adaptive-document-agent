@@ -26,14 +26,14 @@ def is_reporting_ready(result) -> bool:
 
 def source_review_complete(result) -> bool:
     coverage = result.profile.source_coverage
-    checks = list(coverage.checks) if coverage else []
+    checks = coverage.checks_by_review_id() if coverage else {}
     if not checks:
         return True
     if result.executive_brief is None or any(
-            c.status not in {'checked_found', 'checked_not_found'} for c in checks):
+            c.status not in {'checked_found', 'checked_not_found'} for c in checks.values()):
         return False
     from adaptive_document_agent.agent.source_integration_review import resolved_source_check_ids
-    return {c.section_id for c in checks} <= resolved_source_check_ids(result, result.executive_brief)
+    return set(checks) <= resolved_source_check_ids(result, result.executive_brief)
 
 
 def require_source_integration(result) -> None:

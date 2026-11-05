@@ -2,6 +2,7 @@ import pytest
 
 from adaptive_document_agent.agent.presentation_insight_recovery import _numeric_support
 from adaptive_document_agent.services.calendar_claims import bound_period_dates
+from adaptive_document_agent.validation.presentation_numeric_evidence import checked_money_amounts
 from tests.test_topic_coverage_review import _observation
 
 
@@ -37,3 +38,23 @@ def test_binding_feedback_identifies_missing_value_and_does_not_infer_fiscal_yea
     failures.clear()
     assert not _numeric_support('Population was 100 at 2023-12-31.', obs, diagnostics=failures)
     assert 'FY2023' in failures[0] and 'calendar date' in failures[0]
+
+
+@pytest.mark.parametrize('copy, supported', [
+    ('Net assets (RMB in thousands) were RMB 345,007 at 2021-12-31.', [True]),
+    ('RMB in thousands. Net assets were CNY 345,007.', [True]),
+    ('Figures follow.\nRMB in thousands: net assets were RMB 345,007.', [True]),
+    ('Net assets (RMB in thousands) were RMB 345,008.', [False]),
+    ('Net assets (RMB in thousands) were HKD 345,007.', [False]),
+    ('Net assets (RMB in thousands) were RMB 345,007 million.', [False]),
+    ('Net assets (RMB in thousands) were RMB 345.007 million.', [True]),
+    ('Net assets (RMB in thousands) were RMB 345,007.\nElsewhere: RMB 345,007.', [True, False]),
+    ('RMB in thousands. Net assets (RMB in units) were RMB 345,007.', [False]),
+    ('Net assets were RMB 345,007 (RMB in thousands).', [False]),
+])
+def test_declared_money_scale_is_scoped_and_still_requires_a_bound_amount(copy, supported):
+    observation = _observation('Net assets', '2021-12-31', 345_007_000).model_copy(update={
+        'raw_value': '345,007', 'raw_unit': 'RMB in thousands', 'unit': 'currency', 'currency': 'CNY',
+    })
+    assert [bound for _, bound, _ in checked_money_amounts(copy, [observation])] == supported
+    assert _numeric_support(copy, [observation]) is all(supported)

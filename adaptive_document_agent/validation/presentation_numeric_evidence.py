@@ -29,13 +29,17 @@ def observation_numeric_fields(item, *, include_context=False):
     return fields
 
 
+_CURRENCY_TOKEN = r"US\$|HK\$|S\$|RMB|CNY|CNH|USD|HKD|SGD|GBP|EUR|JPY|AUD|CAD|CHF|[$£€¥]"
 _MONEY = re.compile(
-    r"(?<![\w.])(?:(?P<currency>US\$|HK\$|S\$|RMB|CNY|CNH|USD|HKD|SGD|GBP|EUR|JPY|AUD|CAD|CHF|[$£€¥])\s*)?"
+    rf"(?<![\w.])(?:(?P<currency>{_CURRENCY_TOKEN})\s*)?"
     r"(?P<number>[+−-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)"
     r"(?:\s*(?P<scale>thousand|million|billion|trillion|bn|mn|[kmb]))?(?!\w|[.,]\d)", re.I)
 _MONEY_SCALES = {"": 1, "k": 1_000, "thousand": 1_000, "m": 1_000_000,
                  "mn": 1_000_000, "million": 1_000_000, "b": 1_000_000_000,
                  "bn": 1_000_000_000, "billion": 1_000_000_000, "trillion": 10**12}
+_MONEY_UNIT_DECLARATION = re.compile(
+    rf"(?:^[ \t]*|(?P<parenthesis>\())(?P<currency>{_CURRENCY_TOKEN})[ \t]+in[ \t]+"
+    r"(?P<scale>unit|thousand|million|billion|trillion)s?[ \t]*(?(parenthesis)\)|[:.])", re.I | re.M)
 _ALIASES = {"RMB": "CNY", "CNH": "CNY", "US$": "USD", "$": "USD", "HK$": "HKD",
             "S$": "SGD", "£": "GBP", "€": "EUR", "¥": "CNY"}
 _DECREASE = re.compile(r"\b(?:(?:decrease|decline|reduction|drop) of|(?:decreased|declined|fell|dropped) by)\s*$", re.I)
@@ -45,6 +49,19 @@ _CASH_USE = re.compile(r"\s+used in (?:operations|(?:operating|investing|financi
 def _currency(value):
     code = (value or "").upper()
     return _ALIASES.get(code, code)
+
+
+def _money_scale(text, match):
+    if match["scale"]:
+        return _MONEY_SCALES[match["scale"].lower()]
+    # A visible declaration governs later amounts of the same currency in this
+    # paragraph. An explicit suffix always wins, and a new line starts a new scope.
+    start = text.rfind("\n", 0, match.start()) + 1
+    declarations = list(_MONEY_UNIT_DECLARATION.finditer(text, start, match.start()))
+    if declarations and _currency(declarations[-1]["currency"]) == _currency(match["currency"]):
+        name = declarations[-1]["scale"].lower()
+        return _MONEY_SCALES.get(name, 1)  # "in units" explicitly resets the scale.
+    return 1
 
 
 def checked_money_amounts(text, observations, calculations=()):
@@ -75,7 +92,7 @@ def checked_money_amounts(text, observations, calculations=()):
             continue
         if negative or cash_use or decrease:
             claimed = -abs(claimed)
-        scale = _MONEY_SCALES[(match["scale"] or "").lower()]
+        scale = _money_scale(text, match)
         places = -claimed.as_tuple().exponent
         # A decrease by an amount needs a calculated change, while cash used
         # needs an observed outflow. Neither borrows the other's magnitude.

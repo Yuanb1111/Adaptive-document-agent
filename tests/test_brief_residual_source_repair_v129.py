@@ -2,11 +2,14 @@ import pytest
 from adaptive_document_agent.agent.brief_source_repair import correct_residual_source_errors
 from adaptive_document_agent.models.executive_brief import ExecutiveBrief
 from adaptive_document_agent.services.executive_brief import validate_executive_brief
+from adaptive_document_agent.services.llm.base import LLMResponse
+from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
 from tests.test_executive_brief import result_for, payload
 
 
 @pytest.mark.parametrize('valid', [True, False])
-def test_residual_source_correction_freezes_valid_findings_and_rechecks_every_claim(valid):
+@pytest.mark.parametrize('format_failure', [False, True])
+def test_residual_source_correction_freezes_valid_findings_and_rechecks_every_claim(valid, format_failure):
     source = 'Revenue was USD 12 million in 2024. Expenses were USD -7 million in 2024.'
     result = result_for([source])
     original = ExecutiveBrief.model_validate(payload('Revenue was USD 99 million in 2024.'))
@@ -20,14 +23,26 @@ def test_residual_source_correction_freezes_valid_findings_and_rechecks_every_cl
     current.items[1].text = 'Expenses were USD 7 million in 2024.'
     class Client:
         calls = 0
+        repairs = 0
         def generate_structured(self, messages, schema, **kwargs):
             self.calls += 1
             assert set(schema.model_fields) == {'item_1'}
+            if format_failure:
+                raise LLMStructuredOutputError('Malformed patch', response=LLMResponse(text='malformed'))
+            return self.response(schema)
+
+        def repair_structured_output(self, error, schema, **kwargs):
+            self.repairs += 1
+            assert kwargs['stage'] == 'report'
+            return self.response(schema)
+
+        def response(self, schema):
             return schema(item_1={'text':'Expenses were USD ' + ('-7' if valid else '7') + ' million in 2024.'})
     client, audit = Client(), {}
     corrected = correct_residual_source_errors(client, current, result=result, excerpts={1:source},
         initial_errors=errors, audit=audit)
     assert client.calls == 1
+    assert client.repairs == int(format_failure)
     if valid:
         assert corrected.items[0] == current.items[0]
         assert corrected.items[1].evidence == current.items[1].evidence

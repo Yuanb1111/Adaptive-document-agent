@@ -11,6 +11,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from adaptive_document_agent.models import PresentationSlide, PresentationTheme, PresentationVisualBlock, ValidationIssue
+from adaptive_document_agent.services.llm.exceptions import LLMResponseError
 from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
 from .presentation_insight_recovery import _linked_findings
 from .prompting import untrusted_document_message
@@ -169,8 +170,8 @@ def _select_retained_analysis(gateway, result):
         'titles. The compiler adds a source-page citation footer from the bound observations and '
         'finding evidence. That footer does not replace attribution to a named external source, '
         'management explanation, definition or assurance qualifier in the page copy. Use metric '
-        'titles and separate dated level statements for turning points; use exact supplied dates, '
-        'including every material intermediate point. Each directional clause must name its own '
+        'titles and separate dated level statements for turning points; use exact supplied period labels '
+        'without expanding fiscal years to dates, including every material intermediate point. Each directional clause must name its own '
         'start and end periods, including a later "fell" or "turned negative". Prefer dated level '
         'statements over chained movements that omit their starting period. Use '
         'raw reported amounts with explicit units, and only supplied calculations. '
@@ -257,18 +258,19 @@ def _select_retained_analysis(gateway, result):
                         reviewed_priorities = exc.priority_ids
                 if failures:
                     raise ValueError('\n'.join(failures))
-        except ValueError as exc:
+        except (ValueError, LLMResponseError) as exc:
             if source_authoring:
                 result.validation_warnings.append(ValidationIssue(code='retained_page_draft_rejected',
                     stage='presentation', severity='warning', message=json.dumps(dict(
                         attempt=attempt + 1, rejected_draft=draft, diagnostic=str(exc), row_ids=aliases),
                         ensure_ascii=False)))
-            if not source_authoring or attempt:
+            if not source_authoring or attempt or isinstance(exc, LLMResponseError):
                 raise
             messages = [*messages, untrusted_document_message(json.dumps(dict(
                 rejected_draft=draft, error=str(exc)), ensure_ascii=False)),
                 dict(role='user', content='Correct the indicated evidence binding or copy and return the '
-                     'complete selection. Keep every material finding and qualification. Use the exact raw '
+                     'complete selection, with one decision for every entry in findings, including '
+                     'a brief reason for every omitted entry. Keep every material finding and qualification. Use the exact raw '
                      'amount with its source unit and exact period instead of an unsupported rounded value. '
                      + (f'Use exactly these independently reviewed priority IDs: {reviewed_priorities}. '
                         'Author a complete source-grounded page for each; mark other findings omitted.'

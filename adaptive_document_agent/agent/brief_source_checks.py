@@ -11,8 +11,9 @@ def source_check_context(result):
     pages = {p.page_number: p.text for p in result.document.pages}
     records, passages = [], {}
     remaining = 18_000
-    for check in coverage.checks if coverage else []:
-        record = dict(section_id=check.section_id, pages=check.pages, status=check.status,
+    checks = coverage.checks_by_review_id() if coverage else {}
+    for review_id, check in checks.items():
+        record = dict(section_id=review_id, pages=check.pages, status=check.status,
                       question=check.reason, decision_impact=check.decision_impact,
                       finding=check.finding, evidence=[], context_complete=True)
         for page, quotes in check.evidence_quotes.items():

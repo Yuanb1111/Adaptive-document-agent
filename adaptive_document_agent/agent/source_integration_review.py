@@ -53,12 +53,14 @@ class SourceIntegrationReview(BaseModel):
 
 def _context(result, brief):
     coverage = result.profile.source_coverage
-    checks = list(coverage.checks) if coverage else []
-    pages = {page for check in checks for page in check.pages}
+    checks = coverage.checks_by_review_id() if coverage else {}
+    pages = {page for check in checks.values() for page in check.pages}
     sections = {s.id: s for s in coverage.sections} if coverage else {}
     check_rows = []
-    for check in checks:
+    for review_id, check in checks.items():
         row = check.model_dump(mode='json')
+        if review_id != check.section_id:
+            row.update(section_id=review_id, outline_section_id=check.section_id)
         section = sections.get(check.section_id)
         if section:
             row['section_extent'] = [section.start_page, section.end_page]
@@ -143,13 +145,26 @@ def _retry_draft(previous, result, brief, checks, pages):
     for entry in reversed(attempts if isinstance(attempts, list) else []):
         try:
             proposal = SourceIntegrationDraft.model_validate(entry['draft'])
-            bound = bind_source_quotes(proposal.model_copy(deep=True), pages)
+            bound = bind_source_quotes(proposal, pages)
+            _bind_legacy_check_ids(bound, checks)
             bind_unique_inclusions(bound, checks, len(brief.items))
             _validate(bound, result, brief, checks)
             return proposal
         except (ValueError, KeyError, TypeError):
             continue
     return None
+
+
+def _bind_legacy_check_ids(draft, checks):
+    """Recover an old outline ID only from an unambiguous cited page scope."""
+    for decision in draft.decisions:
+        if decision.section_id in checks:
+            continue
+        pages = {quote.page for quote in decision.evidence}
+        matches = [key for key, check in checks.items()
+                   if check.section_id == decision.section_id and pages <= set(check.pages)]
+        if len(matches) == 1:
+            decision.section_id = matches[0]
 
 
 def _revision_notes(previous, context):
@@ -181,7 +196,7 @@ def _revision_notes(previous, context):
 def review_supplementary_sources(gateway, result, brief, *, progress=None, previous=None):
     """Two independent model passes; original conclusions and source facts survive."""
     coverage = result.profile.source_coverage
-    checks = {c.section_id: c for c in coverage.checks} if coverage else {}
+    checks = coverage.checks_by_review_id() if coverage else {}
     if not checks or set(checks) <= resolved_source_check_ids(result, brief):
         return brief
     audit = {'contract': 'source-integration-v206', 'attempts': []}
@@ -216,7 +231,9 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
             'indexes. Include requires a necessary new conclusion in additions and its zero-based index in the merged '
             'brief (original items followed by additions). Omit requires an explicit reason why the evidence does not '
             'change the conclusions, not just page pressure. Quote literal evidence from the section pages for every '
-            'decision. A section disposition may cite only pages listed in that check.pages. '
+            'decision. Copy each check.section_id exactly, including any /check suffix. '
+            'outline_section_id, when present, only identifies the parent outline section. '
+            'A section disposition may cite only pages listed in that check.pages. '
             'Pages cited by the existing brief or another check can supply context, but cannot be '
             'submitted as evidence for this section. When lines are numbered, prefer a page and set the entire evidence text field to '
             'a single reference such as "@lines[4]" or "@lines[4-6]", without appending a transcription. '
@@ -291,6 +308,7 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
                 submitted = draft.model_dump(mode='json')
                 entry['draft'] = submitted
                 draft = bind_source_quotes(draft, pages)
+                _bind_legacy_check_ids(draft, checks)
                 if prior_review is not None:
                     entry['preserved_sections'] = keep_accepted_dispositions(
                         *prior_review, draft, len(brief.items))

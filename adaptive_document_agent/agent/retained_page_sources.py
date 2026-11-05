@@ -12,7 +12,7 @@ class RetainedPage(BaseModel):
         description='Concise metric and scope label. Put dated direction and trajectory in the message. '
                     'If the title itself asserts a change, it must state both complete comparison dates.')
     message: str = Field(min_length=1, max_length=2000,
-        description='Aim for under 900 characters using exact ISO dates and shared explicit units. '
+        description='Aim for under 900 characters using exact source period labels and shared explicit units. '
                     'Keep material source qualifications and dated components intact. Final physical '
                     'page budgets and rendered text fit are checked separately; never truncate evidence.')
     companion_ids: list[str] = Field(default_factory=list, max_length=40,

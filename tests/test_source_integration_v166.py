@@ -59,6 +59,42 @@ def test_material_source_finding_is_added_only_after_independent_review():
     assert len(gateway.calls) == 2
 
 
+@pytest.mark.parametrize('mixed_pages', [False, True])
+def test_checks_in_the_same_outline_section_still_require_independent_verdicts(mixed_pages):
+    from adaptive_document_agent.services.pipeline_completion import source_review_complete
+
+    result, constraint = fixture()
+    coverage = result.profile.source_coverage
+    other = 'Renewal terms are still under negotiation.'
+    result.document.pages[10].text = other
+    coverage.checks.append(coverage.checks[0].model_copy(update={
+        'pages': [11], 'finding': other, 'evidence_quotes': {11: [other]},
+    }))
+    check_ids = list(coverage.checks_by_review_id())
+    assert len(check_ids) == len(set(check_ids)) == 2
+    draft = SourceIntegrationDraft(decisions=[dict(section_id='contracts', disposition='omit',
+        reason='Synthetic test disposition.', evidence=[dict(page=page, text=quote)])
+        for page, quote in [(12, constraint), (11, other)]])
+    if mixed_pages:
+        draft.decisions[0].evidence.extend(draft.decisions[1].evidence)
+
+    class CheckGateway:
+        def generate_structured(self, messages, schema, **kwargs):
+            if schema is SourceIntegrationDraft:
+                assert any(all(key in message['content'] for key in check_ids) for message in messages)
+                return draft.model_copy(deep=True)
+            assert not mixed_pages
+            payload = json.loads(messages[-1]['content'].split('\n', 1)[1].rsplit('\n', 1)[0])
+            assert [d['section_id'] for d in payload['draft']['decisions']] == check_ids
+            return schema(verdicts=[dict(section_id=key, accepted=True, reason='Synthetic review.')
+                                    for key in check_ids])
+
+    assert not source_review_complete(result)
+    result.executive_brief = review_supplementary_sources(CheckGateway(), result, result.executive_brief)
+    assert source_review_complete(result) is not mixed_pages
+    assert all(c.section_id == 'contracts' for c in coverage.checks)
+
+
 def test_first_overlong_addition_keeps_sources_through_copy_and_independent_review():
     from adaptive_document_agent.services.llm.base import LLMResponse
     from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError

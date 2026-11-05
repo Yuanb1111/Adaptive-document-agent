@@ -4,6 +4,8 @@ import re
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError, create_model
 from adaptive_document_agent.models.executive_brief import ExecutiveBrief, BRIEF_EVIDENCE_LIMIT
 from adaptive_document_agent.services.executive_brief import validate_executive_brief
+from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
+from .brief_patch_capacity import compact_overlong_patch
 from .prompting import untrusted_document_message
 from .summary_repair_progress import source_failure_keys
 
@@ -148,12 +150,17 @@ def correct_residual_source_errors(gateway, brief, *, result, excerpts, initial_
         'table cell remains negative; a loss/expense label alone does not authorize a positive '
         'number. Remove unsupported ratios, percentages or inferred counts if the quoted evidence '
         'does not report them. Never calculate or round a replacement. Keep complete source units, '
-        'denominators and periods; add source-supported audit-status caveats. Do not add new '
-        'facts. If a claim lacks its supporting quotation, append_evidence_refs may select exact '
+        'denominators and periods; add source-supported audit-status caveats. If validation names an '
+        'omitted conditional outcome, restore that exact value, unit and its own condition from the '
+        'cited passage. The comparison table is kept verbatim and remains visible. Do not restate '
+        'its amounts, scenario rows or headers in the body. Keep the common definition and '
+        'conditions in the body, and add only the missing source-supported detail. '
+        'If a claim lacks its supporting quotation, append_evidence_refs may select exact '
         'IDs from that item\'s same-page evidence_options. Existing quotations cannot be removed '
         f'or replaced; total quotations must remain at most {BRIEF_EVIDENCE_LIMIT}. Use [] when no addition is needed. '
         'Do not use another item\'s references or add a new source page. If no supplied reference '
-        'supports a claim, correct the claim using existing evidence. Text limit is 550 characters. Full source and independent meaning '
+        'supports a claim, correct the claim using existing evidence. Aim for at most 450 characters '
+        'including spaces so there is room for all qualifications within the 550-character limit. Full source and independent meaning '
         'checks follow this correction; an unchanged or still invalid result fails.'},
         untrusted_document_message(json.dumps(dict(
             failed_items={f'item_{i}':original['items'][i] for i in failed},
@@ -163,8 +170,18 @@ def correct_residual_source_errors(gateway, brief, *, result, excerpts, initial_
             evidence_options=evidence_options,
             source_native_money_options=native_quantity_options(original, failed, result, excerpts)),
             ensure_ascii=False))]
-    proposed = gateway.generate_structured(messages, schema, stage='report', allow_repair=False,
-                                           max_tokens=12000, cancelled=cancelled)
+    try:
+        proposed = gateway.generate_structured(messages, schema, stage='report', allow_repair=False,
+                                               max_tokens=12000, cancelled=cancelled)
+    except LLMStructuredOutputError as exc:
+        recovery = record['output_recovery'] = {}
+        try:
+            proposed = compact_overlong_patch(gateway, messages, schema, exc, recovery, cancelled=cancelled)
+        except LLMStructuredOutputError:
+            if 'capacity_correction' in recovery:
+                raise  # The one recovery request has already been used.
+            proposed = gateway.repair_structured_output(exc, schema, stage='report', cancelled=cancelled,
+                                                         diagnostics=recovery, max_tokens=12000)
     values = proposed.model_dump(mode='json')
     if set(values) != set(schema.model_fields):
         raise ValueError('Source correction must cover exactly the requested item addresses')
