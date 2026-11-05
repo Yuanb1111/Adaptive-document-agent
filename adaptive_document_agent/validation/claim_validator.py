@@ -331,7 +331,13 @@ def classify_metric_semantic_family(
         "投资活动现金",
         "筹资活动现金",
     )
-    if any(p in name_normalized for p in cash_flow_indicators):
+    # A signed source row can spell out both cash directions in its label.
+    # Retain cash-flow semantics for “cash from/(used in)” and its reverse.
+    signed_cash_label = re.search(
+        r"\bcash\s+(?:from\s*/\s*\(\s*used\s+in\s*\)|\(\s*used\s+in\s*\)\s*/\s*from)",
+        name_normalized,
+    )
+    if signed_cash_label or any(p in name_normalized for p in cash_flow_indicators):
         return MetricSemanticFamily.CASH_FLOW
 
     # 1b. EXPENSE_RATIO: cost / expense ratios expressed as "X as % of revenue" or "X / revenue"

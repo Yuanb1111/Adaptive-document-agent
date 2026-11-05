@@ -113,6 +113,13 @@ def writer_context(context):
         {**row, 'id': alias} for alias, row in zip(aliases, rows, strict=True)]}, aliases
 
 
+def source_row_assurance(result, row_refs):
+    """Expose explicit per-row source annotations on the wire only."""
+    status = {o.id: o.audited_status for o in result.observations
+              if o.audited_status in {'audited', 'unaudited'}}
+    return {ref: status[oid] for ref, oid in row_refs.items() if oid in status}
+
+
 def planned_source_citations(selection, context, result):
     """Expose the compiler's actual page references, never model-proposed citations."""
     from adaptive_document_agent.services.source_citations import evidence_pages, source_footer
@@ -134,9 +141,17 @@ def planned_source_citations(selection, context, result):
         allowed = {r['id'] for r in context.get('source_rows', []) if r['table_id'] in tables}
         if companions - primary - allowed:
             continue
-        pages = evidence_pages(insights[decision.insight_id], [observations[k] for k in ids])
+        bound = [observations[k] for k in sorted(ids)]
+        pages = evidence_pages(insights[decision.insight_id], bound)
         if not pages or set(pages) - available_pages:
             continue
-        citations.append(dict(insight_id=decision.insight_id, observation_ids=sorted(ids),
-                              source_pages=pages, footer=source_footer(pages)))
+        citation = dict(insight_id=decision.insight_id, observation_ids=sorted(ids),
+                        source_pages=pages, footer=source_footer(pages))
+        marked_tables = {o.effective_table_id for o in bound
+                         if o.effective_table_id and o.audited_status in {'audited', 'unaudited'}}
+        if marked_tables:
+            citation['bound_assurance'] = [dict(observation_id=o.id, metric=o.metric_original,
+                period=o.period, audited_status=o.audited_status)
+                for o in bound if o.effective_table_id in marked_tables]
+        citations.append(citation)
     return citations

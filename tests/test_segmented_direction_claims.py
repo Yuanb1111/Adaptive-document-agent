@@ -89,6 +89,21 @@ def test_as_of_value_comparisons_require_exact_source_endpoints(text, expected_i
         assert expected_issue in {issue.code for issue in issues}
 
 
+@pytest.mark.parametrize('label', [
+    'Net cash from/(used in) operating activities',
+    'Net cash (used in)/from investing activities',
+])
+def test_signed_cash_source_labels_validate_outflow_magnitude(label):
+    observations = _series(label, [-75, -150, -100])
+    correct = f'{label}: the outflow increased from FY2023 to FY2024. The outflow decreased from FY2024 to FY2025.'
+    assert not ClaimValidator().validate_slide(_slide(correct, observations), observations)
+    reversed_direction = correct.replace('outflow increased', 'outflow decreased', 1)
+    errors = ClaimValidator().validate_slide(_slide(reversed_direction, observations), observations)
+    assert [(e.start_period, e.end_period) for e in errors if e.code == 'directional_contradiction'] == [
+        ('FY2023', 'FY2024'),
+    ]
+
+
 @pytest.mark.parametrize("component", ["title", "message", "bullets"])
 @pytest.mark.parametrize("text", [
     "Net loss widened then narrowed.",

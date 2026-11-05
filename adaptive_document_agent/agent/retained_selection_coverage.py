@@ -37,8 +37,10 @@ class SelectionCoverageError(ValueError):
 def review_selection_coverage(gateway, context, selection, result):
     from adaptive_document_agent.utils.record_encoding import encode_records, INSTRUCTIONS
     from .retained_analysis import fingerprint
-    from .retained_page_sources import planned_source_citations
+    from .retained_page_sources import planned_source_citations, source_row_assurance
     payload = dict(context, proposed_selection=selection.model_dump(mode='json', exclude_none=True),
+                   source_row_assurance=source_row_assurance(result,
+                       {row['id']: row['id'] for row in context.get('source_rows', [])}),
                    planned_source_citations=planned_source_citations(selection, context, result))
     messages = [
         dict(role='system', content=
@@ -67,7 +69,12 @@ def review_selection_coverage(gateway, context, selection, result):
              'now: if an attribution has incomplete dates, specify the exact source-supported '
              'interval and driver rather than leaving a later rewrite to guess its scope. Use the '
              'included insight_id. Refer to the actual source; never infer assurance from neighbouring '
-             'columns. A total alone does not explain a material component breakdown in the source. '
+             'columns. source_row_assurance lists explicit annotations by row ID. A row without an '
+             'annotation has unknown assurance. For marked tables, bound_assurance in each planned '
+             'source citation lists the exact linked periods, including unknown columns. Confirm the '
+             'annotation belongs to that column using the original layout before requesting a change. '
+             'A shared period heading does not carry an assurance annotation across columns. '
+             'A total alone does not explain a material component breakdown in the source. '
              'Reject with exact missing_insight_ids of omitted selectable findings and specific reasons. '
              'When selection must change, also return prioritized_insight_ids: the COMPLETE feasible '
              'replacement selection, choosing additions and lower-priority removals together. It must '

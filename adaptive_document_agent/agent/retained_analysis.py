@@ -153,8 +153,10 @@ def select_retained_analysis(gateway, result):
 def _select_retained_analysis(gateway, result):
     source_authoring = _has_positioned_sources(result)
     context = selection_context(result, source_authoring=source_authoring)
-    from .retained_page_sources import writer_context
+    from .retained_page_sources import source_row_assurance, writer_context
     packet, aliases = writer_context(context) if source_authoring else (context, {})
+    if source_authoring:
+        packet['source_row_assurance'] = source_row_assurance(result, aliases)
     from .audit_source_layout import LAYOUT_INSTRUCTIONS
     authoring = (
         'For each included finding write its final audience page (title, message and companion_ids) '
@@ -166,7 +168,9 @@ def _select_retained_analysis(gateway, result):
         'a second page about a subtotal does not itself explain the composition. Include '
         'only row-N references from this finding’s allowed_companion_rows for companion values actually '
         'used. All primary periods are already bound: for an ordinary trend use an empty companion_ids list. Put each material '
-        'column-specific assurance qualifier beside its period in visible copy. Use concise metric '
+        'column-specific assurance qualifier beside its period in visible copy. source_row_assurance '
+        'lists explicit annotations by row reference. A row without an annotation has unknown assurance; '
+        'do not extend an annotation from an adjacent column. Verify it against the original header. Use concise metric '
         'titles. The compiler adds a source-page citation footer from the bound observations and '
         'finding evidence. That footer does not replace attribution to a named external source, '
         'management explanation, definition or assurance qualifier in the page copy. Use metric '

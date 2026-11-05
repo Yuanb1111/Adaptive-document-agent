@@ -42,6 +42,29 @@ def test_review_packet_and_compiled_slide_use_same_literal_source_footer():
     assert not any(w.code == 'presentation_retained_analysis_review' for w in result.validation_warnings)
 
 
+def test_writer_and_reviewer_receive_only_explicit_row_assurance():
+    from adaptive_document_agent.agent.retained_page_sources import writer_context
+
+    result, _, selection = fixture()
+    result.observations[0].audited_status = 'unaudited'
+    result.observations[1].audited_status = 'unknown'
+    context = retained.selection_context(result, source_authoring=True)
+    _, aliases = writer_context(context)
+    observation_id = result.observations[0].id
+    alias = next(ref for ref, oid in aliases.items() if oid == observation_id)
+    mock = gateway([selection.model_dump(), dict(accepted=True, reason='Synthetic review')])
+    retained.select_retained_analysis(mock, result)
+    packets = [decode_records(json.loads(call[-1]['content'].split('\n', 1)[1].rsplit('\n', 1)[0]))
+               for call in mock.client.calls]
+    assert packets[0]['source_row_assurance'] == {alias: 'unaudited'}
+    assert packets[1]['source_row_assurance'] == {observation_id: 'unaudited'}
+    citation, = packets[1]['planned_source_citations']
+    assert {o['observation_id']: o['audited_status'] for o in citation['bound_assurance']} == {
+        o.id: o.audited_status for o in result.observations if o.id in citation['observation_ids']
+    }
+    assert retained.selection_context(result, source_authoring=True) == context
+
+
 def test_citation_includes_bound_companion_evidence_and_changes_review_fingerprint():
     result, context, selection = fixture()
     companion = result.observations[0].model_copy(deep=True)
