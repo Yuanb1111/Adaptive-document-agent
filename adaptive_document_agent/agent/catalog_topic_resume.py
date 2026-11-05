@@ -15,7 +15,11 @@ def topic_review_failure(result):
 
 
 def retry_catalog_topics(previous, current, gateway, focus, scope):
-    if (not topic_review_failure(previous) or not previous.insights or not previous.report_plan
+    merge_failure = (previous is not None and previous.pipeline_state == 'partial'
+                     and previous.retry_from == 'reporting'
+                     and (previous.failed_stage == 'analysis_time_limit'
+                          or previous.failure_details.get('component') == 'PresentationCoverage'))
+    if (not (topic_review_failure(previous) or merge_failure) or not previous.insights or not previous.report_plan
             or getattr(getattr(gateway, 'settings', None), 'presentation_strategy', None) != 'full_catalog'
             or (focus is not None and focus.strip() != (previous.profile.analysis_focus or '').strip())
             or (scope is not None and [(r.start_page, r.end_page) for r in scope.page_ranges]
@@ -26,9 +30,19 @@ def retry_catalog_topics(previous, current, gateway, focus, scope):
     warnings = previous.validation_warnings
     index = next((i for i in range(len(warnings) - 1, -1, -1) if warnings[i].code in
         {'presentation_topic_coverage_unresolved', 'presentation_topic_coverage_review'}), None)
-    if index is None or warnings[index].code != 'presentation_topic_coverage_review':
+    if index is None:
         return None
     try:
+        replayed = warnings[index].code == 'presentation_topic_coverage_unresolved'
+        if replayed:
+            from .coverage_merge_resume import replay_merge
+            receipt = replay_merge(warnings[index], previous) if merge_failure else None
+            if receipt is None:
+                return None
+            warnings = [*warnings, receipt]
+            index = len(warnings) - 1
+        elif not topic_review_failure(previous):
+            return None
         record = json.loads(warnings[index].message)
         review = TopicCoverageReview.model_validate(record['review'])
         decisions = [d.series_id for d in review.coverage_decisions if d.reason.strip()]
@@ -65,7 +79,7 @@ def retry_catalog_topics(previous, current, gateway, focus, scope):
         candidate.validation_warnings.extend(w.model_copy(deep=True) for w in warnings
             if w.code.startswith('presentation_') and w.code != 'presentation_topic_selection_failed'
             and w not in candidate.validation_warnings)
-        _, lookup = series_directory(candidate)
+        directory, lookup = series_directory(candidate)
         if not completed_review_is_current(candidate, record, lookup):
             return None
         primary = {n for a, b in candidate.profile.analysis_page_ranges for n in range(a, b + 1)}
@@ -76,6 +90,11 @@ def retry_catalog_topics(previous, current, gateway, focus, scope):
     except (ValueError, KeyError, TypeError, AttributeError, IndexError):
         return None
     try:
+        if replayed:
+            from .topic_caveat_review import reconcile_caveats
+            from adaptive_document_agent.services.presentation_ratio_definitions import prepare_topic_ratio_definitions
+            reconcile_caveats(selection, directory, candidate, gateway)
+            prepare_topic_ratio_definitions(selection, lookup, candidate)
         candidate.presentation_topics = review_covered_topics(selection, lookup, candidate, gateway,
             validate, primary_pages=primary, recheck_ids=recheck)
     except CoverageTopicReviewError as exc:

@@ -157,6 +157,15 @@ def _merge(reviewed, original, provisional, lookup, primary_pages, validate, *, 
         local, echoes = scoped_merge_decisions(reviewed, provisional, old)
     except ValueError as exc:
         errors.append(str(exc))
+    else:
+        # The optional display list can echo an explicit ledger inclusion.
+        # Only clear it when both the decision and the selected ID agree.
+        # The original response remains in the audit, and all source checks
+        # (including complete observation representation) still apply below.
+        selected = {sid for topic in revised.topics for sid in topic.series_ids}
+        duplicates = {sid for sid, decision in local.items()
+                      if decision.decision == 'include' and sid in selected}
+        revised.omissions = [item for item in revised.omissions if item.series_id not in duplicates]
     try:
         validate(revised, lookup, primary_pages=primary_pages)
     except ValueError as exc:
@@ -186,6 +195,23 @@ def _merge(reviewed, original, provisional, lookup, primary_pages, validate, *, 
             accepted_source_observations_preserved=True,
             omission_reasons_used_as_evidence=False)
     return revised, local
+
+
+def finalize_decisions(current, decisions, candidates, lookup, primary_pages, validate):
+    represented = [item for topic in current.topics for sid in topic.series_ids for item in lookup[sid]]
+    for sid, decision in list(decisions.items()):
+        if decision.decision == 'omit' and representation_links(lookup[sid], represented) is not None:
+            decisions[sid] = CoverageDeltaDecision(series_id=sid, decision='include',
+                reason='All source facts are represented by the final model-selected evidence; original model reasoning remains in the batch audit.')
+    selected_ids = {sid for topic in current.topics for sid in topic.series_ids}
+    current.omissions = [item for item in current.omissions if item.series_id not in selected_ids
+                         and item.series_id not in decisions]
+    for sid in candidates:
+        if len(current.omissions) >= 12:
+            break
+        if decisions[sid].decision == 'omit':
+            current.omissions.append(PresentationOmission(series_id=sid, reason=decisions[sid].reason))
+    validate(current, lookup, primary_pages=primary_pages)
 
 
 def review_deltas(selection, candidates, lookup, primary_pages, payload, gateway, validate, record,
@@ -307,20 +333,7 @@ def review_deltas(selection, candidates, lookup, primary_pages, payload, gateway
                 validate=lambda reply: _merge(reply, selection, provisional, lookup, primary_pages, validate, audit=merge_audit))
             merge_audit['status'] = 'complete'
             decisions.update(final)
-        represented = [item for topic in current.topics for sid in topic.series_ids for item in lookup[sid]]
-        for sid, decision in list(decisions.items()):
-            if decision.decision == 'omit' and representation_links(lookup[sid], represented) is not None:
-                decisions[sid] = CoverageDeltaDecision(series_id=sid, decision='include',
-                    reason='All source facts are represented by the final model-selected evidence; original model reasoning remains in the batch audit.')
-        selected_ids = {sid for topic in current.topics for sid in topic.series_ids}
-        current.omissions = [item for item in current.omissions if item.series_id not in selected_ids
-                             and decisions.get(item.series_id, None) is None]
-        for sid in candidates:
-            if len(current.omissions) >= 12:
-                break
-            if decisions[sid].decision == 'omit':
-                current.omissions.append(PresentationOmission(series_id=sid, reason=decisions[sid].reason))
-        validate(current, lookup, primary_pages=primary_pages)
+        finalize_decisions(current, decisions, candidates, lookup, primary_pages, validate)
     except IntroductionVerificationFailed as exc:
         reviewed = {sid for local in completed.values() for sid in local}
         record('presentation_topic_coverage_unresolved', 'warning', {

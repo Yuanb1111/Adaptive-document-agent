@@ -37,13 +37,12 @@ def render_incomplete(st, result, *, scope_key):
         st.error(f"Failed stage: {result.failed_stage}{location}. {details.get('message', '')}")
     st.warning('This analysis is incomplete. Download the retained data and diagnostics below. '
                'Use Retry analysis (reuse successful cache) to continue; PowerPoint remains blocked.')
+    render(st, result, key='analysis_json_' + scope_key)
     from adaptive_document_agent.services.topic_review_status import topic_review_gaps, coverage_review_gaps
     gaps = topic_review_gaps(result) + coverage_review_gaps(result)
     if gaps:
-        st.write('Unverified analytical coverage')
-        for gap in gaps:
-            st.text(gap['title'] + ': ' + gap['reason'])
-    render(st, result, key='analysis_json_' + scope_key)
+        with st.expander(f'Unverified analytical coverage ({len(gaps)} entries)', expanded=False):
+            st.text('\n'.join(gap['title'] + ': ' + gap['reason'] for gap in gaps))
     failures = [issue for issue in result.validation_warnings
                 if issue.severity == 'error' or issue.code == 'company_introduction_unavailable']
     if failures:

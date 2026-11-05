@@ -426,7 +426,9 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
     # panel's caption from that split rather than selecting a different
     # analytical caption merely because both charts now fit together.
     caption_charts = charts[:1] if support_sidebar else charts
-    display_message = supported_subtitle(slide_plan, caption_charts, index, denominators=denominators)
+    from .retained_display_copy import is_source_authored_message
+    display_message = (slide_plan.message.strip() if is_source_authored_message(result, slide_plan)
+                       else supported_subtitle(slide_plan, caption_charts, index, denominators=denominators))
     from .presentation_labels import source_fact_caption
     for chart in charts:
         display_message = source_fact_caption(display_message,

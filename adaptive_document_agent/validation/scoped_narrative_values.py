@@ -83,6 +83,16 @@ def scoped_value_errors(slide: PresentationSlide, observations: list[Observation
                                    tuple(sorted({e.row_label.strip() for e in obs.evidence
                                                  if e.row_label and e.row_label.strip()})))
         for variant in variants:
+            # Table recovery can retain a parenthesized unit header as a row.
+            # Its own unit metadata proves this literal token is a unit, not
+            # a second measure that owns subsequent from/to amounts. Preserve
+            # the observation; do not let this header steal a real subject.
+            unit = ' '.join((obs.raw_unit or '').casefold().split())
+            header = obs.metric_original.strip()
+            if (unit and header.startswith('(') and header.endswith(')')
+                    and ' '.join(header[1:-1].casefold().split()) == unit
+                    and variant.strip('() ').casefold() == unit):
+                continue
             group = by_label.setdefault(variant, [])
             if obs.id in selected_ids and obs not in group:
                 group.append(obs)

@@ -14,11 +14,34 @@ from .retained_analysis import (
 )
 
 
+def _final_source_retry(previous):
+    """Keep a draft whose selection was accepted, but grant no source verdict.
+
+    A renderer/validator correction must not force the writer to replace every
+    previously bound page. The normal publication gate reviews the whole draft
+    again; content still rejected by that gate remains a failed attempt.
+    """
+    if (previous is None or previous.failed_stage != 'presentation_coverage'
+            or previous.failure_details.get('component') != 'PresentationCoverage'):
+        return False
+    from .retained_analysis_review import RetainedAnalysisReview, REVIEW_CODE
+    latest = next((w for w in reversed(previous.validation_warnings) if w.code == REVIEW_CODE), None)
+    try:
+        record = json.loads(latest.message)
+        review = RetainedAnalysisReview.model_validate(record['review'])
+        ids = {s.id for s in previous.presentation_plan.slides if s.slide_type == 'analysis'}
+        return (record['contract'] == 1 and review.omissions_accepted and bool(ids)
+                and len(review.verdicts) == len(ids) and {v.slide_id for v in review.verdicts} == ids)
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return False
+
+
 def retained_brief_reporting(previous, current, gateway, requested_focus=None, scope=None):
     """Return only the stages whose saved bindings still match current inputs."""
     if (previous is None or previous.pipeline_state != 'partial' or previous.retry_from != 'reporting'
-            or (previous.failed_stage, previous.failure_details.get('component')) not in
+            or ((previous.failed_stage, previous.failure_details.get('component')) not in
                 {('executive_brief', 'ExecutiveBrief'), ('source_integration', 'SourceIntegration')}
+                and not _final_source_retry(previous))
             or previous.presentation_topics is not None or not previous.presentation_plan
             or not previous.report_plan or not previous.charts or not previous.report_markdown
             or not previous.insights or not any(w.code == SELECTION_CODE for w in previous.validation_warnings)

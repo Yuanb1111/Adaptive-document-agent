@@ -2167,8 +2167,8 @@ class ClaimValidator:
                             continue
 
                     # 5. Validate matching series
-                    for info in matching_series:
-                        scope = resolve_direction_scope(
+                    scoped_matches = [(info, scope) for info in matching_series
+                        for scope in resolve_direction_scope(
                             clause, assocs, (m_name, dir_word, direction_start, direction_end),
                             info["sorted_obs"],
                             lambda a, b: determine_trend_state(
@@ -2177,7 +2177,8 @@ class ClaimValidator:
                             allow_other_period_bases=len(matching_series) > 1,
                             metric_spans=metric_spans,
                             inherited_range=inherited_range,
-                        )
+                        ).individual_scopes()]
+                    for info, scope in scoped_matches:
                         if scope.error:
                             issues.append(DirectionalClaimIssue(
                                 code="direction_scope_ambiguous", severity="error", stage="presentation",
@@ -2312,6 +2313,9 @@ class ClaimValidator:
                                     claim_start=clause_offset + direction_start + dir_word.index(offending),
                                     claim_end=clause_offset + direction_start + dir_word.index(offending) + len(offending),
                                     span_required=True,
+                                    repair_blocked_reason=(
+                                        "One direction word qualifies multiple explicit period ranges; revise the complete claim."
+                                        if scope.shared_predicate else ""),
                                 )
                             )
 

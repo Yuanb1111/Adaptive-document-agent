@@ -44,6 +44,28 @@ def test_restore_validated_selection_and_plan_only_and_regenerate_markdown():
     assert source.presentation_plan.title != reporting.presentation_plan.title
 
 
+@pytest.mark.parametrize('omissions_accepted', [True, False])
+def test_final_source_retry_preserves_draft_but_never_inherits_rejected_review(omissions_accepted):
+    import json
+    source, current, gateway = checkpoint()
+    source.failed_stage = 'presentation_coverage'
+    source.failure_details = dict(component='PresentationCoverage', message='Chart display units differ')
+    ids = [s.id for s in source.presentation_plan.slides if s.slide_type == 'analysis']
+    source.validation_warnings.append(ValidationIssue(code='presentation_retained_analysis_review',
+        stage='presentation', message=json.dumps(dict(contract=1, fingerprint='old-renderer-context',
+            review=dict(verdicts=[dict(slide_id=sid,accepted=False,reason='Chart units differ') for sid in ids],
+                        omissions_accepted=omissions_accepted, omission_reason='Selection reviewed')))))
+    reporting = retained_brief_reporting(source, current, gateway)
+    if not omissions_accepted:
+        assert reporting is None
+    else:
+        assert reporting is not None and reporting.presentation_plan == source.presentation_plan
+        assert not review_complete(reporting)
+        assert not any(w.code == 'presentation_retained_analysis_review' for w in reporting.validation_warnings)
+        with pytest.raises(ValueError, match='Retained-analysis evidence'):
+            require_topic_coverage(reporting)
+
+
 @pytest.mark.parametrize('change', ['source', 'audit', 'observation', 'calculation', 'focus', 'budget',
                                     'selection', 'plan', 'introduction', 'strategy', 'stage'])
 def test_stale_or_inapplicable_upstream_work_falls_back_to_normal_planning(change):

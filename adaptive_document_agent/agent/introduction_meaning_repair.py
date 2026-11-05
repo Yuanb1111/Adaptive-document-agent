@@ -4,8 +4,9 @@ from concurrent.futures import CancelledError
 from pydantic import BaseModel, ConfigDict, Field
 
 from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
-from .introduction_audience import RequiredMeaning
+from .introduction_audience import RequiredMeaning, QUALIFIED_ASSERTION_RULE
 from .prompting import untrusted_document_message
+from .structured_output_correction import format_correction_messages, schema_feedback
 
 MEANING_REVISION_TOKEN_LIMITS = (32000, 40000)
 
@@ -22,14 +23,10 @@ class IntroductionMeaningRevision(BaseModel):
 
 
 def _complete_meaning_revision(gateway, messages, review, inventory, *, cancelled=None):
-    """Regenerate once only after a proven output-limit truncation.
-
-    The output allowance covers provider reasoning and the complete JSON mapping.
-    Both attempts receive identical complete source context; partial JSON is never
-    parsed, continued, merged, or used to create accepted meanings.
-    """
+    """Allow one complete regeneration for output capacity or a diagnosed format error."""
     identity = [{key: value for key, value in item.items() if key != 'meaning'} for item in inventory]
-    for attempt, limit in enumerate(MEANING_REVISION_TOKEN_LIMITS, 1):
+    limit = MEANING_REVISION_TOKEN_LIMITS[0]
+    for attempt in (1, 2):
         record = {'introduction_meaning_revision_attempt': attempt,
                   'requested_max_tokens': limit, 'meaning_inventory': identity,
                   'original_meaning_count': len(inventory), 'status': 'pending'}
@@ -51,9 +48,18 @@ def _complete_meaning_revision(gateway, messages, review, inventory, *, cancelle
             record['status'] = ('truncated' if truncated else
                                 'cancelled' if isinstance(exc, CancelledError) else 'failed')
             record['error_type'] = type(exc).__name__
-            record['capacity_retry'] = truncated and attempt < len(MEANING_REVISION_TOKEN_LIMITS)
+            record['capacity_retry'] = truncated and attempt == 1
             if record['capacity_retry']:
+                limit = MEANING_REVISION_TOKEN_LIMITS[1]
                 continue
+            if (isinstance(exc, LLMStructuredOutputError) and output.usage
+                    and output.usage.finish_reason == 'stop' and isinstance(exc.__cause__, (ValueError, TypeError))):
+                feedback = schema_feedback(exc, IntroductionMeaningRevision)
+                record.update({k: v for k, v in feedback.items() if k in ('schema_errors', 'schema_error')})
+                record['format_retry'] = attempt == 1
+                if record['format_retry']:
+                    messages = [*messages, *format_correction_messages(feedback)]
+                    continue
             raise
         record['status'] = 'response_received'
         return response
@@ -80,7 +86,8 @@ def repair_meanings(gateway, source, selection, reason, review, *, cancelled=Non
          'identify the first defect; it is not a complete repair checklist. The include/omit '
          'decisions have defensible importance; preserve them and their reasons. Return exactly '
          'one edit per supplied meaning_id, mapping that original meaning to one or more corrected '
-         'required_meanings. Retain an already sound atomic meaning unchanged. Do not combine '
+         'required_meanings. Each entry in required_meanings must be an object with a meaning '
+         'string, even for an unchanged assertion. Retain an already sound atomic meaning unchanged. Do not combine '
          'different meaning_ids or move an assertion to another source part. Inspect every '
          'original for separate predicates, measures, subjects and qualifications. Split '
          'independently checkable assertions into separate meanings even when they concern the '
@@ -99,7 +106,7 @@ def repair_meanings(gateway, source, selection, reason, review, *, cancelled=Non
          'Keep source-language audience-ready copy concise. Do not invent values, units, periods, '
          'claims or citations. Leave source_quote empty; Python retains each exact owned passage. '
          'This edit is not approval: the full source, selection and revised meanings will undergo '
-         'another independent review.'},
+         'another independent review. ' + QUALIFIED_ASSERTION_RULE},
         untrusted_document_message(json.dumps({'source': source,
             'previous_selection': selection.model_dump(mode='json'),
             'original_meanings': inventory,
@@ -117,11 +124,19 @@ def repair_meanings(gateway, source, selection, reason, review, *, cancelled=Non
         raise ValueError(record['error'])
     edits = {edit.meaning_id: edit.required_meanings for edit in response.edits}
     revised = {part_id: [] for part_id in included}
+    lineage = {}
     for item in inventory:
-        revised[item['part_id']].extend(edits[item['meaning_id']])
+        part_id = item['part_id']
+        replacements = edits[item['meaning_id']]
+        start = len(revised[part_id])
+        for offset in range(len(replacements)):
+            lineage[f'{part_id}:meaning-{start + offset + 1}'] = [
+                f"{part_id}:meaning-{item['meaning_index'] + 1}"]
+        revised[part_id].extend(replacements)
     for part_id, meanings in revised.items():
         included[part_id].required_meanings = meanings
     if draft == selection:
         record['error'] = 'Meaning correction repeated the rejected selection unchanged'
         raise ValueError(record['error'])
+    record['meaning_lineage'] = lineage
     return draft

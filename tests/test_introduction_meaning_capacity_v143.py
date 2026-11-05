@@ -69,6 +69,33 @@ def attempts(reading):
     return [item for item in reading.plan_audits if "introduction_meaning_revision_attempt" in item]
 
 
+@pytest.mark.parametrize("recover", [True, False])
+def test_completed_invalid_revision_gets_one_diagnosed_correction(recover):
+    reading, source, selection = repair_context()
+    raw = '{"edits":[{"meaning_id":"meaning-0","required_meanings":["untrusted text"]}]}'
+    error = truncated(finish="stop", text=raw)
+    with pytest.raises(ValueError) as invalid:
+        IntroductionMeaningRevision.model_validate_json(raw)
+    error.__cause__ = invalid.value
+    replacement = corrected(dict(original_meanings=[
+        dict(part_id=d.part_id, meaning=m.meaning, meaning_id=f"meaning-{i}")
+        for i, d in enumerate(selection.decisions) for m in d.required_meanings]))
+    gateway = CapacityGateway(reading, [error, replacement if recover else error])
+    if recover:
+        draft = repair_meanings(gateway, source, selection, "Restore the missing qualification.", reading)
+        assert len(draft.decisions[0].required_meanings) == 2
+    else:
+        with pytest.raises(LLMStructuredOutputError):
+            repair_meanings(gateway, source, selection, "Restore the missing qualification.", reading)
+        assert attempts(reading)[1]["format_retry"] is False
+    first, second = gateway.calls
+    assert second[0][:len(first[0])] == first[0]
+    assert first[1]["max_tokens"] == second[1]["max_tokens"]
+    audit = attempts(reading)[0]
+    assert audit["format_retry"] and audit["schema_errors"][0]["loc"] == ["edits", 0, "required_meanings", 0]
+    assert not reading.audience_selection
+
+
 def test_truncated_reasoning_regenerates_full_unchanged_source_once_with_audited_capacity():
     reading,source,selection=repair_context()
     original=(deepcopy(source),selection.model_dump(),deepcopy(reading.parts))

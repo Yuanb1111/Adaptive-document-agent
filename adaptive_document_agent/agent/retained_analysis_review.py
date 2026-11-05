@@ -25,6 +25,9 @@ def needs_catalog_retry(result):
         return True
     if result.failed_stage != 'presentation_coverage' or result.failure_details.get('component') != 'PresentationCoverage':
         return False
+    from .retained_selection_feedback import can_retry_source_review
+    if can_retry_source_review(result):
+        return False
     latest = next((w for w in reversed(result.validation_warnings) if w.code == REVIEW_CODE), None)
     if latest:
         try:
@@ -81,6 +84,8 @@ def review_context(result):
     ids.update(o.id for group in related for o in group)
     observations = [o for o in result.observations if o.id in ids]
     context['observations'] = [o.model_dump(mode='json') for o in observations]
+    from adaptive_document_agent.services.chart_review_evidence import chart_scale_evidence
+    context['chart_scale_evidence'] = [chart_scale_evidence(c, observations) for c in charts]
     pages = {e.page for o in observations for e in o.evidence}
     pages.update(p for s in slides for p in s.source_pages)
     available = {p.page_number for p in result.document.pages if p.text.strip() or p.tables or p.raw_tables}
@@ -155,11 +160,21 @@ def _review_retained_analysis(gateway, result, *, progress=None):
         'chart, theme and calculation against the complete original source pages and row/header '
         'geometry. Verify raw values, signs, scale, currency, period endpoints, entity, definitions, '
         'audit ownership and arithmetic inputs. Python calculations are supplied; never invent '
+        'missing chart scale assumptions: source_values explicitly distinguish raw source amounts '
+        'from normalized base-unit values. Web charts use normalized values; native PPT charts '
+        'use the supplied renderer divisor and visible unit. Check these conversions against the '
+        'source; ChartPlan axis titles alone are not the native PPT unit label. Final rendered '
+        'geometry and labels remain subject to export validation. Never invent '
         'missing values. Reject misleading comparisons or omitted material qualifications, '
         'latest comparable periods, definitions, counterevidence or source caveats. Unknown '
         'assurance may remain unknown; it cannot be upgraded to audited or unaudited by inference. '
         'Also independently assess every selected/omitted finding against user requirements and '
-        'the complete retained analysis. Reject materially misleading omissions or duplicate '
+        'the complete retained analysis within selection_capacity. The user physical-page maximum '
+        'also covers continuation pages; it is not an instruction to fill every available page. '
+        'The provisional report outline is not a mandate to publish every candidate. A distinct '
+        'candidate or different ranking preference alone is not a material gap; explain how an '
+        'omission makes the report misleading or fails an explicit user requirement. Reject '
+        'materially misleading omissions or duplicate '
         'pages with no added analytical value. This review covers retained model-selected '
         'analysis, not exhaustive coverage of every extracted series. Explain specific failures; '
         'do not rewrite copy or approve by relying on selection reasons. ' + LAYOUT_INSTRUCTIONS + INSTRUCTIONS},

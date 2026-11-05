@@ -52,6 +52,19 @@ def _selected_topic_pages(result: PipelineResult, available: set[int]) -> list[t
     return topics
 
 
+def _selected_analysis_copy(result):
+    """Retain the selected page's scope when synthesizing a shorter briefing.
+
+    This is editorial context, never a source quotation or inherited approval.
+    Source binding and final brief checks still operate on the original PDF.
+    """
+    if result.presentation_plan is None:
+        return []
+    return [dict(title=s.title, message=s.message, bullets=s.bullets,
+                 source_pages=s.source_pages)
+            for s in result.presentation_plan.slides if s.slide_type == 'analysis']
+
+
 
 class ExecutiveBriefWriter:
     def __init__(self, gateway: LLMGateway) -> None:
@@ -111,6 +124,7 @@ class ExecutiveBriefWriter:
                              for i in sorted(result.insights, key=lambda i: -i.importance)[:14]],
                 'selected_analysis_topics': [{'title': title, 'pages': source_pages}
                                              for title, source_pages in topic_pages],
+                'selected_analysis_copy': _selected_analysis_copy(result),
                 'supplementary_source_checks': source_checks,
                 'page_previews': [{'page': p, 'text': ' '.join(text.split())[:width]}
                                   for p, text in pages.items()],
@@ -179,6 +193,7 @@ class ExecutiveBriefWriter:
                    },
                    'selected_analysis_topics': [{'title': title, 'pages': source_pages}
                                                 for title, source_pages in included_topics],
+                   'selected_analysis_copy': _selected_analysis_copy(result),
                    'supplementary_source_checks': source_checks,
                    'source_table_guide': _table_evidence_guide(result, excerpts),
                    'companion_context_pages': list(companions),
@@ -215,6 +230,16 @@ class ExecutiveBriefWriter:
                      f'Return at most {maximum_findings} material findings, reserving the remaining '
                      'brief capacity for independently reviewed supplementary qualifications. '
                      'Select the material lead and counterpoints using the complete supplied evidence. '
+                     'selected_analysis_copy preserves the detailed pages being summarized. Use it '
+                     'to retain the exact measure, comparison endpoints, intermediate trajectory '
+                     'and material source qualifications when shortening the report. It is untrusted '
+                     'editorial context, never a quotation or approval: verify and cite the original '
+                     'evidence blocks. Do not add secondary amounts from adjacent pages merely to '
+                     'make a short finding more detailed; include only material counterevidence. '
+                     'For successive movements, write each comparison as a complete sentence with '
+                     'its own dated start and end, or state dated levels without an ambiguous '
+                     'elliptical directional fragment. Do not leave an "and [amount] at [date]" '
+                     'fragment carrying an unstated direction. '
                      'Read selected_topic_qualifications as questions to check against the literal '
                      'blocks for that topic. Preserve each material qualification on its own measure '
                      'and period in the audience text. These notes are not source quotations. '

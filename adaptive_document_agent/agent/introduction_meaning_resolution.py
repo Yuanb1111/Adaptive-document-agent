@@ -6,7 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from adaptive_document_agent.services.source_quotes import normalize_quote
-from .introduction_audience import AUDIENCE_REASON_MAX_LENGTH, RequiredMeaning
+from .introduction_audience import AUDIENCE_REASON_MAX_LENGTH, RequiredMeaning, QUALIFIED_ASSERTION_RULE
 from .introduction_audience_review import current_meanings
 from .introduction_resolution_feedback import MeaningReferenceError, UnappliedMeaningCorrection, resolution_with_feedback
 from .prompting import untrusted_document_message
@@ -225,21 +225,36 @@ def apply_meaning_resolution(selection, response, findings, source, *, transport
     if (set(edits) - addressed or set(additions) - corrected_parts
             or set(inclusions) - corrected_parts):
         raise ValueError('Every targeted edit and addition must resolve an explicit corrected finding')
+    lineage = {}
+    keeper_origins = {}
+    for merge in response.merges:
+        for keeper in merge.retained_meaning_ids:
+            keeper_origins.setdefault(keeper, []).append(merge.meaning_id)
     for decision in draft.decisions:
         inclusion = inclusions.get(decision.part_id)
         if inclusion is not None:
             decision.include = True
             decision.reason = inclusion.reason
             decision.required_meanings = inclusion.required_meanings
+            for index in range(len(inclusion.required_meanings)):
+                lineage[f'{decision.part_id}:meaning-{index + 1}'] = []
             continue
         revised = []
         for index, meaning in enumerate(decision.required_meanings):
             identifier = f'{decision.part_id}:meaning-{index+1}'
             if identifier in merged_targets:
                 continue  # Explicit model proposal; source preservation is independently reviewed.
-            revised.extend(edits.get(identifier, [meaning]))
-        revised.extend(additions.get(decision.part_id, []))
+            replacements = edits.get(identifier, [meaning])
+            for offset in range(len(replacements)):
+                lineage[f'{decision.part_id}:meaning-{len(revised) + offset + 1}'] = [
+                    identifier, *keeper_origins.get(identifier, [])]
+            revised.extend(replacements)
+        for meaning in additions.get(decision.part_id, []):
+            lineage[f'{decision.part_id}:meaning-{len(revised) + 1}'] = []
+            revised.append(meaning)
         decision.required_meanings = revised
+    if transport_audit is not None:
+        transport_audit['meaning_lineage'] = lineage
     if append_transports and transport_audit is not None:
         transport_audit['append_only_edits'] = append_transports
     return draft
@@ -299,7 +314,8 @@ def resolve_meaning_findings(gateway, source, selection, values, verdict, review
         'disposition still needs a substantive source-aware reason; copied source is not semantic proof. '
         'A completely unchanged reply is allowed only when every finding has a valid '
         'already-covered or outside-scope disposition. Your reply is NOT acceptance. The final fresh '
-        'independent full-source review must adjudicate every disposition and the entire revised union.')
+        'independent full-source review must adjudicate every disposition and the entire revised union. '
+        + QUALIFIED_ASSERTION_RULE)
     try:
         def validate(response):
             bound_response = _bind_disposition_evidence(selection, response, findings, source)

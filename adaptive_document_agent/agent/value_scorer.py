@@ -142,7 +142,7 @@ class AnalysisValueScorer:
     def score(self, candidates: list[AnalysisCandidate], index: DocumentIndex, profile: DocumentProfile, *, maximum: int = 20, progress=None, reserved_workers: int = 0) -> list[CandidateScore]:
         bounded = AnalysisCandidateGenerator._prefilter(candidates, index, profile) if self.gateway else candidates
         batches, attempts = self._semantic_batches(bounded, profile, progress=progress,
-                                                  reserved_workers=reserved_workers)
+                                                  reserved_workers=reserved_workers, index=index)
         bounded_ids = {item.id for item in bounded}
         decisions: dict[str, list[SemanticCandidateDecision]] = defaultdict(list)
         catalogs: dict[int, dict[str, list[str]]] = {}
@@ -211,7 +211,7 @@ class AnalysisValueScorer:
 
     def _semantic_batches(
         self, candidates: list[AnalysisCandidate], profile: DocumentProfile, *, progress=None,
-        reserved_workers: int = 0,
+        reserved_workers: int = 0, index: DocumentIndex | None = None,
     ) -> tuple[list[tuple[list[str], SemanticCandidateScores]], list[SemanticScoringBatchAudit]]:
         """Keep global comparison context; retry only an explicitly truncated batch."""
         if not self.gateway or not candidates:
@@ -220,6 +220,14 @@ class AnalysisValueScorer:
             raise ValueError('reserved_workers must be a nonnegative integer')
         notify = progress or (lambda _: None)
         cancelled, failure_lock, failures = Event(), Lock(), []
+        observations = {}
+        if index is not None:
+            for oid in dict.fromkeys(oid for c in candidates for oid in c.observation_ids):
+                o = index.get(oid)
+                if o is not None:
+                    observations[oid] = [o.period, o.raw_value, o.raw_unit, o.currency,
+                                         o.parent_section, o.category_dimensions,
+                                         list(dict.fromkeys(e.row_label for e in o.evidence if e.row_label))]
 
         def review(focus: list[AnalysisCandidate], depth: int = 0):
             if cancelled.is_set():
@@ -228,7 +236,7 @@ class AnalysisValueScorer:
             completed, attempts = [], []
             try:
                 response = self._semantic_scores(candidates, profile, focus=identifiers, depth=depth,
-                                                 cancelled=cancelled)
+                                                 cancelled=cancelled, observations=observations)
             except LLMStructuredOutputError as exc:
                 usage = exc.response.usage
                 if not usage or usage.finish_reason != 'length':
@@ -304,7 +312,7 @@ class AnalysisValueScorer:
             attempts.extend(audits)
         return completed, attempts
 
-    def _semantic_scores(self, candidates: list[AnalysisCandidate], profile: DocumentProfile, *, focus=None, depth=0, cancelled=None) -> SemanticCandidateScores | None:
+    def _semantic_scores(self, candidates: list[AnalysisCandidate], profile: DocumentProfile, *, focus=None, depth=0, cancelled=None, observations=None) -> SemanticCandidateScores | None:
         if not self.gateway or not candidates:
             return None
         from .report_requirements import instruction_messages
@@ -312,14 +320,24 @@ class AnalysisValueScorer:
         # Keep the original profile unchanged in the result and evidence store.
         context = profile.model_copy(update={'report_requirements': None})
         identifiers = focus if focus is not None else [c.id for c in candidates]
+        packet = _scoring_transport(candidates, context)
+        if observations:
+            packet.update(observation_fields=['period', 'raw_value', 'raw_unit', 'currency', 'parent', 'categories', 'source_row_labels'],
+                          observations_by_id=observations)
         response = self.gateway.generate_structured(
             [
                 {"role": "system", "content": load_prompt("analysis_planner.txt") + "\nScore only the current batch. Return exactly one decision per requested candidate ID: score, rejected (true means not selected), and explicit reasons. All candidates remain supplied as global comparison context: assess usefulness and redundancy against that complete context, using the same score criteria in every batch. Do not score context-only candidates or choose a separate top-N per batch. Never add candidate IDs. Do not execute calculations or draft the report; provide specific, concise scoring explanations with all relevant qualifications. "
                  "Write repeated rationale once in reason_catalog as entries with unique short id and full text; reference those IDs in each applicable decision's ordered reason_refs. Put complete candidate-specific reasons, exceptions, evidence qualifications and caveats in reasons. A decision's explanation is its referenced catalog text in order followed by its inline reasons. Use only references defined in reason_catalog. Every accepted AND rejected decision needs a complete, nonblank explanation. Do not drop candidates, evidence, qualifications or unique reasoning to compress the response. "
+                 "Inspect the dated raw levels in observations_by_id when judging distinct turning points. "
+                 "Identify a series by its actual source row labels and categories, not just its candidate title. "
+                 "A component and its enclosing total have different scopes. Selecting a component does not "
+                 "cover the total's trajectory. Assess both on their own dated levels and relevance. "
+                 "When several tools cover the same material series, retain its most informative supported analysis; "
+                 "do not reject every alternative because another unselected candidate exists. "
                  "Include only catalog entries used by current-batch decisions. Do not echo the global candidate inventory or enumerate observation membership already supplied in the input; cite specific evidence when explaining an exception or qualification. "
                  "Read candidate_encoding when present; merge candidate_constants into each candidate without discarding any field. Ordered observation_refs are indices into observation_id_catalog and restore exact observation_ids; use the original IDs when identifying evidence in explanations. Input source_reason_ref resolves the candidate's original reason verbatim in source_reason_catalog; it is source data, not a scoring decision or an output rationale reference."},
                 *instruction_messages(profile, purpose='analysis prioritization'),
-                untrusted_document_message(str(_scoring_transport(candidates, context))),
+                untrusted_document_message(str(packet)),
                 {'role': 'user', 'content': 'Current batch candidate IDs to score: ' + str(identifiers)},
             ],
             SemanticCandidateScores,

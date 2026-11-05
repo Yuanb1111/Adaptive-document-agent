@@ -126,7 +126,7 @@ def chart_change_annotation(chart, index, *, scope_text: str = "") -> str:
     if semantic.is_percentage:
         amount = f"{change:+,.1f} pp"
     else:
-        scale, label = _display_scale(ordered, max(abs(float(item.value)) for item in ordered))
+        scale, label = _display_scale(ordered, max(abs(float(item.value)) for item in ordered), prefer_source=True)
         precision = (0 if last.unit in {'count', 'units'} and change / scale == int(change / scale)
                      else 1 if abs(change / scale) >= 10 else 2)
         amount = f"{change / scale:+,.{precision}f}"

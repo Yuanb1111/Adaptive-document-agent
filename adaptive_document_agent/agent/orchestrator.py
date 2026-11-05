@@ -285,6 +285,9 @@ class DocumentOrchestrator:
             from .brief_retry_feedback import retain_feedback
             if (feedback := retain_feedback(resume)) is not None:
                 issues.append(feedback)
+            from .retained_selection_feedback import retain_selection_feedback
+            if (selection_feedback := retain_selection_feedback(resume)) is not None:
+                issues.append(selection_feedback)
         else:
             notify("Generating analysis candidates")
             if attach_introduction is not None and attach_introduction.failed():

@@ -242,6 +242,13 @@ def source_period_views(lookup: dict[str, list[Observation]]) -> list[dict]:
     return views
 
 
+def uncovered_series(selection, lookup, primary_pages):
+    selected_ids = {sid for topic in selection.topics for sid in topic.series_ids}
+    represented = [item for sid in selected_ids for item in lookup[sid]]
+    return [sid for sid, group in lookup.items() if representation_links(group, represented) is None
+            and (not primary_pages or any(e.page in primary_pages for item in group for e in item.evidence))]
+
+
 def review_topic_coverage(
     selection: PresentationTopicSelection,
     result: PipelineResult,
@@ -253,10 +260,7 @@ def review_topic_coverage(
 ) -> PresentationTopicSelection:
     """Retain the valid draft if coverage review fails; never select by Python rank."""
     selected_ids = {sid for topic in selection.topics for sid in topic.series_ids}
-    represented = [item for sid in selected_ids for item in lookup[sid]]
-    candidates = [sid for sid, group in lookup.items()
-        if representation_links(group, represented) is None
-        and (not primary_pages or any(e.page in primary_pages for item in group for e in item.evidence))]
+    candidates = uncovered_series(selection, lookup, primary_pages)
     if not candidates:
         if any(w.code == 'presentation_topic_coverage_unresolved' for w in result.validation_warnings):
             from .coverage_review_binding import source_fingerprint

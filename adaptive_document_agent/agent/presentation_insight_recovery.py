@@ -5,6 +5,7 @@ import math
 import re
 
 from adaptive_document_agent.models import PresentationSlide, PresentationTheme, ValidationIssue
+from adaptive_document_agent.services.calendar_claims import bound_period_dates
 from adaptive_document_agent.validation.claim_validator import ClaimValidator
 from adaptive_document_agent.validation.presentation_numeric_evidence import checked_money_amounts
 from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
@@ -17,7 +18,7 @@ _PERCENT = re.compile(r"(?<!\w)(?P<number>[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d
                       r"(?P<unit>percentage\s+points?|percent\s+points?|pp\b|%|percent(?:age)?\b)", re.I)
 
 
-def _numeric_support(text, observations, computed_percentages=()):
+def _numeric_support(text, observations, computed_percentages=(), *, diagnostics=None):
     """Ground existing prose in source values and deterministic derived values.
 
     This does not write findings or infer relationships. Currency amounts can
@@ -30,6 +31,8 @@ def _numeric_support(text, observations, computed_percentages=()):
     spans = []
     for match, supported, _ in checked_money_amounts(text, observations, calculations.values()):
         if not supported:
+            if diagnostics is not None:
+                diagnostics.append(f'Unbound typed amount: {match[0]}')
             return False
         spans.append(match.span())
     reported_rates = [o.value for o in observations if o.value is not None
@@ -75,17 +78,28 @@ def _numeric_support(text, observations, computed_percentages=()):
     for start, end in spans:
         masked[start:end] = " " * (end - start)
     exact_values = {abs(float(token.rstrip("%"))) for token in source_numbers}
-    for token in PresentationPlanValidator._numbers("".join(masked)):
+    bare = bound_period_dates("".join(masked), (o.period for o in observations), mask=True)
+    if bare is None:
+        if diagnostics is not None:
+            diagnostics.append('A calendar date is outside the bound periods. Use these exact labels, '
+                'including FY labels without inventing year-end dates or unbound absence dates: '
+                + str(sorted({o.period for o in observations if o.period})))
+        return False
+    for token in PresentationPlanValidator._numbers(bare):
         try:
             number = abs(float(token.rstrip("%")))
         except ValueError:
+            if diagnostics is not None:
+                diagnostics.append(f'Unbound numeric/calendar token: {token}')
             return False
         if not any(math.isclose(number, allowed, rel_tol=1e-12, abs_tol=1e-9) for allowed in exact_values):
+            if diagnostics is not None:
+                diagnostics.append(f'No source row bound to numeric value: {token}')
             return False
     return True
 
 
-def _linked_findings(result):
+def _linked_findings(result, *, allow_new_copy=False):
     """Only task-provenanced, source-supported insights qualify for reuse."""
     refs = insight_inputs(result)
     by_id = {o.id: o for o in result.observations}
@@ -114,6 +128,7 @@ def _linked_findings(result):
         if insight.movement:
             copies.append(f"{insight.title}: {insight.movement.rstrip('.')}.")
         for copy in copies:
+            copy = bound_period_dates(copy, (o.period for o in observations))
             if (not _numeric_support(insight.title, observations, percentages)
                     or not _numeric_support(copy, observations, percentages)):
                 continue
@@ -122,6 +137,11 @@ def _linked_findings(result):
             if not ClaimValidator().validate_slide(probe, observations):
                 linked.append((insight, set(ids), copy))
                 break
+        else:
+            if allow_new_copy:
+                # The task and its inputs are valid. The rejected sentence is
+                # not publishable; a new page must be written from those inputs.
+                linked.append((insight, set(ids), None))
     return linked
 
 

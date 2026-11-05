@@ -146,6 +146,32 @@ def test_missing_range_read_privacy_failure_is_preserved():
     assert len(client.calls) == 3
 
 
+def test_missing_table_range_retains_literal_evidence_without_inventing_its_headers():
+    result, blocks, rows, part = fixture()
+    result.document.pages[0].text = result.document.pages[0].text.replace(
+        '-- i --', 'Ratio A 2.9 2.2 3.1\nRatio B 2.5 1.8 2.2')
+    blocks = source_blocks(result, [1])
+    rows[2]['end_line'] = 5
+    rows.pop()
+    for row in rows:
+        row['block_id'] = blocks[0].id
+    patch = part(7, 8, 'content')
+    patch.update(block_id=blocks[0].id,
+                 reading_note='The table headers are outside this range; no periods can be asserted.')
+    before = deepcopy(rows)
+    client = Responses([rows, rows, [patch]])
+    outcome = _read_batch(client, result, blocks, Event())
+    assert_complete(result, blocks, outcome)
+    assert len(client.calls) == 3 and rows == before
+    recovered = next(p for p in outcome.parts if p.start_line == 7)
+    assert recovered.role == 'content'
+    assert all(f.evidence_only and f.text == f.source_quote for f in recovered.facts)
+    assert '\n'.join(f.text for f in recovered.facts) == recovered.source_text.strip()
+    assert outcome.audit['missing_range_read']['literal_passages']
+    accepted = next(p for p in outcome.parts if p.start_line == 3)
+    assert accepted.facts[0].text == rows[1]['facts'][0]['text']
+
+
 def test_missing_range_output_truncation_is_audited_without_another_retry():
     from adaptive_document_agent.services.llm.base import LLMResponse
     from adaptive_document_agent.services.llm.usage import LLMUsage

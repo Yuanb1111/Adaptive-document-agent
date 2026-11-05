@@ -77,4 +77,12 @@ def plan_outputs(
         result.failed_stage = 'presentation_coverage'
         result.failure_details = dict(component='TopicEvidenceReview', error_type=type(error).__name__,
                                       message=str(error))
+    else:
+        latest = next((issue for issue in reversed(getattr(result, 'validation_warnings', ())) if issue.code in
+            {'presentation_topic_coverage_unresolved', 'presentation_topic_coverage_review'}), None)
+        if latest is not None and latest.code == 'presentation_topic_coverage_unresolved':
+            result.pipeline_state, result.retry_from = 'partial', 'reporting'
+            result.failed_stage = 'presentation_coverage'
+            result.failure_details = dict(component='PresentationCoverage', retry_strategy='full_catalog',
+                message='The final catalog coverage decision is incomplete. Retry the selection before briefing.')
     return report_plan, selection, error

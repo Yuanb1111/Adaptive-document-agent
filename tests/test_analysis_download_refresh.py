@@ -23,6 +23,28 @@ def test_partial_json_download_needs_no_presentation_or_export_checks():
     assert ui.download_options['analysis_data.json']['on_click'] == 'ignore'
 
 
+def test_many_unverified_entries_are_folded_below_download(monkeypatch):
+    from contextlib import contextmanager
+    from adaptive_document_agent.services import topic_review_status
+    result, ui = _result(), DownloadUI()
+    gaps = [dict(title=f'Series {i}', reason='Pending merge') for i in range(500)]
+    monkeypatch.setattr(topic_review_status, 'coverage_review_gaps', lambda result: gaps)
+    events = []
+
+    @contextmanager
+    def details(label, *, expanded):
+        assert 'analysis_data.json' in ui.downloads
+        assert '500' in label and not expanded
+        events.append('opened')
+        yield
+        events.append('closed')
+
+    ui.expander = details
+    ui.text = lambda value: events.append(len(value.splitlines()))
+    analysis_download.render_incomplete(ui, result, scope_key='reporting')
+    assert events == ['opened', 500, 'closed']
+
+
 def test_refresh_recreates_expired_streamlit_media_without_model_or_ppt_work(monkeypatch):
     from streamlit.runtime import media_file_manager
     from streamlit.runtime.media_file_storage import MediaFileStorageError

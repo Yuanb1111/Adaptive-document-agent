@@ -15,6 +15,12 @@ def observation_numeric_fields(item, *, include_context=False):
     if include_context:
         values.extend((item.entity, item.dimensions))
     fields = [str(value) for value in values if value is not None]
+    # Accounting parentheses encode a sign in a raw source cell. Preserve that
+    # cell and additionally license its signed spelling, only when the typed
+    # observation agrees. This is still the reported unit, not a new amount.
+    parenthesized = re.fullmatch(r"\(\s*(\d[\d,]*(?:\.\d+)?)\s*\)", item.raw_value.strip())
+    if parenthesized and item.value is not None and item.value < 0:
+        fields.append('-' + parenthesized[1])
     if item.unit == 'percent' or item.unit_family == 'percentage':
         if item.value is not None:
             fields.append(f'{item.value}%')

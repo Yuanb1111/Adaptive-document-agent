@@ -12,6 +12,7 @@ from typing import Any, Iterable
 
 from pptx.util import Inches, Pt
 from .validation_cache import validation_cache_scope
+from .source_citations import source_footer as _source_footer
 
 from adaptive_document_agent.document_model import (
     DocumentIndex,
@@ -83,23 +84,6 @@ FONT = "Arial"
 TITLE_FONT = "Arial"
 
 CHART_PALETTE = CHART_COLORS
-
-
-def _source_footer(pages: list[int] | set[int] | tuple[int, ...]) -> str:
-    """Return the standardized client-facing source provenance footer."""
-    normalized = sorted({int(page) for page in pages if int(page) > 0})
-    if not normalized:
-        return "Source: Document disclosures (page references not available)"
-    ranges = []
-    start = end = normalized[0]
-    for page in normalized[1:]:
-        if page == end + 1:
-            end = page
-        else:
-            ranges.append(str(start) if start == end else f"{start}-{end}")
-            start = end = page
-    ranges.append(str(start) if start == end else f"{start}-{end}")
-    return f"Source: Document disclosures (p. {', '.join(ranges)})"
 
 
 def _resolve_template_path(template_path: str | Path | None = None) -> Path:
@@ -1805,7 +1789,7 @@ def _add_native_chart(
     from pptx.util import Inches, Pt
 
     max_abs = max(abs(float(item.value or 0)) for item in values)
-    scale, scale_label = _display_scale(values, max_abs)
+    scale, scale_label = _display_scale(values, max_abs, prefer_source=True)
     chart_left, chart_top, chart_width, chart_height = (Inches(value) for value in bounds)
 
     # Detect balance sheet metric for interim date formatting
@@ -1849,19 +1833,19 @@ def _add_native_chart(
         scaled_vals = [v / scale for v in numeric_vals] if numeric_vals else []
         categories = list(dict.fromkeys(row[0] for row in rows))
         series_names = list(dict.fromkeys(row[1] for row in rows))
+        effective_chart_type = plan.chart_type
+        if effective_chart_type == "area" and not has_complete_period_cadence(categories):
+            effective_chart_type = "bar"
         data = CategoryChartData()
         from .presentation_axes import explicit_date_categories
         date_categories = (explicit_date_categories(values, categories)
-                           if plan.chart_type in {"line", "area"} else None)
+                           if effective_chart_type in {"line", "area"} else None)
         data.categories = date_categories or _chart_category_labels(categories, bounds[2])
         if date_categories:
             data.categories.number_format = "dd mmm yyyy"
         for name in series_names:
             lookup = {label: value for label, series_name, value in rows if series_name == name}
             data.add_series(name, [lookup.get(label) / scale if lookup.get(label) is not None else None for label in categories])
-        effective_chart_type = plan.chart_type
-        if effective_chart_type == "area" and not has_complete_period_cadence(categories):
-            effective_chart_type = "bar"
         chart_type = {
             "line": XL_CHART_TYPE.LINE_MARKERS,
             "area": XL_CHART_TYPE.AREA,
@@ -1946,6 +1930,9 @@ def _add_native_chart(
         # Signed dynamic format preserves minus sign and exact precision
         labels.number_format = label_fmt
         labels.number_format_is_linked = False
+        if plan.show_data_labels:
+            from .chart_label_positions import separate_close_column_labels
+            separate_close_column_labels(chart, width=bounds[2])
         if (compact and chart.chart_type == XL_CHART_TYPE.LINE_MARKERS
                 and len(categories) >= 5 and len(chart.series) == 1):
             # Keep endpoints and the largest interior turning point readable.
@@ -3208,11 +3195,21 @@ def _appendix_observations(result: PipelineResult, charts: list[ChartPlan]) -> l
     return sorted(unique.values(), key=lambda item: (display_metric_name(item), period_sort_key(item.period)))
 
 
-def _display_scale(observations: list[Observation], max_value: float) -> tuple[float, str]:
+def _display_scale(observations: list[Observation], max_value: float, *, prefer_source: bool = False) -> tuple[float, str]:
     units = {item.unit for item in observations if item.unit}
     families = {getattr(item, "unit_family", None) for item in observations}
     if "percent" in units or "percentage" in families or "multiple" in units or "multiple" in families:
         return 1.0, ""
+    if prefer_source and observations:
+        # A native chart beside source-authored prose should retain a shared,
+        # explicit source scale. Never infer it from prose or a metric name.
+        scales = {item.unit_scale for item in observations}
+        labels = {1_000: "thousands", 1_000_000: "millions", 1_000_000_000: "billions"}
+        if (len(scales) == 1 and next(iter(scales)) in labels
+                and all(item.raw_unit for item in observations)
+                and len({(item.unit, item.currency) for item in observations}) == 1):
+            scale = next(iter(scales))
+            return float(scale), labels[scale]
     if max_value >= 1_000_000_000:
         return 1_000_000_000.0, "billions"
     if max_value >= 1_000_000:

@@ -6,11 +6,44 @@ _MONTHS = ('January February March April May June July August September October 
 _MONTH_NUMBER = {name.casefold(): i for i, name in enumerate(_MONTHS, 1)}
 _MONTH_NUMBER.update({name[:3].casefold(): i for i, name in enumerate(_MONTHS, 1)})
 _MONTH = '|'.join(sorted(_MONTH_NUMBER, key=len, reverse=True))
+_DATED_PERIOD = re.compile(
+    rf'\b(?:(?P<month>{_MONTH})\.?\s+(?P<day>\d{{1,2}}),?|'
+    rf'(?P<day_first>\d{{1,2}})\s+(?P<month_last>{_MONTH})\.?)\s+'
+    r'(?P<year>(?:19|20)\d{2})(?![\w-])', re.I)
+_ISO_PERIOD = re.compile(r'(?<![\w.-])(?:19|20)\d{2}-\d{2}-\d{2}(?![\w-]|\.\w)')
+_ISO_RANGE = re.compile(r'(?<![\w.-])(?P<start>(?:19|20)\d{2}-\d{2}-\d{2})-to-'
+                        r'(?P<end>(?:19|20)\d{2}-\d{2}-\d{2})(?![\w-]|\.\w)', re.I)
 _DATES = re.compile(
     rf'(?i)(?<![\w.])(?P<iso_year>(?:19|20)\d{{2}})-(?P<iso_month>\d{{2}})-(?P<iso_day>\d{{2}})(?![\w-]|\.\w)'
     rf'|\b(?P<month>{_MONTH})\.?\s+(?P<day>\d{{1,2}})(?:st|nd|rd|th)?\b'
     rf'|\b(?P<day_first>\d{{1,2}})\s+(?P<month_last>{_MONTH})\.?\b'
     r'|(?P<cn_month>1[0-2]|[1-9])\s*月\s*(?P<cn_day>3[01]|[12]\d|[1-9])\s*日')
+
+
+def bound_period_dates(text, periods, *, mask=False):
+    """Normalize complete dates only if the exact date is a selected source period."""
+    owners = set(periods)
+    unmatched = False
+    def spelled(match):
+        nonlocal unmatched
+        try:
+            value = date(int(match['year']), _MONTH_NUMBER[(match['month'] or match['month_last']).lower()],
+                         int(match['day'] or match['day_first'])).isoformat()
+        except ValueError:
+            unmatched = True
+            return match[0]
+        if value not in owners:
+            unmatched = True
+        return value if value in owners else match[0]
+    # The explicit word "to" connects two complete dates; it is not part of
+    # either date or an identifier. Both endpoints still require source owners.
+    normalized = _ISO_RANGE.sub(lambda m: m['start'] + ' to ' + m['end'], text)
+    normalized = _DATED_PERIOD.sub(spelled, normalized)
+    if mask:
+        if unmatched or any(m[0] not in owners for m in _ISO_PERIOD.finditer(normalized)):
+            return None
+        return _ISO_PERIOD.sub(' ', normalized)
+    return normalized
 
 
 def split_calendar_dates(text: str) -> tuple[str, set[str]]:

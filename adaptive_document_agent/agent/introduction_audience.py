@@ -15,11 +15,28 @@ _AUTHOR_EVIDENCE_RULE = (
 # prompt preference and never a reason to truncate a complete explanation.
 AUDIENCE_REASON_MAX_LENGTH = 2000
 
+QUALIFIED_ASSERTION_RULE = (
+    'A capability or measurement together with the conditions under which it holds is ONE assertion. '
+    'An operating condition is not an independent assertion to split off. Each resulting claim must '
+    'carry its own source-supported conditions even when those conditions are also discussed in '
+    'another meaning. Coverage elsewhere in the part does not qualify an unconditional claim. '
+    'Repeated necessary conditions are not redundant claims. Before returning, read each claim alone '
+    'against its complete owned source and check that no conditional statement became unconditional. '
+    'Preserve the exact qualified category names used by the source instead of replacing them with '
+    'broader parent categories. Prefer the source’s own qualified phrases over a shorter paraphrase. '
+    'Separate independently checkable status, operating-stage and threshold assertions; keep a '
+    'threshold together with its timing and conditions. This evidence inventory is not a slide, '
+    'so fitting several assertions into one sentence does not save an audience page. '
+)
+
 
 class RequiredMeaning(BaseModel):
     model_config = ConfigDict(extra='forbid')
     meaning: str = Field(min_length=1, max_length=2000,
-        description='One concise, independently checkable source-language assertion. Prefer under 25 words; this limit is transport capacity.')
+        description='One independently checkable source-language assertion, including its own necessary '
+                    'period, basis, attribution and operating conditions. Never rely on another meaning '
+                    'to qualify this claim. Preserve qualified source phrases; brevity never removes '
+                    'scope. The character limit is transport capacity, not a target for summarization.')
     source_quote: str = Field(default='', max_length=16000,
         description='Leave empty. Python binds the complete literal text of this exact owning part; do not retype evidence.')
 
@@ -88,17 +105,19 @@ def select_introduction_audience(gateway, result, review, *, cancelled=None):
         'its source passage also supports a relevant qualitative statement. '
         'Do not rewrite sources, invent claims, change content roles or choose every '
         'part just because it exists. An independent reviewer will assess the complete source and selection.')
+    rules += ' ' + QUALIFIED_ASSERTION_RULE
     messages = [{'role':'system','content':rules + ' ' + _AUTHOR_EVIDENCE_RULE},
                 untrusted_document_message(json.dumps(source,ensure_ascii=False))]
     attempts = []
     selection = None
     meaning_revision_base = None
+    meaning_repair_used = False
     inventory_revision_base = None
     inventory_correction_used = False
     binding_budget = {'used': False}
     meaning_resolution = None
     from .introduction_recovery import IntroductionRepairBudget, MAX_SEMANTIC_REVIEWS
-    recovery = IntroductionRepairBudget()
+    recovery = IntroductionRepairBudget(audit_cursor=len(review.plan_audits))
     # Three standard rounds, then bounded recovery for newly discovered bound
     # source findings. Every correction still needs a fresh independent review.
     for attempt in range(MAX_SEMANTIC_REVIEWS):
@@ -186,9 +205,15 @@ def select_introduction_audience(gateway, result, review, *, cancelled=None):
             return
         if not recovery.allow_repair(values, verdict, review, attempt=attempt):
             break
-        if meaning_revision_base is None and verdict.repair_scope == 'meanings':
+        if not meaning_repair_used and verdict.repair_scope == 'meanings':
             from .introduction_meaning_repair import repair_meanings
-            meaning_revision_base = values
+            # A mixed omission/meaning correction already establishes a
+            # preservation baseline. That does not mean every included meaning
+            # has received the bounded full-inventory correction. Keep the
+            # baseline and the correction budget as separate state.
+            meaning_repair_used = True
+            if meaning_revision_base is None:
+                meaning_revision_base = values
             feedback = json.dumps(verdict.model_dump(mode='json'), ensure_ascii=False)
             selection = repair_meanings(gateway, source, selection, feedback, review,
                                         cancelled=cancelled)

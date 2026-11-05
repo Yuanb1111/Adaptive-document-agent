@@ -208,7 +208,10 @@ def _read_missing(gateway, result, blocks, parts, ranges, source_messages, cance
              'The original blocks are context. Return parts that partition these ranges exactly once; '
              'do not return or modify any already assigned lines. Decide from the source whether '
              'each range is substantive content, a heading, or layout. Every substantive range '
-             'still needs supported facts. Never assume a short line is a footer. '
+             'still needs supported facts. If its table headers or required context lie outside '
+             'the owned range, leave facts empty and explain the limitation; the literal range '
+             'will remain internal evidence for the independent editor. Never borrow missing '
+             'periods, units or qualifications. Never assume a short line is a footer. '
              + json.dumps(ranges)}], SummaryReadBatch, blocks, cancelled, record)
         record['response'] = response.model_dump(mode='json')
         # Reject modifications to accepted lines before binding or merging facts.
@@ -216,7 +219,11 @@ def _read_missing(gateway, result, blocks, parts, ranges, source_messages, cance
                        r['start_line'] <= p.start_line <= p.end_line <= r['end_line']
                        for r in ranges) for p in response.parts):
             raise ValueError('Summary missing-line reading changed already assigned source lines')
-        additions, errors = bind_reading(response, blocks, result, record)
+        # This is the bounded recovery read, just like rejected-part recovery.
+        # Preserve model-owned substance as evidence_only when its paraphrase
+        # cannot be supported inside the range; final editorial approval is
+        # still required. The scope check above keeps accepted lines immutable.
+        additions, errors = bind_reading(response, blocks, result, record, literal_fallback=True)
         combined = parts + additions
         probe = SummaryReview(document_id=result.document.document_id, document_sha256=result.document.sha256,
             source_pages=sorted({b.page for b in blocks}), source_blocks=blocks, parts=combined)

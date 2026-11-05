@@ -19,9 +19,14 @@ _RANGE = re.compile(
     rf"(?:to|through|until|and|[–-])\s*(?P<end>{_PERIOD})\b", re.I,
 )
 _VALUE_AT_DATE_RANGE = re.compile(
-    rf"\bfrom\s+(?:(?!\bto\b)[^;\n]){{1,100}}?\bat\s+(?P<start>{_PERIOD})\s+"
-    rf"to\s+(?:(?!\bto\b)[^;\n]){{1,100}}?\bat\s+(?P<end>{_PERIOD})\b",
+    rf"\bfrom\s+(?:(?!\bto\b)[^;\n]){{1,100}}?\b(?:at|on)\s+(?P<start>{_PERIOD})\s+"
+    rf"to\s+(?:(?!\bto\b)[^;\n]){{1,100}}?\b(?:at|on)\s+(?P<end>{_PERIOD})\b",
     re.I,
+)
+_DATED_BASELINE_RANGE = re.compile(
+    rf"\b(?:was|were)\s+(?P<initial>[\d,(−+\-][^;\n]{{0,60}}?)\s+at\s+"
+    rf"(?P<start>{_PERIOD})\s+and\s+(?:rose|fell|increased|decreased|grew|declined)\s+"
+    rf"to\s+(?P<final>[\d,(−+\-][^;\n]{{0,60}}?)\s+at\s+(?P<end>{_PERIOD})\b", re.I,
 )
 _VALUE_IN_PERIOD_START = re.compile(
     rf"\bfrom\s+(?P<value>(?:(?!\b(?:to|and)\b)[^;\n]){{1,100}}?)"
@@ -49,6 +54,14 @@ _NON_TEMPORAL_BEFORE = re.compile(
 class DirectionScope:
     observations: list[Observation] | None = None
     error: str = ""
+    segments: list[list[Observation]] | None = None
+    shared_predicate: bool = False
+
+    def individual_scopes(self) -> list[DirectionScope]:
+        """Check every explicitly coordinated comparison, never its combined endpoints."""
+        if self.segments is None:
+            return [self]
+        return [DirectionScope(observations=group, shared_predicate=True) for group in self.segments]
 
 
 def inherited_period_range(component: str, predicate_offset: int, local_context: str) -> tuple[str, str]:
@@ -60,6 +73,21 @@ def inherited_period_range(component: str, predicate_offset: int, local_context:
     """
     if re.search(rf"\b{_PERIOD}\b", local_context, re.I):
         return "", ""
+    if re.search(r"\bbetween (?:those|these) (?:two )?dates\b", local_context, re.I):
+        # An explicit anaphor can refer to the immediately preceding sentence.
+        # Require exactly two complete dates there; never borrow data endpoints,
+        # scan older sentences, or resolve a multi-period antecedent by guessing.
+        boundaries = list(re.finditer(r"[;\r\n]|\.(?!\d)\s+", component[:predicate_offset]))
+        if not boundaries:
+            return "", "The referenced date pair has no preceding sentence"
+        start = boundaries[-2].end() if len(boundaries) > 1 else 0
+        previous = component[start:boundaries[-1].start()]
+        mentions = list(re.finditer(rf"\b{_PERIOD}\b", previous, re.I))
+        dates = [m[0] for m in mentions]
+        if (len(dates) != 2 or dates[0] == dates[1]
+                or any(not re.fullmatch(rf"{_YEAR}-\d{{2}}-\d{{2}}", date) for date in dates)):
+            return "", "The referenced dates do not identify exactly two complete preceding dates"
+        return f"from {dates[0]} to {dates[1]}", ""
     prefix = component[:predicate_offset]
     boundaries = list(re.finditer(r"[;\r\n]|\.(?!\d)\s+", prefix))
     if boundaries:
@@ -313,27 +341,43 @@ def resolve_direction_scope(
     # Every stated period must resolve to this metric's linked observations.
     ranges = [([match["start"], match["end"]], match.start())
               for match in [*_RANGE.finditer(local_text), *_VALUE_AT_DATE_RANGE.finditer(local_text),
-                            *_REVERSED_VALUE_RANGE.finditer(local_text)]]
+                            *_REVERSED_VALUE_RANGE.finditer(local_text),
+                            *_DATED_BASELINE_RANGE.finditer(local_text)]]
     ranges.extend(_value_in_period_ranges(local_text))
     if len(ranges) > 1 and allow_other_period_bases:
         basis = extract_period_basis(observations[0].period)
         ranges = [r for r in ranges if all(extract_period_basis(period) == basis
                                            for period in r[0])]
     if ranges:
-        if len(ranges) != 1:
-            return DirectionScope(error="Several period ranges qualify the same direction word")
-        periods, range_start = ranges[0]
-        prefix = local_text[:range_start]
-        year_end = bool(re.search(r"(?i)\b(?:year[- ]end(?:\s+of)?|end\s+of\s+(?:the\s+)?year(?:\s+of)?)\s*$", prefix))
-        indices = []
-        for period in periods:
-            index = _period_index(period, observations, year_end=year_end)
-            if index is None:
+        if len(ranges) > 1:
+            explicit = list(_RANGE.finditer(local_text))
+            # "rose from A to B and from C to D" applies the same predicate
+            # to each written pair. Nested explanations or unpaired dates do
+            # not establish this syntax and must remain unresolved.
+            coordinated = (len(explicit) == len(ranges)
+                and all(re.match(r"(?:from|between)\b", m[0], re.I) for m in explicit)
+                and all(re.fullmatch(r"\s*(?:,\s*(?:and\s*)?|and\s+)",
+                                     local_text[a.end():b.start()], re.I)
+                        for a, b in zip(explicit, explicit[1:]))
+                and all(any(r.start() <= m.start() and m.end() <= r.end() for r in explicit)
+                        for m in re.finditer(rf"\b{_PERIOD}\b", local_text, re.I)))
+            if not coordinated:
+                return DirectionScope(error="Several period ranges qualify the same direction word")
+        segments = []
+        for periods, range_start in ranges:
+            prefix = local_text[:range_start]
+            year_end = bool(re.search(r"(?i)\b(?:year[- ]end(?:\s+of)?|end\s+of\s+(?:the\s+)?year(?:\s+of)?)\s*$", prefix))
+            indices = []
+            for period in periods:
+                index = _period_index(period, observations, year_end=year_end)
+                if index is None:
+                    return DirectionScope(error="The stated period range is missing or not chronological")
+                indices.append(index)
+            if any(first >= last for first, last in zip(indices, indices[1:])):
                 return DirectionScope(error="The stated period range is missing or not chronological")
-            indices.append(index)
-        if any(first >= last for first, last in zip(indices, indices[1:])):
-            return DirectionScope(error="The stated period range is missing or not chronological")
-        return DirectionScope(observations[indices[0]:indices[-1] + 1])
+            segments.append(observations[indices[0]:indices[-1] + 1])
+        return (DirectionScope(observations=segments[0]) if len(segments) == 1
+                else DirectionScope(segments=segments))
 
     period_mentions = list(re.finditer(rf"\b{_PERIOD}\b", local_text, re.I))
     if period_mentions:

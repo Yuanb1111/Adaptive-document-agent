@@ -137,6 +137,14 @@ def test_first_review_mixed_findings_use_targeted_repair_and_still_require_fresh
             if schema.__name__ == 'IntroductionAudienceSelection':
                 return schema.model_validate(selection.model_dump())
             payload = review_payload(messages)
+            if schema.__name__ == 'IntroductionMeaningRevision':
+                assert not final_acceptance
+                # A mixed targeted correction does not consume the one full
+                # inventory correction. Keep every other source-owned claim.
+                return schema(edits=[dict(meaning_id=row['meaning_id'], required_meanings=[dict(
+                    meaning='The system schedules appointments on demand.'
+                    if row['part_id'] == 'part-0' and row['meaning_index'] == 0 else row['meaning'])])
+                    for row in payload['original_meanings']])
             if schema.__name__ == 'IntroductionMeaningResolution':
                 self.resolutions += 1
                 if self.resolutions == 1:
@@ -162,8 +170,16 @@ def test_first_review_mixed_findings_use_targeted_repair_and_still_require_fresh
                 return review_response(schema, messages, accepted=False, repair_scope='selection',
                     reason='Mixed source defects.', findings=[f.model_dump() for f in rejected.findings])
             assert payload['meaning_resolution']['semantic_approval'] is False
-            assert payload['decisions'][2:] == reviews[0]['decisions'][2:]
-            assert payload['decisions'][0]['required_meanings'][1] == reviews[0]['decisions'][0]['required_meanings'][1]
+            # Full-inventory authorship leaves proposed quotations empty;
+            # canonical evidence and selected assertions remain unchanged.
+            def canonical(value):
+                if isinstance(value, dict):
+                    return {k: canonical(v) for k, v in value.items() if k != 'proposed_source_quote'}
+                if isinstance(value, list):
+                    return [canonical(v) for v in value]
+                return value
+            assert canonical(payload['decisions'][2:]) == canonical(reviews[0]['decisions'][2:])
+            assert canonical(payload['decisions'][0]['required_meanings'][1]) == canonical(reviews[0]['decisions'][0]['required_meanings'][1])
             assert payload['decisions'][1]['include']
             if final_acceptance:
                 return review_response(schema, messages, accepted=True, reason='Fresh complete source judgment.')
@@ -182,6 +198,56 @@ def test_first_review_mixed_findings_use_targeted_repair_and_still_require_fresh
         with pytest.raises(ValueError, match='not independently accepted'):
             select_introduction_audience(Gateway(), result, reading)
         assert reading.audience_part_ids is None and not reading.audience_selection
-        assert len(reviews) == 3 and calls.count('IntroductionMeaningResolution') == 2
+        assert len(reviews) == 3 and calls.count('IntroductionMeaningResolution') == 1
+        assert calls.count('IntroductionMeaningRevision') == 1
     assert calls.count('IntroductionAudienceSelection') == 1
-    assert 'IntroductionAudienceSelectionAddition' not in calls and 'IntroductionMeaningRevision' not in calls
+    assert 'IntroductionAudienceSelectionAddition' not in calls
+    if final_acceptance:
+        assert 'IntroductionMeaningRevision' not in calls
+
+
+def test_mixed_correction_does_not_consume_full_inventory_repair_or_replace_original_baseline():
+    result, _, _ = fixture(4)
+    reading, _, selection, rejected, response = mixed_fixture()
+    calls, reviews = [], []
+
+    class Gateway:
+        def generate_structured(self, messages, schema, **kwargs):
+            calls.append(schema.__name__)
+            if schema.__name__ == 'IntroductionAudienceSelection':
+                return schema.model_validate(selection.model_dump())
+            payload = review_payload(messages)
+            if schema.__name__ == 'IntroductionMeaningResolution':
+                authored = response.model_copy(deep=True)
+                authored.edits[0].required_meanings[0].meaning = 'The system schedules appointments efficiently.'
+                return authored
+            if schema.__name__ == 'IntroductionMeaningRevision':
+                # The newly included passage also participates in the complete
+                # correction; this is not another targeted edit of one finding.
+                assert {row['part_id'] for row in payload['original_meanings']} == {'part-0', 'part-1', 'part-2'}
+                return schema(edits=[dict(meaning_id=row['meaning_id'], required_meanings=[dict(
+                    meaning='The system schedules appointments only after staff training.'
+                    if row['part_id'] == 'part-0' and row['meaning_index'] == 0 else row['meaning'])])
+                    for row in payload['original_meanings']])
+            assert schema.__name__ == 'IntroductionAudienceReview'
+            reviews.append(deepcopy(payload))
+            if len(reviews) == 1:
+                return review_response(schema, messages, accepted=False, repair_scope='selection',
+                    reason='Mixed source defects.', findings=[f.model_dump() for f in rejected.findings])
+            if len(reviews) == 2:
+                current = payload['current_meanings'][0]
+                return review_response(schema, messages, accepted=False, repair_scope='meanings',
+                    reason='Training condition is still missing.', findings=[{
+                        **rejected.findings[0].model_dump(), 'current_meaning': current['meaning']}])
+            assert len(reviews) == 3
+            assert payload['meaning_revision_base'] == reviews[1]['meaning_revision_base']
+            assert payload['current_meanings'][0]['meaning'].endswith('only after staff training.')
+            assert payload['meaning_resolution']['semantic_approval'] is False
+            return review_response(schema, messages, accepted=True, reason='Synthetic fresh source review.')
+
+    from adaptive_document_agent.agent.introduction_audience import select_introduction_audience
+    select_introduction_audience(Gateway(), result, reading)
+    assert reading.audience_selection['independent_review']['accepted']
+    assert calls == ['IntroductionAudienceSelection', 'IntroductionAudienceReview',
+                     'IntroductionMeaningResolution', 'IntroductionAudienceReview',
+                     'IntroductionMeaningRevision', 'IntroductionAudienceReview']

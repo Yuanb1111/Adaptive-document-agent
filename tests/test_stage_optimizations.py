@@ -114,6 +114,21 @@ def test_output_planners_overlap_without_report_dependency(monkeypatch):
     assert len(set(threads)) == 2
 
 
+def test_unfinished_catalog_merge_returns_reporting_checkpoint_before_briefing(monkeypatch):
+    from tests.test_analysis_export_diagnostics import _result
+    from adaptive_document_agent.models import ValidationIssue
+    r = _result()
+    def topics(result):
+        result.validation_warnings.append(ValidationIssue(code='presentation_topic_coverage_unresolved',
+            stage='presentation', severity='warning', message='Final merge unavailable.'))
+        return result.presentation_topics
+    monkeypatch.setattr(output_planning, 'DynamicReportPlanner', lambda g: SimpleNamespace(plan=lambda *a: r.report_plan))
+    monkeypatch.setattr(output_planning, 'PresentationTopicSelector', lambda g: SimpleNamespace(select=topics))
+    output_planning.plan_outputs(SimpleNamespace(discovery_workers=1), r)
+    assert (r.pipeline_state, r.failed_stage, r.retry_from) == ('partial', 'presentation_coverage', 'reporting')
+    assert r.failure_details['retry_strategy'] == 'full_catalog'
+
+
 def test_force_bypasses_chunk_and_gateway_model_caches(tmp_path):
     cache = DiskCache(tmp_path)
     client = MockLLMClient([{"summary": "first"}, {"summary": "fresh"}])

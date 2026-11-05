@@ -14,6 +14,35 @@ from tests.test_budget_output_v145 import gateway, response
 from tests.test_coverage_completion_v174 import prepared
 
 
+def test_included_series_in_optional_display_list_keeps_explicit_inclusion(monkeypatch):
+    result, lookup, selected, raw, delta, valid, _ = prepared(monkeypatch)
+    echoed = valid.model_dump()
+    included = next(d.series_id for d in valid.coverage_decisions if d.decision == 'include')
+    echoed['omissions'] = [dict(series_id=included, reason='Included in the selected topic.')]
+    llm, client = gateway([response(delta), response(json.dumps(echoed))])
+    result.presentation_topics = review_topic_coverage(selected, result, lookup, set(), raw, llm,
+                                                       PresentationTopicSelector._validate)
+    assert topic_coverage_complete(result) and len(client.requests) == 2
+    assert included in {sid for topic in result.presentation_topics.topics for sid in topic.series_ids}
+    assert included not in {item.series_id for item in result.presentation_topics.omissions}
+    audit = json.loads(result.validation_warnings[-1].message)
+    assert audit['merge']['attempts'][0]['review']['omissions'] == echoed['omissions']
+
+    # Old checkpoints retained the same raw batch and merge responses as a
+    # failed merge. Only a complete, still-bound inventory is recoverable.
+    from adaptive_document_agent.agent.coverage_merge_resume import replay_merge
+    audit.pop('review')
+    audit['unreviewed_series_ids'] = []
+    result.presentation_topics = selected
+    issue = ValidationIssue(code='presentation_topic_coverage_unresolved', severity='warning',
+        stage='presentation', related_ids=audit['candidate_series_ids'], message=json.dumps(audit))
+    recovered = replay_merge(issue, result)
+    assert recovered and json.loads(recovered.message)['review']['topics'] == valid.model_dump()['topics']
+    audit['batches'][0]['source_observation_ids'][included] = []
+    issue.message = json.dumps(audit)
+    assert replay_merge(issue, result) is None
+
+
 @pytest.mark.parametrize('fault', ['extra', 'missing', 'duplicate', 'blank'])
 def test_merge_schema_and_local_validator_bind_only_requested_ids(monkeypatch, fault):
     _, _, selected, _, delta, valid, _ = prepared(monkeypatch)
