@@ -14,19 +14,20 @@ DirectionSpan = tuple[str, str, int, int]
 _SEQUENCE = re.compile(r"\b(?:then|before|prior to|subsequently)\b", re.I)
 _YEAR = r"(?:19|20)\d{2}"
 _PERIOD = rf"(?:{_YEAR}-\d{{2}}-\d{{2}}|(?:FY\s*|[1369]M\s*|[12]H\s*|Q[1-4]\s*)?{_YEAR})"
+_DATE_PREPOSITION = r"(?:at|on|as\s+of)"
 _RANGE = re.compile(
     rf"\b(?:from\s+|between\s+)?(?P<start>{_PERIOD})\s*"
     rf"(?:to|through|until|and|[–-])\s*(?P<end>{_PERIOD})\b", re.I,
 )
 _VALUE_AT_DATE_RANGE = re.compile(
-    rf"\bfrom\s+(?:(?!\bto\b)[^;\n]){{1,100}}?\b(?:at|on)\s+(?P<start>{_PERIOD})\s+"
-    rf"to\s+(?:(?!\bto\b)[^;\n]){{1,100}}?\b(?:at|on)\s+(?P<end>{_PERIOD})\b",
+    rf"\bfrom\s+(?:(?!\bto\b)[^;\n]){{1,100}}?\b{_DATE_PREPOSITION}\s+(?P<start>{_PERIOD})\s+"
+    rf"to\s+(?:(?!\bto\b)[^;\n]){{1,100}}?\b{_DATE_PREPOSITION}\s+(?P<end>{_PERIOD})\b",
     re.I,
 )
 _DATED_BASELINE_RANGE = re.compile(
-    rf"\b(?:was|were)\s+(?P<initial>[\d,(−+\-][^;\n]{{0,60}}?)\s+at\s+"
+    rf"\b(?:was|were)\s+(?P<initial>[\d,(−+\-][^;\n]{{0,60}}?)\s+{_DATE_PREPOSITION}\s+"
     rf"(?P<start>{_PERIOD})\s+and\s+(?:rose|fell|increased|decreased|grew|declined)\s+"
-    rf"to\s+(?P<final>[\d,(−+\-][^;\n]{{0,60}}?)\s+at\s+(?P<end>{_PERIOD})\b", re.I,
+    rf"to\s+(?P<final>[\d,(−+\-][^;\n]{{0,60}}?)\s+{_DATE_PREPOSITION}\s+(?P<end>{_PERIOD})\b", re.I,
 )
 _VALUE_IN_PERIOD_START = re.compile(
     rf"\bfrom\s+(?P<value>(?:(?!\b(?:to|and)\b)[^;\n]){{1,100}}?)"
@@ -216,10 +217,11 @@ def _period_index(label: str, observations: list[Observation], *, year_end: bool
 
 
 def predicate_conjunctions(clause: str):
-    """Exclude the conjunction inside an explicit 'between X and Y' range."""
+    """Find predicate boundaries without splitting explicit period phrases."""
     return [m for m in re.finditer(r"\b(?:and|as)\b", clause, re.I)
-            if not (re.search(rf"\bbetween\s+{_PERIOD}\s*$", clause[:m.start()], re.I)
-                    and re.match(rf"\s*{_PERIOD}\b", clause[m.end():], re.I))]
+            if not (m[0].casefold() == "as" and re.match(r"\s+of\b", clause[m.end():], re.I))
+            and not (re.search(rf"\bbetween\s+{_PERIOD}\s*$", clause[:m.start()], re.I)
+                     and re.match(rf"\s*{_PERIOD}\b", clause[m.end():], re.I))]
 
 
 def _separator_bounds(clause: str, left_end: int, right_start: int,

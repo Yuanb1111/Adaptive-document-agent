@@ -69,6 +69,26 @@ def test_independent_as_predicates_cannot_borrow_the_other_subject():
     assert repaired.slides[0].message == text
 
 
+@pytest.mark.parametrize(('text', 'expected_issue'), [
+    ('Cash rose from 100 as of 2023-12-31 to 160 as of 2024-12-31, then fell '
+     'from 160 as of 2024-12-31 to 125 as of 2025-12-31.', None),
+    ('Cash was 100 as of 2023-12-31 and rose to 160 as of 2024-12-31.', None),
+    ('Cash rose from 160 as of 2024-12-31 to 125 as of 2025-12-31.', 'directional_contradiction'),
+    ('Cash fell to 125 as of 2025-12-31.', 'direction_scope_ambiguous'),
+    ('Cash fell from 160 as of 2024-06-30 to 125 as of 2025-12-31.', 'direction_scope_ambiguous'),
+])
+def test_as_of_value_comparisons_require_exact_source_endpoints(text, expected_issue):
+    observations = _series('Cash', [100, 160, 125])
+    for item in observations:
+        item.period = f'{item.period[2:]}-12-31'
+        item.period_type = 'balance_sheet_date'
+    issues = ClaimValidator().validate_slide(_slide(text, observations), observations)
+    if expected_issue is None:
+        assert not issues
+    else:
+        assert expected_issue in {issue.code for issue in issues}
+
+
 @pytest.mark.parametrize("component", ["title", "message", "bullets"])
 @pytest.mark.parametrize("text", [
     "Net loss widened then narrowed.",
