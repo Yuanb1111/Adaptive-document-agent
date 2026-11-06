@@ -16,6 +16,23 @@ _GENERIC = re.compile(r"evidence.backed comparison|retained reported values|sele
                       r"supplied observations|paired observations exist|has observations for multiple periods", re.I)
 _PERCENT = re.compile(r"(?<!\w)(?P<number>[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s*"
                       r"(?P<unit>percentage\s+points?|percent\s+points?|pp\b|%|percent(?:age)?\b)", re.I)
+_CAGR_PERIOD = re.compile(r'\b((?:19|20)\d{2}E?)\s*(?:[-–—]|\bto\b)\s*((?:19|20)\d{2}E?)\b', re.I)
+
+
+def _chart_cagr_values(clause, reported, calculations):
+    """Resolve the exact source cell or the exact calculated interval, never both."""
+    intervals = _CAGR_PERIOD.findall(clause)
+    if len(intervals) != 1:
+        return []
+    start, end = (p.upper() for p in intervals[0])
+    recalculated = bool(re.search(r'\b(?:recalculated|recomputed|calculated|computed)\b', clause, re.I))
+    source_attributed = bool(re.search(r'\b(?:reported|reports?|lists?|shows?|labels?)\b', clause, re.I))
+    if recalculated == source_attributed:
+        return []
+    if source_attributed:
+        return [o.value for o in reported if o.period == f'{start}–{end}']
+    return [c['value'] for c in calculations if c['kind'] == 'cagr'
+            and [c['periods'][0], c['periods'][-1]] == [start, end]]
 
 
 def _numeric_support(text, observations, computed_percentages=(), *, diagnostics=None):
@@ -35,9 +52,24 @@ def _numeric_support(text, observations, computed_percentages=(), *, diagnostics
                 diagnostics.append(f'Unbound typed amount: {match[0]}')
             return False
         spans.append(match.span())
+    chart_reported = [o for o in observations if o.value is not None and 'chart_reported_cagr' in o.dimensions]
+    chart_units = any(e.extraction_method == 'digital_chart_axis' for o in observations for e in o.evidence)
+    if chart_units:
+        from adaptive_document_agent.extraction.chart_growth_evidence import CHART_MONEY_UNIT
+        from adaptive_document_agent.extraction.normalizer import infer_unit_defaults
+        allowed_units = {(o.currency, o.unit_scale) for o in observations if o.currency}
+        for match in CHART_MONEY_UNIT.finditer(text):
+            unit = infer_unit_defaults(match[0])
+            if (unit.currency, unit.scale) not in allowed_units:
+                if diagnostics is not None:
+                    diagnostics.append(f'Unbound chart unit: {match[0]}')
+                return False
     reported_rates = [o.value for o in observations if o.value is not None
-                      and (o.unit in {"percent", "%"} or o.unit_family == "percentage")]
-    derived_rates = [c["value"] for c in calculations.values() if c["unit"] == "percent"] + list(computed_percentages)
+                      and (o.unit in {"percent", "%"} or o.unit_family == "percentage") and o not in chart_reported]
+    derived_rates = [c["value"] for c in calculations.values()
+                     if c["unit"] == "percent" and not (chart_units and c['kind'] == 'cagr')]
+    if not chart_units:
+        derived_rates += list(computed_percentages)
     point_changes = [c["value"] for c in calculations.values() if c["unit"] == "percentage_points"]
     for match in _PERCENT.finditer(text):
         literal = match["number"].replace(",", "")
@@ -49,14 +81,24 @@ def _numeric_support(text, observations, computed_percentages=(), *, diagnostics
                         rel_tol=1e-12, abs_tol=1e-9) for value in values)
 
         unit = match["unit"].casefold()
-        if unit == "pp" or "point" in unit:
+        prefix = re.split(r";|\n|(?<=[.!?])\s+", text[:match.start()])[-1]
+        suffix = re.split(r";|\n|(?<=[.!?])\s+", text[match.end():])[0]
+        clause = prefix + match[0] + suffix
+        if (chart_units or chart_reported) and re.search(r'\bCAGR\b', clause, re.I):
+            rates = _chart_cagr_values(clause, chart_reported, calculations.values())
+            if unit == "pp" or "point" in unit or not rates or not any(
+                    round(rate, places) == float(literal) for rate in rates):
+                if diagnostics is not None:
+                    diagnostics.append(f'Unbound CAGR {match[0]}. Cite the matching reported CAGR cell or '
+                                       'explicitly label the recalculated CAGR and give its exact annual endpoints.')
+                return False
+        elif unit == "pp" or "point" in unit:
             if not matches(point_changes):
                 return False
         elif not matches(reported_rates):
             # A computed growth rate is not a reported margin/ratio. Require
             # an explicit change predicate in this claim, never lend the rate
             # to a level statement such as "margin was 95.4%".
-            prefix = re.split(r";|\n|(?<=[.!?])\s+", text[:match.start()])[-1]
             predicates = re.findall(
                 r"\b(?:grew|growth|increased|decreased|rose|fell|declined|widened|narrowed|changed|was|were|reached|at)\b",
                 prefix, re.I,

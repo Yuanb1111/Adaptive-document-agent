@@ -179,6 +179,12 @@ def format_observation_period(
     if as_of_date:
         return format_period_label(as_of_date, is_balance_sheet=is_balance_sheet, is_unaudited=is_unaudited)
 
+    # Positioned chart data retain their literal year labels. The FY display
+    # convention for financial statements must not relabel a chart axis.
+    if (period and re.fullmatch(r'(?:19|20)\d{2}', period)
+            and any(e.extraction_method == 'digital_chart_axis' for e in getattr(obs, 'evidence', ()))):
+        return period + ('*' if is_unaudited else '')
+
     return format_period_label(period, is_balance_sheet=is_balance_sheet, is_unaudited=is_unaudited)
 
 

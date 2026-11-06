@@ -147,6 +147,11 @@ class DocumentOrchestrator:
             with record_timing(details, 'retry_source_checks'):
                 retry_failed_source_checks(document, profile, self.gateway, progress=notify)
             observations = [o.model_copy(deep=True) for o in resume.observations]
+            from adaptive_document_agent.extraction.chart_growth_evidence import chart_growth_observations
+            observations = chart_growth_observations(document, observations,
+                analysis_plan=resume.analysis_plan, analysis_results=resume.analysis_results)
+            if observations != resume.observations:
+                resume = resume.model_copy(update={'observations': observations})
             extractor = ObservationExtractor()
             index = DocumentModelBuilder().build(observations)
             from .company_introduction import prepare_company_introduction
@@ -247,6 +252,8 @@ class DocumentOrchestrator:
             with record_timing(timings, "observation_extraction"):
                 extractor = ObservationExtractor()
                 observations = extractor.extract(document, page_ranges=profile.analysis_page_ranges)
+                from adaptive_document_agent.extraction.chart_growth_evidence import chart_growth_observations
+                observations = chart_growth_observations(document, observations)
                 run_state['result'].observations = observations
                 mappings = SemanticResolver(self.gateway).resolve_metrics(
                     [item.metric_original for item in observations],

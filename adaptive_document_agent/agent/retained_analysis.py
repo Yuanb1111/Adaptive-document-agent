@@ -366,7 +366,10 @@ def compile_retained_analysis(result):
             # Data-only findings still own complete reviewed prose. Route them
             # through the paginating compositor, not the legacy data subtitle
             # which abbreviates the message before drawing its table.
-            ordered_ids = sorted(ids)
+            # A CAGR cell qualifies the written growth comparison. It is
+            # not a level in the year-by-year table below that comparison.
+            ordered_ids = sorted(o.id for o in observations
+                                 if o.id in primary or 'chart_reported_cagr' not in o.dimensions)
             slide.visual_blocks = [PresentationVisualBlock(
                 role='table', observation_ids=ordered_ids[start:start + 30])
                 for start in range(0, len(ordered_ids), 30)]

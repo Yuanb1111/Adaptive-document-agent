@@ -324,7 +324,25 @@ def quoted_table_context(item, result, *, excerpts=None):
     non_percentage_coefficients = set()
     literal_row_percentages = set()
     recovered_tables = {}
-    for quote in continuous_quote_passages(item.evidence, {number: p.text for number, p in pages.items()}):
+    passages = continuous_quote_passages(item.evidence, {number: p.text for number, p in pages.items()})
+    # A chart axis is separate from its data grid. Require both the complete
+    # grid row and the positioned axis unit in this item's own source quotes.
+    from collections import defaultdict
+    quoted_by_page = defaultdict(list)
+    for passage in passages:
+        quoted_by_page[passage.page].append(normalize_quote(passage.text))
+    chart_units = defaultdict(set)
+    for observation in result.observations:
+        for axis in observation.evidence:
+            if (axis.extraction_method != 'digital_chart_axis' or not axis.bbox or not axis.text
+                    or axis.table_id != observation.effective_table_id
+                    or not any(normalize_quote(axis.text) in text for text in quoted_by_page[axis.page])
+                    or (excerpts is not None and normalize_quote(axis.text) not in
+                        normalize_quote(excerpts.get(axis.page, '')))):
+                continue
+            key = (axis.page, axis.table_id, observation.row_id, observation.column_id, observation.raw_value)
+            chart_units[key].add((observation.currency, observation.unit_scale, observation.period))
+    for quote in passages:
         page = pages.get(quote.page)
         source = excerpts.get(quote.page, "") if excerpts is not None else (page.text if page else "")
         quoted = normalize_quote(quote.text)
@@ -363,7 +381,6 @@ def quoted_table_context(item, result, *, excerpts=None):
         # Resolve each quoted row independently. A complete product table and
         # a second table's shared total must not invalidate unrelated rows.
         # Competing same-label rows still require identical complete bindings.
-        from collections import defaultdict
         plausible, matched = defaultdict(set), defaultdict(list)
         # The independent introductory reader runs before analytical extraction.
         # Recover literal aligned source rows locally when no parsed tables were
@@ -481,6 +498,13 @@ def quoted_table_context(item, result, *, excerpts=None):
                 if column >= len(table.column_types) or table.column_types[column] not in {"amount", "numeric"}:
                     continue
                 row_index = next(i for i, candidate in enumerate(table.rows) if candidate is row)
+                axis_units = chart_units.get((quote.page, table.table_id, row_index, column, cell), ())
+                if len(axis_units) == 1 and column < len(table.column_periods):
+                    currency, scale, period = next(iter(axis_units))
+                    if currency and scale in _SCALES and period == table.column_periods[column]:
+                        quantity = canonical_quantity(currency, coefficient, _SCALES[scale])
+                        context.bases.setdefault(quantity, set()).add('')
+                        continue
                 defaults = cell_unit_defaults(table, row_index,
                     table.headers[column] if column < len(table.headers) else None)
                 currency = (table.column_currencies[column]

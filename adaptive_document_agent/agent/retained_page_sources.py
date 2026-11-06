@@ -16,6 +16,9 @@ PERIOD_AND_ASSURANCE_RULES = (
     'literal source scope without turning it into a comparison between incompatible endpoints. '
     'Only use an audit label for a row explicitly marked with that status. Unknown means unmarked. '
     'Never propagate a label to another period or measure based on a shared heading. '
+    'When a chart reports CAGR alongside its raw levels, cite the matching reported CAGR companion row. '
+    'State the reported CAGR and any recalculated CAGR in separate sentences, with explicit attribution '
+    'and the exact start and end years in each sentence. Use the bound original chart unit for the levels. '
 )
 _PERIOD_ASSURANCE = re.compile(
     r'(?P<period>\b(?:FY\d{4}|\d{1,2}M\d{4}|\d{4}-\d{2}-\d{2})\b)\s*'
@@ -74,6 +77,10 @@ def page_bindings(page, insight, primary, context, result):
     allowed = {r['id'] for r in context['source_rows'] if r['table_id'] in tables}
     ids = primary | set(page.companion_ids)
     foreign = set(page.companion_ids) - allowed - primary
+    primary_series = {(by_id[k].effective_table_id, by_id[k].metric_original) for k in primary}
+    foreign.update(k for k in set(page.companion_ids) & allowed
+                   if (owner := by_id[k].dimensions.get('chart_reported_cagr'))
+                   and (by_id[k].effective_table_id, owner) not in primary_series)
     if foreign:
         raise ValueError(f'{insight.id}: companion rows outside its source tables: {sorted(foreign)}')
     if len(ids) > 40:
