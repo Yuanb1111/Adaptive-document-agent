@@ -110,6 +110,91 @@ def test_copy_and_coverage_errors_reach_the_same_bounded_correction(monkeypatch)
     assert len(mock.client.calls) == 4
 
 
+@pytest.mark.parametrize('outcome', ['accepted', 'unchanged', 'wrong_id', 'material_omission'])
+def test_final_copy_revision_preserves_selection_and_requires_fresh_validation(outcome):
+    from copy import deepcopy
+    from adaptive_document_agent.agent import retained_analysis as retained
+    from adaptive_document_agent.utils.record_encoding import decode_records
+    from tests.test_retained_source_citations import fixture
+
+    result, _, proposal = fixture()
+    iid = proposal.ordered_insight_ids[0]
+    result.insights.extend(result.insights[0].model_copy(update={'id': other})
+                           for other in ('other-page', 'omitted'))
+    good = proposal.model_dump(exclude_none=True)
+    good['decisions'].extend([
+        dict(insight_id='other-page', decision='include', reason='Other finding.',
+             page=dict(title='Revenue context', message='Revenue is reported.', companion_ids=[])),
+        dict(insight_id='omitted', decision='omit', reason='Lower priority.'),
+    ])
+    good['ordered_insight_ids'].append('other-page')
+    bad = deepcopy(good)
+    bad['decisions'][0]['page']['message'] = 'Revenue was RMB 987,654,321.'
+    issue = dict(accepted=False, reason='Copy needs source correction.',
+                 page_issues=[dict(insight_id=iid, reason='Remove the unbound amount.')])
+    accepted = dict(accepted=True, reason='Synthetic complete coverage verdict.')
+    responses = [bad, issue, bad, issue]
+    if outcome == 'material_omission':
+        responses[-1] = dict(issue, missing_insight_ids=['omitted'], prioritized_insight_ids=[iid, 'omitted'])
+    else:
+        page = (bad if outcome == 'unchanged' else good)['decisions'][0]['page']
+        responses.append(dict(pages={'other-page' if outcome == 'wrong_id' else iid: page}))
+        if outcome != 'wrong_id':
+            responses.append(accepted)
+    mock = gateway(responses)
+
+    if outcome == 'accepted':
+        retained.select_retained_analysis(mock, result)
+        assert retained.selected_record(result)['selection'] == good
+        assert mock.usage[-1]['operation'] == 'RetainedSelectionCoverage'
+    else:
+        error = {'unchanged': 'outside its bound evidence', 'wrong_id': 'exactly the flagged insight IDs',
+                 'material_omission': 'omits material findings'}[outcome]
+        with pytest.raises(ValueError, match=error):
+            retained.select_retained_analysis(mock, result)
+        assert retained.selected_record(result) is None
+
+    revision_calls = [i for i, usage in enumerate(mock.usage) if usage['operation'] == 'RetainedPageRevisions']
+    assert revision_calls == ([] if outcome == 'material_omission' else [4])
+    if revision_calls:
+        wire = mock.client.calls[4][-1]['content']
+        payload = decode_records(json.loads(wire.split('\n', 1)[1].rsplit('\n', 1)[0]))
+        assert set(payload['pages_to_correct']) == {iid}
+        assert payload['pages_to_correct'][iid]['source_page_numbers'] == [234]
+        errors = payload['pages_to_correct'][iid]['errors']
+        assert any('outside its bound evidence' in error for error in errors)
+        assert 'Remove the unbound amount.' in errors
+
+
+def test_valid_checkpoint_gets_copy_revision_without_regenerating_selection():
+    from adaptive_document_agent.agent import retained_analysis as retained
+    from adaptive_document_agent.agent.retained_page_sources import writer_context
+    from adaptive_document_agent.agent.retained_selection_feedback import retain_selection_feedback
+    from adaptive_document_agent.models import ValidationIssue
+    from tests.test_retained_source_citations import fixture
+
+    result, context, proposal = fixture()
+    _, aliases = writer_context(context)
+    iid = proposal.ordered_insight_ids[0]
+    draft = proposal.model_dump(exclude_none=True)
+    result.failed_stage = 'presentation_selection'
+    result.failure_details = dict(component='RetainedAnalysisSelection')
+    result.validation_warnings.append(ValidationIssue(code='retained_page_draft_rejected', stage='presentation',
+        message=json.dumps(dict(rejected_draft=draft, row_ids=aliases, diagnostic='Copy requires clarification.'))))
+    result.validation_warnings.append(retain_selection_feedback(result))
+    page = dict(draft['decisions'][0]['page'], message='The company reported revenue.')
+    mock = gateway([
+        dict(accepted=False, reason='A page needs clarification.',
+             page_issues=[dict(insight_id=iid, reason='Clarify the reporting attribution.')]),
+        dict(pages={iid: page}),
+        dict(accepted=True, reason='The correction retains source meaning.'),
+    ])
+    retained.select_retained_analysis(mock, result)
+    assert [u['operation'] for u in mock.usage] == [
+        'RetainedSelectionCoverage', 'RetainedPageRevisions', 'RetainedSelectionCoverage']
+    assert retained.selected_record(result)['selection']['decisions'][0]['page'] == page
+
+
 @pytest.mark.parametrize('priorities,valid', [
     (['omitted'], True), (['included', 'omitted'], False),
     ([], False), (['unknown'], False), (['omitted', 'omitted'], False),

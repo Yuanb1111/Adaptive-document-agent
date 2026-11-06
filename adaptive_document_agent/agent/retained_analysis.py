@@ -175,8 +175,8 @@ def _select_retained_analysis(gateway, result):
         'finding evidence. That footer does not replace attribution to a named external source, '
         'management explanation, definition or assurance qualifier in the page copy. Use metric '
         'titles and separate dated level statements for turning points; use exact supplied period labels '
-        'without expanding fiscal years to dates, including every material intermediate point. Each directional clause must name its own '
-        'start and end periods, including a later "fell" or "turned negative". Prefer dated level '
+        'without expanding fiscal years to dates, including every material intermediate point. Each directional clause must '
+        'name its own source metric and start and end periods, including in attributed explanations. Prefer dated level '
         'statements over chained movements that omit their starting period. Use '
         'raw reported amounts with explicit units, and only supplied calculations. '
         'Every numeric amount must bind to a primary or allowed companion row; source '
@@ -204,7 +204,9 @@ def _select_retained_analysis(gateway, result):
         'coverage of the original document or of unselected extracted metrics. ' + authoring + INSTRUCTIONS},
         *instruction_messages(result.profile, purpose='selecting retained analysis for PowerPoint'),
         untrusted_document_message(json.dumps(encode_records(packet), ensure_ascii=False, separators=(',', ':')))]
-    from .retained_page_sources import validate_authored_pages
+    from .retained_page_sources import AuthoredPageErrors, validate_authored_pages
+    from .retained_page_revision import revise_retained_pages
+    from .retained_selection_coverage import SelectionCoverageError, review_selection_coverage
     from .retained_selection_request import selection_request
     from .retained_selection_feedback import selection_retry_feedback
     feedback = selection_retry_feedback(result, context) if source_authoring else None
@@ -219,10 +221,12 @@ def _select_retained_analysis(gateway, result):
                  'only new or rejected pages. Every included page is still independently reviewed. A rejected draft is '
                  'not approval; all numerical, selection and source reviews will run again.')])
     reviewed_priorities = []
+    copy_revision_used = False
     for attempt in range(2):
         schema = SourceAuthoredAnalysisSelection if source_authoring else RetainedAnalysisSelection
-        if (attempt == 0 and feedback is not None and not feedback['current_binding_errors']
-                and not feedback.get('source_review')):
+        reusing_draft = (attempt == 0 and feedback is not None and not feedback['current_binding_errors']
+                         and not feedback.get('source_review'))
+        if reusing_draft:
             # A validator repair can make the original draft bind correctly.
             # Preserve that exact copy, but rerun selection, independent coverage
             # and all subsequent source/final reviews before allowing export.
@@ -243,25 +247,48 @@ def _select_retained_analysis(gateway, result):
             if reviewed_priorities and set(selection.ordered_insight_ids) != set(reviewed_priorities):
                 raise ValueError(f'The corrected selection must retain the independently chosen priorities: {reviewed_priorities}')
             if source_authoring:
-                # Both independent checks feed the SAME bounded correction.
-                # A copy error must not conceal a material omission until the
-                # final attempt, when no semantic correction remains available.
-                failures = []
-                try:
-                    validate_authored_pages(selection, context, result)
-                except ValueError as exc:
-                    failures.append(str(exc))
-                from .retained_selection_coverage import review_selection_coverage
-                try:
-                    review_selection_coverage(gateway, {**context, 'reviewed_priorities': reviewed_priorities,
-                                                       'copy_validation_errors': failures},
-                                              selection, result)
-                except ValueError as exc:
-                    failures.append(str(exc))
-                    if getattr(exc, 'priority_ids', None):
-                        reviewed_priorities = exc.priority_ids
-                if failures:
-                    raise ValueError('\n'.join(failures))
+                # Run both checks before choosing between selection and copy repair.
+                for _ in range(2):
+                    failures, page_issues = [], {}
+                    localizable = True
+                    try:
+                        validate_authored_pages(selection, context, result)
+                    except ValueError as exc:
+                        failures.append(str(exc))
+                        localizable = isinstance(exc, AuthoredPageErrors)
+                        if localizable:
+                            page_issues = exc.by_insight
+                    try:
+                        review_selection_coverage(gateway, {**context, 'reviewed_priorities': reviewed_priorities,
+                                                           'copy_validation_errors': failures},
+                                                  selection, result)
+                    except SelectionCoverageError as exc:
+                        failures.append(str(exc))
+                        if exc.priority_ids:
+                            reviewed_priorities = exc.priority_ids
+                            localizable = False
+                        for issue in exc.page_issues:
+                            page_issues.setdefault(issue.insight_id, []).append(issue.reason)
+                    except ValueError as exc:
+                        failures.append(str(exc))
+                        localizable = False
+                    if not failures:
+                        break
+                    if (not attempt and not reusing_draft) or copy_revision_used or not localizable or not page_issues:
+                        raise ValueError('\n'.join(failures))
+                    copy_revision_used = True
+                    try:
+                        revised = revise_retained_pages(gateway, result, packet, aliases, draft, page_issues)
+                    except (ValueError, LLMResponseError) as exc:
+                        raise ValueError('\n'.join([*failures, f'Page revision failed: {exc}'])) from exc
+                    draft = {**draft, 'decisions': [
+                        {**entry, 'page': revised[entry['insight_id']].model_dump(mode='json')}
+                        if entry['insight_id'] in revised else entry for entry in draft['decisions']]}
+                    for decision in selection.decisions:
+                        if decision.insight_id in revised:
+                            page = revised[decision.insight_id]
+                            decision.page = page.model_copy(update={
+                                'companion_ids': [aliases.get(ref, ref) for ref in page.companion_ids]})
         except (ValueError, LLMResponseError) as exc:
             if source_authoring:
                 result.validation_warnings.append(ValidationIssue(code='retained_page_draft_rejected',

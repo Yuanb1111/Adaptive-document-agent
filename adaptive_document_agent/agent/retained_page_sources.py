@@ -62,12 +62,18 @@ def page_bindings(page, insight, primary, context, result):
     return title, copy, ids
 
 
+class AuthoredPageErrors(ValueError):
+    def __init__(self, by_insight: dict[str, list[str]]):
+        self.by_insight = by_insight
+        super().__init__('\n'.join(f'{iid}: {issue}' for iid, issues in by_insight.items() for issue in issues))
+
+
 def validate_authored_pages(selection, context, result):
     from adaptive_document_agent.models import PresentationSlide
     from adaptive_document_agent.validation.claim_validator import ClaimValidator
     from .retained_analysis import findings
     linked = findings(result, allow_new_copy=True)
-    failures = []
+    failures = {}
     for decision in selection.decisions:
         if decision.decision != 'include':
             continue
@@ -75,27 +81,29 @@ def validate_authored_pages(selection, context, result):
         try:
             title, copy, ids = page_bindings(decision.page, insight, primary, context, result)
         except ValueError as exc:
-            failures.append(str(exc))
+            failures[insight.id] = [str(exc).removeprefix(f'{insight.id}: ')]
             continue
         probe = PresentationSlide(id=insight.id, slide_type='analysis', title=title, message=copy,
                                   observation_ids=sorted(ids))
         observations = [o for o in result.observations if o.id in ids]
         errors = ClaimValidator().validate_slide(probe, observations)
-        failures.extend(f'{insight.id}: {e.message}' for e in errors)
+        if not errors:
+            continue
+        issues = failures[insight.id] = [e.message for e in errors]
         if any(e.code == 'direction_scope_ambiguous' for e in errors):
             periods = sorted({o.period for o in observations if o.id in primary and o.period})
-            failures.append(f'{insight.id}: primary source periods are {periods}. For each comparison, '
-                'including a source-attributed explanation, name its own start AND end in the same '
-                'clause. "The decrease through [end]" supplies only one endpoint. Never infer the '
-                'start from the earliest data. For nested comparisons, use separate sentences with '
-                'one dated pair each. If the source does not specify a range for a driver, describe '
-                'the supported dated event without claiming a change over an unspecified period.')
+            issues.append(f'Primary source periods are {periods}. In each directional clause, explicitly '
+                'name the source metric and both source-supported endpoints, including in attributed '
+                'explanations. "The decrease through [end]" supplies only one endpoint. Never infer the '
+                'start from the earliest data. Separate the headline comparison from its drivers. '
+                'If a driver has no source-supported interval, describe the supported event without '
+                'claiming a change over an unspecified period.')
         if any(e.target_component == 'title' for e in errors):
-            failures.append(f'{insight.id}: use a neutral metric/scope title, or explicitly write both '
+            issues.append('Use a neutral metric/scope title, or explicitly write both '
                             'comparison endpoints in the title itself. Dates in the message do not '
                             'supply a missing title endpoint.')
     if failures:
-        raise ValueError('\n'.join(failures))
+        raise AuthoredPageErrors(failures)
 
 
 def writer_context(context):

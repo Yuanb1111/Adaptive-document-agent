@@ -29,9 +29,10 @@ class RetainedSelectionCoverage(BaseModel):
 
 
 class SelectionCoverageError(ValueError):
-    def __init__(self, message, priority_ids):
+    def __init__(self, message, review: RetainedSelectionCoverage):
         super().__init__(message)
-        self.priority_ids = priority_ids
+        self.priority_ids = review.prioritized_insight_ids
+        self.page_issues = review.page_issues
 
 
 def review_selection_coverage(gateway, context, selection, result):
@@ -58,7 +59,11 @@ def review_selection_coverage(gateway, context, selection, result):
              'Also check each included page against its source: material intermediate turning points, '
              'complete comparison endpoints, latest comparable component amounts with dates/units, '
              'source attribution, definitions and column-specific assurance qualifiers must survive '
-             'the rewrite. planned_source_citations supplies the deterministic source-page footer '
+             'the rewrite. Check quantitative completeness within the primary observations and '
+             'eligible companion rows for that finding. For supplementary disclosures supported only '
+             'by cited source prose, retain their qualitative meaning when material. The downstream '
+             'brief can cite the exact source passage and figures. Do not request a number on this '
+             'analysis page if it cannot bind to an eligible row. planned_source_citations supplies the deterministic source-page footer '
              'that the compiler will add to each bound page. Evaluate title, message and that footer '
              'together for page traceability; a supplied page citation need not be repeated in the '
              'body. A footer does not establish a claim’s truth or replace attribution to a named '
@@ -120,4 +125,4 @@ def review_selection_coverage(gateway, context, selection, result):
         copy_issues = '; '.join(f'{p.insight_id}: {p.reason}' for p in review.page_issues)
         raise SelectionCoverageError(
             f'Retained selection omits material findings {missing}: {review.reason}. '
-            f'Complete feasible priority selection: {priorities}. Page corrections: {copy_issues}', priorities)
+            f'Complete feasible priority selection: {priorities}. Page corrections: {copy_issues}', review)
