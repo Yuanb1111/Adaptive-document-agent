@@ -71,6 +71,15 @@ def test_cagr_claims_cannot_borrow_the_other_rate_or_currency(source, text, acce
     assert _numeric_support(text, bound) is accepted
 
 
+def test_saved_chart_currency_symbol_matches_the_original_axis_unit(source):
+    document, raw = source
+    bound = [o.model_copy(update={'currency': 'US$'}) for o in chart_growth_observations(document, raw)
+             if o.currency]
+    assert _numeric_support('The chart labels revenue in US$ million.', bound)
+    assert not _numeric_support('The chart labels revenue in HK$ million.', bound)
+    assert not _numeric_support('The chart labels revenue in US$ thousand.', bound)
+
+
 def test_ambiguous_axis_leaves_cells_unchanged(source):
     document, raw = source
     document.pages[0].text_blocks[0]['lines'].append(dict(text='HK$ million', bbox=[20, 57, 56, 63]))

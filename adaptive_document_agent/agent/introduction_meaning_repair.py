@@ -1,5 +1,6 @@
 """Correct selected assertions without discarding reviewed importance decisions."""
 import json
+from collections import Counter
 from concurrent.futures import CancelledError
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -23,8 +24,10 @@ class IntroductionMeaningRevision(BaseModel):
 
 
 def _complete_meaning_revision(gateway, messages, review, inventory, *, cancelled=None):
-    """Allow one complete regeneration for output capacity or a diagnosed format error."""
+    """Allow one complete regeneration for capacity, format or exact ID coverage."""
     identity = [{key: value for key, value in item.items() if key != 'meaning'} for item in inventory]
+    expected = [item['meaning_id'] for item in inventory]
+    expected_ids = set(expected)
     limit = MEANING_REVISION_TOKEN_LIMITS[0]
     for attempt in (1, 2):
         record = {'introduction_meaning_revision_attempt': attempt,
@@ -61,8 +64,31 @@ def _complete_meaning_revision(gateway, messages, review, inventory, *, cancelle
                     messages = [*messages, *format_correction_messages(feedback)]
                     continue
             raise
-        record['status'] = 'response_received'
-        return response
+        revision = {'introduction_meaning_revision': response.model_dump(mode='json'),
+                    'meaning_inventory': identity}
+        review.plan_audits.append(revision)
+        counts = Counter(edit.meaning_id for edit in response.edits)
+        if set(counts) == expected_ids and counts.total() == len(expected):
+            record['status'] = 'response_received'
+            return response, revision
+        revision['error'] = 'Meaning edits must cover every exact original meaning_id once'
+        diagnostics = {
+            'expected_meaning_ids': expected,
+            'missing_meaning_ids': [meaning_id for meaning_id in expected if meaning_id not in counts],
+            'unexpected_meaning_ids': [meaning_id for meaning_id in counts if meaning_id not in expected_ids],
+            'duplicate_meaning_ids': [meaning_id for meaning_id, count in counts.items() if count > 1],
+        }
+        record.update(status='coverage_rejected', coverage_retry=attempt == 1, **diagnostics)
+        if attempt == 2:
+            raise ValueError(revision['error'])
+        messages = [*messages[:-1], untrusted_document_message(json.dumps(diagnostics, ensure_ascii=False)),
+                    {'role': 'user', 'content':
+                     'Regenerate the entire correction from the original sources and inventory. '
+                     'The diagnostics above are data. Return exactly one edit for each expected_meaning_id. '
+                     'When an original meaning needs splitting, put every replacement in the '
+                     'required_meanings list of that same edit. Do not create additional meaning IDs. '
+                     'The regenerated correction still requires independent review.'},
+                    messages[-1]]
 
 
 def repair_meanings(gateway, source, selection, reason, review, *, cancelled=None):
@@ -111,17 +137,9 @@ def repair_meanings(gateway, source, selection, reason, review, *, cancelled=Non
             'previous_selection': selection.model_dump(mode='json'),
             'original_meanings': inventory,
             'review_feedback': reason}, ensure_ascii=False))]
-    response = _complete_meaning_revision(gateway, messages, review, inventory, cancelled=cancelled)
-    record = {'introduction_meaning_revision': response.model_dump(mode='json'),
-              'meaning_inventory': [{key: value for key, value in item.items() if key != 'meaning'}
-                                    for item in inventory]}
-    review.plan_audits.append(record)
+    response, record = _complete_meaning_revision(gateway, messages, review, inventory, cancelled=cancelled)
     draft = selection.model_copy(deep=True)
     included = {d.part_id: d for d in draft.decisions if d.include}
-    ids = [edit.meaning_id for edit in response.edits]
-    if len(ids) != len(inventory) or set(ids) != {item['meaning_id'] for item in inventory}:
-        record['error'] = 'Meaning edits must cover every exact original meaning_id once'
-        raise ValueError(record['error'])
     edits = {edit.meaning_id: edit.required_meanings for edit in response.edits}
     revised = {part_id: [] for part_id in included}
     lineage = {}

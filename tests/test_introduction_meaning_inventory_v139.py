@@ -131,7 +131,8 @@ def test_incomplete_inventory_empty_replacements_and_owner_reassignment_fail_clo
     client = InventoryClient(malformed=malformed)
     with pytest.raises(ValueError):
         select_introduction_audience(client, result, reading)
-    assert client.calls.count('IntroductionMeaningRevision') == 1
+    expected_attempts = 2 if malformed in {'missing', 'duplicate', 'unknown'} else 1
+    assert client.calls.count('IntroductionMeaningRevision') == expected_attempts
     assert len(client.reviews) == 1
     assert reading.audience_part_ids is None and not reading.audience_selection
 

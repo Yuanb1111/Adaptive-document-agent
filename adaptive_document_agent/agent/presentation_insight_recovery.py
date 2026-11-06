@@ -6,6 +6,7 @@ import re
 
 from adaptive_document_agent.models import PresentationSlide, PresentationTheme, ValidationIssue
 from adaptive_document_agent.services.calendar_claims import bound_period_dates
+from adaptive_document_agent.services.financial_formatter import normalize_currency_symbol
 from adaptive_document_agent.validation.claim_validator import ClaimValidator
 from adaptive_document_agent.validation.presentation_numeric_evidence import checked_money_amounts
 from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
@@ -57,10 +58,10 @@ def _numeric_support(text, observations, computed_percentages=(), *, diagnostics
     if chart_units:
         from adaptive_document_agent.extraction.chart_growth_evidence import CHART_MONEY_UNIT
         from adaptive_document_agent.extraction.normalizer import infer_unit_defaults
-        allowed_units = {(o.currency, o.unit_scale) for o in observations if o.currency}
+        allowed_units = {(normalize_currency_symbol(o.currency), o.unit_scale) for o in observations if o.currency}
         for match in CHART_MONEY_UNIT.finditer(text):
             unit = infer_unit_defaults(match[0])
-            if (unit.currency, unit.scale) not in allowed_units:
+            if (normalize_currency_symbol(unit.currency), unit.scale) not in allowed_units:
                 if diagnostics is not None:
                     diagnostics.append(f'Unbound chart unit: {match[0]}')
                 return False

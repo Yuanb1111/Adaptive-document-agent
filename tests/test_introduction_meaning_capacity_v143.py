@@ -96,6 +96,39 @@ def test_completed_invalid_revision_gets_one_diagnosed_correction(recover):
     assert not reading.audience_selection
 
 
+@pytest.mark.parametrize("recover", [True, False])
+def test_invalid_meaning_ids_get_one_complete_correction(recover):
+    reading, source, selection = repair_context()
+
+    def wrong_ids(payload):
+        edits = corrected(payload).edits
+        return IntroductionMeaningRevision(edits=[
+            edits[0], edits[0], edits[1].model_copy(update={"meaning_id": "meaning-2"}),
+        ])
+
+    gateway = CapacityGateway(reading, [wrong_ids, corrected if recover else wrong_ids])
+    if recover:
+        draft = repair_meanings(gateway, source, selection, "Split the assertion.", reading)
+        assert len(draft.decisions[0].required_meanings) == 2
+        assert draft.decisions[1:] == selection.decisions[1:]
+    else:
+        with pytest.raises(ValueError, match="every exact original meaning_id"):
+            repair_meanings(gateway, source, selection, "Split the assertion.", reading)
+
+    first, second = gateway.calls
+    assert [second[0][0], second[0][-1]] == first[0]
+    assert first[1]["max_tokens"] == second[1]["max_tokens"]
+    rejection, final = attempts(reading)
+    assert rejection["status"] == "coverage_rejected" and rejection["coverage_retry"]
+    assert rejection["missing_meaning_ids"] == ["meaning-1"]
+    assert rejection["unexpected_meaning_ids"] == ["meaning-2"]
+    assert rejection["duplicate_meaning_ids"] == ["meaning-0"]
+    assert "required_meanings list of that same edit" in second[0][-2]["content"]
+    assert final["status"] == ("response_received" if recover else "coverage_rejected")
+    assert not final.get("coverage_retry")
+    assert not reading.audience_selection
+
+
 def test_truncated_reasoning_regenerates_full_unchanged_source_once_with_audited_capacity():
     reading,source,selection=repair_context()
     original=(deepcopy(source),selection.model_dump(),deepcopy(reading.parts))
