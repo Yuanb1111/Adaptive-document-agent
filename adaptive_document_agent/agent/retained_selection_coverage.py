@@ -43,6 +43,15 @@ def review_selection_coverage(gateway, context, selection, result):
                    source_row_assurance=source_row_assurance(result,
                        {row['id']: row['id'] for row in context.get('source_rows', [])}),
                    planned_source_citations=planned_source_citations(selection, context, result))
+    copy_review_ids = set(context.get('copy_review_ids', ()))
+    review_scope = (
+        'Selection coverage has already been assessed for these exact findings. This pass only checks '
+        'the revised pages identified by copy_review_ids. Check all claims on those pages against their '
+        'sources and report remaining copy issues for those IDs. Do not reopen the selection or critique '
+        'unchanged pages in this pass. Leave both selection ID lists empty. The later publication '
+        'review still checks all pages and omissions independently. '
+        if copy_review_ids else ''
+    )
     messages = [
         dict(role='system', content=
              'Independently assess the proposed report selection against the document purpose, user '
@@ -98,7 +107,7 @@ def review_selection_coverage(gateway, context, selection, result):
              'Return only the verdict. Keep the overall reason short and use one concise issue per '
              'included page requiring correction. Specify the exact missing fact, qualifier or '
              'source-supported interval in the issue without recopying the draft or source tables. '
-             + PERIOD_AND_ASSURANCE_RULES + INSTRUCTIONS),
+             + review_scope + PERIOD_AND_ASSURANCE_RULES + INSTRUCTIONS),
         untrusted_document_message(json.dumps(encode_records(payload), ensure_ascii=False,
                                              separators=(',', ':')))
     ]
@@ -119,14 +128,26 @@ def review_selection_coverage(gateway, context, selection, result):
             or (priorities and set(priorities) - included != set(missing))
             or review.accepted != (not missing and not page_ids)):
         raise ValueError('Coverage verdict must identify exact omitted findings and included page issues or accept with no gaps')
+    # A copy review has no authority to change the previously reviewed selection.
+    # Preserve any out-of-scope objections in the audit for the later full review.
+    effective = review
+    if copy_review_ids:
+        scoped_issues = [issue for issue in review.page_issues if issue.insight_id in copy_review_ids]
+        effective = review.model_copy(update=dict(accepted=not scoped_issues, page_issues=scoped_issues,
+            missing_insight_ids=[], prioritized_insight_ids=[],
+            reason='Revised pages need further correction.' if scoped_issues else 'Revised pages passed copy review.'))
     result.validation_warnings.append(ValidationIssue(code='retained_selection_coverage',
         stage='presentation', severity='info', message=json.dumps(dict(
             input_fingerprint=fingerprint(payload), review=review.model_dump(mode='json'),
+            **(dict(copy_review_ids=sorted(copy_review_ids), selected_ids=selection.ordered_insight_ids,
+                    effective_review=effective.model_dump(mode='json'))
+               if copy_review_ids else {}),
             output_attempts=[{k: v for k, v in attempt.items() if k != 'raw_response'}
                              for attempt in audit['output_attempts']],
             final_presentation_approval=False), ensure_ascii=False)))
-    if not review.accepted:
-        copy_issues = '; '.join(f'{p.insight_id}: {p.reason}' for p in review.page_issues)
+    if not effective.accepted:
+        copy_issues = '; '.join(f'{p.insight_id}: {p.reason}' for p in effective.page_issues)
         raise SelectionCoverageError(
-            f'Retained selection omits material findings {missing}: {review.reason}. '
-            f'Complete feasible priority selection: {priorities}. Page corrections: {copy_issues}', review)
+            f'Retained selection omits material findings {effective.missing_insight_ids}: {effective.reason}. '
+            f'Complete feasible priority selection: {effective.prioritized_insight_ids}. Page corrections: {copy_issues}',
+            effective)

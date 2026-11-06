@@ -141,6 +141,8 @@ def test_final_copy_revision_preserves_selection_and_requires_fresh_validation(o
         responses.append(dict(pages={'other-page' if outcome == 'wrong_id' else iid: page}))
         if outcome != 'wrong_id':
             responses.append(accepted)
+        if outcome == 'unchanged':
+            responses.extend([dict(pages={iid: page}), accepted])
     mock = gateway(responses)
 
     if outcome == 'accepted':
@@ -155,7 +157,7 @@ def test_final_copy_revision_preserves_selection_and_requires_fresh_validation(o
         assert retained.selected_record(result) is None
 
     revision_calls = [i for i, usage in enumerate(mock.usage) if usage['operation'] == 'RetainedPageRevisions']
-    assert revision_calls == ([] if outcome == 'material_omission' else [4])
+    assert revision_calls == {'material_omission': [], 'unchanged': [4, 6]}.get(outcome, [4])
     if revision_calls:
         wire = mock.client.calls[4][-1]['content']
         payload = decode_records(json.loads(wire.split('\n', 1)[1].rsplit('\n', 1)[0]))
@@ -166,7 +168,8 @@ def test_final_copy_revision_preserves_selection_and_requires_fresh_validation(o
         assert 'Remove the unbound amount.' in errors
 
 
-def test_valid_checkpoint_gets_copy_revision_without_regenerating_selection():
+@pytest.mark.parametrize('resolved', [True, False])
+def test_valid_checkpoint_gets_copy_revision_without_regenerating_selection(resolved):
     from adaptive_document_agent.agent import retained_analysis as retained
     from adaptive_document_agent.agent.retained_page_sources import writer_context
     from adaptive_document_agent.agent.retained_selection_feedback import retain_selection_feedback
@@ -183,16 +186,61 @@ def test_valid_checkpoint_gets_copy_revision_without_regenerating_selection():
         message=json.dumps(dict(rejected_draft=draft, row_ids=aliases, diagnostic='Copy requires clarification.'))))
     result.validation_warnings.append(retain_selection_feedback(result))
     page = dict(draft['decisions'][0]['page'], message='The company reported revenue.')
-    mock = gateway([
-        dict(accepted=False, reason='A page needs clarification.',
-             page_issues=[dict(insight_id=iid, reason='Clarify the reporting attribution.')]),
-        dict(pages={iid: page}),
-        dict(accepted=True, reason='The correction retains source meaning.'),
+    rejected = dict(accepted=False, reason='A page needs clarification.',
+                    page_issues=[dict(insight_id=iid, reason='Clarify the reporting attribution.')])
+    revision = dict(pages={iid: page})
+    if resolved:
+        mock = gateway([rejected, revision, dict(accepted=True, reason='The correction retains source meaning.')])
+        retained.select_retained_analysis(mock, result)
+        assert retained.selected_record(result)['selection']['decisions'][0]['page'] == page
+        count = 1
+    else:
+        mock = gateway([rejected, revision, rejected, revision, rejected])
+        with pytest.raises(ValueError, match='Clarify the reporting attribution'):
+            retained.select_retained_analysis(mock, result)
+        assert retained.selected_record(result) is None
+        count = 2
+    assert [u['operation'] for u in mock.usage] == ['RetainedSelectionCoverage'] + [
+        'RetainedPageRevisions', 'RetainedSelectionCoverage'] * count
+
+
+def test_copy_review_cannot_reopen_selection_but_retains_remaining_copy_error():
+    from copy import deepcopy
+    from adaptive_document_agent.agent import retained_analysis as retained
+    from adaptive_document_agent.agent.retained_analysis_review import review_context, review_complete
+    from tests.test_retained_source_citations import fixture
+
+    result, _, proposal = fixture()
+    iid = proposal.ordered_insight_ids[0]
+    result.insights.extend(result.insights[0].model_copy(update={'id': key}) for key in ('unchanged', 'omitted'))
+    draft = proposal.model_dump(exclude_none=True)
+    draft['ordered_insight_ids'].append('unchanged')
+    draft['decisions'].extend([
+        dict(insight_id='unchanged', decision='include', reason='Included.',
+             page=dict(title='Revenue context', message='Revenue is reported.', companion_ids=[])),
+        dict(insight_id='omitted', decision='omit', reason='Lower priority.'),
     ])
+    corrected = dict(draft['decisions'][0]['page'], message='The company reported revenue.')
+    copy_issue = dict(insight_id=iid, reason='Clarify the attributed claim.')
+    needs_copy = dict(accepted=False, reason='The selection is sound; revise this page.', page_issues=[copy_issue])
+    conflicting = dict(accepted=False, reason='Replace a topic and correct two pages.',
+        missing_insight_ids=['omitted'], prioritized_insight_ids=[iid, 'omitted'],
+        page_issues=[copy_issue, dict(insight_id='unchanged', reason='Review an untouched page.')])
+    accepted = dict(accepted=True, reason='The revised page is source-faithful.')
+    mock = gateway([draft, needs_copy, deepcopy(draft), needs_copy,
+                    dict(pages={iid: draft['decisions'][0]['page']}), conflicting,
+                    dict(pages={iid: corrected}), accepted])
+
     retained.select_retained_analysis(mock, result)
-    assert [u['operation'] for u in mock.usage] == [
-        'RetainedSelectionCoverage', 'RetainedPageRevisions', 'RetainedSelectionCoverage']
-    assert retained.selected_record(result)['selection']['decisions'][0]['page'] == page
+    selection = retained.selected_record(result)['selection']
+    assert selection['ordered_insight_ids'] == draft['ordered_insight_ids']
+    assert selection['decisions'][0]['page'] == corrected
+    assert selection['decisions'][1:] == draft['decisions'][1:]
+    result.presentation_plan = retained.compile_retained_analysis(result)
+    deferred, = review_context(result)['deferred_copy_review_objections']
+    assert deferred['missing_insight_ids'] == ['omitted']
+    assert deferred['page_issues'] == conflicting['page_issues'][1:]
+    assert not review_complete(result)
 
 
 @pytest.mark.parametrize('priorities,valid', [

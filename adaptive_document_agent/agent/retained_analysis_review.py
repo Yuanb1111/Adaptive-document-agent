@@ -66,6 +66,25 @@ def review_context(result):
         raise ValueError('Final analytical pages no longer match the retained model selection')
     context = selection_context(result)
     context['selection_record'] = selected_record(result)
+    deferred = []
+    for issue in result.validation_warnings:
+        if issue.code != 'retained_selection_coverage':
+            continue
+        try:
+            audit = json.loads(issue.message)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(audit, dict) or audit.get('selected_ids') != selected.ordered_insight_ids:
+            continue
+        if not (scope := audit.get('copy_review_ids')):
+            continue
+        review = audit['review']
+        page_issues = [p for p in review['page_issues'] if p['insight_id'] not in scope]
+        if review['missing_insight_ids'] or page_issues:
+            deferred.append(dict(missing_insight_ids=review['missing_insight_ids'], page_issues=page_issues,
+                                 reason=review['reason']))
+    if deferred:
+        context['deferred_copy_review_objections'] = deferred
     context['slides'] = [s.model_dump(mode='json') for s in slides]
     context['themes'] = [t.model_dump(mode='json') for t in plan.themes]
     chart_ids = {cid for s in slides for cid in [*s.chart_ids, *(c for b in s.visual_blocks for c in b.chart_ids)]}
@@ -178,6 +197,8 @@ def _review_retained_analysis(gateway, result, *, progress=None):
         'materially misleading omissions or duplicate '
         'pages with no added analytical value. This review covers retained model-selected '
         'analysis, not exhaustive coverage of every extracted series. Explain specific failures; '
+        'If deferred_copy_review_objections is supplied, verify those concerns against the current '
+        'original evidence and final pages. They are questions, not accepted facts or required rankings. '
         'do not rewrite copy or approve by relying on selection reasons. '
         + PERIOD_AND_ASSURANCE_RULES + LAYOUT_INSTRUCTIONS + INSTRUCTIONS},
         untrusted_document_message(json.dumps(encode_records(context), ensure_ascii=False, separators=(',', ':')))]

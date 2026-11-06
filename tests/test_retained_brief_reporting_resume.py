@@ -1,8 +1,11 @@
 """A rejected brief can reuse its bound plan without inheriting a final verdict."""
+import json
+
 import pytest
 
 from adaptive_document_agent.agent.brief_reporting_resume import retained_brief_reporting
-from adaptive_document_agent.agent.retained_analysis_review import review_complete
+from adaptive_document_agent.agent.retained_analysis import selected_record
+from adaptive_document_agent.agent.retained_analysis_review import review_complete, review_context
 from adaptive_document_agent.models import PipelineResult, ValidationIssue
 from adaptive_document_agent.models.presentation import CompanySummaryItem, CompanySummaryPage
 from adaptive_document_agent.services.pipeline_completion import require_topic_coverage
@@ -29,6 +32,11 @@ def checkpoint():
 
 def test_restore_validated_selection_and_plan_only_and_regenerate_markdown():
     source, current, gateway = checkpoint()
+    selected_ids = selected_record(source)['selection']['ordered_insight_ids']
+    source.validation_warnings.append(ValidationIssue(
+        code='retained_selection_coverage', stage='presentation', message=json.dumps(dict(
+            selected_ids=selected_ids, copy_review_ids=selected_ids,
+            review=dict(missing_insight_ids=['omitted'], page_issues=[], reason='Check this omission at publication.')))))
     count = len(gateway.client.calls)
     reporting = retained_brief_reporting(source, current, gateway)
     assert reporting is not None
@@ -36,6 +44,7 @@ def test_restore_validated_selection_and_plan_only_and_regenerate_markdown():
     assert reporting.report_plan == source.report_plan and reporting.charts == source.charts
     assert reporting.report_markdown and reporting.report_markdown != source.report_markdown
     assert not reporting.executive_brief and not review_complete(reporting)
+    assert review_context(reporting)['deferred_copy_review_objections'][0]['missing_insight_ids'] == ['omitted']
     with pytest.raises(ValueError, match='Retained-analysis evidence'):
         require_topic_coverage(reporting)
     assert len(gateway.client.calls) == count

@@ -60,7 +60,10 @@ def retained_brief_reporting(previous, current, gateway, requested_focus=None, s
         'report_plan': previous.report_plan.model_copy(deep=True),
         'charts': [c.model_copy(deep=True) for c in previous.charts],
         'presentation_plan': previous.presentation_plan.model_copy(deep=True),
-        'validation_warnings': [*current.validation_warnings, selection_issue.model_copy(deep=True)],
+        'validation_warnings': [*current.validation_warnings,
+                                *(w.model_copy(deep=True) for w in previous.validation_warnings
+                                  if w.code == 'retained_selection_coverage'),
+                                selection_issue.model_copy(deep=True)],
     })
     try:
         record = selected_record(candidate)

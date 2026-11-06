@@ -221,7 +221,7 @@ def _select_retained_analysis(gateway, result):
                  'only new or rejected pages. Every included page is still independently reviewed. A rejected draft is '
                  'not approval; all numerical, selection and source reviews will run again.')])
     reviewed_priorities = []
-    copy_revision_used = False
+    max_copy_revisions = copy_revisions_left = 2
     for attempt in range(2):
         schema = SourceAuthoredAnalysisSelection if source_authoring else RetainedAnalysisSelection
         reusing_draft = (attempt == 0 and feedback is not None and not feedback['current_binding_errors']
@@ -248,7 +248,8 @@ def _select_retained_analysis(gateway, result):
                 raise ValueError(f'The corrected selection must retain the independently chosen priorities: {reviewed_priorities}')
             if source_authoring:
                 # Run both checks before choosing between selection and copy repair.
-                for _ in range(2):
+                copy_review_ids = []
+                while True:
                     failures, page_issues = [], {}
                     localizable = True
                     try:
@@ -260,7 +261,8 @@ def _select_retained_analysis(gateway, result):
                             page_issues = exc.by_insight
                     try:
                         review_selection_coverage(gateway, {**context, 'reviewed_priorities': reviewed_priorities,
-                                                           'copy_validation_errors': failures},
+                                                           'copy_validation_errors': failures,
+                                                           'copy_review_ids': copy_review_ids},
                                                   selection, result)
                     except SelectionCoverageError as exc:
                         failures.append(str(exc))
@@ -274,13 +276,14 @@ def _select_retained_analysis(gateway, result):
                         localizable = False
                     if not failures:
                         break
-                    if (not attempt and not reusing_draft) or copy_revision_used or not localizable or not page_issues:
+                    if (not attempt and not reusing_draft) or not copy_revisions_left or not localizable or not page_issues:
                         raise ValueError('\n'.join(failures))
-                    copy_revision_used = True
+                    copy_revisions_left -= 1
                     try:
                         revised = revise_retained_pages(gateway, result, packet, aliases, draft, page_issues)
                     except (ValueError, LLMResponseError) as exc:
                         raise ValueError('\n'.join([*failures, f'Page revision failed: {exc}'])) from exc
+                    copy_review_ids = sorted(revised)
                     draft = {**draft, 'decisions': [
                         {**entry, 'page': revised[entry['insight_id']].model_dump(mode='json')}
                         if entry['insight_id'] in revised else entry for entry in draft['decisions']]}
@@ -295,7 +298,8 @@ def _select_retained_analysis(gateway, result):
                     stage='presentation', severity='warning', message=json.dumps(dict(
                         attempt=attempt + 1, rejected_draft=draft, diagnostic=str(exc), row_ids=aliases),
                         ensure_ascii=False)))
-            if not source_authoring or attempt or isinstance(exc, LLMResponseError):
+            if (not source_authoring or attempt or copy_revisions_left < max_copy_revisions
+                    or isinstance(exc, LLMResponseError)):
                 raise
             messages = [*messages, untrusted_document_message(json.dumps(dict(
                 rejected_draft=draft, error=str(exc)), ensure_ascii=False)),
