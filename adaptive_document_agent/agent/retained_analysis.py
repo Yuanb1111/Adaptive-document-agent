@@ -153,7 +153,7 @@ def select_retained_analysis(gateway, result):
 def _select_retained_analysis(gateway, result):
     source_authoring = _has_positioned_sources(result)
     context = selection_context(result, source_authoring=source_authoring)
-    from .retained_page_sources import source_row_assurance, writer_context
+    from .retained_page_sources import PERIOD_AND_ASSURANCE_RULES, source_row_assurance, writer_context
     packet, aliases = writer_context(context) if source_authoring else (context, {})
     if source_authoring:
         packet['source_row_assurance'] = source_row_assurance(result, aliases)
@@ -184,7 +184,7 @@ def _select_retained_analysis(gateway, result):
         'without introducing that extra number. Preserve the raw negative sign or parentheses for '
         'outflows even when using the words "cash used". Never merge explanations for different '
         'dated steps into one broader causal interval. Keep selection reasons '
-        'qualitative. Omitted findings have no page. ' + LAYOUT_INSTRUCTIONS
+        'qualitative. Omitted findings have no page. ' + PERIOD_AND_ASSURANCE_RULES + LAYOUT_INSTRUCTIONS
         if source_authoring else 'Leave the optional page field empty. ')
     from .report_requirements import instruction_messages
     from adaptive_document_agent.utils.record_encoding import encode_records, INSTRUCTIONS

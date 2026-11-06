@@ -1,9 +1,38 @@
 """Bind source-authored analysis pages to their calculation and companion rows."""
+import re
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from adaptive_document_agent.services.presentation_evidence import (
     ambiguous_source_table_ids, observation_uses_ambiguous_table)
 from .audit_source_layout import audit_source_page
+
+
+PERIOD_AND_ASSURANCE_RULES = (
+    'Use the exact bound period labels, even in parentheses and source attributions. '
+    'Do not expand a fiscal-year or interim label into a calendar date. If the levels have '
+    'different reporting bases, list their exact dated values separately instead of asserting a '
+    'direction across those bases. State a source-attributed driver separately and retain its '
+    'literal source scope without turning it into a comparison between incompatible endpoints. '
+    'Only use an audit label for a row explicitly marked with that status. Unknown means unmarked. '
+    'Never propagate a label to another period or measure based on a shared heading. '
+)
+_PERIOD_ASSURANCE = re.compile(
+    r'(?P<period>\b(?:FY\d{4}|\d{1,2}M\d{4}|\d{4}-\d{2}-\d{2})\b)\s*'
+    r'\(\s*(?P<status>unaudited|audited)\s*\)', re.I)
+
+
+def _check_explicit_period_assurance(text, observations):
+    """Reject an adjacent label that has no matching row for the named period."""
+    by_period = {}
+    for observation in observations:
+        if observation.period:
+            by_period.setdefault(observation.period.upper(), set()).add(observation.audited_status)
+    for match in _PERIOD_ASSURANCE.finditer(text):
+        period, status = match['period'].upper(), match['status'].lower()
+        if status not in by_period.get(period, ()):
+            raise ValueError(f'{period} has no bound row explicitly marked {status}. '
+                             'Keep the exact period and value and remove the unsupported qualifier.')
 
 
 class RetainedPage(BaseModel):
@@ -59,6 +88,10 @@ def page_bindings(page, insight, primary, context, result):
                 f'Details: {diagnostics}. Bind any used table components to their exact '
                 'allowed companion rows. Do not introduce amounts found only in unbound source prose; '
                 'retain the source explanation without that additional numeric claim. Preserve signed raw outflows.')
+        try:
+            _check_explicit_period_assurance(text, obs)
+        except ValueError as exc:
+            raise ValueError(f'{insight.id}.{field}: {exc}') from exc
     return title, copy, ids
 
 
@@ -154,7 +187,8 @@ def planned_source_citations(selection, context, result):
         if not pages or set(pages) - available_pages:
             continue
         citation = dict(insight_id=decision.insight_id, observation_ids=sorted(ids),
-                        source_pages=pages, footer=source_footer(pages))
+                        source_pages=pages, footer=source_footer(pages),
+                        bound_periods=sorted({o.period for o in bound if o.period}))
         marked_tables = {o.effective_table_id for o in bound
                          if o.effective_table_id and o.audited_status in {'audited', 'unaudited'}}
         if marked_tables:

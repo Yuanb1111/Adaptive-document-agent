@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from adaptive_document_agent.models import ChartPlan, Observation, PresentationPlan, PresentationSlide, SourceEvidence
+from adaptive_document_agent.models import ChartPlan, DocumentPage, Observation, PresentationPlan, PresentationSlide, SourceEvidence
 from adaptive_document_agent.services.presentation_period_scope import prepare_presentation_period_scope, review_presentation_period_scope
 from tests.test_pptx_export import _result
 
@@ -63,6 +63,23 @@ def test_same_full_series_does_not_narrow_valid_original_copy():
     original = result.model_dump()
     assert prepare_presentation_period_scope(result) == []
     assert result.model_dump() == original
+
+
+@pytest.mark.parametrize("cited_scope", [True, False])
+def test_display_scope_does_not_replace_attributed_literal_source_scope(cited_scope):
+    result = _sample()
+    result.document.pages = [DocumentPage(page_number=10, text=(
+        "Defects increased during the Track Record Period as production expanded." if cited_scope else
+        "The source discusses defects and production."))]
+    slide = result.presentation_plan.slides[0]
+    attribution = "The filing cites higher production in explaining defects during the Track Record Period."
+    slide.message = attribution
+    assert prepare_presentation_period_scope(result) == ["movements"]
+    assert "over FY2021–FY2023" in slide.title
+    if cited_scope:
+        assert slide.message == attribution
+    else:
+        assert "over FY2021–FY2023" in slide.message
 
 
 @pytest.mark.parametrize("period,basis,ptype", [(None, "FY", "fiscal_year"), ("Unknown", "", "generic"),

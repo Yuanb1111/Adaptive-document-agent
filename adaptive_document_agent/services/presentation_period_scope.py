@@ -16,10 +16,34 @@ from .presentation_evidence import ambiguous_source_table_ids, observation_uses_
 _BROAD = re.compile(
     r"\b(?:over|across|during|throughout|for|in)\s+(?:the\s+)?"
     r"(?:(?:whole|entire|full)\s+)?"
-    r"(?:track[ -]record\s+period|(?:whole|entire|full)\s+(?:reporting\s+)?period|reporting\s+period)\b",
+    r"(?P<scope>track[ -]record\s+period|(?:whole|entire|full)\s+(?:reporting\s+)?period|reporting\s+period)\b",
     re.I,
 )
+_ATTRIBUTION = re.compile(
+    r"\b(?:source|filing|prospectus|document|report|company|management)\s+(?:also\s+)?"
+    r"(?:attributes?|cites?|describes?|explains?|reports?|says?|states?|notes?)\b", re.I)
 _META = {"column_role", "table_context", "section", "period_basis"}
+
+
+def _scopes_display(text, match, sources):
+    """Preserve a literal source scope inside an attributed sentence."""
+    prefix = re.split(r"(?<=[.!?;])\s+|\n", text[:match.start()])[-1]
+    if not _ATTRIBUTION.search(prefix):
+        return True
+    literal = r"\b" + r"\s+".join(re.escape(word) for word in match["scope"].split()) + r"\b"
+    return not any(re.search(literal, source, re.I) for source in sources)
+
+
+def _scope_candidates(result, plan, *, include_unresolved=False):
+    pages = {page.page_number: page.text for page in result.document.pages}
+    for slide in plan.slides:
+        if slide.slide_type != "analysis":
+            continue
+        sources = [pages.get(page, "") for page in slide.source_pages]
+        if any((include_unresolved and "the respective displayed periods" in text.casefold())
+               or any(_scopes_display(text, match, sources) for match in _BROAD.finditer(text))
+               for text in (slide.title, slide.message, *slide.bullets)):
+            yield slide, sources
 
 
 def _subject(item: Observation) -> tuple | None:
@@ -144,14 +168,12 @@ def review_presentation_period_scope(result, plan=None) -> list[tuple[str, str]]
     target = plan or result.presentation_plan
     if target is None:
         return []
-    candidates = [s for s in target.slides if s.slide_type == "analysis" and any(
-        _BROAD.search(text) or "the respective displayed periods" in text.casefold()
-        for text in [s.title, s.message, *s.bullets])]
+    candidates = list(_scope_candidates(result, target, include_unresolved=True))
     if not candidates:
         return []
     observations, charts, eligible, by_subject = _evidence_context(result)
     findings = []
-    for slide in candidates:
+    for slide, _ in candidates:
         groups = _visible_groups(slide, charts, observations)
         visible = list({o.id: o for _, items in groups for o in items}.values())
         scopes = [{_period(o) for o in items} for _, items in groups]
@@ -242,13 +264,12 @@ def prepare_presentation_period_scope(result: PipelineResult, plan: Presentation
     target = plan or result.presentation_plan
     if target is None:
         return []
-    candidates = [s for s in target.slides if s.slide_type == "analysis" and any(
-        _BROAD.search(text) for text in [s.title, s.message, *s.bullets])]
+    candidates = list(_scope_candidates(result, target))
     if not candidates:
         return _sync_summary_copies(result, target)
     observations, charts, eligible, by_subject = _evidence_context(result)
     changed = []
-    for slide in candidates:
+    for slide, sources in candidates:
         groups = _visible_groups(slide, charts, observations)
         visible = list({o.id: o for _, items in groups for o in items}.values())
         ids = [o.id for o in visible]
@@ -282,9 +303,12 @@ def prepare_presentation_period_scope(result: PipelineResult, plan: Presentation
             continue
         label = _period_text({p[1] for p in scopes[0]}) if same_scope else "the respective displayed periods"
         replacement = "over " + label
-        slide.title = _BROAD.sub(replacement, slide.title)
-        slide.message = _BROAD.sub(replacement, slide.message)
-        slide.bullets = [_BROAD.sub(replacement, text) for text in slide.bullets]
+        def scope_copy(text):
+            return _BROAD.sub(lambda m: replacement if _scopes_display(text, m, sources) else m[0], text)
+
+        slide.title = scope_copy(slide.title)
+        slide.message = scope_copy(slide.message)
+        slide.bullets = [scope_copy(text) for text in slide.bullets]
         details = []
         if not same_scope:
             details.append("Displayed periods: " + "; ".join(

@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict
 from adaptive_document_agent.utils.record_encoding import INSTRUCTIONS, encode_records
 from .audit_source_layout import LAYOUT_INSTRUCTIONS, audit_source_page
 from .prompting import untrusted_document_message
-from .retained_page_sources import RetainedPage
+from .retained_page_sources import PERIOD_AND_ASSURANCE_RULES, RetainedPage
 
 
 class RetainedPageRevisions(BaseModel):
@@ -52,10 +52,12 @@ def revise_retained_pages(gateway, result, packet, aliases, draft, issues):
              'more negative, describe greater cash use while keeping both original signed amounts. '
              'Use exact primary values and only this finding’s allowed_companion_rows for other values. '
              'The compiler adds the footer from bound evidence; keep source page numbers out of the page prose. '
-             'Keep only companion references used in the replacement. ' + LAYOUT_INSTRUCTIONS + INSTRUCTIONS),
+             'Keep only companion references used in the replacement. '
+             + PERIOD_AND_ASSURANCE_RULES + LAYOUT_INSTRUCTIONS + INSTRUCTIONS),
         dict(role='user', content='Apply the requested local corrections and preserve the existing source-supported '
              'amounts and composition. Check that every directional sentence names exactly one metric and its own '
-             'literal endpoints. Separate attributed drivers into their own sentences.'),
+             'literal endpoints. Separate attributed drivers into their own sentences. If feedback requests a calendar '
+             'date or an assurance qualifier that is absent from the bound rows, use the exact supported label instead.'),
         untrusted_document_message(json.dumps(encode_records(payload), ensure_ascii=False, separators=(',', ':'))),
     ]
     revision = gateway.generate_structured(messages, RetainedPageRevisions, stage='presentation',

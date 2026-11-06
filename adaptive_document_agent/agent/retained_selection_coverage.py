@@ -38,7 +38,7 @@ class SelectionCoverageError(ValueError):
 def review_selection_coverage(gateway, context, selection, result):
     from adaptive_document_agent.utils.record_encoding import encode_records, INSTRUCTIONS
     from .retained_analysis import fingerprint
-    from .retained_page_sources import planned_source_citations, source_row_assurance
+    from .retained_page_sources import PERIOD_AND_ASSURANCE_RULES, planned_source_citations, source_row_assurance
     payload = dict(context, proposed_selection=selection.model_dump(mode='json', exclude_none=True),
                    source_row_assurance=source_row_assurance(result,
                        {row['id']: row['id'] for row in context.get('source_rows', [])}),
@@ -63,7 +63,10 @@ def review_selection_coverage(gateway, context, selection, result):
              'eligible companion rows for that finding. For supplementary disclosures supported only '
              'by cited source prose, retain their qualitative meaning when material. The downstream '
              'brief can cite the exact source passage and figures. Do not request a number on this '
-             'analysis page if it cannot bind to an eligible row. planned_source_citations supplies the deterministic source-page footer '
+             'analysis page if it cannot bind to an eligible row. This also applies to numeric '
+             'constants in source definitions and to calendar endpoints. For an unbound definition '
+             'constant, require the source-supported method in words and leave the exact constant '
+             'to a separately cited passage. planned_source_citations supplies the deterministic source-page footer '
              'that the compiler will add to each bound page. Evaluate title, message and that footer '
              'together for page traceability; a supplied page citation need not be repeated in the '
              'body. A footer does not establish a claim’s truth or replace attribution to a named '
@@ -71,8 +74,9 @@ def review_selection_coverage(gateway, context, selection, result):
              'Reject incorrect or unsupported attribution even when a footer is supplied. '
              'Report concrete omissions or misleading scope in page_issues using the '
              'included insight_id. Use copy_validation_errors to inspect the underlying source '
-             'now: if an attribution has incomplete dates, specify the exact source-supported '
-             'interval and driver rather than leaving a later rewrite to guess its scope. Use the '
+             'now: if an attribution has incomplete scope, specify the exact bound period labels or '
+             'the original source-defined scope and driver. Do not ask for a calendar date absent '
+             'from the finding’s bound_periods in planned_source_citations. Use the '
              'included insight_id. Refer to the actual source; never infer assurance from neighbouring '
              'columns. source_row_assurance lists explicit annotations by row ID. A row without an '
              'annotation has unknown assurance. For marked tables, bound_assurance in each planned '
@@ -94,7 +98,7 @@ def review_selection_coverage(gateway, context, selection, result):
              'Return only the verdict. Keep the overall reason short and use one concise issue per '
              'included page requiring correction. Specify the exact missing fact, qualifier or '
              'source-supported interval in the issue without recopying the draft or source tables. '
-             + INSTRUCTIONS),
+             + PERIOD_AND_ASSURANCE_RULES + INSTRUCTIONS),
         untrusted_document_message(json.dumps(encode_records(payload), ensure_ascii=False,
                                              separators=(',', ':')))
     ]

@@ -59,10 +59,29 @@ def test_writer_and_reviewer_receive_only_explicit_row_assurance():
     assert packets[0]['source_row_assurance'] == {alias: 'unaudited'}
     assert packets[1]['source_row_assurance'] == {observation_id: 'unaudited'}
     citation, = packets[1]['planned_source_citations']
+    assert citation['bound_periods'] == sorted({o.period for o in result.observations})
     assert {o['observation_id']: o['audited_status'] for o in citation['bound_assurance']} == {
         o.id: o.audited_status for o in result.observations if o.id in citation['observation_ids']
     }
     assert retained.selection_context(result, source_authoring=True) == context
+
+
+@pytest.mark.parametrize('period,status,accepted', [
+    ('6M2023', 'unaudited', True), ('6M2024', 'unaudited', False),
+    ('6M2024', 'audited', False), ('6M2025', 'unaudited', False),
+])
+def test_explicit_assurance_requires_a_matching_bound_period(period, status, accepted):
+    from adaptive_document_agent.agent.retained_page_sources import _check_explicit_period_assurance
+    from tests.test_topic_coverage_review import _observation
+
+    rows = [_observation('Loss', '6M2023', 100).model_copy(update={'audited_status': 'unaudited'}),
+            _observation('Loss', '6M2024', 120)]
+    copy = f'Loss in {period} ({status}) was reported.'
+    if accepted:
+        _check_explicit_period_assurance(copy, rows)
+    else:
+        with pytest.raises(ValueError, match=f'{period} has no bound row explicitly marked {status}'):
+            _check_explicit_period_assurance(copy, rows)
 
 
 def test_citation_includes_bound_companion_evidence_and_changes_review_fingerprint():
