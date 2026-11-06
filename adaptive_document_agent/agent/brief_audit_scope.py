@@ -28,7 +28,7 @@ AUDIT_STATUS_SCOPE_RULE = (
     'source context, never semantic approval; fresh independent meaning review remains mandatory.')
 
 
-def _geometric_statuses(page, table, labels):
+def geometric_column_statuses(page, table, labels):
     """Recheck preserved coordinates before trusting a column annotation."""
     from adaptive_document_agent.extraction.borderless_layout import source_lines, geometric_audit_statuses
     words = []
@@ -46,9 +46,9 @@ def _geometric_statuses(page, table, labels):
             if valid_box(box) and isinstance(line.get('text'), str) and line['text'].strip():
                 words.append(dict(text=line['text'], x0=box[0], x1=box[2], top=box[1], bottom=box[3]))
     width = len(table.headers) - 1
-    unknown = ['unknown'] * max(width, 0)
+    unresolved = [None] * max(width, 0)
     if not words or not valid_box(table.bbox) or width < 1 or table.source_rotation or page.reading_rotation:
-        return unknown
+        return unresolved
     lines = source_lines(page, page.text, str.strip, words=words)
     compact = lambda text: ''.join(normalize_quote(text).split())
     year_headers = {compact(raw) for raw in table.raw_header_lines
@@ -56,7 +56,7 @@ def _geometric_statuses(page, table, labels):
     candidates = [i for i, line in enumerate(lines) if compact(line.text) in year_headers
                   and line.bottom is not None and line.bottom < table.bbox[1]]
     if not candidates:
-        return unknown
+        return unresolved
     year_index = max(candidates, key=lambda i: lines[i].bottom)
     annotations = [line for line in lines[year_index + 1:]
                    if line.top is not None and line.top < table.bbox[1]
@@ -64,7 +64,7 @@ def _geometric_statuses(page, table, labels):
     from adaptive_document_agent.extraction.period_header_geometry import geometric_periods
     periods = geometric_periods(lines[max(0, year_index - 5):year_index], lines[year_index], width)
     if periods is None:
-        return unknown
+        return unresolved
     statuses = geometric_audit_statuses(annotations, lines[year_index], width)
     header_text = ' '.join(table.raw_header_lines)
     for i, actual in enumerate(periods):
@@ -78,7 +78,7 @@ def _geometric_statuses(page, table, labels):
             elif re.search(r'December\s*31', header_text, re.I):
                 equivalent.update((f'2H{interim[1]}', f'H2{interim[1]}'))
         if stored not in equivalent:
-            statuses[i] = 'unknown'
+            statuses[i] = None
     return statuses
 
 
@@ -115,7 +115,7 @@ def source_audit_scope(item, result):
                 if located and _STATUS.search(located) and any(located in q for q in quotes):
                     labels.append(located)
             available = {m[0].casefold() for label in labels for m in _STATUS.finditer(label)}
-            geometric = _geometric_statuses(page, table, labels)
+            geometric = geometric_column_statuses(page, table, labels)
             duration_dates = set()
             _header_dates(table, page.text, duration_bindings=duration_dates)
             columns = []

@@ -7,6 +7,9 @@ from adaptive_document_agent.models import ValidationIssue
 from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
 from .prompting import untrusted_document_message
 from .retained_analysis import selected_record, selection_context, fingerprint, RetainedAnalysisSelection
+from .retained_audit_scope import (
+    ASSURANCE_REVIEW_RULES, AssuranceChange, contradicted_assurance, verified_column_assurance,
+)
 
 REVIEW_CODE = 'presentation_retained_analysis_review'
 
@@ -44,6 +47,7 @@ class RetainedSlideVerdict(BaseModel):
     slide_id: str
     accepted: bool
     reason: str = Field(min_length=1, max_length=1200)
+    assurance_changes: list[AssuranceChange] | None = Field(default=None, max_length=40)
 
 
 class RetainedAnalysisReview(BaseModel):
@@ -79,7 +83,9 @@ def review_context(result):
         if not (scope := audit.get('copy_review_ids')):
             continue
         review = audit['review']
-        page_issues = [p for p in review['page_issues'] if p['insight_id'] not in scope]
+        contradicted = audit.get('contradicted_assurance_issue_ids', [])
+        page_issues = [p for p in review['page_issues']
+                       if p['insight_id'] not in scope and p['insight_id'] not in contradicted]
         if review['missing_insight_ids'] or page_issues:
             deferred.append(dict(missing_insight_ids=review['missing_insight_ids'], page_issues=page_issues,
                                  reason=review['reason']))
@@ -90,6 +96,9 @@ def review_context(result):
     chart_ids = {cid for s in slides for cid in [*s.chart_ids, *(c for b in s.visual_blocks for c in b.chart_ids)]}
     charts = [c for c in result.charts if c.id in chart_ids]
     context['charts'] = [c.model_dump(mode='json') for c in charts]
+    context['verified_column_assurance'] = verified_column_assurance(result, {
+        oid for s in slides for oid in [*s.observation_ids,
+            *(o for b in s.visual_blocks for o in b.observation_ids)]})
     ids = {o['id'] for o in context['observations']}
     ids.update(oid for a in result.analysis_results for oid in a.input_observation_ids)
     ids.update(oid for s in slides for oid in [*s.observation_ids,
@@ -144,10 +153,11 @@ def review_complete(result):
         record = json.loads(latest.message)
         if record.get('contract') != 1 or record.get('fingerprint') != fingerprint(context):
             return False
-        review = RetainedAnalysisReview.model_validate(record['review'])
+        review = RetainedAnalysisReview.model_validate(record.get('effective_review', record['review']))
         return (len(review.verdicts) == len(expected)
                 and {v.slide_id for v in review.verdicts} == expected
-                and all(v.accepted for v in review.verdicts) and review.omissions_accepted)
+                and all(v.accepted and not v.assurance_changes for v in review.verdicts)
+                and review.omissions_accepted)
     except (ValueError, KeyError, TypeError):
         return False
 
@@ -200,17 +210,30 @@ def _review_retained_analysis(gateway, result, *, progress=None):
         'If deferred_copy_review_objections is supplied, verify those concerns against the current '
         'original evidence and final pages. They are questions, not accepted facts or required rankings. '
         'do not rewrite copy or approve by relying on selection reasons. '
-        + PERIOD_AND_ASSURANCE_RULES + LAYOUT_INSTRUCTIONS + INSTRUCTIONS},
+        + PERIOD_AND_ASSURANCE_RULES + ASSURANCE_REVIEW_RULES + LAYOUT_INSTRUCTIONS + INSTRUCTIONS},
         untrusted_document_message(json.dumps(encode_records(context), ensure_ascii=False, separators=(',', ':')))]
     # One bounded review. No 16k -> 32k retry of the same evidence packet.
     review = gateway.generate_structured(messages, RetainedAnalysisReview,
         stage='presentation', allow_repair=False, max_tokens=16000)
+    bound = {s['id']: set(s['observation_ids']) | {
+        oid for block in s['visual_blocks'] for oid in block['observation_ids']} for s in context['slides']}
+    contradicted = [v.slide_id for v in review.verdicts if not v.accepted and contradicted_assurance(
+        v.assurance_changes, bound.get(v.slide_id, ()), context['verified_column_assurance'])]
+    effective = review
+    if contradicted:
+        effective = review.model_copy(update={'verdicts': [
+            v.model_copy(update=dict(accepted=True, reason='Requested assurance contradicts the verified source column.',
+                                     assurance_changes=[])) if v.slide_id in contradicted else v
+            for v in review.verdicts]})
     result.validation_warnings.append(ValidationIssue(code=REVIEW_CODE, stage='presentation',
         severity='info', message=json.dumps(dict(contract=1, fingerprint=fingerprint(context),
-            review=review.model_dump(mode='json')), ensure_ascii=False)))
-    reasons = [f'{v.slide_id}: {v.reason}' for v in review.verdicts if not v.accepted]
-    if not review.omissions_accepted:
-        reasons.insert(0, 'Omitted findings: ' + review.omission_reason)
+            review=review.model_dump(mode='json', exclude_none=True),
+            **(dict(contradicted_assurance_slide_ids=contradicted,
+                    effective_review=effective.model_dump(mode='json', exclude_none=True))
+               if contradicted else {})), ensure_ascii=False)))
+    reasons = [f'{v.slide_id}: {v.reason}' for v in effective.verdicts if not v.accepted]
+    if not effective.omissions_accepted:
+        reasons.insert(0, 'Omitted findings: ' + effective.omission_reason)
     if reasons:
         raise ValueError('Retained-analysis evidence review rejected the report. ' + ' '.join(reasons))
     require_retained_review(result)

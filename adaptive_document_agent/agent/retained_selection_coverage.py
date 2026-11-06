@@ -6,6 +6,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from adaptive_document_agent.models import ValidationIssue
 from .presentation_budget_output import complete_budget_output
 from .prompting import untrusted_document_message
+from .retained_audit_scope import (
+    ASSURANCE_REVIEW_RULES, AssuranceChange, contradicted_assurance, verified_column_assurance,
+)
 
 SELECTION_COVERAGE_TOKEN_LIMITS = (12000, 20000)
 
@@ -14,6 +17,7 @@ class RetainedPageIssue(BaseModel):
     model_config = ConfigDict(extra='forbid')
     insight_id: str
     reason: str = Field(min_length=1, max_length=1800)
+    assurance_changes: list[AssuranceChange] | None = Field(default=None, max_length=40)
 
 
 class RetainedSelectionCoverage(BaseModel):
@@ -37,12 +41,16 @@ class SelectionCoverageError(ValueError):
 
 def review_selection_coverage(gateway, context, selection, result):
     from adaptive_document_agent.utils.record_encoding import encode_records, INSTRUCTIONS
+    from .audit_source_layout import LAYOUT_INSTRUCTIONS
     from .retained_analysis import fingerprint
     from .retained_page_sources import PERIOD_AND_ASSURANCE_RULES, planned_source_citations, source_row_assurance
+    citations = planned_source_citations(selection, context, result)
+    cited_ids = {c['insight_id']: set(c['observation_ids']) for c in citations}
+    bindings = verified_column_assurance(result, set().union(*cited_ids.values()))
     payload = dict(context, proposed_selection=selection.model_dump(mode='json', exclude_none=True),
                    source_row_assurance=source_row_assurance(result,
                        {row['id']: row['id'] for row in context.get('source_rows', [])}),
-                   planned_source_citations=planned_source_citations(selection, context, result))
+                   planned_source_citations=citations, verified_column_assurance=bindings)
     copy_review_ids = set(context.get('copy_review_ids', ()))
     review_scope = (
         'Selection coverage has already been assessed for these exact findings. This pass only checks '
@@ -107,7 +115,8 @@ def review_selection_coverage(gateway, context, selection, result):
              'Return only the verdict. Keep the overall reason short and use one concise issue per '
              'included page requiring correction. Specify the exact missing fact, qualifier or '
              'source-supported interval in the issue without recopying the draft or source tables. '
-             + review_scope + PERIOD_AND_ASSURANCE_RULES + INSTRUCTIONS),
+             + review_scope + PERIOD_AND_ASSURANCE_RULES + ASSURANCE_REVIEW_RULES
+             + LAYOUT_INSTRUCTIONS + INSTRUCTIONS),
         untrusted_document_message(json.dumps(encode_records(payload), ensure_ascii=False,
                                              separators=(',', ':')))
     ]
@@ -130,18 +139,26 @@ def review_selection_coverage(gateway, context, selection, result):
         raise ValueError('Coverage verdict must identify exact omitted findings and included page issues or accept with no gaps')
     # A copy review has no authority to change the previously reviewed selection.
     # Preserve any out-of-scope objections in the audit for the later full review.
+    contradicted = [issue.insight_id for issue in review.page_issues
+                    if contradicted_assurance(issue.assurance_changes, cited_ids.get(issue.insight_id, ()), bindings)]
     effective = review
-    if copy_review_ids:
-        scoped_issues = [issue for issue in review.page_issues if issue.insight_id in copy_review_ids]
-        effective = review.model_copy(update=dict(accepted=not scoped_issues, page_issues=scoped_issues,
-            missing_insight_ids=[], prioritized_insight_ids=[],
-            reason='Revised pages need further correction.' if scoped_issues else 'Revised pages passed copy review.'))
+    if copy_review_ids or contradicted:
+        active = [issue for issue in review.page_issues if issue.insight_id not in contradicted
+                  and (not copy_review_ids or issue.insight_id in copy_review_ids)]
+        missing = [] if copy_review_ids else missing
+        priorities = [] if copy_review_ids else priorities
+        effective = review.model_copy(update=dict(accepted=not missing and not active, page_issues=active,
+            missing_insight_ids=missing, prioritized_insight_ids=priorities,
+            reason='Source-checked review still requires corrections.' if missing or active
+            else 'No actionable issues in the source-checked review.'))
     result.validation_warnings.append(ValidationIssue(code='retained_selection_coverage',
         stage='presentation', severity='info', message=json.dumps(dict(
-            input_fingerprint=fingerprint(payload), review=review.model_dump(mode='json'),
-            **(dict(copy_review_ids=sorted(copy_review_ids), selected_ids=selection.ordered_insight_ids,
-                    effective_review=effective.model_dump(mode='json'))
+            input_fingerprint=fingerprint(payload), review=review.model_dump(mode='json', exclude_none=True),
+            **(dict(copy_review_ids=sorted(copy_review_ids), selected_ids=selection.ordered_insight_ids)
                if copy_review_ids else {}),
+            **(dict(effective_review=effective.model_dump(mode='json', exclude_none=True))
+               if effective is not review else {}),
+            **(dict(contradicted_assurance_issue_ids=contradicted) if contradicted else {}),
             output_attempts=[{k: v for k, v in attempt.items() if k != 'raw_response'}
                              for attempt in audit['output_attempts']],
             final_presentation_approval=False), ensure_ascii=False)))
