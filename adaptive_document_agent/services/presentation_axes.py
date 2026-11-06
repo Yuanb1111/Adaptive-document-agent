@@ -1,6 +1,8 @@
 """Readable native axes from retained values and explicit source dates."""
 
+from calendar import monthrange
 from datetime import date
+from math import ceil
 
 from .presentation_style import readable_axis_bounds
 
@@ -24,6 +26,31 @@ def explicit_date_categories(values, categories):
     return [dates[label] for label in categories] if all(label in dates for label in categories) else None
 
 
+def _date_axis_right_bound(start, end, step, label_fraction):
+    """Keep the last calendar tick inside the plot without adding another tick."""
+    start_month = start.year * 12 + start.month - 1
+    span = (end - start).days
+    end_ordinal = end.toordinal()
+    padded_end = min(date.max.toordinal(), end_ordinal + max(1, ceil(span * .06)))
+    padded_date = date.fromordinal(padded_end)
+    elapsed_months = padded_date.year * 12 + padded_date.month - 1 - start_month
+    tick_month = start_month + elapsed_months // step * step
+
+    def tick_ordinal(month_index):
+        year, month = divmod(month_index, 12)
+        if year > date.max.year:
+            return date.max.toordinal() + 1
+        month += 1
+        return date(year, month, min(start.day, monthrange(year, month)[1])).toordinal()
+
+    tick = tick_ordinal(tick_month)
+    if tick > padded_end:
+        tick_month -= step
+        tick = tick_ordinal(tick_month)
+    clearance = ceil((tick - start.toordinal()) * label_fraction / (1 - label_fraction))
+    return min(max(padded_end, tick + clearance), tick_ordinal(tick_month + step) - 1)
+
+
 def style_date_axis(chart, dates, width):
     """Space points by calendar time; keep full dates in the chart workbook."""
     from pptx.oxml.xmlchemy import OxmlElement
@@ -31,27 +58,28 @@ def style_date_axis(chart, dates, width):
     axis = chart.category_axis
     axis.tick_labels.number_format = "dd mmm yyyy" if width >= 5 else "mmm yyyy"
     axis.tick_labels.number_format_is_linked = False
-    # Anchor regular calendar ticks to a reported date. Arbitrary padding on
-    # the left shifted annual December observations to November tick labels.
-    # The right display window may expand without changing the tick origin.
-    padding = max(1, (max(dates) - min(dates)).days * .06)
-    origin = date(1899, 12, 30)
-    for tag, value in (("c:min", (min(dates) - origin).days),
-                       ("c:max", (max(dates) - origin).days + padding)):
-        nodes = axis._element.scaling.xpath(tag)
-        element = nodes[0] if nodes else OxmlElement(tag)
-        element.set("val", str(value))
-        if not nodes:
-            axis._element.scaling.append(element)
-    months = (max(dates).year - min(dates).year) * 12 + max(dates).month - min(dates).month
+    start, end = min(dates), max(dates)
+    months = (end.year - start.year) * 12 + end.month - start.month
     # A full date is much wider than a month/year label. Reserve axis margins
     # and inter-label space rather than treating each inch as one readable tick.
     font_size = axis.tick_labels.font.size
     points = font_size.pt if font_size is not None else 11
     characters = 11 if width >= 5 else 8
     label_points = characters * points * .6 + 2 * points
-    target = max(2, int(max(.5, width - .8) * 72 / label_points))
+    axis_points = max(.5, width - .8) * 72
+    target = max(2, int(axis_points / label_points))
     step = next((n for n in (1, 3, 6, 12, 24, 60) if n >= months / target), 120)
+    # Keep ticks anchored to the first reported date. Reserve room for the
+    # last centered tick label, even when it falls inside the point padding.
+    label_fraction = min(.25, label_points / (2 * axis_points))
+    origin = date(1899, 12, 30).toordinal()
+    right_bound = _date_axis_right_bound(start, end, step, label_fraction)
+    for tag, value in (("c:min", start.toordinal() - origin), ("c:max", right_bound - origin)):
+        nodes = axis._element.scaling.xpath(tag)
+        element = nodes[0] if nodes else OxmlElement(tag)
+        element.set("val", str(value))
+        if not nodes:
+            axis._element.scaling.append(element)
     for tag, value in (("c:baseTimeUnit", "days"), ("c:majorUnit", str(step)), ("c:majorTimeUnit", "months")):
         nodes = axis._element.xpath(tag)
         element = nodes[0] if nodes else OxmlElement(tag)
