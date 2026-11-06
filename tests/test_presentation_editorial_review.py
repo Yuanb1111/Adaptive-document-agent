@@ -4,6 +4,7 @@ from copy import deepcopy
 from datetime import date
 import io
 
+import pytest
 from pptx import Presentation
 
 from adaptive_document_agent.models import PresentationSlide
@@ -50,9 +51,10 @@ def test_summary_uses_one_font_across_continuations_and_retains_every_item():
     assert all(s.top.inches + s.height.inches < 6.05 for s in bodies)
 
 
-def test_source_dates_remain_visible_without_changing_calendar_spacing():
+@pytest.mark.parametrize('first_value,rising', [(110.32, False), (65.32, True)])
+def test_source_dates_remain_visible_without_changing_calendar_spacing(first_value, rising):
     from pptx.chart.data import CategoryChartData
-    from pptx.enum.chart import XL_CHART_TYPE
+    from pptx.enum.chart import XL_CHART_TYPE, XL_DATA_LABEL_POSITION
     from pptx.util import Inches
     from adaptive_document_agent.services.presentation_axes import style_date_axis, label_source_dates
 
@@ -61,7 +63,7 @@ def test_source_dates_remain_visible_without_changing_calendar_spacing():
     dates = [date(2023, 12, 31), date(2024, 6, 30), date(2024, 10, 31)]
     data = CategoryChartData()
     data.categories = dates
-    data.add_series('Cash', [110.32, 73.033, 81.324])
+    data.add_series('Cash', [first_value, 73.033, 81.324])
     chart = slide.shapes.add_chart(XL_CHART_TYPE.LINE_MARKERS,
         Inches(1), Inches(1), Inches(6), Inches(4), data).chart
     style_date_axis(chart, dates, 6)
@@ -70,7 +72,16 @@ def test_source_dates_remain_visible_without_changing_calendar_spacing():
     deck.save(stream)
     chart = next(s.chart for s in Presentation(io.BytesIO(stream.getvalue())).slides[0].shapes if s.has_chart)
     assert chart._chartSpace.xpath('.//c:dateAx')
-    assert list(chart.series[0].values) == [110.32, 73.033, 81.324]
+    assert list(chart.series[0].values) == [first_value, 73.033, 81.324]
+    first, second, third = [point.data_label for point in chart.series[0].points]
+    assert first.position == (XL_DATA_LABEL_POSITION.BELOW if rising else XL_DATA_LABEL_POSITION.ABOVE)
+    assert first._dLbl.xpath('c:layout/c:manualLayout/c:xMode')[0].get('val') == 'factor'
+    assert float(first._dLbl.xpath('c:layout/c:manualLayout/c:x')[0].get('val')) > 0
+    assert first.text_frame.text == f'31 Dec 2023: {first_value}'
+    assert second.position == XL_DATA_LABEL_POSITION.BELOW
+    assert third.position == XL_DATA_LABEL_POSITION.ABOVE
+    assert not second._dLbl.xpath('c:layout')
+    assert not third._dLbl.xpath('c:layout')
     assert '30 Jun 2024' in chart.series[0].points[1].data_label.text_frame.text
     assert '81.32' in chart.series[0].points[2].data_label.text_frame.text
 

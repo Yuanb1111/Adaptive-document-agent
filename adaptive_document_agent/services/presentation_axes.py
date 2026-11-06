@@ -90,13 +90,17 @@ def style_date_axis(chart, dates, width):
 
 def label_source_dates(chart, dates, *, width=6, precision=None):
     """Display exact point dates as well as the continuous calendar axis."""
-    from pptx.util import Pt
     from pptx.enum.chart import XL_DATA_LABEL_POSITION
+    from pptx.oxml.xmlchemy import OxmlElement
+    from pptx.util import Pt
 
-    if len(chart.series) != 1 or len(dates) > 6:
+    if len(chart.series) != 1 or not dates or len(dates) > 6:
         return
     series = chart.series[0]
-    for i, (point, day, value) in enumerate(zip(series.points, dates, series.values)):
+    values = series.values
+    first, *later = sorted(range(len(dates)), key=dates.__getitem__)
+    font_size = 9
+    for i, (point, day, value) in enumerate(zip(series.points, dates, values)):
         label = point.data_label
         label.position = XL_DATA_LABEL_POSITION.ABOVE if i % 2 == 0 else XL_DATA_LABEL_POSITION.BELOW
         # The plotted values are already scaled; labels use that same unit.
@@ -109,15 +113,32 @@ def label_source_dates(chart, dates, *, width=6, precision=None):
         # in the editable workbook and source-data appendix.
         # Narrow date axes can omit a final interim tick. Preserve that exact
         # observed endpoint visibly, rather than only in the workbook.
-        label.text_frame.text = (f'{day:%d %b %Y}: {amount}'
-                                 if width >= 5 or i == len(dates) - 1 else amount)
+        text = f'{day:%d %b %Y}: {amount}' if width >= 5 or i == len(dates) - 1 else amount
+        label.text_frame.text = text
+        if i == first:
+            # Offset the centered label into the plot, on the opposite side
+            # of the initial segment so the line cannot cross its text.
+            following = values[later[0]] if later else None
+            label.position = (XL_DATA_LABEL_POSITION.BELOW if following is not None and following > value
+                              else XL_DATA_LABEL_POSITION.ABOVE)
+            layout = OxmlElement('c:layout')
+            manual = OxmlElement('c:manualLayout')
+            # The factor offset is relative to the automatic label location
+            # and expressed as a fraction of the chart width.
+            offset = (len(text) * font_size * .55 / 2 + 5) / (72 * width)
+            for tag, setting in (('c:xMode', 'factor'), ('c:x', str(offset))):
+                element = OxmlElement(tag)
+                element.set('val', setting)
+                manual.append(element)
+            layout.append(manual)
+            label._dLbl.insert(1, layout)
         for paragraph in label.text_frame.paragraphs:
-            paragraph.font.size = Pt(9)
+            paragraph.font.size = Pt(font_size)
             for run in paragraph.runs:
                 # Explicit run formatting prevents the template's large chart
                 # font from winning over a paragraph default in PowerPoint.
                 run.font.name = 'Arial'
-                run.font.size = Pt(9)
+                run.font.size = Pt(font_size)
                 run.font.bold = False
 
 
