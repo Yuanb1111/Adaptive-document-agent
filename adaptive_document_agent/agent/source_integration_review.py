@@ -359,8 +359,10 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
                         raise  # Reviewer capacity/refusal failure must not regenerate the writer.
                     feedback = schema_feedback(exc, SourceIntegrationDraft)
                     entry['format_failure'] = feedback
-                    multiple_fields = len(feedback.get('schema_errors', [])) > 1
-                    if (attempt == 0 and (notes or multiple_fields)) or (attempt == 1 and prior_review is not None):
+                    # A single overlong body needs the same local correction as
+                    # several overlong fields. Regenerating the whole proposal
+                    # can repeat the length failure and discard valid bindings.
+                    if attempt == 0 or (attempt == 1 and prior_review is not None):
                         pending_copy = overlong_additions(exc, feedback, SourceIntegrationDraft)
                     if attempt and pending_copy is None:
                         schema_errors = feedback.get('schema_errors', [])

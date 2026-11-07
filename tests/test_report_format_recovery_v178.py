@@ -24,7 +24,7 @@ def test_overlong_or_missing_field_is_corrected_with_complete_original_context(r
     source = deepcopy((result.document, result.observations))
     draft, review = _outputs(constraint)
     invalid = draft.model_dump()
-    invalid['additions'][0]['text'] = 'x' * 578
+    invalid['decisions'][0]['reason'] = 'x' * 1001
     raw = json.dumps(invalid) if role == 'draft' else '{"verdicts":[{"section_id":"contracts","accepted":true}]}'
     outputs = ([response(raw, finish=finish), response(draft), response(review)] if role == 'draft'
                else [response(draft), response(raw, finish=finish), response(review)])
@@ -36,7 +36,7 @@ def test_overlong_or_missing_field_is_corrected_with_complete_original_context(r
     assert retry[:len(first)] == first
     feedback = json.loads(retry[-2]['content'].split('\n', 1)[1].rsplit('\n', 1)[0])
     assert feedback['raw_response'] == raw
-    assert feedback['schema_errors'][0]['loc'] == (['additions', 0, 'text'] if role == 'draft' else ['verdicts', 0, 'reason'])
+    assert feedback['schema_errors'][0]['loc'] == (['decisions', 0, 'reason'] if role == 'draft' else ['verdicts', 0, 'reason'])
     # Format correction stays on the initial capacity; only length exhaustion
     # can consume the larger capacity retry tested separately.
     assert all(r[1]['max_tokens'] == SOURCE_OUTPUT_TOKEN_LIMITS[0] for r in client.requests)
