@@ -23,6 +23,17 @@ _DATES = re.compile(
 def bound_period_dates(text, periods, *, mask=False):
     """Normalize complete dates only if the exact date is a selected source period."""
     owners = set(periods)
+    # Source periods may themselves use spelled month names. Compare complete
+    # calendar identities in either spelling, never expand FY/interim labels.
+    for period in tuple(owners):
+        match = _DATED_PERIOD.fullmatch(period or '')
+        if match:
+            try:
+                owners.add(date(int(match['year']),
+                    _MONTH_NUMBER[(match['month'] or match['month_last']).lower()],
+                    int(match['day'] or match['day_first'])).isoformat())
+            except ValueError:
+                pass
     unmatched = False
     def spelled(match):
         nonlocal unmatched

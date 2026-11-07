@@ -27,10 +27,12 @@ _PERIOD_ASSURANCE = re.compile(
 
 def _check_explicit_period_assurance(text, observations):
     """Reject an adjacent label that has no matching row for the named period."""
+    from adaptive_document_agent.services.calendar_claims import bound_period_dates
     by_period = {}
     for observation in observations:
         if observation.period:
-            by_period.setdefault(observation.period.upper(), set()).add(observation.audited_status)
+            period = bound_period_dates(observation.period, [observation.period])
+            by_period.setdefault(period.upper(), set()).add(observation.audited_status)
     for match in _PERIOD_ASSURANCE.finditer(text):
         period, status = match['period'].upper(), match['status'].lower()
         if status not in by_period.get(period, ()):

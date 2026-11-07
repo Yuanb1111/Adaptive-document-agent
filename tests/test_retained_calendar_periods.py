@@ -78,3 +78,33 @@ def test_accounting_amount_keeps_currency_scale_and_typed_negative_sign(amount, 
     positive = observation.model_copy(update={'value': 33_068_000})
     assert not all(ok for _, ok, _ in checked_money_amounts(
         'Reserves were (RMB33,068) thousand.', [positive]))
+
+
+@pytest.mark.parametrize('period', ['30 Jun 2024', 'June 30, 2024', '2024-06-30'])
+@pytest.mark.parametrize('written', ['30 Jun 2024', 'June 30, 2024', '2024-06-30'])
+def test_spelled_source_period_and_iso_claim_have_the_same_complete_date(period, written):
+    rows = [_observation('Population', period, 188_474)]
+    original = rows[0].model_dump()
+    assert bound_period_dates(f'At {written}, population was 188,474.', [period]) == (
+        'At 2024-06-30, population was 188,474.')
+    assert _numeric_support(f'At {written}, population was 188,474.', rows)
+    assert not _numeric_support('At 31 Jul 2024, population was 188,474.', rows)
+    assert not _numeric_support('At 30 Jun 2025, population was 188,474.', rows)
+    assert rows[0].model_dump() == original
+
+
+@pytest.mark.parametrize('period', ['FY2024', '6M2024', '31 Feb 2024'])
+def test_non_calendar_or_invalid_period_cannot_license_a_calendar_date(period):
+    assert bound_period_dates('At 30 Jun 2024.', [period], mask=True) is None
+
+
+@pytest.mark.parametrize('status,accepted', [('unaudited', True), ('audited', False), ('unknown', False)])
+def test_normalized_calendar_date_keeps_its_own_explicit_assurance(status, accepted):
+    from adaptive_document_agent.agent.retained_page_sources import _check_explicit_period_assurance
+    rows = [_observation('Population', '30 Jun 2024', 100).model_copy(update={'audited_status': status})]
+    text = bound_period_dates('At 30 Jun 2024 (unaudited), population was 100.', [rows[0].period])
+    if accepted:
+        _check_explicit_period_assurance(text, rows)
+    else:
+        with pytest.raises(ValueError, match='no bound row explicitly marked unaudited'):
+            _check_explicit_period_assurance(text, rows)

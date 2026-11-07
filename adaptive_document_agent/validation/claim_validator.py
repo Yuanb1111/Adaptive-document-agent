@@ -56,6 +56,8 @@ from .presentation_metric_binding import (
     possessive_ratio_subject,
     ratio_label_forms,
     source_label_forms,
+    mask_metric_labels,
+    qualified_source_aliases,
 )
 
 
@@ -1482,18 +1484,19 @@ def _associate_clause_direction_spans(
     # one subject has no known alias. Do not lend that predicate to the other
     # metric. Preserve joint subjects such as 'volume and price increased'.
     direction_pattern = r"\b(?:" + "|".join(map(re.escape, _ALL_DIRECTIONAL_WORDS)) + r")\b"
+    predicate_clause = mask_metric_labels(clause, metric_aliases_map)
     # An offset relates independent subjects. A named metric on one side must
     # never lend its values to an unrecognized subject on the other side.
     # Otherwise "A offset B declines" can be silently rewritten to "increases"
     # merely because A increased. Unknown source aliases remain unbound.
-    offset = re.search(r'\boffset(?:ting|s)?\b(?:\s+by\b)?', clause, re.I)
+    offset = re.search(r'\boffset(?:ting|s)?\b(?:\s+by\b)?', predicate_clause, re.I)
     if offset:
         associations = []
         for start, text in ((0, clause[:offset.start()]), (offset.end(), clause[offset.end():])):
             local = _associate_clause_direction_spans(text, metric_aliases_map, metric_values_map)
             if not local:
                 local = [(ambiguous_metric, m[0], m.start(), m.end())
-                         for m in re.finditer(direction_pattern, text, re.I)]
+                         for m in re.finditer(direction_pattern, mask_metric_labels(text, metric_aliases_map), re.I)]
             associations.extend((metric, word, s + start, e + start) for metric, word, s, e in local)
         return associations
     for boundary in predicate_conjunctions(clause):
@@ -1502,7 +1505,8 @@ def _associate_clause_direction_spans(
             # Temporal continuation inherits its subject; an independent
             # predicate below still must establish its own metric.
             continue
-        if re.search(direction_pattern, left, re.I) and re.search(direction_pattern, right, re.I):
+        if (re.search(direction_pattern, predicate_clause[:boundary.start()], re.I)
+                and re.search(direction_pattern, predicate_clause[boundary.end():], re.I)):
             a = _associate_clause_direction_spans(left, metric_aliases_map, metric_values_map)
             b = _associate_clause_direction_spans(right, metric_aliases_map, metric_values_map)
             return a + [(metric, word, s + boundary.end(), e + boundary.end()) for metric, word, s, e in b]
@@ -1559,7 +1563,7 @@ def _associate_clause_direction_spans(
     occupied_dir = [False] * len(clause)
     for dw in _ALL_DIRECTIONAL_WORDS:
         pattern = r"\b" + re.escape(dw.casefold()) + r"\b"
-        for m in re.finditer(pattern, clause_lower):
+        for m in re.finditer(pattern, predicate_clause.casefold()):
             s, e = m.start(), m.end()
             # "Growth rate" names a measure; it does not assert an upward
             # movement. A separate predicate (rose/declined/etc.) still needs
@@ -1798,6 +1802,7 @@ class ClaimValidator:
                 canonical_name=first_obs.metric_canonical,
                 pres_label=getattr(first_obs, "presentation_label", None),
             )
+            aliases = list(set(aliases) | qualified_source_aliases(obs_list))
             metric_aliases_map[metric_name] = aliases
 
             vals: list[str] = []

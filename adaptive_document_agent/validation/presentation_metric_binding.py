@@ -5,6 +5,31 @@ from __future__ import annotations
 import re
 
 
+def mask_metric_labels(text: str, aliases: dict[str, list[str]]) -> str:
+    """Keep words inside literal metric names out of predicate detection.
+
+    Offsets stay unchanged, so genuine predicates outside the label still bind
+    their exact source values and periods. This is not a semantic trend verdict.
+    """
+    masked = list(text)
+    for labels in aliases.values():
+        for label in labels:
+            for match in re.finditer(r'(?<!\w)' + re.escape(label) + r'(?!\w)', text, re.I):
+                masked[match.start():match.end()] = ' ' * len(match[0])
+    return ''.join(masked)
+
+
+def qualified_source_aliases(observations) -> set[str]:
+    """Join retained heading/row text without inventing a semantic name."""
+    labels = set()
+    for item in observations:
+        parent = (item.parent_section or item.dimensions.get('section', '')).strip(' .:;,')
+        if parent:
+            for separator in (' ', ': '):
+                labels.update(source_label_forms(parent + separator + item.metric_original))
+    return labels
+
+
 def ratio_label_forms(label: str) -> set[str]:
     """Derive ratio aliases from the source subject, without aliasing its inputs.
 
