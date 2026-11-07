@@ -31,9 +31,11 @@ def observation_numeric_fields(item, *, include_context=False):
 
 _CURRENCY_TOKEN = r"US\$|HK\$|S\$|RMB|CNY|CNH|USD|HKD|SGD|GBP|EUR|JPY|AUD|CAD|CHF|[$£€¥]"
 _MONEY = re.compile(
-    rf"(?<![\w.])(?:(?P<currency>{_CURRENCY_TOKEN})\s*)?"
+    rf"(?<![\w.])(?P<accounting>\()?\s*(?:(?P<currency>{_CURRENCY_TOKEN})\s*)?"
     r"(?P<number>[+−-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)"
-    r"(?:\s*(?P<scale>thousand|million|billion|trillion|bn|mn|[kmb]))?(?!\w|[.,]\d)", re.I)
+    r"(?:\s*(?P<scale>thousand|million|billion|trillion|bn|mn|[kmb]))?"
+    r"(?(accounting)\s*\)(?:\s*(?P<outer_scale>thousand|million|billion|trillion|bn|mn|[kmb]))?)"
+    r"(?!\w|[.,]\d)", re.I)
 _MONEY_SCALES = {"": 1, "k": 1_000, "thousand": 1_000, "m": 1_000_000,
                  "mn": 1_000_000, "million": 1_000_000, "b": 1_000_000_000,
                  "bn": 1_000_000_000, "billion": 1_000_000_000, "trillion": 10**12}
@@ -52,8 +54,8 @@ def _currency(value):
 
 
 def _money_scale(text, match):
-    if match["scale"]:
-        return _MONEY_SCALES[match["scale"].lower()]
+    if match["scale"] or match["outer_scale"]:
+        return _MONEY_SCALES[(match["scale"] or match["outer_scale"]).lower()]
     # A visible declaration governs later amounts of the same currency in this
     # paragraph. An explicit suffix always wins, and a new line starts a new scope.
     start = text.rfind("\n", 0, match.start()) + 1
@@ -74,7 +76,7 @@ def checked_money_amounts(text, observations, calculations=()):
                if c.get("currency") and set(c["observation_ids"]) <= monetary.keys()]
     currencies = {code for _, code, _ in amounts + changes}
     for match in _MONEY.finditer(text):
-        if not (match["currency"] or match["scale"]):
+        if not (match["currency"] or match["scale"] or match["outer_scale"]):
             continue
         currency = _currency(match["currency"])
         if not currency and len(currencies) == 1:
@@ -86,11 +88,13 @@ def checked_money_amounts(text, observations, calculations=()):
         cash_use = _CASH_USE.match(after)
         negative = re.search(r"(?:\bnegative|(?<!\w)[−-])$", before, re.I)
         positive = re.search(r"(?:\bpositive|(?<!\w)\+)$", before, re.I)
-        conflicting_sign = (positive or literal.startswith("+")) and (negative or cash_use or decrease or claimed < 0)
-        if conflicting_sign or re.match(r"\s*(?:[%％/]|per\b)", after, re.I):
+        accounting = bool(match["accounting"])
+        conflicting_scale = match["scale"] and match["outer_scale"]
+        conflicting_sign = (positive or literal.startswith("+")) and (accounting or negative or cash_use or decrease or claimed < 0)
+        if conflicting_scale or conflicting_sign or re.match(r"\s*(?:[%％/]|per\b)", after, re.I):
             yield match, False, set()
             continue
-        if negative or cash_use or decrease:
+        if accounting or negative or cash_use or decrease:
             claimed = -abs(claimed)
         scale = _money_scale(text, match)
         places = -claimed.as_tuple().exponent

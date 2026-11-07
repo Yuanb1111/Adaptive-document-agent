@@ -136,6 +136,7 @@ def test_final_copy_revision_preserves_selection_and_requires_fresh_validation(o
     responses = [bad, issue, bad, issue]
     if outcome == 'material_omission':
         responses[-1] = dict(issue, missing_insight_ids=['omitted'], prioritized_insight_ids=[iid, 'omitted'])
+        responses.append(deepcopy(bad))  # Ignoring the priority correction must still fail closed.
     else:
         page = (bad if outcome == 'unchanged' else good)['decisions'][0]['page']
         responses.append(dict(pages={'other-page' if outcome == 'wrong_id' else iid: page}))
@@ -151,7 +152,7 @@ def test_final_copy_revision_preserves_selection_and_requires_fresh_validation(o
         assert mock.usage[-1]['operation'] == 'RetainedSelectionCoverage'
     else:
         error = {'unchanged': 'outside its bound evidence', 'wrong_id': 'exactly the flagged insight IDs',
-                 'material_omission': 'omits material findings'}[outcome]
+                 'material_omission': 'independently chosen priorities'}[outcome]
         with pytest.raises(ValueError, match=error):
             retained.select_retained_analysis(mock, result)
         assert retained.selected_record(result) is None
@@ -287,3 +288,40 @@ def test_writer_cannot_drop_independently_reviewed_priorities(obeys):
         with pytest.raises(ValueError, match='independently chosen priorities'):
             retained.select_retained_analysis(mock, result)
         assert retained.selected_record(result) is None
+
+
+@pytest.mark.parametrize('settles', [True, False])
+def test_late_priority_change_gets_one_independent_correction_after_copy_retry(settles):
+    from copy import deepcopy
+    from adaptive_document_agent.agent import retained_analysis as retained
+    from tests.test_retained_source_citations import fixture
+
+    result, _, proposal = fixture()
+    original = proposal.ordered_insight_ids[0]
+    result.insights.append(result.insights[0].model_copy(update={'id': 'required'}))
+    initial = proposal.model_dump(exclude_none=True)
+    initial['decisions'].append(dict(insight_id='required', decision='omit', reason='Lower priority.'))
+    copy_issue = dict(accepted=False, reason='Correct attribution.',
+                      page_issues=[dict(insight_id=original, reason='Name the company.')])
+    corrected = deepcopy(initial)
+    corrected['decisions'][0]['page']['message'] = 'The company reported revenue.'
+    replacement = dict(decisions=[
+        dict(insight_id=original, decision='omit', reason='Reviewed lower priority.'),
+        dict(insight_id='required', decision='include', reason='Independent priority.',
+             page=corrected['decisions'][0]['page'])], ordered_insight_ids=['required'])
+    priority_issue = dict(accepted=False, missing_insight_ids=['required'],
+                         prioritized_insight_ids=['required'], reason='Material omitted trajectory.')
+    final_review = (dict(accepted=True, reason='Source-backed corrected selection.') if settles else
+                    dict(accepted=False, missing_insight_ids=[original],
+                         prioritized_insight_ids=[original], reason='Another priority reversal.'))
+    mock = gateway([initial, copy_issue, corrected, priority_issue, replacement, final_review])
+    if settles:
+        retained.select_retained_analysis(mock, result)
+        assert retained.selected_record(result)['selection'] == replacement
+        assert not any(w.code == 'presentation_retained_analysis_review' for w in result.validation_warnings)
+    else:
+        with pytest.raises(ValueError, match='omits material findings'):
+            retained.select_retained_analysis(mock, result)
+        assert retained.selected_record(result) is None
+    assert [u['operation'] for u in mock.usage] == [
+        'SourceAuthoredAnalysisSelection', 'RetainedSelectionCoverage'] * 3

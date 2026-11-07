@@ -58,3 +58,23 @@ def test_declared_money_scale_is_scoped_and_still_requires_a_bound_amount(copy, 
     })
     assert [bound for _, bound, _ in checked_money_amounts(copy, [observation])] == supported
     assert _numeric_support(copy, [observation]) is all(supported)
+
+
+@pytest.mark.parametrize('amount,supported', [
+    ('(RMB33,068) thousand', True), ('(RMB33,068 thousand)', True),
+    ('(RMB33.068 million)', True), ('(CNY33,068) thousand', True),
+    ('RMB33,068 thousand', False), ('(RMB+33,068) thousand', False),
+    ('positive (RMB33,068) thousand', False), ('(USD33,068) thousand', False),
+    ('(RMB33,068) million', False), ('(RMB33,069) thousand', False),
+    ('(RMB33,068 million) thousand', False),
+])
+def test_accounting_amount_keeps_currency_scale_and_typed_negative_sign(amount, supported):
+    observation = _observation('Reserves', '2024-06-30', -33_068_000).model_copy(update={
+        'raw_value': '(33,068)', 'raw_unit': 'RMB in thousands', 'unit': 'currency', 'currency': 'CNY',
+    })
+    copy = f'Reserves were {amount} at 2024-06-30.'
+    assert [ok for _, ok, _ in checked_money_amounts(copy, [observation])] == [supported]
+    assert _numeric_support(copy, [observation]) is supported
+    positive = observation.model_copy(update={'value': 33_068_000})
+    assert not all(ok for _, ok, _ in checked_money_amounts(
+        'Reserves were (RMB33,068) thousand.', [positive]))

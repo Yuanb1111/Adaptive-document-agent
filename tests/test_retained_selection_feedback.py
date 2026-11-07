@@ -97,3 +97,48 @@ def test_final_source_rejection_gets_one_bounded_selection_repair_not_an_approva
     assert len(mock.client.calls)==2  # Source rejection forces rewriting, even if numeric bindings pass.
     assert retained.selected_record(result)['selection']['decisions'][0]['page']['message']=='Reported revenue.'
     assert not can_retry_source_review(result) and needs_catalog_retry(result)
+
+
+@pytest.mark.parametrize('legacy', [True, False])
+@pytest.mark.parametrize('obeys', [True, False])
+def test_resume_keeps_structured_priority_verdict_and_requires_corrected_selection(legacy, obeys):
+    from adaptive_document_agent.models import ValidationIssue
+    from tests.test_retained_source_citations import fixture as source_fixture
+
+    result, _, proposal = source_fixture()
+    original = proposal.ordered_insight_ids[0]
+    result.insights.append(result.insights[0].model_copy(update={'id': 'required'}))
+    draft = proposal.model_dump(exclude_none=True)
+    draft['decisions'].append(dict(insight_id='required', decision='omit', reason='Lower priority.'))
+    from adaptive_document_agent.agent.retained_page_sources import writer_context
+    context = retained.selection_context(result, source_authoring=True)
+    _, aliases = writer_context(context)
+    review = dict(accepted=False, missing_insight_ids=['required'], prioritized_insight_ids=['required'],
+                  page_issues=[], reason='Material omission.')
+    rejected = dict(rejected_draft=draft, row_ids=aliases, diagnostic='Material omission.')
+    if not legacy:
+        rejected['reviewed_priorities'] = ['required']
+    result.validation_warnings.extend([
+        ValidationIssue(code='retained_selection_coverage', stage='presentation', message=json.dumps(dict(review=review))),
+        ValidationIssue(code='retained_page_draft_rejected', stage='presentation', message=json.dumps(rejected)),
+    ])
+    result.failed_stage = 'presentation_selection'
+    result.failure_details = dict(component='RetainedAnalysisSelection')
+    result.validation_warnings.append(retain_selection_feedback(result))
+    feedback = selection_retry_feedback(result, context)
+    assert feedback['reviewed_priorities'] == ['required']
+    assert feedback['current_binding_errors'] and not feedback['final_approval']
+    corrected = (dict(decisions=[
+        dict(insight_id=original, decision='omit', reason='Reviewed lower priority.'),
+        dict(insight_id='required', decision='include', reason='Reviewed priority.', page=draft['decisions'][0]['page'])],
+        ordered_insight_ids=['required']) if obeys else draft)
+    mock = gateway([corrected, dict(accepted=True, reason='Synthetic independent review.')]
+                   if obeys else [corrected, corrected])
+    if obeys:
+        retained.select_retained_analysis(mock, result)
+        assert retained.selected_record(result)['selection'] == corrected
+        assert len(mock.client.calls) == 2
+    else:
+        with pytest.raises(ValueError, match='independently chosen priorities'):
+            retained.select_retained_analysis(mock, result)
+        assert retained.selected_record(result) is None

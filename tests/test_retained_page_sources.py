@@ -34,7 +34,9 @@ def test_positioned_source_can_restore_a_finding_without_publishing_its_rejected
     assert not review_complete(result)
 
 
-def test_source_authored_negative_cash_flow_reaches_export_plan_without_changing_raw_cells():
+@pytest.mark.parametrize('amount', ['RMB -119,245 thousand', '(RMB119,245) thousand',
+                                   '(RMB119,245 thousand)'])
+def test_source_authored_negative_cash_flow_reaches_export_plan_without_changing_raw_cells(amount):
     from tests.test_retained_display_evidence_v218 import _display_result
     from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
 
@@ -43,7 +45,7 @@ def test_source_authored_negative_cash_flow_reaches_export_plan_without_changing
     insight = result.insights[0]
     original = result.model_dump(include={'observations', 'insights', 'analysis_results'})
     page = dict(title='Operating Cash Flow', companion_ids=[],
-                message='Operating cash flow was RMB -119,245 thousand in FY2023, '
+                message=f'Operating cash flow was {amount} in FY2023, '
                         'RMB 437,002 thousand in FY2024 and RMB 445,134 thousand in FY2025.')
     response = dict(decisions=[dict(insight_id=insight.id, decision='include',
                     reason='Distinct cash-flow trajectory.', page=page)], ordered_insight_ids=[insight.id])

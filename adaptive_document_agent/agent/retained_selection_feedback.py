@@ -74,6 +74,19 @@ def retain_selection_feedback(previous):
     try:
         draft = json.loads(issue.message)
         context = selection_context(previous, source_authoring=True)
+        # Older checkpoints stored the structured priority verdict separately.
+        # Carry it forward as correction feedback, never as publication approval.
+        if 'reviewed_priorities' not in draft:
+            coverage = next((w for w in reversed(previous.validation_warnings)
+                             if w.code == 'retained_selection_coverage'), None)
+            audit = json.loads(coverage.message) if coverage else {}
+            review = (audit.get('effective_review', audit.get('review', {}))
+                      if not audit.get('copy_review_ids') else {})
+            priorities = review.get('prioritized_insight_ids', [])
+            included = set(draft['rejected_draft']['ordered_insight_ids'])
+            missing = set(review.get('missing_insight_ids', []))
+            if priorities and missing and set(priorities) - included == missing:
+                draft['reviewed_priorities'] = priorities
         record = dict(context_fingerprint=feedback_fingerprint(context), rejected=draft)
     except (ValueError, KeyError, TypeError):
         return None
@@ -98,14 +111,22 @@ def selection_retry_feedback(result, context):
             if decision.page:
                 decision.page.companion_ids = [aliases.get(k, k) for k in decision.page.companion_ids]
         _validate_selection(selection, context)
+        priorities = rejected.get('reviewed_priorities', [])
+        eligible = {f['insight']['id'] for f in context['findings'] if f['selectable']}
+        if (len(priorities) != len(set(priorities)) or set(priorities) - eligible
+                or len(priorities) > context.get('selection_capacity', 8)):
+            return None
     except (ValueError, KeyError, TypeError):
         return None
     fresh_errors = []
+    if priorities and set(selection.ordered_insight_ids) != set(priorities):
+        fresh_errors.append(f'The corrected selection must retain the independently chosen priorities: {priorities}')
     try:
         validate_authored_pages(selection, context, result)
     except ValueError as exc:
         fresh_errors.append(str(exc))
     return dict(rejected_draft=rejected['rejected_draft'], previous_errors=rejected['diagnostic'],
                 current_binding_errors=fresh_errors, source_review=record.get('source_review', False),
+                reviewed_priorities=priorities,
                 preserved_pages=record.get('preserved_pages', {}),
                 final_approval=False)

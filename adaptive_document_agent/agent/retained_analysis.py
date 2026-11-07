@@ -220,9 +220,12 @@ def _select_retained_analysis(gateway, result):
                  'exact source-checked copy: retained IDs will keep that copy unchanged; author '
                  'only new or rejected pages. Every included page is still independently reviewed. A rejected draft is '
                  'not approval; all numerical, selection and source reviews will run again.')])
-    reviewed_priorities = []
+    reviewed_priorities = (feedback or {}).get('reviewed_priorities', [])
+    # A late coverage decision needs its own bounded selection correction;
+    # earlier copy repairs must not consume that opportunity.
+    priority_revisions_left = 1
     max_copy_revisions = copy_revisions_left = 2
-    for attempt in range(2):
+    for attempt in range(3):
         schema = SourceAuthoredAnalysisSelection if source_authoring else RetainedAnalysisSelection
         reusing_draft = (attempt == 0 and feedback is not None and not feedback['current_binding_errors']
                          and not feedback.get('source_review'))
@@ -242,6 +245,7 @@ def _select_retained_analysis(gateway, result):
         for decision in selection.decisions:
             if decision.page is not None:
                 decision.page.companion_ids = [aliases.get(ref, ref) for ref in decision.page.companion_ids]
+        priority_change = False
         try:
             _validate_selection(selection, context)
             if reviewed_priorities and set(selection.ordered_insight_ids) != set(reviewed_priorities):
@@ -268,6 +272,7 @@ def _select_retained_analysis(gateway, result):
                         failures.append(str(exc))
                         if exc.priority_ids:
                             reviewed_priorities = exc.priority_ids
+                            priority_change = True
                             localizable = False
                         for issue in exc.page_issues:
                             page_issues.setdefault(issue.insight_id, []).append(issue.reason)
@@ -296,11 +301,15 @@ def _select_retained_analysis(gateway, result):
             if source_authoring:
                 result.validation_warnings.append(ValidationIssue(code='retained_page_draft_rejected',
                     stage='presentation', severity='warning', message=json.dumps(dict(
-                        attempt=attempt + 1, rejected_draft=draft, diagnostic=str(exc), row_ids=aliases),
+                        attempt=attempt + 1, rejected_draft=draft, diagnostic=str(exc), row_ids=aliases,
+                        reviewed_priorities=reviewed_priorities),
                         ensure_ascii=False)))
-            if (not source_authoring or attempt or copy_revisions_left < max_copy_revisions
-                    or isinstance(exc, LLMResponseError)):
+            priority_retry = priority_change and priority_revisions_left > 0
+            if (not source_authoring or isinstance(exc, LLMResponseError)
+                    or (not priority_retry and (attempt or copy_revisions_left < max_copy_revisions))):
                 raise
+            if priority_retry:
+                priority_revisions_left -= 1
             messages = [*messages, untrusted_document_message(json.dumps(dict(
                 rejected_draft=draft, error=str(exc)), ensure_ascii=False)),
                 dict(role='user', content='Correct the indicated evidence binding or copy and return the '
