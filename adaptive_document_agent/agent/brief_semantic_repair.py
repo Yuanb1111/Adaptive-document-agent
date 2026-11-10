@@ -121,6 +121,11 @@ def correct_new_meaning_errors(gateway, brief, *, result, excerpts, topics, sour
         'Repeat the source-bound qualification for each affected measure, or explicitly introduce '
         'one common period/status scope covering all the comparisons. A qualifier inside only '
         'the first comparison does not cover a later measure with implicit dates. '
+        'For dense findings whose measures share the SAME verified period/status, explicitly say '
+        '"For EACH measure below, the periods are [qualified period] and [other period], respectively:" '
+        'then list the named measures and their dated pairs. Include EACH/ALL in that scope; a '
+        'plain "For [periods], [first measure] ..." qualifies only that first clause. Do not use '
+        'a common scope if the selected source columns have different or unknown status. '
         'An unsupported comparison must be removed or changed to a quoted same-duration, same-definition '
         'pair. Annual and interim flow totals do not form a growth comparison. Do not annualize, '
         'rescale or round. If no comparable pair is quoted, state the independently dated reported '
@@ -169,6 +174,10 @@ def correct_new_meaning_errors(gateway, brief, *, result, excerpts, topics, sour
                  'meaning patch, using the SAME source. Return exact item_N keys from the schema, concise '
                  'complete text within 550 characters and optional label within 60. Preserve '
                  'the corrected meaning, signs, native quantities and all material qualifications. '
+                 'The limit counts characters, not words. Aim under 420 characters. If several '
+                 'measures share verified periods/status, introduce an explicit EACH-measure scope '
+                 'and state their named pairs without repeating the full dates. Use independently '
+                 'dated facts if a change predicate makes the signed/magnitude basis ambiguous. '
                  'Do not return locked items, evidence objects, references, an entire '
                  'brief or an explanation. No new semantic rewrite is authorized by this format correction.'}]
             continue
@@ -209,6 +218,10 @@ def correct_new_meaning_errors(gateway, brief, *, result, excerpts, topics, sour
                  + AUDIT_STATUS_SCOPE_RULE + ' '
                  'Do not delete a required source-supported status when removing an unrelated '
                  'new quantity; preserve the retained measure and its own qualification. '
+                 'Each assurance binding must include the actual measure, supported period and '
+                 'status in its exact audience clause. A status in binding metadata does not '
+                 'qualify text such as "over those periods". Spell out that measure\'s scope '
+                 'or bind an explicit shared scope containing all affected measures. '
                  'Return exactly the schema item_N keys with text and optional label. Make the smallest '
                  'correction, preserve all other findings and qualifications. This is the final '
                  'shared format/contract retry, not a new briefing or a new review loop.'}]

@@ -48,6 +48,23 @@ def test_rejected_candidate_receives_only_a_targeted_patch_and_fresh_complete_re
     assert audit['outcome'] == 'repaired' and audit['discarded_indices'] == []
 
 
+@pytest.mark.parametrize('accepted', [False, True])
+def test_resumed_pending_review_repairs_fresh_rejection_without_regenerating(monkeypatch, accepted):
+    result, candidate, gateway, reviewed = fixture(monkeypatch, accepted=accepted)
+    context = json.loads(result.validation_warnings[-1].message)['source_context']
+    save_checks(result, context_key(candidate, context, result), candidate,
+                {1: []}, {0: 'review_pending'}, context)
+    if accepted:
+        corrected = resume_brief_review(gateway, result)
+        assert corrected.items[1] == candidate.items[1]
+        assert reviewed[-1] == corrected
+    else:
+        with pytest.raises(ValueError, match='Saved executive briefing correction failed'):
+            resume_brief_review(gateway, result)
+    assert len(gateway.calls) == 1
+    assert reviewed[0] == candidate
+
+
 def test_stale_source_context_does_not_reuse_or_patch_a_saved_candidate(monkeypatch):
     result, _, gateway, reviewed = fixture(monkeypatch)
     result.profile.analysis_focus = 'A different scope'

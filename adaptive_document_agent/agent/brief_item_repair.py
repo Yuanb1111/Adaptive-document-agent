@@ -130,7 +130,8 @@ def _audit(result: PipelineResult, audit: dict[str, Any], outcome: str) -> None:
 
 
 def _salvage(values: list[Any], locked: dict[int, ExecutiveBriefItem], title: Any,
-             result: PipelineResult, excerpts: dict[int, str], topics, semantic_validator=None, diagnostics=None):
+             result: PipelineResult, excerpts: dict[int, str], topics, semantic_validator=None, diagnostics=None,
+             selection_repair=None):
     """Preserve every lock; a patch can never displace it through duplication."""
     retained = {}
     seen = {normalized(brief_claim_text(item, include_label=False)) for item in locked.values()}
@@ -181,7 +182,14 @@ def _salvage(values: list[Any], locked: dict[int, ExecutiveBriefItem], title: An
                     str(list(retained)[p]): reasons for p, reasons in selected_errors.items()
                     if type(p) is int and 0 <= p < len(retained)}
             if selected_errors:
-                return None, []
+                # Only this changed selection can reopen a surviving item.
+                # Give its new rejection one source-bound text correction;
+                # never drop further findings or inherit the larger draft's approval.
+                corrected = (selection_repair(brief, selected_errors, list(retained))
+                             if selection_repair is not None else None)
+                if corrected is None:
+                    return None, []
+                brief = corrected
     if not brief.title.strip() or validate_executive_brief(brief, result, excerpts=excerpts):
         brief = brief.model_copy(update={'title': 'Executive Summary'})
     if (validate_executive_brief(brief, result, excerpts=excerpts)
@@ -408,7 +416,9 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
          'speaker. Do not turn such an explanation into an unqualified new numerical comparison. '
          'Alternatively explicitly state one common period/status scope covering all following '
          'comparisons. A status beside the first measure alone does not qualify a later implicit-date '
-         'clause. Check all owned narrative evidence as well as tables before changing a literal '
+         'clause. A common scope must explicitly say it applies to EACH/ALL named measures below, '
+         'and every one of those measures must have that same verified source status. '
+         'Check all owned narrative evidence as well as tables before changing a literal '
          'total; do not add component figures merely because reviewer feedback preferred a breakdown. '
          'Do not repeat a rejected conversion or omit the finding merely because its native scale is less compact. '
          'When shortening prose, retain its valid source context and shared assumptions. '
@@ -593,8 +603,12 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
         except (LLMResponseError, ValueError) as exc:
             audit['post_source_meaning_correction_error'] = str(exc)
     salvage_diagnostics = audit['salvage'] = {}
+    from .brief_selection_repair import selection_context_repair
+    repair_selection = selection_context_repair(gateway, result=result, excerpts=excerpts, topics=topics,
+        source_context=source_context, evidence_catalog=evidence_catalog,
+        semantic_validator=semantic_validator, audit=salvage_diagnostics, cancelled=cancelled)
     salvaged, discarded = _salvage(merged, locked, title, result, excerpts, topics, semantic_validator,
-                                  salvage_diagnostics)
+                                  salvage_diagnostics, selection_repair=repair_selection)
     if salvaged is not None:
         audit['discarded_indices'] = discarded
         _audit(result, audit, 'salvaged')

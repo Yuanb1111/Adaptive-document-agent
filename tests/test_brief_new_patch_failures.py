@@ -80,7 +80,8 @@ def test_sibling_failure_keeps_reviewed_revision_of_reopened_lock(accept_selecti
         item('Costs were 8.', label='Costs')])
     cash_patch = {**original['items'][1], 'text':'Reported cash was 4.'}
     replies = Replies([original, {'item_1':cash_patch}, {
-        'item_0':{'text':'Reported revenue was 12.'}, 'item_1':{'text':'The cash balance was 4.'}}])
+        'item_0':{'text':'Reported revenue was 12.'}, 'item_1':{'text':'The cash balance was 4.'}},
+        {'item_0': {'text': 'Reported revenue was 12.'}}])
     selections = []
     def review(brief):
         if len(brief.items) == 2:
@@ -98,5 +99,5 @@ def test_sibling_failure_keeps_reviewed_revision_of_reopened_lock(accept_selecti
     else:
         with pytest.raises(ValueError, match='necessary counterpoint'):
             run()
-    assert selections == [['Reported revenue was 12.', 'Costs were 8.']]
+    assert selections == [['Reported revenue was 12.', 'Costs were 8.']] * (1 if accept_selection else 3)
     assert audited(result)['updated_salvage_locks'] == [0]

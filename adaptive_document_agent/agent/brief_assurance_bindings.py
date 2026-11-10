@@ -24,6 +24,44 @@ def assurance_catalog(inventory: list[dict]) -> dict[str, dict]:
     return catalog
 
 
+def assurance_binding_errors(item, inventory, bindings):
+    """A model's status declaration must actually appear in its audience span.
+
+    This validates the declared transport, not the semantic measure ownership.
+    Missing scope may use the existing contract retry only when its selected
+    source columns support the status. Unknown or unrelated columns never do.
+    """
+    import re
+    from .brief_audit_scope import _PERIOD, _STATUS, _period_keys
+    catalog = assurance_catalog(inventory)
+    errors, recoverable = [], True
+    for number, value in enumerate(bindings or []):
+        prefix = f'Assurance binding {number}: '
+        try:
+            binding = BriefAssuranceBinding.model_validate(value)
+        except ValueError:
+            errors.append(prefix + 'invalid source binding')
+            recoverable = False
+            continue
+        refs = binding.source_refs
+        if (len(refs) != len(set(refs)) or any(ref not in catalog for ref in refs)
+                or any(catalog[ref]['status'] != binding.status for ref in refs)):
+            errors.append(prefix + 'references do not support the declared status')
+            recoverable = False
+            continue
+        if item.text.count(binding.claim) != 1:
+            errors.append(prefix + 'claim must be one exact unique audience clause')
+            continue
+        sources = [catalog[ref] for ref in refs]
+        periods = {key for match in _PERIOD.finditer(binding.claim)
+                   for key in _period_keys(match, sources)}
+        if not any(match[0].casefold() == binding.status for match in _STATUS.finditer(binding.claim)):
+            errors.append(prefix + 'declared status is missing from its audience clause')
+        if any(re.sub(r'\s+', '', source['period']).upper() not in periods for source in sources):
+            errors.append(prefix + 'source period is missing from its audience clause')
+    return errors, bool(errors) and recoverable
+
+
 def bound_assertion(item, status, period, keys, inventory, bindings) -> bool:
     """Validate a semantic scope choice without guessing a measure from prose.
 

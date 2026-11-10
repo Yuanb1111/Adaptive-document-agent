@@ -32,6 +32,80 @@ def case():
     return result, draft
 
 
+@pytest.mark.parametrize('accept_fresh', [False, True])
+def test_retry_edits_only_rejected_addition_but_rechecks_every_section(accept_fresh):
+    from adaptive_document_agent.models import ValidationIssue
+    result, draft = case()
+    result.failed_stage = 'source_integration'
+    result.validation_warnings.append(ValidationIssue(code='source_integration_unresolved',
+        stage='report', message=json.dumps(dict(attempts=[dict(draft=draft.model_dump(mode='json'),
+        review=dict(verdicts=[dict(section_id=d.section_id, accepted=i == 1,
+            reason='Scope needs a correction.' if i == 0 else 'Supported.')
+            for i, d in enumerate(draft.decisions)]))]))))
+    previous = result.model_copy(deep=True)
+    calls = []
+    class Gateway:
+        def generate_structured(self, messages, schema, **kwargs):
+            calls.append(schema.__name__)
+            if schema.__name__ == 'ReopenedSourceAdditions':
+                assert set(schema.model_fields) == ({'item_3'} if len(calls) == 1 else {'item_3', 'item_4'})
+                return schema(**{key: draft.additions[int(key[5:]) - 3].model_copy(
+                    update={'label': 'Source scope'}) for key in schema.model_fields})
+            if schema is SourceIntegrationDraft:
+                return draft
+            return schema(verdicts=[dict(section_id=d.section_id, accepted=accept_fresh,
+                reason='Fresh complete source review.') for d in draft.decisions])
+    merged = review_supplementary_sources(Gateway(), result, result.executive_brief, previous=previous)
+    assert calls[:2] == ['ReopenedSourceAdditions', 'SourceIntegrationReview']
+    assert 'SourceIntegrationDraft' not in calls
+    assert bool(resolved_source_check_ids(result, merged)) is accept_fresh
+    assert merged.items[:3] == previous.executive_brief.items
+    if accept_fresh:
+        assert merged.items[4] == draft.additions[1]
+    else:
+        assert merged == previous.executive_brief
+
+
+@pytest.mark.parametrize('outcome', ['accepted', 'overlong', 'forged'])
+def test_overlong_targeted_retry_preserves_locks_and_recovers_its_checkpoint(outcome):
+    from adaptive_document_agent.models import ValidationIssue
+    from adaptive_document_agent.agent.source_integration_review import _retry_draft
+    from adaptive_document_agent.agent.source_integration_resume import rejected_addition_sections
+    from tests.test_budget_output_v145 import gateway, response
+    result, draft = case()
+    result.failed_stage = 'source_integration'
+    verdicts = [dict(section_id=d.section_id, accepted=i == 1, reason='Prior source review.')
+                for i, d in enumerate(draft.decisions)]
+    result.validation_warnings.append(ValidationIssue(code='source_integration_unresolved', stage='report',
+        message=json.dumps(dict(attempts=[dict(draft=draft.model_dump(mode='json'), review=dict(verdicts=verdicts))]))))
+    previous = result.model_copy(deep=True)
+    invalid = draft.additions[0].model_dump(mode='json')
+    invalid['text'] *= 20
+    assert len(invalid['text']) > 550
+    body = (invalid['text'] if outcome == 'overlong' else draft.additions[0].text
+            + (' Invented value 987654321.' if outcome == 'forged' else ''))
+    outputs = [response(json.dumps(dict(item_3=invalid))), response(json.dumps(dict(
+        addition_0_text=[dict(label=draft.additions[0].label, text=body)])))]
+    if outcome == 'accepted':
+        outputs.append(response(json.dumps(dict(verdicts=[{**v, 'accepted': True} for v in verdicts]))))
+    llm, _ = gateway(outputs)
+    merged = review_supplementary_sources(llm, result, result.executive_brief, previous=previous)
+    operations = [u['operation'] for u in llm.usage]
+    assert operations == ['ReopenedSourceAdditions', 'SourceAdditionCopy',
+                          *(['SourceIntegrationReview'] if outcome == 'accepted' else [])]
+    if outcome == 'accepted':
+        assert merged.items[4] == draft.additions[1]
+        assert resolved_source_check_ids(result, merged) == {'contracts', 'outlook'}
+    else:
+        assert merged == previous.executive_brief
+        assert not resolved_source_check_ids(result, merged)
+        checks = result.profile.source_coverage.checks_by_review_id()
+        pages = {p.page_number: p.text for p in result.document.pages}
+        retained = _retry_draft(result, result, merged, checks, pages)
+        assert retained == draft
+        assert rejected_addition_sections(result, retained, checks, len(merged.items))[1] == ['contracts']
+
+
 @pytest.mark.parametrize('accepted', [True, False])
 def test_reviewer_sees_exact_addition_at_index_four_and_still_owns_semantic_verdict(accepted):
     result, draft = case()
@@ -124,14 +198,19 @@ def test_revised_draft_keeps_only_separately_accepted_additions(shared):
         assert last['submitted_draft']['additions'][0]['text'] == revision.additions[0].text
 
 
-def test_reopened_unchanged_section_gets_its_first_correction_after_companion_changes():
+@pytest.mark.parametrize('mixed_rejection', [False, True])
+@pytest.mark.parametrize('accept_final', [False, True])
+def test_reopened_unchanged_section_gets_its_first_correction_after_companion_changes(mixed_rejection, accept_final):
     result, draft = case()
     class Gateway:
         drafts = reviews = 0
         def generate_structured(self, messages, schema, **kwargs):
             if schema.__name__ == 'ReopenedSourceAdditions':
-                assert set(schema.model_fields) == {'item_3'}
-                return schema(item_3=draft.additions[0].model_copy(update={'label': 'Cancellation scope'}))
+                assert set(schema.model_fields) == ({'item_3', 'item_4'} if mixed_rejection else {'item_3'})
+                values = dict(item_3=draft.additions[0].model_copy(update={'label': 'Cancellation scope'}))
+                if mixed_rejection:
+                    values['item_4'] = draft.additions[1].model_copy(update={'label': 'Forecast scope'})
+                return schema(**values)
             if schema is SourceIntegrationDraft:
                 self.drafts += 1
                 value = draft.model_copy(deep=True)
@@ -140,10 +219,16 @@ def test_reopened_unchanged_section_gets_its_first_correction_after_companion_ch
                 return value
             self.reviews += 1
             return schema(verdicts=[dict(section_id=d.section_id,
-                accepted=self.reviews == 3 or i == self.reviews - 1, reason='Scope independently reviewed.')
+                accepted=((self.reviews == 3 and accept_final)
+                          or self.reviews < 3 and i == self.reviews - 1
+                          and not (mixed_rejection and self.reviews == 2)),
+                reason='Scope independently reviewed.')
                 for i, d in enumerate(draft.decisions)])
     gateway = Gateway()
     merged = review_supplementary_sources(gateway, result, result.executive_brief)
     assert gateway.reviews == 3
-    assert resolved_source_check_ids(result, merged) == {'contracts', 'outlook'}
-    assert [item.label for item in merged.items[-2:]] == ['Cancellation scope', 'Forecast scope']
+    assert resolved_source_check_ids(result, merged) == ({'contracts', 'outlook'} if accept_final else set())
+    if accept_final:
+        assert [item.label for item in merged.items[-2:]] == ['Cancellation scope', 'Forecast scope']
+    else:
+        assert merged == result.executive_brief

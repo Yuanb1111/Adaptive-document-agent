@@ -13,6 +13,67 @@ from tests.test_source_completion_capacity_v173 import _outputs, _audit
 from tests.test_source_integration_v166 import fixture
 
 
+def test_semantic_revision_keeps_its_own_format_correction_after_initial_shortening():
+    result, constraint = fixture()
+    for i in range(5):
+        text = f'Operational context {i}.'
+        result.document.pages[0].text += '\n' + text
+        result.executive_brief.items.append(ExecutiveBriefItem(label='Context', text=text,
+            evidence=[dict(page=1, text=text)]))
+    original = result.executive_brief.model_copy(deep=True)
+    draft, review = _outputs(constraint)
+    draft.decisions[0].brief_item_indexes = [len(original.items)]
+    invalid = draft.model_dump(mode='json')
+    invalid['additions'][0]['text'] = constraint * 20
+    rejected = review.model_copy(deep=True)
+    rejected.verdicts[0].accepted = False
+    patch = response(json.dumps({'addition_0_text': constraint}))
+    llm, _ = gateway([response(json.dumps(invalid)), patch, response(rejected),
+        response(json.dumps(invalid)), patch, response(review)])
+    merged = review_supplementary_sources(llm, result, original)
+    assert resolved_source_check_ids(result, merged) == {'contracts'}
+    assert len(_audit(result)[1]['attempts']) == 4
+    assert [u['operation'] for u in llm.usage] == [
+        'SourceIntegrationDraft', 'SourceAdditionCopy', 'SourceIntegrationReview',
+        'SourceIntegrationDraft', 'SourceAdditionCopy', 'SourceIntegrationReview']
+    assert merged.items[:len(original.items)] == original.items
+
+
+@pytest.mark.parametrize('accepted', [False, True])
+def test_shorter_complete_copy_stays_bounded_and_preserves_semantic_correction(accepted):
+    result, constraint = fixture()
+    for i in range(5):
+        text = f'Operational context {i}.'
+        result.document.pages[0].text += '\n' + text
+        result.executive_brief.items.append(ExecutiveBriefItem(label='Context', text=text,
+            evidence=[dict(page=1, text=text)]))
+    original = result.executive_brief.model_copy(deep=True)
+    draft, review = _outputs(constraint)
+    draft.decisions[0].brief_item_indexes = [len(original.items)]
+    invalid = draft.model_dump(mode='json')
+    invalid['additions'][0]['text'] = constraint * 20
+    shorter = constraint * 12
+    assert 550 < len(shorter) < len(invalid['additions'][0]['text'])
+    review.verdicts[0].accepted = accepted
+    outputs = [response(json.dumps(invalid)),
+        response(json.dumps({'addition_0_text': shorter})),
+        response(json.dumps({'addition_0_text': constraint})), response(review)]
+    if not accepted:
+        outputs.extend([response(draft), response(review)])
+    llm, _ = gateway(outputs)
+    merged = review_supplementary_sources(llm, result, original)
+    assert [u['operation'] for u in llm.usage] == [
+        'SourceIntegrationDraft', 'SourceAdditionCopy', 'SourceAdditionCopy', 'SourceIntegrationReview',
+        *([] if accepted else ['SourceIntegrationDraft', 'SourceIntegrationReview'])]
+    audit = _audit(result)[1]
+    assert len(audit['attempts']) == (3 if accepted else 4) and audit['attempts'][1]['length_progress_retry']
+    assert audit['attempts'][2]['draft']['decisions'] == invalid['decisions']
+    assert bool(resolved_source_check_ids(result, merged)) is accepted
+    assert merged.items[:len(original.items)] == original.items
+    if not accepted:
+        assert merged == original
+
+
 @pytest.mark.parametrize('slots', [1, 2])
 @pytest.mark.parametrize('outcome', ['accepted', 'overlong', 'forged', 'rejected'])
 def test_first_single_overlong_body_only_rewrites_requested_copy(slots, outcome):

@@ -7,6 +7,7 @@ from adaptive_document_agent.services.source_quotes import normalize_quote
 def review_evidence_errors(response, *, brief, pending, catalogs, result=None, binding_errors=None):
     from .brief_meaning_review import comparison_errors
     from .brief_audit_scope import audit_status_errors
+    from .brief_assurance_bindings import assurance_binding_errors
     binding_errors = binding_errors or {}
     audit = {'response': response.model_dump(mode='json'), 'source_catalogs': catalogs,
              'source_audit_scopes': {row['index']: row['source_audit_scope'] for row in pending}, 'errors': {}}
@@ -14,8 +15,9 @@ def review_evidence_errors(response, *, brief, pending, catalogs, result=None, b
     for verdict in response.items:
         item = brief.items[verdict.index]
         failed = [*binding_errors.get(verdict.index, []), *([] if verdict.accepted else [verdict.reason])]
-        failed.extend(audit_status_errors(item, result, inventory=next(
-            row['source_audit_scope'] for row in pending if row['index'] == verdict.index),
+        inventory = next(row['source_audit_scope'] for row in pending if row['index'] == verdict.index)
+        failed.extend(assurance_binding_errors(item, inventory, verdict.assurance_bindings)[0])
+        failed.extend(audit_status_errors(item, result, inventory=inventory,
             bindings=verdict.assurance_bindings))
         if verdict.numeric_comparison and not verdict.comparisons:
             failed.append('Every asserted numeric change needs source-bound comparison endpoints')

@@ -54,6 +54,12 @@ def check_meaning_contract(original, candidate, indices, *, result, excerpts, in
                                for quantity in introduced for currency, _, unit in [quantity])
         statuses = audit_status_errors(item, result, inventory=inventories[index],
             bindings=(assurance_bindings or {}).get(index))
+        from .brief_assurance_bindings import assurance_binding_errors
+        declared_errors, declared_recoverable = assurance_binding_errors(
+            item, inventories[index], (assurance_bindings or {}).get(index))
+        if declared_errors:
+            item_errors.extend(declared_errors)
+            recoverable &= declared_recoverable
         placements = misplaced_parenthetical_statuses(item, result, inventory=inventories[index])
         if statuses:
             item_errors.extend(statuses)

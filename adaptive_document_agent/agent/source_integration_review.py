@@ -274,6 +274,8 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
         audit['corrections_used'] = budget
         prior_review = None
         retained = _retry_draft(previous, result, brief, checks, pages)
+        from .source_integration_resume import rejected_addition_sections
+        scoped_retry = rejected_addition_sections(previous, retained, checks, len(brief.items))
         notes = _revision_notes(previous, context)
         if notes:
             audit['prior_objections'] = notes
@@ -283,22 +285,43 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
                     'Check each prior objection directly, including exceptions to scope and missing '
                     'counterevidence. Keep supported material from the proposal. If needed use separate '
                     'additions for distinct findings within the available slots. Prior feedback is not evidence.')]
-            retained = None
+            if scoped_retry is None:
+                retained = None
+        if scoped_retry is not None:
+            prior_review = bind_source_quotes(retained, pages), scoped_retry[0]
+            audit['retry_rejected_sections'] = scoped_retry[1]
+            audit['attempts'].append(dict(proposal_checkpoint=True, draft=retained.model_dump(mode='json'),
+                review=dict(verdicts=[v.model_dump(mode='json') for v in scoped_retry[0].values()])))
         from .source_integration_copy import overlong_additions, shorten_additions, revise_reopened_additions
         pending_copy = None
-        # One semantic correction may itself need one schema-only repair.
-        # A second semantic rejection or repeated format failure stays terminal.
-        for attempt in range(3):
+        semantic_corrections = format_corrections = 0
+        length_progress_used = False
+        # Each semantic proposal owns one format correction. Formatting the
+        # initial proposal must not consume the later semantic patch's format
+        # opportunity. At most three proposals (including a reopened section),
+        # one format correction each, and one strictly shorter copy retry.
+        for attempt in range(7):
             entry = {}
             audit['attempts'].append(entry)
             draft = None
             try:
-                if attempt and (reopened := audit['attempts'][-2].get('reopened_sections')):
+                if attempt == 0 and scoped_retry is not None:
+                    draft = revise_reopened_additions(gateway, messages, prior_review[0], scoped_retry[1],
+                                                      len(brief.items), entry)
+                elif attempt and (reopened := audit['attempts'][-2].get('reopened_sections')):
                     draft = revise_reopened_additions(gateway, messages, prior_review[0], reopened,
                                                       len(brief.items), entry)
                 elif pending_copy is not None:
                     draft = shorten_additions(gateway, messages, SourceIntegrationDraft, pending_copy, entry, len(brief.items))
                     pending_copy = None
+                elif (attempt and scoped_retry is not None and prior_review is not None
+                      and 'review' in audit['attempts'][-2]):
+                    # The retry is already scoped to existing additions. Its
+                    # semantic correction must keep that same bounded transport
+                    # instead of regenerating a larger, overflowing brief.
+                    rejected = sorted(sid for sid, verdict in prior_review[1].items() if not verdict.accepted)
+                    draft = revise_reopened_additions(gateway, messages, prior_review[0], rejected,
+                                                      len(brief.items), entry)
                 elif attempt == 0 and retained is not None:
                     draft = retained
                     entry['recovered_proposal'] = True
@@ -338,11 +361,14 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
                     raise ValueError('Independent review must judge every supplementary source.')
                 if any(not v.accepted for v in verdicts.values()):
                     rejected = {sid for sid, verdict in verdicts.items() if not verdict.accepted}
-                    if (attempt == 1 and rejected <= set(entry.get('preserved_sections', []))
+                    if (semantic_corrections == 1 and rejected & set(entry.get('preserved_sections', []))
                             and merged != _validate(prior_review[0], result, brief, checks)):
                         # The whole-brief review reopened unchanged copy only
                         # after a companion changed. These sections have not
                         # yet had a chance to address their own objections.
+                        # A still-rejected sibling must not block that chance.
+                        # The same final bounded patch covers all current
+                        # rejections; passing sections remain immutable.
                         entry['reopened_sections'] = sorted(rejected)
                     prior_review = draft, verdicts
                     raise ValueError('; '.join(v.reason for v in verdicts.values() if not v.accepted))
@@ -354,7 +380,17 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
                 entry['error'] = str(exc)
                 if isinstance(exc, SourceReviewContractError):
                     raise
+                if 'targeted_format_failure' in entry and 'review' not in entry:
+                    raise  # A failed targeted format correction cannot reopen the full writer.
                 if isinstance(exc, LLMStructuredOutputError):
+                    if pending_copy is not None and not length_progress_used:
+                        from .source_integration_copy import shorter_copy_retry
+                        shorter = shorter_copy_retry(exc, pending_copy, len(brief.items))
+                        if shorter is not None:
+                            pending_copy = shorter
+                            length_progress_used = True
+                            entry['length_progress_retry'] = True
+                            continue
                     if draft is not None or pending_copy is not None:
                         raise  # Reviewer capacity/refusal failure must not regenerate the writer.
                     feedback = schema_feedback(exc, SourceIntegrationDraft)
@@ -362,25 +398,28 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
                     # A single overlong body needs the same local correction as
                     # several overlong fields. Regenerating the whole proposal
                     # can repeat the length failure and discard valid bindings.
-                    if attempt == 0 or (attempt == 1 and prior_review is not None):
-                        pending_copy = overlong_additions(exc, feedback, SourceIntegrationDraft)
-                    if attempt and pending_copy is None:
+                    if format_corrections:
                         schema_errors = feedback.get('schema_errors', [])
                         if schema_errors:
                             detail = '; '.join(
                                 f'{".".join(map(str, e["loc"]))}: {e["msg"]}' for e in schema_errors[:5])
                             raise ValueError(f'Supplementary draft failed validation: {detail}') from exc
                         raise
+                    format_corrections += 1
+                    pending_copy = overlong_additions(exc, feedback, SourceIntegrationDraft)
                     if pending_copy is None:
                         messages += format_correction_messages(feedback)
                     continue
                 if draft is None:
                     raise
+                if 'shortened_fields' in entry and 'review' not in entry:
+                    raise  # Copy compression cannot gain a new source-repair route.
                 # A format-only correction has not yet used the single
                 # source/meaning correction for a complete proposal.
-                if attempt and not (entry.get('reopened_sections')
-                        or (attempt == 1 and 'shortened_fields' in entry and 'review' in entry)):
+                if semantic_corrections and not entry.get('reopened_sections'):
                     raise
+                semantic_corrections += 1
+                format_corrections = 0
                 correction = {key: entry[key] for key in ('draft', 'review', 'error') if key in entry}
                 messages += [untrusted_document_message(json.dumps(correction, ensure_ascii=False)),
                              {'role': 'user', 'content': 'Correct the specific rejected source bindings or semantic findings. '
@@ -394,6 +433,7 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
                               f'source quotations; each addition has its own one to {BRIEF_EVIDENCE_LIMIT} exact quotes. '
                               'Each addition text has a hard 550-character limit. Use at most four additions '
                               'and seven merged items. Use the complete source evidence above.'}]
+        raise ValueError('Supplementary source integration exhausted its bounded correction budget.')
     except (ValueError, LLMResponseError) as exc:
         audit['reason'] = str(exc)
         result.validation_warnings.append(ValidationIssue(code='source_integration_unresolved', stage='report',

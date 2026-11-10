@@ -63,7 +63,10 @@ def resume_brief_review(gateway, result, *, cancelled=None):
         validator = meaning_validator(gateway, result=result, source_context=context, cancelled=cancelled)
         errors = validator(candidate)
         if errors:
-            if complete_rejection:
+            if complete_rejection or record.get('unavailable'):
+                # Finishing an interrupted review can produce a real rejection.
+                # It is the same source-validated candidate: repair only those
+                # freshly failed items instead of replacing the whole brief.
                 from .brief_rejected_resume import correct_saved_rejection
                 corrected = correct_saved_rejection(gateway, result, candidate, context, topics, errors,
                     validator, cancelled=cancelled)
