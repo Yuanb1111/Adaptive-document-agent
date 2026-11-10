@@ -76,6 +76,12 @@ class SelectionClient:
             elif self.correction_fault == 'changed_include':
                 decisions[0].update(include=False, required_meanings=[])
                 decisions[-1].update(include=True, required_meanings=[dict(meaning='Team AC requires training.')])
+            elif self.correction_fault == 'patch_only':
+                decisions = [d for d in decisions if d['part_id'] in payload['repair_part_ids']]
+            elif self.correction_fault == 'duplicate_protected':
+                decisions.append(deepcopy(decisions[0]))
+            elif self.correction_fault == 'unknown':
+                decisions[-1]['part_id'] = 'unknown-source'
             return schema(decisions=decisions)
         if schema.__name__ == 'IntroductionMeaningRevision':
             assert self.review_mode in {'semantic_repair', 'reject_after_meaning'}
@@ -130,14 +136,55 @@ def test_exact_inventory_failure_is_audited_and_corrected_before_independent_rev
     assert reading.audience_selection['independent_review']['accepted']
 
 
-@pytest.mark.parametrize('fault', ['still_missing', 'changed_reason', 'changed_meaning', 'changed_include'])
-def test_invalid_correction_or_changed_valid_decisions_fail_before_semantic_review(fault):
+@pytest.mark.parametrize('fault', ['still_missing', 'duplicate_protected', 'unknown'])
+def test_invalid_correction_fails_before_semantic_review(fault):
     result, reading, _ = fixture(3)
     client = SelectionClient(correction_fault=fault)
-    with pytest.raises(ValueError, match='cover every exact|changed an already valid'):
+    with pytest.raises(ValueError, match='cover every exact'):
         select_introduction_audience(client, result, reading)
     assert client.calls == ['IntroductionAudienceSelection', 'IntroductionAudienceInventoryCorrection']
     assert len(reading.plan_audits) == 2 and reading.plan_audits[-1]['error']
+    assert reading.audience_part_ids is None and not reading.audience_selection
+
+
+@pytest.mark.parametrize('fault', ['changed_reason', 'changed_meaning', 'changed_include'])
+def test_full_correction_cannot_rewrite_protected_decisions(fault):
+    result, reading, _ = fixture(3)
+    client = SelectionClient(correction_fault=fault)
+    select_introduction_audience(client, result, reading)
+    audit = reading.plan_audits[1]
+    assert audit['ignored_protected_changes'] == ['part-0']
+    assert audit['merged_selection']['decisions'][:2] == client.initial['decisions']
+    assert client.reviews[0]['decisions'][0]['required_meanings'][0]['meaning'] == (
+        client.initial['decisions'][0]['required_meanings'][0]['meaning'])
+    assert client.reviews[0]['inventory_revision_base'] == client.initial
+    assert client.calls[-1] == 'IntroductionAudienceReview'
+    assert reading.audience_selection['independent_review']['accepted']
+
+
+@pytest.mark.parametrize('fault', ['missing', 'duplicate', 'unknown', 'combined', 'all_omitted'])
+def test_patch_only_inventory_correction_retains_other_decisions_and_requires_review(fault):
+    result, reading, _ = fixture(3)
+    client = SelectionClient(fault=fault, correction_fault='patch_only')
+    select_introduction_audience(client, result, reading)
+    expected = {'missing': ['part-2'], 'unknown': ['part-2'], 'duplicate': ['part-1'],
+                'combined': ['part-1', 'part-2'], 'all_omitted': ['part-0', 'part-1', 'part-2']}[fault]
+    assert client.correction_payload['repair_part_ids'] == expected
+    audit = reading.plan_audits[1]
+    assert [d['part_id'] for d in audit['introduction_audience_inventory_correction']['decisions']] == expected
+    assert audit['merged_selection']['decisions'] == [
+        dict(d, required_meanings=[dict(m, source_quote='') for m in d['required_meanings']])
+        for d in client.valid()]
+    assert client.calls == ['IntroductionAudienceSelection', 'IntroductionAudienceInventoryCorrection',
+                            'IntroductionAudienceReview']
+
+
+def test_ignored_protected_rewrite_does_not_bypass_rejecting_reviewer():
+    result, reading, _ = fixture(3)
+    client = SelectionClient(correction_fault='changed_meaning', review_mode='reject')
+    with pytest.raises(ValueError, match='not independently accepted'):
+        select_introduction_audience(client, result, reading)
+    assert client.reviews
     assert reading.audience_part_ids is None and not reading.audience_selection
 
 
