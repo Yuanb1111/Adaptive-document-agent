@@ -22,7 +22,7 @@ def numbered_source_pages(pages):
             # An individually overlong source line remains in full below;
             # only a literal substring, not an invalid whole-line option, fits.
             start = end
-        output.append(dict(page=page['page'], lines=[
+        output.append(dict(**{k: v for k, v in page.items() if k != 'text'}, lines=[
             f'{n} | {line}' for n, line in enumerate(page['text'].splitlines(), 1)],
             evidence_reference_options=options))
     return output

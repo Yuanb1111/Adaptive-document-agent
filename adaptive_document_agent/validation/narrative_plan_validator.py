@@ -17,10 +17,13 @@ def expanded_observation_ids(owner, charts) -> set[str]:
     return ids
 
 
-def validate_narrative_plan(plan, result, calculations=None) -> list[str]:
+def validate_narrative_plan(plan, result, calculations=None, *, qualitative_pages=None) -> list[str]:
     from .presentation_plan_validator import PresentationPlanValidator
 
     errors = []
+    if qualitative_pages is None:
+        from adaptive_document_agent.agent.retained_page_sources import retained_context_citations
+        qualitative_pages = retained_context_citations(result)
     observations = {o.id: o for o in result.observations}
     charts = {c.id: c for c in result.charts}
     insights = {i.id: i for i in result.insights}
@@ -42,6 +45,7 @@ def validate_narrative_plan(plan, result, calculations=None) -> list[str]:
         from adaptive_document_agent.services.source_citations import evidence_pages
         context_pages = pages | {page for iid in theme.insight_ids if iid in insights
                                  for page in evidence_pages(insights[iid], [], document=result.document)}
+        context_pages.update(p for iid in theme.insight_ids for p in qualitative_pages.get(iid, ()))
         if not pages <= set(theme.source_pages) <= context_pages:
             errors.append(f"theme {theme.id} source pages must match its retained evidence")
         if any(not observations[oid].evidence or observations[oid].validation_status not in {"valid", "partially_valid"}

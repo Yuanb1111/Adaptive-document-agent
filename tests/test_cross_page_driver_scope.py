@@ -46,10 +46,18 @@ def test_writer_revision_review_and_citation_keep_the_paragraph_opening(legacy_d
     packet['source_row_assurance'] = source_row_assurance(result, aliases)
     mock = gateway([dict(pages={insight.id: selection.decisions[0].page.model_dump()})])
     revise_retained_pages(mock, result, packet, aliases, selection.model_dump(),
-                         {insight.id: ['Check the paragraph period in its full context.']})
+                         {insight.id: ['Check the paragraph period in its full context.']},
+                         earlier_issues={insight.id: ['Retain the previously corrected limitation.'],
+                                         'unrequested-page': ['No edit permission.']})
     correction = _payload(mock.client.calls[0])
+    assert correction['earlier_review_questions'] == {
+        insight.id: ['Retain the previously corrected limitation.']}
     assert {p['page']: p['text'] for p in correction['source_pages']} == sources
     assert correction['pages_to_correct'][insight.id]['source_page_numbers'] == sorted(sources)
+    calculations = correction['pages_to_correct'][insight.id]['bound_calculations']
+    assert calculations
+    assert all(set(c['observation_ids']) <= {o.id for o in result.observations} for c in calculations)
+    assert all(c['fact_type'] == 'calculated_result' for c in calculations)
     review_gateway = gateway([dict(accepted=True, reason='Synthetic packet protocol check.')])
     review_selection_coverage(review_gateway, context, selection, result)
     review = _payload(review_gateway.client.calls[0])

@@ -2,6 +2,7 @@
 import re
 
 from pydantic import BaseModel, ConfigDict, Field
+from adaptive_document_agent.models.executive_brief import BriefQuote
 
 from adaptive_document_agent.services.presentation_evidence import (
     ambiguous_source_table_ids, observation_uses_ambiguous_table)
@@ -14,6 +15,9 @@ PERIOD_AND_ASSURANCE_RULES = (
     'different reporting bases, list their exact dated values separately instead of asserting a '
     'direction across those bases. State a source-attributed driver separately and retain its '
     'literal source scope without turning it into a comparison between incompatible endpoints. '
+    'A source-defined named interval must retain its literal name; do not narrow it to the '
+    'subset of periods used by the chart comparison. An attributed qualitative explanation '
+    'for that broader named scope is distinct from a numeric comparison across unequal durations. '
     'Read a prose citation together with its preceding and following source pages. A continuation '
     'may inherit its period, entity and measure from the preceding paragraph opening, while later '
     'paragraphs on the same page can concern different periods. A driver_quote alone does not '
@@ -26,11 +30,19 @@ PERIOD_AND_ASSURANCE_RULES = (
     '(increase, decrease, higher, lower) for comparisons with bound rows and explicit endpoints; '
     'do not turn prose-only factors into additional numerical trend claims. Do not require '
     'their unbound amounts on the analysis page. '
+    'For material source-only qualifications without eligible rows, preserve their qualitative '
+    'meaning, including adverse or limiting effects, and distinguish related gross/net or other '
+    'populations. Do not require unbound percentages or thresholds. Do not retain uncalibrated '
+    'reassurance such as "relatively low" when omitted numeric qualifications materially limit it. '
     'Only use an audit label for a row explicitly marked with that status. Unknown means unmarked. '
     'Never propagate a label to another period or measure based on a shared heading. '
     'When a chart reports CAGR alongside its raw levels, cite the matching reported CAGR companion row. '
     'State the reported CAGR and any recalculated CAGR in separate sentences, with explicit attribution '
     'and the exact start and end years in each sentence. Use the bound original chart unit for the levels. '
+    'A Python-calculated CAGR is a derived result, not a source table cell. It may be stated as '
+    '"The calculated CAGR was [rate] from [exact start period] to [exact end period]" when the '
+    'supplied calculation and its input rows support it. Do not remove such a calculated rate '
+    'merely because the source does not report a CAGR cell. Do not relabel it as reported. '
 )
 _PERIOD_ASSURANCE = re.compile(
     r'(?P<period>\b(?:FY\d{4}|\d{1,2}M\d{4}|\d{4}-\d{2}-\d{2})\b)\s*'
@@ -64,6 +76,39 @@ class RetainedPage(BaseModel):
     companion_ids: list[str] = Field(default_factory=list, max_length=40,
         description='Only extra rows used in visible copy. Choose row references from this finding’s '
                     'allowed_companion_rows. Use [] when its primary observations are sufficient.')
+    context_evidence: list[BriefQuote] = Field(default_factory=list, max_length=8,
+        description='Exact literal quotations from supplied source_pages supporting qualitative '
+                    'qualifications or drivers outside the primary row evidence. These do not '
+                    'authorize additional numeric claims or companion rows.')
+
+
+def context_evidence_pages(page, context, result):
+    """Bind model-selected qualitative context without expanding numeric eligibility."""
+    from adaptive_document_agent.services.source_quotes import normalize_quote
+    allowed = {p['page'] for p in context.get('source_pages', [])}
+    sources = {p.page_number: normalize_quote(p.text) for p in result.document.pages}
+    pages = set()
+    for quote in page.context_evidence if page is not None else []:
+        text = normalize_quote(quote.text)
+        if quote.page not in allowed or not text or text not in sources.get(quote.page, ''):
+            raise ValueError('Context evidence must be a literal quote from a supplied source page')
+        pages.add(quote.page)
+    return pages
+
+
+def retained_context_citations(result):
+    """Recheck persisted quotation provenance for slide/theme validators."""
+    from .retained_analysis import selected_record, selection_context, fingerprint, RetainedAnalysisSelection
+    record = selected_record(result)
+    if not record or not any(d.get('page', {}).get('context_evidence')
+                            for d in record['selection']['decisions'] if d.get('page')):
+        return {}
+    context = selection_context(result)
+    if not record.get('source_authoring') or record['input_fingerprint'] != fingerprint(context):
+        raise ValueError('Retained qualitative context has stale source bindings')
+    selection = RetainedAnalysisSelection.model_validate(record['selection'])
+    return {d.insight_id: context_evidence_pages(d.page, context, result)
+            for d in selection.decisions if d.decision == 'include'}
 
 
 def page_sources(result, linked):
@@ -89,6 +134,7 @@ def page_sources(result, linked):
 def page_bindings(page, insight, primary, context, result):
     from .presentation_insight_recovery import _numeric_support
     from adaptive_document_agent.services.calendar_claims import bound_period_dates
+    context_evidence_pages(page, context, result)
     by_id = {o.id: o for o in result.observations}
     tables = {by_id[k].effective_table_id for k in primary}
     allowed = {r['id'] for r in context['source_rows'] if r['table_id'] in tables}
@@ -210,6 +256,7 @@ def planned_source_citations(selection, context, result):
             continue
         bound = [observations[k] for k in sorted(ids)]
         pages = evidence_pages(insights[decision.insight_id], bound, document=result.document)
+        pages = sorted(set(pages) | context_evidence_pages(decision.page, context, result))
         if not pages or set(pages) - available_pages:
             continue
         citation = dict(insight_id=decision.insight_id, observation_ids=sorted(ids),

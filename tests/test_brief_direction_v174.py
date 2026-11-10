@@ -55,6 +55,31 @@ class Gateway:
         return self.audience
 
 
+def test_negated_inequality_needs_copy_correction_not_a_guessed_strict_direction():
+    claim = 'Stock was not lower in June than in May.'
+    source = BriefMeaningReview(items=[dict(index=0, accepted=True, reason='The values increased.',
+        numeric_comparison=True, comparisons=[dict(claim=claim, start_value='12', end_value='13',
+            direction='increase', absolute_magnitude=False, start_context='May 12', end_context='June 13')])])
+    audience = BriefClaimDirectionReview(items=[dict(index=0, comparisons=[dict(
+        comparison_index=0, claim=claim, predicate='not lower', direction='uncertain',
+        absolute_magnitude=False, reason='The wording permits either increase or equality.')])])
+    requested = [dict(index=0, label='Stock', text=claim, comparisons=[dict(claim=claim)])]
+    eligible = set()
+    errors = direction_errors(audience, requested=requested, verdicts=source.items,
+                              correction_eligible=eligible)
+    assert eligible == {0}
+    assert 'independently dated facts' in str(errors)
+    assert 'negated inequality' in str(errors)
+    # A source correction cannot evade this assertion by dropping its ledger.
+    source.items[0].comparisons = []
+    source.items[0].numeric_comparison = False
+    audience.items[0].comparisons = []
+    audience.items[0].omitted_directional_claims = ['not lower']
+    requested[0]['comparisons'] = []
+    assert 'lacks its own source-bound comparison' in str(direction_errors(
+        audience, requested=requested, verdicts=source.items))
+
+
 @pytest.mark.parametrize('start,end,source_basis,source_direction,audience_basis,accepted', [
     ('-36,817', '-13,586', True, 'decrease', 'unsigned_activity', True),
     ('36,817', '13,586', False, 'decrease', 'unsigned_activity', True),

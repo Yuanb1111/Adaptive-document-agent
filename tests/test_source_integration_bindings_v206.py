@@ -87,7 +87,8 @@ def test_full_brief_repairs_rejected_additions_in_place_and_resumes_after_timeou
 
 
 @pytest.mark.parametrize('accept_fresh', [False, True])
-def test_retry_edits_only_rejected_addition_but_rechecks_every_section(accept_fresh):
+@pytest.mark.parametrize('numeric_correction', [False, True])
+def test_retry_edits_only_rejected_addition_but_rechecks_every_section(accept_fresh, numeric_correction):
     from adaptive_document_agent.models import ValidationIssue
     result, draft = case()
     result.failed_stage = 'source_integration'
@@ -102,15 +103,18 @@ def test_retry_edits_only_rejected_addition_but_rechecks_every_section(accept_fr
         def generate_structured(self, messages, schema, **kwargs):
             calls.append(schema.__name__)
             if schema.__name__ == 'ReopenedSourceAdditions':
-                assert set(schema.model_fields) == ({'item_3'} if len(calls) == 1 else {'item_3', 'item_4'})
-                return schema(**{key: draft.additions[int(key[5:]) - 3].model_copy(
-                    update={'label': 'Source scope'}) for key in schema.model_fields})
+                assert set(schema.model_fields) == ({'item_3'} if 'SourceIntegrationReview' not in calls else {'item_3', 'item_4'})
+                values = {key: draft.additions[int(key[5:]) - 3].model_copy(
+                    update={'label': 'Source scope'}) for key in schema.model_fields}
+                if numeric_correction and len(calls) == 1:
+                    values['item_3'].text += ' Invented value 987654321.'
+                return schema(**values)
             if schema is SourceIntegrationDraft:
                 return draft
             return schema(verdicts=[dict(section_id=d.section_id, accepted=accept_fresh,
                 reason='Fresh complete source review.') for d in draft.decisions])
     merged = review_supplementary_sources(Gateway(), result, result.executive_brief, previous=previous)
-    assert calls[:2] == ['ReopenedSourceAdditions', 'SourceIntegrationReview']
+    assert calls[:2 + numeric_correction] == ['ReopenedSourceAdditions'] * (1 + numeric_correction) + ['SourceIntegrationReview']
     assert 'SourceIntegrationDraft' not in calls
     assert bool(resolved_source_check_ids(result, merged)) is accept_fresh
     assert merged.items[:3] == previous.executive_brief.items
@@ -261,6 +265,10 @@ def test_reopened_unchanged_section_gets_its_first_correction_after_companion_ch
         def generate_structured(self, messages, schema, **kwargs):
             if schema.__name__ == 'ReopenedSourceAdditions':
                 assert set(schema.model_fields) == ({'item_3', 'item_4'} if mixed_rejection else {'item_3'})
+                packet = json.loads(messages[-2]['content'].split('\n', 1)[1].rsplit('\n', 1)[0])
+                assert set(packet['items_to_revise']) == set(schema.model_fields)
+                assert packet['items_to_revise']['item_3']['current_item']['text'] == draft.additions[0].text
+                assert packet['items_to_revise']['item_3']['section_ids'] == ['contracts']
                 values = dict(item_3=draft.additions[0].model_copy(update={'label': 'Cancellation scope'}))
                 if mixed_rejection:
                     values['item_4'] = draft.additions[1].model_copy(update={'label': 'Forecast scope'})

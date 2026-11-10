@@ -212,6 +212,9 @@ def _select_retained_analysis(gateway, result):
         'raw reported amounts with explicit units, and only supplied calculations. '
         'Every numeric amount must bind to a primary or allowed companion row; source '
         'prose can explain drivers but cannot license an unbound additional amount. Name its driver '
+        'and cite exact passages in context_evidence when related supplied pages carry material '
+        'qualifications outside its primary evidence. Those pages join the footer but do not '
+        'expand numeric eligibility. Preserve the qualified meaning '
         'without introducing that extra number. Preserve the raw negative sign or parentheses for '
         'outflows even when using the words "cash used". Never merge explanations for different '
         'dated steps into one broader causal interval. Keep selection reasons '
@@ -256,14 +259,15 @@ def _select_retained_analysis(gateway, result):
     # earlier copy repairs must not consume that opportunity.
     priority_revisions_left = 1
     max_copy_revisions = copy_revisions_left = 2
+    earlier_page_issues = {}
     for attempt in range(3):
         schema = SourceAuthoredAnalysisSelection if source_authoring else RetainedAnalysisSelection
-        reusing_draft = (attempt == 0 and feedback is not None and not feedback['current_binding_errors']
-                         and not feedback.get('source_review'))
+        reusing_draft = (attempt == 0 and feedback is not None and not feedback.get('source_review')
+                         and (not feedback['current_binding_errors'] or feedback.get('selection_unchanged')))
         if reusing_draft:
-            # A validator repair can make the original draft bind correctly.
-            # Preserve that exact copy, but rerun selection, independent coverage
-            # and all subsequent source/final reviews before allowing export.
+            # A structurally valid unchanged selection can repair its rejected
+            # pages directly. Keep the other draft pages stable; all numeric,
+            # coverage and final source checks still run before export.
             selection = schema.model_validate(feedback['rejected_draft'])
         else:
             selection = selection_request(gateway, messages, schema, result, attempt,
@@ -313,11 +317,15 @@ def _select_retained_analysis(gateway, result):
                         localizable = False
                     if not failures:
                         break
+                    previous_issues = {iid: list(reasons) for iid, reasons in earlier_page_issues.items()}
+                    for iid, reasons in page_issues.items():
+                        earlier_page_issues[iid] = list(dict.fromkeys([*earlier_page_issues.get(iid, []), *reasons]))
                     if (not attempt and not reusing_draft) or not copy_revisions_left or not localizable or not page_issues:
                         raise ValueError('\n'.join(failures))
                     copy_revisions_left -= 1
                     try:
-                        revised = revise_retained_pages(gateway, result, packet, aliases, draft, page_issues)
+                        revised = revise_retained_pages(gateway, result, packet, aliases, draft, page_issues,
+                                                       earlier_issues=previous_issues)
                     except (ValueError, LLMResponseError) as exc:
                         raise ValueError('\n'.join([*failures, f'Page revision failed: {exc}'])) from exc
                     copy_review_ids = sorted(revised)
@@ -397,6 +405,8 @@ def compile_retained_analysis(result):
         chart_ids = [charts[0].id] if charts else []
         from adaptive_document_agent.services.source_citations import evidence_pages
         pages = evidence_pages(insight, observations, document=result.document)
+        from .retained_page_sources import context_evidence_pages
+        pages = sorted(set(pages) | context_evidence_pages(decision.page, context, result))
         sid = f'retained_analysis_{n}'
         slide = PresentationSlide(id=sid, slide_type='analysis', title=title,
             section_id=sid, section_title=title, message=copy, bullets=[copy],

@@ -20,6 +20,8 @@ from .source_integration_output import review_output, SourceReviewContractError
 from .source_integration_bindings import (MERGED_BRIEF_INSTRUCTIONS, bind_unique_inclusions,
     keep_accepted_dispositions, merged_review_context)
 from .source_integration_quotes import bind_source_quotes, numbered_source_pages
+from .audit_source_layout import audit_source_page, LAYOUT_INSTRUCTIONS
+from adaptive_document_agent.services.brief_column_quantities import column_quantities
 
 # Reserve room for both reasoning and the complete evidence-bound answer on the
 # first request; the independent reviewer and all rejection gates stay intact.
@@ -68,7 +70,9 @@ def _context(result, brief):
             row['section_extent'] = [section.start_page, section.end_page]
         check_rows.append(row)
     return dict(checks=check_rows,
-        source_pages=[dict(page=p.page_number, text=p.text) for p in result.document.pages if p.page_number in pages],
+        source_pages=[dict(**audit_source_page(p, reading_orientation=True), has_structured_tables=bool(p.tables),
+            verified_quantity_columns=column_quantities(p))
+            for p in result.document.pages if p.page_number in pages],
         current_brief=brief.model_dump(mode='json'),
         topics=result.presentation_topics.model_dump(mode='json') if result.presentation_topics else None,
         user_focus=result.profile.analysis_focus)
@@ -251,14 +255,24 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
             'Use separate references for discontinuous text in table columns. Read surrounding context and '
             'include the source lines for each stated date, condition and qualification. You may also copy '
             'a literal substring of the page, excluding line-number prefixes. '
-            'Each addition needs its own evidence for its dates and units. A header quoted by another '
+            'Each addition needs its own evidence for its dates and units. '
+            'Leave quantity_representations empty for ordinary source '
+            'amounts, including positive cost estimates. That field is ONLY for expressing an explicitly '
+            'negative source coefficient as its positive absolute magnitude: quantity_text must be the '
+            'exact displayed amount with unit, and source_value the negative coefficient alone. '
+            'Never annotate a positive source value as absolute_magnitude. A header quoted by another '
             'item does not bind this item. In flattened schedules and matrices, adjacent text can come '
             'from different columns. Use a monetary estimate only when its coefficient, unit and '
             'measure are explicit together in narrative, verified by a structured source row and '
             'column, or the original text has a standalone, unambiguous subtotal line consisting '
             'of its measure and sole amount with an explicit unit header. Cite both the line and '
             'header in the same addition for such a subtotal. A page with has_structured_tables=false '
-            'has no structured cells. True only '
+            'has no structured cells. verified_quantity_columns independently supplies geometry-checked '
+            'amount/unit pairs from the original PDF, including rotated pages. Those pairs may be used '
+            'without parsed tables, but cite all their evidence_lines in the same addition and verify '
+            'the project/measure ownership against the complete source. They do not prove semantic '
+            'ownership, dates or status. Do not describe supported column values as unavailable solely '
+            'because has_structured_tables is false. True only '
             'indicates a table exists, not that any particular amount belongs to it. Otherwise state '
             'the source-supported plan, assumption or limitation qualitatively. '
             'Preserve all original conclusions unchanged; add only material missing findings or qualifications. '
@@ -273,14 +287,21 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
             'subject, counterpart and effective time. Keep numbers, units, audit scope, conditions and uncertainty exact. No calculations, invented facts, '
             'whole-document absence claims or boilerplate review-status text. Return at most seven merged brief items. '
             f'With {len(brief.items)} original items, use at most {maximum_additions} additions. '
-            'Each added item text must be at most 550 characters; preserve material qualifications concisely.'},
+            'Each added item text must be at most 550 characters including spaces; aim under 450. '
+            'Each decision permits at most four representative evidence quotes; additions retain '
+            'their own complete evidence. Cite the entire supporting sentence: if a selected line '
+            'ends before a numeric target or condition, include its continuation in that SAME item. '
+            'Keep four-digit years at both endpoints of ranges; never abbreviate the second year. '
+            'Preserve material qualifications concisely.'
+            + LAYOUT_INSTRUCTIONS},
             *instruction_messages(result.profile, purpose='supplementary source integration'),
             untrusted_document_message(encoded)]
         budget = dict(review_format=0)
         audit['corrections_used'] = budget
         prior_review = None
         retained = _retry_draft(previous, result, brief, checks, pages)
-        from .source_integration_resume import editable_rejected_sections, rejected_addition_sections
+        from .source_integration_resume import (editable_rejected_sections, rejected_addition_sections,
+                                                rejected_matching_proposal)
         scoped_retry = rejected_addition_sections(previous, retained, checks, len(brief.items))
         notes = _revision_notes(previous, context)
         if notes:
@@ -291,7 +312,7 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
                     'Check each prior objection directly, including exceptions to scope and missing '
                     'counterevidence. Keep supported material from the proposal. If needed use separate '
                     'additions for distinct findings within the available slots. Prior feedback is not evidence.')]
-            if scoped_retry is None:
+            if scoped_retry is None and rejected_matching_proposal(previous, retained):
                 retained = None
         if scoped_retry is not None:
             prior_review = bind_source_quotes(retained, pages), scoped_retry[0]
@@ -320,10 +341,9 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
                 elif pending_copy is not None:
                     draft = shorten_additions(gateway, messages, SourceIntegrationDraft, pending_copy, entry, len(brief.items))
                     pending_copy = None
-                elif (attempt and scoped_retry is not None and prior_review is not None
-                      and 'review' in audit['attempts'][-2]):
+                elif attempt and scoped_retry is not None and prior_review is not None:
                     # The retry is already scoped to existing additions. Its
-                    # semantic correction must keep that same bounded transport
+                    # source/meaning correction must keep that same bounded transport
                     # instead of regenerating a larger, overflowing brief.
                     rejected = sorted(sid for sid, verdict in prior_review[1].items() if not verdict.accepted)
                     draft = revise_reopened_additions(gateway, messages, prior_review[0], rejected,
@@ -409,6 +429,14 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
                     # several overlong fields. Regenerating the whole proposal
                     # can repeat the length failure and discard valid bindings.
                     copy_repair = overlong_additions(exc, feedback, SourceIntegrationDraft)
+                    if format_corrections and not length_progress_used and copy_repair is not None:
+                        from .source_integration_copy import format_to_copy_progress
+                        previous_format = audit['attempts'][-2].get('format_failure')
+                        if format_to_copy_progress(previous_format, copy_repair, SourceIntegrationDraft):
+                            pending_copy = copy_repair
+                            length_progress_used = True
+                            entry['length_progress_retry'] = True
+                            continue
                     if format_corrections or (semantic_corrections and copy_repair is None):
                         schema_errors = feedback.get('schema_errors', [])
                         if schema_errors:

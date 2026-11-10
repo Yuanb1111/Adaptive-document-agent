@@ -25,7 +25,11 @@ MERGED_BRIEF_INSTRUCTIONS = (
     'shorter original brief. Apply the same evidence rules as the writer. When a PDF table '
     'is flattened, require a numerical estimate only if its measure, amount and unit are '
     'unambiguously bound by the source. Otherwise assess whether the brief conveys the '
-    'material qualitative finding and uncertainty. Do not reconstruct cells from proximity. ')
+    'material qualitative finding and uncertainty. Do not reconstruct cells from proximity. '
+    'verified_quantity_columns supplies amount/unit pairs checked from original column geometry, '
+    'even when has_structured_tables is false. Verify their measure/project ownership and all '
+    'qualifications against the full source; require the item to quote all evidence_lines for each '
+    'used pair. Geometry proves the unit binding, not semantic meaning or approval. ')
 
 
 def merged_review_context(context: dict, draft: SourceIntegrationDraft, merged: ExecutiveBrief) -> dict:

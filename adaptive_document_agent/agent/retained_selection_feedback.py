@@ -130,6 +130,7 @@ def selection_retry_feedback(result, context):
         fresh_errors.append(str(exc))
     return dict(rejected_draft=draft, previous_errors=rejected['diagnostic'],
                 current_binding_errors=fresh_errors, source_review=record.get('source_review', False),
+                selection_unchanged=not priorities or set(selection.ordered_insight_ids) == set(priorities),
                 reviewed_priorities=priorities,
                 preserved_pages=record.get('preserved_pages', {}),
                 final_approval=False)

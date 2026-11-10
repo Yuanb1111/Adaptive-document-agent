@@ -316,6 +316,9 @@ def validate_executive_brief(brief: ExecutiveBrief, result: PipelineResult, *,
         quantities = {canonical_quantity(*quantity) for quantity in quantities}
         from .brief_quantity_representation import magnitude_claim_text
         claim_text, representation_errors = magnitude_claim_text(item, table_context, quantities)
+        from adaptive_document_agent.validation.presentation_numeric_evidence import check_page_references
+        claim_text, citation_errors = check_page_references(claim_text, {q.page for q in item.evidence})
+        errors.extend(f'{item.label}: {error}.' for error in citation_errors)
         claim_text = literal_quantity_text(claim_text)
         errors.extend(f'{item.label}: {error}.' for error in representation_errors)
         errors.extend(f'{item.label}: {error}.' for error in table_context.basis_errors(claim_text))

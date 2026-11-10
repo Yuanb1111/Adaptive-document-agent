@@ -224,6 +224,12 @@ def _put_commentary(slide, text: str, rect: Rect) -> str:
     from pptx.util import Pt
     for paragraph in body.text_frame.paragraphs:
         paragraph.line_spacing = Pt(COMMENTARY_LINE_PT)
+    # A sentence-boundary cut can leave most of the allocated sidebar empty.
+    # Retain exactly the same copy, wrapping and font while exposing that real
+    # whitespace to the subsequent lossless continuation-packing pass.
+    from pptx.util import Inches
+    used_height = len(_lines(text[:cut], rect.w - .18, COMMENTARY_PT)) * COMMENTARY_LINE_PT / 72 + .12
+    body.height = Inches(min(rect.h, used_height))
     # Reflow on the next page, whose text column can be wider than this slot.
     return text[cut:]
 
@@ -312,7 +318,9 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
         rendered = _paginate_chart_slide(presentation, slide_plan,
                                         (ordered[:split], ordered[split:]), result, index)
     from .composition_pagination import compact_support_pages
-    return compact_support_pages(presentation, slide_plan, charts, result, index, rendered)
+    rendered = compact_support_pages(presentation, slide_plan, charts, result, index, rendered)
+    from .composition_commentary_packing import pack_commentary_pages
+    return pack_commentary_pages(presentation, rendered, charts, index)
 
 
 def _paginate_chart_slide(presentation, slide_plan: PresentationSlide,
@@ -357,7 +365,7 @@ def _paginate_chart_slide(presentation, slide_plan: PresentationSlide,
 
 def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: list[ChartPlan],
                            result: PipelineResult, index, *, preserve_charts=False,
-                          compact_header=False, support_sidebar=False, full_width_chart=False) -> list:
+                           compact_header=False, support_sidebar=False, full_width_chart=False) -> list:
     """Render all requested charts, explicit KPI/table facts and retained commentary."""
     from .pptx_export import _add_native_chart, _source_footer, _unit_label, _display_source_unit
     from adaptive_document_agent.document_model.metric_semantic_classifier import classify_metric, format_metric_display_value

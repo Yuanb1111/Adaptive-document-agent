@@ -368,6 +368,8 @@ def quoted_table_context(item, result, *, excerpts=None):
                         literal_row_percentages.add(_number(parsed.value))
         from .brief_quantity_geometry import wrapped_quantity_support
         context.quantities.update(wrapped_quantity_support(page, quote.text, source))
+        from .brief_column_quantities import quoted_column_quantities
+        context.quantities.update(quoted_column_quantities(page, quote.text, source))
         from .brief_literal_table_units import uniform_quoted_rows
         for quantity in uniform_quoted_rows(source, quote.text):
             context.quantities.add(quantity)

@@ -121,13 +121,16 @@ def test_first_overlong_addition_keeps_sources_through_copy_and_independent_revi
 
 
 @pytest.mark.parametrize('same_context', [False, True])
-def test_retry_revalidates_proposal_and_requires_fresh_section_verdicts(same_context):
+@pytest.mark.parametrize('old_objections', [False, True])
+def test_retry_revalidates_proposal_and_requires_fresh_section_verdicts(same_context, old_objections):
     saved, constraint = fixture()
     review_supplementary_sources(Gateway(constraint, accept=False), saved, saved.executive_brief)
     saved.failed_stage = 'source_integration'
     audit = json.loads(saved.validation_warnings[-1].message)
     for entry in audit['attempts']:
         entry.pop('review')
+    if old_objections:
+        audit['prior_objections'] = ['An earlier proposal omitted the source limitation.']
     saved.validation_warnings[-1].message = json.dumps(audit)
     current = saved.model_copy(deep=True)
     if not same_context:

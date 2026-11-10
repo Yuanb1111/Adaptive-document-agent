@@ -17,7 +17,7 @@ _GENERIC = re.compile(r"evidence.backed comparison|retained reported values|sele
                       r"supplied observations|paired observations exist|has observations for multiple periods", re.I)
 _PERCENT = re.compile(r"(?<!\w)(?P<number>[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s*"
                       r"(?P<unit>percentage\s+points?|percent\s+points?|pp\b|%|percent(?:age)?\b)", re.I)
-_CAGR_PERIOD = re.compile(r'\b((?:19|20)\d{2}E?)\s*(?:[-–—]|\bto\b)\s*((?:19|20)\d{2}E?)\b', re.I)
+_CAGR_PERIOD = re.compile(r'\b((?:FY)?(?:19|20)\d{2}E?)\s*(?:[-–—]|\bto\b)\s*((?:FY)?(?:19|20)\d{2}E?)\b', re.I)
 
 
 def _chart_cagr_values(clause, reported, calculations):
@@ -85,7 +85,9 @@ def _numeric_support(text, observations, computed_percentages=(), *, diagnostics
         prefix = re.split(r";|\n|(?<=[.!?])\s+", text[:match.start()])[-1]
         suffix = re.split(r";|\n|(?<=[.!?])\s+", text[match.end():])[0]
         clause = prefix + match[0] + suffix
-        if (chart_units or chart_reported) and re.search(r'\bCAGR\b', clause, re.I):
+        computed_cagr = (re.search(r'\bCAGR\b', clause, re.I)
+                         and re.search(r'\b(?:recalculated|recomputed|calculated|computed)\b', clause, re.I))
+        if re.search(r'\bCAGR\b', clause, re.I) and (chart_units or chart_reported or computed_cagr):
             rates = _chart_cagr_values(clause, chart_reported, calculations.values())
             if unit == "pp" or "point" in unit or not rates or not any(
                     round(rate, places) == float(literal) for rate in rates):
@@ -95,6 +97,8 @@ def _numeric_support(text, observations, computed_percentages=(), *, diagnostics
                 return False
         elif unit == "pp" or "point" in unit:
             if not matches(point_changes):
+                if diagnostics is not None:
+                    diagnostics.append(f'No bound percentage-point calculation supports {match[0]}.')
                 return False
         elif not matches(reported_rates):
             # A computed growth rate is not a reported margin/ratio. Require
@@ -105,6 +109,11 @@ def _numeric_support(text, observations, computed_percentages=(), *, diagnostics
                 prefix, re.I,
             )
             if not matches(derived_rates) or not predicates or predicates[-1].casefold() in {"was", "were", "reached", "at"}:
+                if diagnostics is not None:
+                    diagnostics.append(f'Unbound percentage claim: {match[0]}. No matching reported rate '
+                        'or correctly labelled change is bound to this page. Remove this numeric claim '
+                        'unless its exact eligible row or calculation is supplied; source prose alone '
+                        'does not authorize the amount. Preserve supported qualitative context.')
                 return False
         spans.append(match.span())
 

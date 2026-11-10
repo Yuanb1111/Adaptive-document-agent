@@ -5,6 +5,63 @@ from adaptive_document_agent.agent.retained_analysis_review import review_comple
 from tests.test_retained_analysis_v216 import _linked_result, gateway
 
 
+@pytest.mark.parametrize('mutation', ['valid', 'invented_quote', 'unsupplied_page', 'extra_number'])
+def test_related_qualitative_evidence_adds_provenance_but_never_numeric_eligibility(mutation):
+    from adaptive_document_agent.models import DocumentPage
+    from adaptive_document_agent.agent.retained_page_sources import (
+        RetainedPage, page_bindings, planned_source_citations,
+    )
+    result = _linked_result()
+    source = 'A fulfillment constraint applies. The separately defined amount is RMB 987654321 thousand.'
+    result.document.pages.append(DocumentPage(page_number=235, text=source))
+    context = retained.selection_context(result, source_authoring=True)
+    if mutation != 'unsupplied_page':
+        context['source_pages'].append(dict(page=235, text=source))
+    insight, primary, _ = next(iter(retained.findings(result, allow_new_copy=True).values()))
+    page = RetainedPage(title='Revenue', message='The source describes a fulfillment constraint.',
+        context_evidence=[dict(page=235, text=source if mutation != 'invented_quote' else 'No constraint applies.')])
+    if mutation == 'extra_number':
+        page.message += ' The amount is RMB 987654321 thousand.'
+    if mutation != 'valid':
+        with pytest.raises(ValueError, match='Context evidence|outside its bound evidence'):
+            page_bindings(page, insight, primary, context, result)
+        return
+    _, _, ids = page_bindings(page, insight, primary, context, result)
+    assert ids == primary
+    selection = retained.RetainedAnalysisSelection(decisions=[dict(insight_id=insight.id,
+        decision='include', reason='Qualitative context matters.', page=page)], ordered_insight_ids=[insight.id])
+    citation, = planned_source_citations(selection, context, result)
+    assert citation['source_pages'] == [234, 235]
+    assert set(citation['observation_ids']) == primary
+    assert result.document.pages[-1].text == source
+
+
+@pytest.mark.parametrize('text,accepted', [
+    ('The calculated CAGR was 10.0% from FY2021 to FY2023.', True),
+    ('The calculated CAGR was 10.0% from FY2022 to FY2023.', False),
+    ('The calculated CAGR was 10.0% from 2021 to 2023.', False),
+    ('The calculated CAGR was 21.0% from FY2021 to FY2023.', False),
+    ('The calculated CAGR was 10.0%.', False),
+    ('The reported calculated CAGR was 10.0% from FY2021 to FY2023.', False),
+    ('The margin was 10.0% from FY2021 to FY2023.', False),
+])
+def test_calculated_cagr_level_binds_its_exact_fiscal_interval(text, accepted):
+    from adaptive_document_agent.agent.presentation_insight_recovery import _numeric_support
+    result = _linked_result()
+    observations = [o.model_copy(update=dict(period=period, value=value, raw_value=str(value)))
+                    for o, period, value in zip(result.observations,
+                        ['FY2021', 'FY2022', 'FY2023'], [100.0, 110.0, 121.0])]
+    assert _numeric_support(text, observations) is accepted
+
+
+def test_unbound_percentage_repair_feedback_identifies_the_offending_claim():
+    from adaptive_document_agent.agent.presentation_insight_recovery import _numeric_support
+    diagnostics = []
+    assert not _numeric_support('Management states an aging proportion below 3%.',
+                                _linked_result().observations, diagnostics=diagnostics)
+    assert any('Unbound percentage claim: 3%' in message for message in diagnostics)
+
+
 def test_positioned_source_can_restore_a_finding_without_publishing_its_rejected_copy():
     result = _linked_result()
     page = result.document.pages[0]

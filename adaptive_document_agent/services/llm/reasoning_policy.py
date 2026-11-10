@@ -57,6 +57,9 @@ _SIMPLE_OPERATIONS = frozenset({("presentation", "IntroductionPages"), ("report"
                               ("presentation", "SummaryCoverageReview"),
                               ("presentation", "PhysicalBudgetReview"),
                               ("report", "BriefClaimDirectionReview"),
+                              # Compress one owned body with locked evidence; the
+                              # independent source reviewer retains full reasoning.
+                              ("report", "SourceAdditionCopy"),
                               # AuditScopeDraft/AuditScopeReview/BriefMeaningReview reconcile original
                               # source ownership, not already validated copy. They
                               # retain provider-default reasoning (v212).

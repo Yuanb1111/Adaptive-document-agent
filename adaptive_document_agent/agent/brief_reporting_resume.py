@@ -25,6 +25,11 @@ def _final_source_retry(previous):
     if (previous is None or previous.failed_stage != 'presentation_coverage'
             or previous.failure_details.get('component') != 'PresentationCoverage'):
         return False
+    from .retained_selection_feedback import can_retry_source_review
+    if can_retry_source_review(previous):
+        # A fresh rejection must reach the existing bounded page-correction
+        # route. Reusing its unchanged plan would repeat the same failure.
+        return False
     from .retained_analysis_review import RetainedAnalysisReview, REVIEW_CODE
     latest = next((w for w in reversed(previous.validation_warnings) if w.code == REVIEW_CODE), None)
     try:

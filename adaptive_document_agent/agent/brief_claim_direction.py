@@ -177,7 +177,11 @@ def direction_errors(response, *, requested, verdicts, correction_eligible=None)
                     other_failure = True
                 if claim.direction == 'uncertain':
                     failures.append('Audience direction is ambiguous: ' + claim.reason
-                                    + f'; comparison_index={claim.comparison_index}, claim={bound!r}')
+                                    + f'; comparison_index={claim.comparison_index}, claim={bound!r}. '
+                                    + 'Split distinct predicates into owned comparisons. If the words '
+                                    + 'do not choose increase, decrease or equality, the audience copy '
+                                    + 'needs an evidence-supported strict comparison or independently '
+                                    + 'dated facts; a negated inequality is not a direction-free repair.')
                     # A reviewer may have bound several distinct predicates
                     # to one comparison. The existing single binding correction
                     # can split that scope, but never edits audience copy or

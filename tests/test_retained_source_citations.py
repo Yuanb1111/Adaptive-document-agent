@@ -24,6 +24,37 @@ def fixture():
     return result, context, selection
 
 
+def test_compiler_and_export_validation_preserve_literal_related_context(monkeypatch):
+    from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
+    from adaptive_document_agent.agent.audit_source_layout import audit_source_page
+    from adaptive_document_agent.models.executive_brief import BriefQuote
+    result, _, selection = fixture()
+    extra = DocumentPage(page_number=235, text='Related exposure qualifies this reported balance.')
+    result.document.pages.append(extra)
+    original_sources = retained.page_sources
+
+    def sources(current, linked):
+        context = original_sources(current, linked)
+        context['source_pages'].append(audit_source_page(current.document.pages[-1]))
+        return context
+
+    monkeypatch.setattr(retained, 'page_sources', sources)
+    selection.decisions[0].page.context_evidence = [BriefQuote(page=235, text=extra.text)]
+    retained.select_retained_analysis(gateway([selection.model_dump(),
+        dict(accepted=True, reason='Synthetic cross-measure source review.')]), result)
+    plan = retained.compile_retained_analysis(result)
+    slide, = (s for s in plan.slides if s.slide_type == 'analysis')
+    assert slide.source_pages == plan.themes[0].source_pages == [234, 235]
+    PresentationPlanValidator().validate(plan, result)
+    slide.source_pages.append(236)
+    with pytest.raises(ValueError, match='not supported by its retained references'):
+        PresentationPlanValidator().validate(plan, result)
+    slide.source_pages.remove(236)
+    result.document.pages[-1].text = 'The original qualification changed.'
+    with pytest.raises(ValueError, match='stale source bindings'):
+        PresentationPlanValidator().validate(plan, result)
+
+
 def test_review_packet_and_compiled_slide_use_same_literal_source_footer():
     from adaptive_document_agent.services.pptx_export import _source_footer
     result, context, selection = fixture()

@@ -51,7 +51,7 @@ def pack_commentary_pages(presentation, rendered, charts, index):
             continue
         candidates = sorted((page for page in retained if page != donor),
                             key=lambda page: abs(retained.index(page) - retained.index(donor)))
-        for target in candidates:
+        for target, chart_column in [(page, narrow) for page in candidates for narrow in (False, True)]:
             native = [s for s in target.shapes if s.has_chart]
             if not native or any(s.name not in by_id for s in native) or citations(target) != donor_citations:
                 continue
@@ -62,14 +62,22 @@ def pack_commentary_pages(presentation, rendered, charts, index):
             copy = '\n'.join(part for part in text.split('\n') if part.strip() not in visible)
             if not copy.strip():
                 continue
-            height = len(_lines(copy, width - .18, COMMENTARY_PT)) * COMMENTARY_LINE_PT / 72 + .12
+            # A full-width band may collide with a complete sidebar by a few
+            # points. Its sibling chart column can hold the same full copy
+            # without changing the sidebar, fonts, or plotted minimum size.
+            left = min(s.left.inches for s in native) if chart_column else .55
+            copy_width = (max(s.left.inches + s.width.inches for s in native) - left
+                          if chart_column else width)
+            if chart_column and abs(copy_width - width) < .01:
+                continue
+            height = len(_lines(copy, copy_width - .18, COMMENTARY_PT)) * COMMENTARY_LINE_PT / 72 + .12
             gap = .03
             bottom = presentation.slide_height.inches - 1.02
             context = [s.top.inches - gap for s in target.shapes
                        if s.name == 'source_context:definitions_and_limits']
             if context:
                 bottom = min(bottom, *context)
-            rect = Rect(.55, bottom - height, width, height)
+            rect = Rect(left, bottom - height, copy_width, height)
             if rect.y < 1.45:
                 continue
             # Do not cover a table, label, annotation, source qualification,

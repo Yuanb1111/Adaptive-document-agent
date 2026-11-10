@@ -16,8 +16,10 @@ class PresentationPlanValidator:
         errors: list[str] = []
         from adaptive_document_agent.services.presentation_evidence import calculation_catalog
         from .narrative_plan_validator import validate_narrative_plan
+        from adaptive_document_agent.agent.retained_page_sources import retained_context_citations
+        qualitative_pages = retained_context_citations(result)
         calculations = calculation_catalog(result.observations) if any(s.calculation_ids for s in plan.slides) else {}
-        errors.extend(validate_narrative_plan(plan, result, calculations))
+        errors.extend(validate_narrative_plan(plan, result, calculations, qualitative_pages=qualitative_pages))
         slide_ids = [slide.id for slide in plan.slides]
         if len(slide_ids) != len(set(slide_ids)):
             errors.append("slide IDs must be unique")
@@ -329,6 +331,7 @@ class PresentationPlanValidator:
                 if block.role == "horizon":
                     referenced_pages.update(page for item in block.horizon_items for page in item.source_pages)
             for identifier in insight_ids:
+                referenced_pages.update(qualitative_pages.get(identifier, ()))
                 item = insight_by_id.get(identifier)
                 if item:
                     from adaptive_document_agent.services.source_citations import evidence_pages

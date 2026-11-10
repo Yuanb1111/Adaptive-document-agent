@@ -16,7 +16,7 @@ from adaptive_document_agent.utils.pipeline_version import ANALYSIS_VERSION
 from .base import LLMClient, LLMResponse
 from .config import LLMSettings, PrivacyMode
 from .exceptions import LLMResponseError, LLMTransportError, LLMStructuredOutputError, PrivacyViolationError
-from .structured import preserves_json_content, validate_structured_text
+from .structured import preserves_json_content, repair_extra_null_fields, validate_structured_text
 from adaptive_document_agent.services.analysis_deadline import AnalysisTimeLimitExceeded
 
 T = TypeVar("T", bound=BaseModel)
@@ -223,6 +223,13 @@ class LLMGateway:
         if diagnostics is not None:
             diagnostics.update(error=str(error), validation_detail=str(error.__cause__ or error),
                                raw_response=error.response.text)
+        local_repair = repair_extra_null_fields(error.response.text, response_model)
+        if local_repair is not None:
+            value, removed_paths = local_repair
+            if diagnostics is not None:
+                diagnostics.update(repair_method='remove_forbidden_null_fields',
+                    removed_null_paths=removed_paths, repair_response=value.model_dump_json())
+            return value
         return self._repair_structured(error.response.text, response_model, stage=stage,
             cancelled=cancelled, request_metadata=_request_metadata(request_metadata),
             diagnostics=diagnostics, preserve_content=True, max_tokens=max_tokens)

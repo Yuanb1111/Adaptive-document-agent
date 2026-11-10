@@ -138,6 +138,12 @@ _PAGE_CITATION = re.compile(
 
 def check_selection_page_references(reason, cited_pages):
     """Validate physical PDF citations in the rationale without licensing their digits elsewhere."""
+    return check_page_references(reason, cited_pages,
+        error_prefix='selection reason cites a page outside its retained slide references')
+
+
+def check_page_references(reason, cited_pages, *, error_prefix='page citation outside the item-bound evidence'):
+    """Mask only explicit physical page references after checking their full span."""
     errors = []
 
     def mask_reference(match):
@@ -145,7 +151,7 @@ def check_selection_page_references(reason, cited_pages):
             ends = [int(n.replace(',', '')) for n in re.split(r'[-–—]', span)]
             first, last = ends[0], ends[-1]
             if first > last or sum(first <= page <= last for page in cited_pages) != last - first + 1:
-                errors.append(f'selection reason cites a page outside its retained slide references: {match[0]}')
+                errors.append(f'{error_prefix}: {match[0]}')
                 break
         return ' '
 

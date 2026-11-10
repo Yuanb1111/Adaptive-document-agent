@@ -112,6 +112,33 @@ def test_short_continuation_packs_without_losing_copy_evidence_or_chart_values()
     validate_composed_geometry(deck)
 
 
+def test_continuation_uses_chart_column_without_overlapping_a_fixed_sidebar():
+    copy = ('Reported measurements retain their original source qualifications and comparison periods. ' * 2).strip()
+    deck, target, donor, charts, index, result = packing_case(copy)
+    chart = next(s for s in target.shapes if s.has_chart)
+    chart.width = Inches(7)
+    sidebar = _put_text(target, 'The existing source qualification stays visible.', Rect(8.1, 2.9, 3.2, 2.9), size=16)
+    before = sidebar.element.xml, result.model_dump(), list(chart.chart.series[0].values)
+    assert pack_commentary_pages(deck, [target, donor], charts, index) == [target]
+    packed = next(s for s in target.shapes if s.has_text_frame and s.text == copy)
+    assert packed.left + packed.width <= sidebar.left
+    assert {(run.font.size or p.font.size).pt for p in packed.text_frame.paragraphs for run in p.runs} == {16}
+    assert (sidebar.element.xml, result.model_dump(), list(chart.chart.series[0].values)) == before
+    assert chart.height.inches >= 1.8
+    validate_composed_geometry(deck)
+
+
+def test_commentary_box_exposes_unused_height_without_changing_copy_or_font():
+    deck = _deck()
+    slide, top = _base(deck, 'Source scope', '')
+    copy = 'The original qualification remains fully visible.'
+    assert not _put_commentary(slide, copy, Rect(.55, top, 6, 4.5))
+    body = next(s for s in slide.shapes if s.has_text_frame and s.text == copy)
+    assert body.height.inches < 1
+    assert {(run.font.size or p.font.size).pt for p in body.text_frame.paragraphs for run in p.runs} == {16}
+    validate_composed_geometry(deck)
+
+
 @pytest.mark.parametrize('block', ['different_source', 'missing_source', 'no_plot_space', 'qualified_subtitle', 'geometry_failure'])
 def test_unfit_or_unsafe_candidate_retains_original_page_and_geometry(monkeypatch, block):
     deck, target, donor, charts, index, _ = packing_case(

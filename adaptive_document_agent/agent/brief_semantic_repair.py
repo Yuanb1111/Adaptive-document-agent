@@ -96,6 +96,8 @@ def correct_new_meaning_errors(gateway, brief, *, result, excerpts, topics, sour
         'Preserve existing period wording unless an explicit supplied period_clarification '
         'authorizes the alternative. If a comparison cannot be repaired within these locked '
         'quantities and periods, remove its change assertion and retain independently dated facts. '
+        'Do not replace it with a negated inequality such as "not lower" or "not higher"; '
+        'those still assert a comparison without choosing a strict direction or equality. '
         'Do not enumerate new years. You may spell out an already displayed compact period only with its '
         'same duration and unique exact source-bound closing date, or use its equivalent compact '
         'label. This does not introduce a measurement or permit a bare duration count. '

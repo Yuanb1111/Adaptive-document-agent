@@ -124,7 +124,7 @@ def test_final_copy_revision_preserves_selection_and_requires_fresh_validation(o
     good = proposal.model_dump(exclude_none=True)
     good['decisions'].extend([
         dict(insight_id='other-page', decision='include', reason='Other finding.',
-             page=dict(title='Revenue context', message='Revenue is reported.', companion_ids=[])),
+             page=dict(title='Revenue context', message='Revenue is reported.', companion_ids=[], context_evidence=[])),
         dict(insight_id='omitted', decision='omit', reason='Lower priority.'),
     ])
     good['ordered_insight_ids'].append('other-page')
@@ -218,7 +218,7 @@ def test_copy_review_cannot_reopen_selection_but_retains_remaining_copy_error():
     draft['ordered_insight_ids'].append('unchanged')
     draft['decisions'].extend([
         dict(insight_id='unchanged', decision='include', reason='Included.',
-             page=dict(title='Revenue context', message='Revenue is reported.', companion_ids=[])),
+             page=dict(title='Revenue context', message='Revenue is reported.', companion_ids=[], context_evidence=[])),
         dict(insight_id='omitted', decision='omit', reason='Lower priority.'),
     ])
     corrected = dict(draft['decisions'][0]['page'], message='The company reported revenue.')

@@ -6,10 +6,46 @@ import json
 import re
 from typing import TypeVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 
 T = TypeVar("T", bound=BaseModel)
+
+
+def repair_extra_null_fields(text: str, response_model: type[T]) -> tuple[T, list[list[str | int]]] | None:
+    """Remove only schema-forbidden null placeholders, preserving every declared value."""
+    try:
+        validate_structured_text(text, response_model)
+    except ValidationError as exc:
+        errors = exc.errors(include_url=False)
+    except (ValueError, TypeError):
+        return None
+    else:
+        return None
+    if not errors or any(e['type'] != 'extra_forbidden' or e.get('input') is not None for e in errors):
+        return None
+    try:
+        # Ambiguous duplicate keys cannot be repaired by silently choosing one.
+        def unique_object(pairs):
+            value = {}
+            for key, item in pairs:
+                if key in value:
+                    raise ValueError('Duplicate JSON key')
+                value[key] = item
+            return value
+
+        value = json.loads(_json_candidates(text)[0], object_pairs_hook=unique_object)
+        paths = [list(e['loc']) for e in errors]
+        for path in paths:
+            parent = value
+            for key in path[:-1]:
+                parent = parent[key]
+            if not isinstance(parent, dict) or path[-1] not in parent or parent[path[-1]] is not None:
+                return None
+            del parent[path[-1]]
+        return response_model.model_validate(value), paths
+    except (ValueError, TypeError, KeyError, IndexError):
+        return None
 
 
 def preserves_json_content(original: str, repaired: str) -> bool:

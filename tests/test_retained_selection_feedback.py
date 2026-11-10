@@ -33,14 +33,16 @@ def test_rejected_feedback_is_rechecked_and_cannot_approve_or_become_stale():
     assert selection_retry_feedback(result, retained.selection_context(result, source_authoring=True)) is None
 
 
-def test_retry_writer_receives_rejected_copy_and_fresh_binding_errors():
+def test_retry_repairs_rejected_page_without_regenerating_valid_selection():
     result, response, accepted = fixture()
     response['decisions'][0]['page']['message'] = 'Reported revenue.'
-    mock = gateway([response, accepted])
+    iid = response['ordered_insight_ids'][0]
+    mock = gateway([accepted, dict(pages={iid: response['decisions'][0]['page']}), accepted])
     retained.select_retained_analysis(mock, result)
-    messages = json.dumps(mock.client.calls[0])
-    assert 'Continue from this retained rejected draft' in messages
-    assert 'current_binding_errors' in messages and 'USD999 million' in messages
+    messages = json.dumps(mock.client.calls[1])
+    assert 'pages_to_correct' in messages and 'USD999 million' in messages
+    assert [u['operation'] for u in mock.usage] == [
+        'RetainedSelectionCoverage', 'RetainedPageRevisions', 'RetainedSelectionCoverage']
     assert retained.selected_record(result)
     assert not any(w.code=='presentation_retained_analysis_review' for w in result.validation_warnings)
 
@@ -119,7 +121,9 @@ def test_final_source_rejection_gets_one_bounded_selection_repair_not_an_approva
     from adaptive_document_agent.agent.retained_selection_feedback import can_retry_source_review
     result, response, accepted = fixture()
     response['decisions'][0]['page']['message'] = 'Reported revenue.'
-    retained.select_retained_analysis(gateway([response, accepted]),result)
+    iid = response['ordered_insight_ids'][0]
+    retained.select_retained_analysis(gateway([
+        accepted, dict(pages={iid: response['decisions'][0]['page']}), accepted]), result)
     result.presentation_plan = retained.compile_retained_analysis(result)
     result.pipeline_state = 'partial'
     result.failed_stage = 'presentation_coverage'
@@ -131,6 +135,8 @@ def test_final_source_rejection_gets_one_bounded_selection_repair_not_an_approva
             verdicts=[dict(slide_id=slide.id,accepted=True,reason='Copy correct')],
             omissions_accepted=False,omission_reason='Material trajectory omitted.')))))
     assert can_retry_source_review(result) and not needs_catalog_retry(result)
+    from adaptive_document_agent.agent.brief_reporting_resume import _final_source_retry
+    assert not _final_source_retry(result), 'A fresh source rejection must reach bounded page correction'
     result.validation_warnings.append(retain_selection_feedback(result))
     feedback = selection_retry_feedback(result,retained.selection_context(result))
     assert feedback['source_review'] and not feedback['final_approval']

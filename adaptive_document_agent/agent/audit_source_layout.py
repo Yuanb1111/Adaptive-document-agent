@@ -4,7 +4,9 @@ from math import isfinite
 
 LAYOUT_INSTRUCTIONS = (
     'A source page may include layout_lines: each row is [literal text, left x, right x, top y] '
-    'in original PDF points (x increases rightward, y downward). These are retained extraction '
+    'in PDF points (x increases rightward, y downward). When layout_rotation is supplied, '
+    'the coordinates have been rotated by that angle into reading orientation; their relative '
+    'positions and source text are unchanged. Otherwise they are original PDF coordinates. These are retained extraction '
     'coordinates for narrow lines, not interpreted table cells, periods or assurance. '
     'Full-width prose coordinates are omitted; ALL prose and qualifiers remain in the full '
     'page text. Coordinate omission is never evidence of a missing qualifier. Inspect the relative '
@@ -16,7 +18,7 @@ LAYOUT_INSTRUCTIONS = (
     'layout never grants assurance. Keep quotation text literal to the supplied full source page. ')
 
 
-def audit_source_page(page):
+def audit_source_page(page, *, reading_orientation=False):
     """Show narrow line positions for column reading; retain complete page text."""
     result = dict(page=page.page_number, text=page.text)
     lines = []
@@ -36,6 +38,10 @@ def audit_source_page(page):
                 continue
             # Only a compact reading view: full-precision boxes remain in the
             # original document. No period/status association is manufactured.
+            if reading_orientation and page.reading_rotation in (90, 180, 270):
+                from adaptive_document_agent.extraction.source_geometry import rotate_box
+                box = rotate_box(box, 0, 0, page.reading_rotation)
+                result['layout_rotation'] = page.reading_rotation
             lines.append([text, round(box[0], 2), round(box[2], 2), round(box[1], 2)])
     if lines:
         # Whole-width prose has no neighboring-column position to disambiguate.

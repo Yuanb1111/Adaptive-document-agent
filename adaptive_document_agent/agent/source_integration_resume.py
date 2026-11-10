@@ -2,6 +2,29 @@
 import json
 
 
+def rejected_matching_proposal(previous, retained):
+    """Old objections do not invalidate a newer, still-unreviewed valid proposal."""
+    if previous is None or retained is None:
+        return False
+    from .source_integration_review import SourceIntegrationDraft, SourceIntegrationReview
+    issue = next((w for w in reversed(previous.validation_warnings)
+                  if w.code in {'source_integration_review', 'source_integration_unresolved'}), None)
+    if issue is None:
+        return False
+    try:
+        for entry in reversed(json.loads(issue.message)['attempts']):
+            try:
+                draft = SourceIntegrationDraft.model_validate(entry.get('draft'))
+                review = SourceIntegrationReview.model_validate(entry.get('review'))
+            except (ValueError, TypeError, AttributeError):
+                continue
+            if draft == retained:
+                return any(not verdict.accepted for verdict in review.verdicts)
+    except (ValueError, KeyError, TypeError):
+        pass
+    return False
+
+
 def editable_rejected_sections(draft, verdicts, original_count):
     """A partial rejection is editable only within its own existing additions."""
     rejected = {sid for sid, verdict in verdicts.items() if not verdict.accepted}
