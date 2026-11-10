@@ -95,7 +95,7 @@ def retain_selection_feedback(previous):
 
 
 def selection_retry_feedback(result, context):
-    from .retained_analysis import fingerprint, RetainedAnalysisSelection, _validate_selection
+    from .retained_analysis import RetainedAnalysisSelection, _validate_selection, repair_omission_ids
     from .retained_page_sources import validate_authored_pages
     issue = next((w for w in reversed(result.validation_warnings) if w.code == CODE), None)
     if issue is None:
@@ -105,7 +105,10 @@ def selection_retry_feedback(result, context):
         if record['context_fingerprint'] != feedback_fingerprint(context):
             return None
         rejected = record['rejected']
-        selection = RetainedAnalysisSelection.model_validate(rejected['rejected_draft'])
+        draft = rejected['rejected_draft']
+        selection = RetainedAnalysisSelection.model_validate(draft)
+        if repair_omission_ids(selection, context):
+            draft = selection.model_dump(mode='json', exclude_none=True)
         aliases = rejected['row_ids']
         for decision in selection.decisions:
             if decision.page:
@@ -125,7 +128,7 @@ def selection_retry_feedback(result, context):
         validate_authored_pages(selection, context, result)
     except ValueError as exc:
         fresh_errors.append(str(exc))
-    return dict(rejected_draft=rejected['rejected_draft'], previous_errors=rejected['diagnostic'],
+    return dict(rejected_draft=draft, previous_errors=rejected['diagnostic'],
                 current_binding_errors=fresh_errors, source_review=record.get('source_review', False),
                 reviewed_priorities=priorities,
                 preserved_pages=record.get('preserved_pages', {}),

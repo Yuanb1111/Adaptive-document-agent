@@ -65,6 +65,54 @@ def test_now_valid_retained_copy_still_requires_independent_coverage():
     assert not any(w.code == 'presentation_retained_analysis_review' for w in result.validation_warnings)
 
 
+@pytest.mark.parametrize('resume', [False, True])
+def test_shortened_omission_id_is_recovered_before_fresh_coverage_review(resume):
+    from adaptive_document_agent.models import ValidationIssue
+    from tests.test_retained_source_citations import fixture as source_fixture
+
+    result, _, proposal = source_fixture()
+    task_id = 'task_other'
+    alias = f'insight_{task_id}'
+    finding_id = alias + '_full'
+    result.analysis_results.append(result.analysis_results[0].model_copy(update={'task_id': task_id}))
+    result.insights.append(result.insights[0].model_copy(update={'id': finding_id, 'result_ids': [task_id]}))
+    draft = proposal.model_dump(exclude_none=True)
+    draft['decisions'].append(dict(insight_id=alias, decision='omit', reason='Repeats the selected series.'))
+    approved = dict(accepted=True, reason='Synthetic independent coverage review.')
+    if resume:
+        result.failed_stage = 'presentation_selection'
+        result.failure_details = dict(component='RetainedAnalysisSelection')
+        result.validation_warnings.append(ValidationIssue(code='retained_page_draft_rejected',
+            stage='presentation', message=json.dumps(dict(rejected_draft=draft, row_ids={},
+                diagnostic=f'Unknown finding {alias}'))))
+        result.validation_warnings.append(retain_selection_feedback(result))
+    mock = gateway([approved] if resume else [draft, approved])
+    retained.select_retained_analysis(mock, result)
+    selected = retained.selected_record(result)['selection']
+    assert selected['ordered_insight_ids'] == draft['ordered_insight_ids']
+    assert selected['decisions'] == [draft['decisions'][0], {**draft['decisions'][1], 'insight_id': finding_id}]
+    assert [u['operation'] for u in mock.usage] == (
+        ['RetainedSelectionCoverage'] if resume else ['SourceAuthoredAnalysisSelection', 'RetainedSelectionCoverage'])
+    assert not any(w.code == 'presentation_retained_analysis_review' for w in result.validation_warnings)
+
+
+@pytest.mark.parametrize('case', ['ambiguous', 'included', 'duplicate', 'not_provenanced'])
+def test_omission_id_recovery_does_not_guess_or_rebind_selected_findings(case):
+    alias = 'insight_task_other'
+    finding_id = alias + '_full'
+    insight = dict(id=finding_id, result_ids=['task_other'] if case != 'not_provenanced' else ['task_different'])
+    context = dict(findings=[dict(insight=insight, selectable=True)], unavailable_findings=[])
+    if case == 'ambiguous':
+        context['unavailable_findings'].append(dict(insight={**insight, 'id': alias + '_another'}))
+    decisions = [dict(insight_id=alias, decision='include' if case == 'included' else 'omit', reason='Test decision.')]
+    if case == 'duplicate':
+        decisions.append(dict(insight_id=finding_id, decision='omit', reason='Already decided.'))
+    proposal = retained.RetainedAnalysisSelection(decisions=decisions, ordered_insight_ids=['other'])
+    assert not retained.repair_omission_ids(proposal, context)
+    with pytest.raises(ValueError, match='unknown finding'):
+        retained._validate_selection(proposal, context)
+
+
 def test_final_source_rejection_gets_one_bounded_selection_repair_not_an_approval():
     from adaptive_document_agent.models import ValidationIssue
     from adaptive_document_agent.agent.retained_analysis_review import needs_catalog_retry

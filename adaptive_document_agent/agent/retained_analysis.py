@@ -111,6 +111,36 @@ class SourceAuthoredAnalysisSelection(RetainedAnalysisSelection):
     """Source interpretation keeps provider reasoning defaults; legacy selection only ranks findings."""
 
 
+def repair_omission_ids(selection: RetainedAnalysisSelection, context: dict) -> bool:
+    """Restore a shortened omission ID only from unique task provenance."""
+    from collections import Counter, defaultdict
+
+    required = {row['insight']['id'] for row in context['findings']}
+    known = {row['insight']['id']: row['insight']
+             for row in [*context['findings'], *context['unavailable_findings']]}
+    by_task_alias = defaultdict(set)
+    for iid, insight in known.items():
+        for task_id in insight.get('result_ids', []):
+            by_task_alias[f'insight_{task_id}'].add(iid)
+    counts = Counter(d.insight_id for d in selection.decisions)
+    ordered = set(selection.ordered_insight_ids)
+    repaired = False
+    for decision in selection.decisions:
+        alias = decision.insight_id
+        if (decision.decision != 'omit' or decision.page is not None or alias in known
+                or counts[alias] != 1 or alias in ordered):
+            continue
+        matches = by_task_alias.get(alias, set())
+        if len(matches) != 1:
+            continue
+        iid, = matches
+        if iid in required and iid not in counts and iid not in ordered and iid.startswith(alias + '_'):
+            decision.insight_id = iid
+            counts[iid] += 1
+            repaired = True
+    return repaired
+
+
 def _validate_selection(selection: RetainedAnalysisSelection, context: dict) -> None:
     required = {f['insight']['id'] for f in context['findings']}
     selectable = {f['insight']['id'] for f in context['findings'] if f['selectable']}
@@ -238,6 +268,7 @@ def _select_retained_analysis(gateway, result):
         else:
             selection = selection_request(gateway, messages, schema, result, attempt,
                                           max_tokens=12000 if source_authoring else 8000)
+        repair_omission_ids(selection, context)
         for decision in selection.decisions:
             preserved = (feedback or {}).get('preserved_pages', {}).get(decision.insight_id)
             if decision.decision == 'include' and preserved:
