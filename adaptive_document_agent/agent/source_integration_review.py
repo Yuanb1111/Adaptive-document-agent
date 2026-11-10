@@ -296,10 +296,9 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
         pending_copy = None
         semantic_corrections = format_corrections = 0
         length_progress_used = False
-        # Each semantic proposal owns one format correction. Formatting the
-        # initial proposal must not consume the later semantic patch's format
-        # opportunity. At most three proposals (including a reopened section),
-        # one format correction each, and one strictly shorter copy retry.
+        # The initial proposal can get a schema correction. Later semantic
+        # revisions may only compress overlong copy with all bindings intact.
+        # Neither correction can buy a new source-binding repair.
         for attempt in range(7):
             entry = {}
             audit['attempts'].append(entry)
@@ -398,7 +397,8 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
                     # A single overlong body needs the same local correction as
                     # several overlong fields. Regenerating the whole proposal
                     # can repeat the length failure and discard valid bindings.
-                    if format_corrections:
+                    copy_repair = overlong_additions(exc, feedback, SourceIntegrationDraft)
+                    if format_corrections or (semantic_corrections and copy_repair is None):
                         schema_errors = feedback.get('schema_errors', [])
                         if schema_errors:
                             detail = '; '.join(
@@ -406,14 +406,14 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
                             raise ValueError(f'Supplementary draft failed validation: {detail}') from exc
                         raise
                     format_corrections += 1
-                    pending_copy = overlong_additions(exc, feedback, SourceIntegrationDraft)
+                    pending_copy = copy_repair
                     if pending_copy is None:
                         messages += format_correction_messages(feedback)
                     continue
                 if draft is None:
                     raise
-                if 'shortened_fields' in entry and 'review' not in entry:
-                    raise  # Copy compression cannot gain a new source-repair route.
+                if format_corrections and 'review' not in entry:
+                    raise  # A format correction cannot gain a new source-repair route.
                 # A format-only correction has not yet used the single
                 # source/meaning correction for a complete proposal.
                 if semantic_corrections and not entry.get('reopened_sections'):
