@@ -331,7 +331,8 @@ class PresentationPlanValidator:
             for identifier in insight_ids:
                 item = insight_by_id.get(identifier)
                 if item:
-                    referenced_pages.update(source.page for source in item.evidence)
+                    from adaptive_document_agent.services.source_citations import evidence_pages
+                    referenced_pages.update(evidence_pages(item, [], document=result.document))
                     linked_ids = insight_observation_ids.get(identifier, [])
                     referenced_observation_ids.update(linked_ids)
                     referenced_pages.update(e.page for oid in linked_ids for e in observation_by_id[oid].evidence)

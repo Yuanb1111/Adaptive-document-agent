@@ -176,7 +176,8 @@ def _select_retained_analysis(gateway, result):
         'management explanation, definition or assurance qualifier in the page copy. Use metric '
         'titles and separate dated level statements for turning points; use exact supplied period labels '
         'without expanding fiscal years to dates, including every material intermediate point. Each directional clause must '
-        'name its own source metric and start and end periods, including in attributed explanations. Prefer dated level '
+        'name its own source metric and start and end periods when comparing periods. Preserve the literal '
+        'single-period scope of an attributed explanation without inventing a comparison. Prefer dated level '
         'statements over chained movements that omit their starting period. Use '
         'raw reported amounts with explicit units, and only supplied calculations. '
         'Every numeric amount must bind to a primary or allowed companion row; source '
@@ -364,7 +365,7 @@ def compile_retained_analysis(result):
                   if set([*c.observation_ids, *c.total_observation_ids]) == primary]
         chart_ids = [charts[0].id] if charts else []
         from adaptive_document_agent.services.source_citations import evidence_pages
-        pages = evidence_pages(insight, observations)
+        pages = evidence_pages(insight, observations, document=result.document)
         sid = f'retained_analysis_{n}'
         slide = PresentationSlide(id=sid, slide_type='analysis', title=title,
             section_id=sid, section_title=title, message=copy, bullets=[copy],

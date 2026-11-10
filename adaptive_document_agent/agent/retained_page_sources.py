@@ -14,6 +14,18 @@ PERIOD_AND_ASSURANCE_RULES = (
     'different reporting bases, list their exact dated values separately instead of asserting a '
     'direction across those bases. State a source-attributed driver separately and retain its '
     'literal source scope without turning it into a comparison between incompatible endpoints. '
+    'Read a prose citation together with its preceding and following source pages. A continuation '
+    'may inherit its period, entity and measure from the preceding paragraph opening, while later '
+    'paragraphs on the same page can concern different periods. A driver_quote alone does not '
+    'establish that scope. Attribute a driver to the period stated in its own paragraph; a '
+    'within-period explanation does not establish a comparison with another period. If the '
+    'paragraph scope is unavailable, report the uncertainty instead of supplying an interval. '
+    'For source prose without eligible numeric rows, preserve the supported qualitative driver '
+    'and its literal period. Use noun phrases describing the source-supported factors and their '
+    'positive or negative contribution to that period. Reserve directional predicates '
+    '(increase, decrease, higher, lower) for comparisons with bound rows and explicit endpoints; '
+    'do not turn prose-only factors into additional numerical trend claims. Do not require '
+    'their unbound amounts on the analysis page. '
     'Only use an audit label for a row explicitly marked with that status. Unknown means unmarked. '
     'Never propagate a label to another period or measure based on a shared heading. '
     'When a chart reports CAGR alongside its raw levels, cite the matching reported CAGR companion row. '
@@ -55,9 +67,12 @@ class RetainedPage(BaseModel):
 
 
 def page_sources(result, linked):
+    from adaptive_document_agent.services.source_citations import evidence_pages
     ids = set().union(*(entry[1] for entry in linked.values()))
     anchors = [o for o in result.observations if o.id in ids]
     pages = {e.page for o in anchors for e in o.evidence}
+    for insight, _, _ in linked.values():
+        pages.update(evidence_pages(insight, [], document=result.document))
     originals = [p for p in result.document.pages if p.page_number in pages]
     tables = {o.effective_table_id for o in anchors if o.effective_table_id}
     ambiguous = ambiguous_source_table_ids(result)
@@ -135,11 +150,13 @@ def validate_authored_pages(selection, context, result):
         if any(e.code == 'direction_scope_ambiguous' for e in errors):
             periods = sorted({o.period for o in observations if o.id in primary and o.period})
             issues.append(f'Primary source periods are {periods}. In each directional clause, explicitly '
-                'name the source metric and both source-supported endpoints, including in attributed '
-                'explanations. "The decrease through [end]" supplies only one endpoint. Never infer the '
+                'name the source metric and both source-supported endpoints for a comparison. '
+                '"The decrease through [end]" supplies only one endpoint. Never infer the '
                 'start from the earliest data. Separate the headline comparison from its drivers. '
                 'If a driver has no source-supported interval, describe the supported event without '
-                'claiming a change over an unspecified period.')
+                'claiming a change over an unspecified period. For a prose-only single-period driver, '
+                'use attributed qualitative noun phrases with its original period and positive or '
+                'negative role, without increase/decrease/higher/lower predicates or extra amounts.')
         if any(e.target_component == 'title' for e in errors):
             issues.append('Use a neutral metric/scope title, or explicitly write both '
                             'comparison endpoints in the title itself. Dates in the message do not '
@@ -192,7 +209,7 @@ def planned_source_citations(selection, context, result):
         if companions - primary - allowed:
             continue
         bound = [observations[k] for k in sorted(ids)]
-        pages = evidence_pages(insights[decision.insight_id], bound)
+        pages = evidence_pages(insights[decision.insight_id], bound, document=result.document)
         if not pages or set(pages) - available_pages:
             continue
         citation = dict(insight_id=decision.insight_id, observation_ids=sorted(ids),

@@ -39,7 +39,10 @@ def validate_narrative_plan(plan, result, calculations=None) -> list[str]:
             errors.append(f"theme {theme.id} has no retained evidence")
         pages = {e.page for oid in ids if oid in observations for e in observations[oid].evidence}
         pages.update(e.page for iid in theme.insight_ids if iid in insights for e in insights[iid].evidence)
-        if set(theme.source_pages) != pages:
+        from adaptive_document_agent.services.source_citations import evidence_pages
+        context_pages = pages | {page for iid in theme.insight_ids if iid in insights
+                                 for page in evidence_pages(insights[iid], [], document=result.document)}
+        if not pages <= set(theme.source_pages) <= context_pages:
             errors.append(f"theme {theme.id} source pages must match its retained evidence")
         if any(not observations[oid].evidence or observations[oid].validation_status not in {"valid", "partially_valid"}
                for oid in ids if oid in observations):
