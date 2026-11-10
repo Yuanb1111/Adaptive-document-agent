@@ -199,7 +199,8 @@ def test_integration_retry_requires_latest_exact_candidate_complete_approval_and
         assert reporting.executive_brief is None
 
 
-def test_reused_accepted_brief_still_enters_normal_source_integration(monkeypatch):
+@pytest.mark.parametrize('timed_out', [False, True])
+def test_reused_accepted_brief_still_enters_normal_source_integration(monkeypatch, timed_out):
     from hashlib import sha256
     from adaptive_document_agent.agent import prepared_executive_brief, source_integration_review
     from adaptive_document_agent.agent.orchestrator import DocumentOrchestrator
@@ -215,8 +216,13 @@ def test_reused_accepted_brief_still_enters_normal_source_integration(monkeypatc
     gw = mock_gateway([selection(source)])
     select_retained_analysis(gw, source)
     approve_preintegration_input(source)
+    if timed_out:
+        source.failed_stage = 'analysis_time_limit'
+        source.failure_details = dict(component='AnalysisTimeLimit',
+            stopped_stage='Reviewing supplementary sources against the final conclusions')
     runner = DocumentOrchestrator(gw)
     monkeypatch.setattr(runner, '_load_document', lambda *_: source.document.model_copy(deep=True))
+    monkeypatch.setattr(runner, '_generate_report', lambda *_a, **_k: pytest.fail('Reran upstream selection'))
     monkeypatch.setattr(prepared_executive_brief, 'current_executive_brief',
                         lambda *_a, **_k: pytest.fail('Unexpected independent briefing regeneration'))
     def reject(gateway, current, brief, **kwargs):

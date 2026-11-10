@@ -2,6 +2,21 @@
 import json
 
 
+def editable_rejected_sections(draft, verdicts, original_count):
+    """A partial rejection is editable only within its own existing additions."""
+    rejected = {sid for sid, verdict in verdicts.items() if not verdict.accepted}
+    if not rejected or rejected == set(verdicts):
+        return []
+    owners = {d.section_id: {i for i in d.brief_item_indexes if i >= original_count}
+              for d in draft.decisions}
+    if any(not owners.get(sid) for sid in rejected):
+        return []
+    targets = set.union(*(owners[sid] for sid in rejected))
+    if any(targets & ids for sid, ids in owners.items() if sid not in rejected):
+        return []
+    return sorted(rejected)
+
+
 def rejected_addition_sections(previous, retained, checks, original_count):
     """Return edit scopes only after the caller matched and validated the draft.
 
@@ -28,17 +43,8 @@ def rejected_addition_sections(previous, retained, checks, original_count):
             verdicts = {v.section_id: v for v in review.verdicts}
             if len(verdicts) != len(review.verdicts) or set(verdicts) != set(checks):
                 return None
-            rejected = {sid for sid, v in verdicts.items() if not v.accepted}
-            if not rejected or rejected == set(checks):
-                return None
-            owners = {d.section_id: {i for i in d.brief_item_indexes if i >= original_count}
-                      for d in retained.decisions}
-            if any(not owners[sid] for sid in rejected):
-                return None
-            targets = set.union(*(owners[sid] for sid in rejected))
-            if any(targets & ids for sid, ids in owners.items() if sid not in rejected):
-                return None
-            return verdicts, sorted(rejected)
+            sections = editable_rejected_sections(retained, verdicts, original_count)
+            return (verdicts, sections) if sections else None
     except (ValueError, KeyError, TypeError, AttributeError):
         return None
     return None

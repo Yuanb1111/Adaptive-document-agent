@@ -6,6 +6,7 @@ from adaptive_document_agent.services.company_summary import require_verified_in
 from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
 from adaptive_document_agent.validation.report_validator import ReportValidator
 
+from .analysis_time_limit import is_reporting_timeout
 from .company_introduction import _has_valid_introduction
 from .report_generator import ReportGenerator
 from .retained_analysis import (
@@ -38,10 +39,11 @@ def _final_source_retry(previous):
 
 def retained_brief_reporting(previous, current, gateway, requested_focus=None, scope=None):
     """Return only the stages whose saved bindings still match current inputs."""
+    timed_out = is_reporting_timeout(previous)
     if (previous is None or previous.pipeline_state != 'partial' or previous.retry_from != 'reporting'
             or ((previous.failed_stage, previous.failure_details.get('component')) not in
                 {('executive_brief', 'ExecutiveBrief'), ('source_integration', 'SourceIntegration')}
-                and not _final_source_retry(previous))
+                and not timed_out and not _final_source_retry(previous))
             or previous.presentation_topics is not None or not previous.presentation_plan
             or not previous.report_plan or not previous.charts or not previous.report_markdown
             or not previous.insights or not any(w.code == SELECTION_CODE for w in previous.validation_warnings)
@@ -89,7 +91,7 @@ def retained_brief_reporting(previous, current, gateway, requested_focus=None, s
         charts=candidate.charts)
     candidate.validation_warnings.extend(
         ReportValidator().validate(candidate.report_markdown, candidate.analysis_results).issues)
-    if previous.failed_stage == 'source_integration':
+    if previous.failed_stage == 'source_integration' or timed_out:
         candidate.executive_brief = checked_integration_input(previous, candidate)
     return candidate
 

@@ -8,9 +8,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from adaptive_document_agent.models import ValidationIssue
 from adaptive_document_agent.models.executive_brief import (BRIEF_EVIDENCE_LIMIT, BriefQuote,
     ExecutiveBrief, ExecutiveBriefItem)
+from adaptive_document_agent.services.analysis_deadline import AnalysisTimeLimitExceeded
 from adaptive_document_agent.services.executive_brief import validate_executive_brief
 from adaptive_document_agent.services.source_quotes import normalize_quote
 from adaptive_document_agent.services.llm.exceptions import LLMResponseError, LLMStructuredOutputError
+from .analysis_time_limit import is_reporting_timeout
 from .prompting import untrusted_document_message
 from .presentation_budget_output import complete_budget_output
 from .structured_output_correction import schema_feedback, format_correction_messages
@@ -131,7 +133,8 @@ def _validate(draft, result, brief, checks):
 
 def _retry_draft(previous, result, brief, checks, pages):
     """Recover only a structurally valid proposal. The reviewer still reads every section."""
-    if (previous is None or previous.failed_stage != 'source_integration' or previous.executive_brief is None
+    if (previous is None or (previous.failed_stage != 'source_integration' and not is_reporting_timeout(previous))
+            or previous.executive_brief is None
             or _fingerprint(previous, previous.executive_brief) != _fingerprint(result, brief)):
         return None
     issue = next((w for w in reversed(previous.validation_warnings)
@@ -169,7 +172,8 @@ def _bind_legacy_check_ids(draft, checks):
 
 def _revision_notes(previous, context):
     """Retain objections only for the same sections and source text. No verdict transfers."""
-    if previous is None or previous.failed_stage != 'source_integration' or previous.executive_brief is None:
+    if (previous is None or (previous.failed_stage != 'source_integration' and not is_reporting_timeout(previous))
+            or previous.executive_brief is None):
         return []
     old = _context(previous, previous.executive_brief)
     if any(old[k] != context[k] for k in ('checks', 'source_pages', 'topics', 'user_focus')):
@@ -209,10 +213,11 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
         pages = {p['page']: p['text'] for p in context['source_pages']}
         if any(not pages.get(p, '').strip() for c in checks.values() for p in c.pages):
             raise ValueError('Complete supplementary source text is unavailable.')
+        maximum_additions = min(4, 7 - len(brief.items))
         structured_pages = {page.page_number for page in result.document.pages if page.tables}
         def source_payload(source_pages):
             return json.dumps({**context, 'original_brief_item_count': len(brief.items),
-                'first_addition_index': len(brief.items), 'source_pages': [
+                'first_addition_index': len(brief.items), 'maximum_additions': maximum_additions, 'source_pages': [
                 {**page, 'has_structured_tables': page['page'] in structured_pages}
                 for page in source_pages]}, ensure_ascii=False)
         encoded = source_payload(numbered_source_pages(context['source_pages']))
@@ -267,6 +272,7 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
             'For statements about relationships or conflicts, preserve who made the statement, its '
             'subject, counterpart and effective time. Keep numbers, units, audit scope, conditions and uncertainty exact. No calculations, invented facts, '
             'whole-document absence claims or boilerplate review-status text. Return at most seven merged brief items. '
+            f'With {len(brief.items)} original items, use at most {maximum_additions} additions. '
             'Each added item text must be at most 550 characters; preserve material qualifications concisely.'},
             *instruction_messages(result.profile, purpose='supplementary source integration'),
             untrusted_document_message(encoded)]
@@ -274,7 +280,7 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
         audit['corrections_used'] = budget
         prior_review = None
         retained = _retry_draft(previous, result, brief, checks, pages)
-        from .source_integration_resume import rejected_addition_sections
+        from .source_integration_resume import editable_rejected_sections, rejected_addition_sections
         scoped_retry = rejected_addition_sections(previous, retained, checks, len(brief.items))
         notes = _revision_notes(previous, context)
         if notes:
@@ -307,8 +313,9 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
                 if attempt == 0 and scoped_retry is not None:
                     draft = revise_reopened_additions(gateway, messages, prior_review[0], scoped_retry[1],
                                                       len(brief.items), entry)
-                elif attempt and (reopened := audit['attempts'][-2].get('reopened_sections')):
-                    draft = revise_reopened_additions(gateway, messages, prior_review[0], reopened,
+                elif attempt and (edit_sections := audit['attempts'][-2].get('reopened_sections')
+                                  or audit['attempts'][-2].get('capacity_repair_sections')):
+                    draft = revise_reopened_additions(gateway, messages, prior_review[0], edit_sections,
                                                       len(brief.items), entry)
                 elif pending_copy is not None:
                     draft = shorten_additions(gateway, messages, SourceIntegrationDraft, pending_copy, entry, len(brief.items))
@@ -360,6 +367,10 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
                     raise ValueError('Independent review must judge every supplementary source.')
                 if any(not v.accepted for v in verdicts.values()):
                     rejected = {sid for sid, verdict in verdicts.items() if not verdict.accepted}
+                    if len(draft.additions) == maximum_additions:
+                        edit_sections = editable_rejected_sections(draft, verdicts, len(brief.items))
+                        if edit_sections:
+                            entry['capacity_repair_sections'] = edit_sections
                     if (semantic_corrections == 1 and rejected & set(entry.get('preserved_sections', []))
                             and merged != _validate(prior_review[0], result, brief, checks)):
                         # The whole-brief review reopened unchanged copy only
@@ -431,11 +442,13 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
                               'split distinct material conclusions into separate additions and bind their merged '
                               'indexes in its single decision. A decision needs at most four representative '
                               f'source quotations; each addition has its own one to {BRIEF_EVIDENCE_LIMIT} exact quotes. '
-                              'Each addition text has a hard 550-character limit. Use at most four additions '
-                              'and seven merged items. Use the complete source evidence above.'}]
+                              f'Each addition text has a hard 550-character limit. Use at most {maximum_additions} '
+                              'additions and seven merged items. Use the complete source evidence above.'}]
         raise ValueError('Supplementary source integration exhausted its bounded correction budget.')
-    except (ValueError, LLMResponseError) as exc:
+    except (ValueError, LLMResponseError, AnalysisTimeLimitExceeded) as exc:
         audit['reason'] = str(exc)
         result.validation_warnings.append(ValidationIssue(code='source_integration_unresolved', stage='report',
             severity='warning', related_ids=list(checks), message=json.dumps(audit, ensure_ascii=False)))
+        if isinstance(exc, AnalysisTimeLimitExceeded):
+            raise
         return brief

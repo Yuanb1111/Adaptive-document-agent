@@ -32,6 +32,60 @@ def case():
     return result, draft
 
 
+@pytest.mark.parametrize('interrupt', [False, True])
+def test_full_brief_repairs_rejected_additions_in_place_and_resumes_after_timeout(interrupt):
+    from adaptive_document_agent.services.analysis_deadline import AnalysisTimeLimitExceeded
+
+    result, draft = case()
+    original_text = 'Production continued during the reporting period.'
+    result.document.pages[0].text += '\n' + original_text
+    result.executive_brief.items.append(ExecutiveBriefItem.model_validate(payload(original_text, 1, 'Production')['items'][0]))
+    supplement = 'Cancellation also requires written notice.'
+    result.document.pages[11].text += '\n' + supplement
+    draft.additions.append(ExecutiveBriefItem.model_validate(payload(supplement, 12, 'Notice')['items'][0]))
+    draft.decisions[0].brief_item_indexes = [4, 6]
+    draft.decisions[1].brief_item_indexes = [5]
+    calls = []
+    retrying = False
+
+    class Gateway:
+        def generate_structured(self, messages, schema, **kwargs):
+            calls.append(schema.__name__)
+            if schema is SourceIntegrationDraft:
+                assert len(calls) == 1
+                context = json.loads(messages[-1]['content'].split('\n', 1)[1].rsplit('\n', 1)[0])
+                assert context['maximum_additions'] == 3
+                return draft.model_copy(deep=True)
+            if schema.__name__ == 'ReopenedSourceAdditions':
+                assert set(schema.model_fields) == {'item_4', 'item_6'}
+                if interrupt and not retrying:
+                    raise AnalysisTimeLimitExceeded()
+                return schema(item_4=draft.additions[0].model_copy(update={'label': 'Cancellation scope'}),
+                              item_6=draft.additions[2])
+            return schema(verdicts=[dict(section_id=d.section_id, accepted=i == 1 or len(calls) >= 4,
+                reason='Independent source review.') for i, d in enumerate(draft.decisions)])
+
+    original = result.executive_brief
+    if interrupt:
+        with pytest.raises(AnalysisTimeLimitExceeded):
+            review_supplementary_sources(Gateway(), result, original)
+        assert result.validation_warnings[-1].code == 'source_integration_unresolved'
+        assert not resolved_source_check_ids(result, original)
+        result.pipeline_state, result.retry_from, result.failed_stage = 'partial', 'reporting', 'analysis_time_limit'
+        result.failure_details = dict(component='AnalysisTimeLimit')
+        previous = result.model_copy(deep=True)
+        retrying = True
+    else:
+        previous = None
+    merged = review_supplementary_sources(Gateway(), result, original, previous=previous)
+    assert calls == ['SourceIntegrationDraft', 'SourceIntegrationReview', 'ReopenedSourceAdditions',
+                     *(['ReopenedSourceAdditions'] if interrupt else []), 'SourceIntegrationReview']
+    assert len(merged.items) == 7 and merged.items[:4] == original.items
+    assert merged.items[5] == draft.additions[1]
+    assert merged.items[4].label == 'Cancellation scope'
+    assert resolved_source_check_ids(result, merged) == {'contracts', 'outlook'}
+
+
 @pytest.mark.parametrize('accept_fresh', [False, True])
 def test_retry_edits_only_rejected_addition_but_rechecks_every_section(accept_fresh):
     from adaptive_document_agent.models import ValidationIssue

@@ -4,6 +4,12 @@ from adaptive_document_agent.services.analysis_deadline import ANALYSIS_LIMIT_SE
 from adaptive_document_agent.utils.pipeline_version import PIPELINE_VERSION
 
 
+def is_reporting_timeout(result):
+    return (result is not None and result.failed_stage == 'analysis_time_limit'
+            and result.retry_from == 'reporting'
+            and result.failure_details.get('component') == 'AnalysisTimeLimit')
+
+
 def retain_timed_out_result(state, gateway, deadline):
     result = state.get('result')
     if result is None:
