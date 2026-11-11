@@ -96,7 +96,7 @@ def retain_selection_feedback(previous):
 
 def selection_retry_feedback(result, context):
     from .retained_analysis import RetainedAnalysisSelection, _validate_selection, repair_omission_ids
-    from .retained_page_sources import validate_authored_pages
+    from .retained_page_sources import rebind_context_evidence, validate_authored_pages
     issue = next((w for w in reversed(result.validation_warnings) if w.code == CODE), None)
     if issue is None:
         return None
@@ -125,6 +125,7 @@ def selection_retry_feedback(result, context):
     if priorities and set(selection.ordered_insight_ids) != set(priorities):
         fresh_errors.append(f'The corrected selection must retain the independently chosen priorities: {priorities}')
     try:
+        rebind_context_evidence(selection, context, result)
         validate_authored_pages(selection, context, result)
     except ValueError as exc:
         fresh_errors.append(str(exc))

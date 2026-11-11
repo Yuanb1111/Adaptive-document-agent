@@ -55,6 +55,69 @@ def test_compiler_and_export_validation_preserve_literal_related_context(monkeyp
         PresentationPlanValidator().validate(plan, result)
 
 
+@pytest.mark.parametrize('matching_pages', [[235], [235, 236], []])
+def test_quote_page_recovery_preserves_evidence_and_allows_bounded_revision(monkeypatch, matching_pages):
+    from adaptive_document_agent.agent.retained_selection_feedback import retain_selection_feedback
+    from adaptive_document_agent.models import ValidationIssue
+
+    result, _, proposal = fixture()
+    iid = proposal.ordered_insight_ids[0]
+    quote = 'Related exposure qualifies this reported balance.'
+    result.document.pages.append(DocumentPage(page_number=237, text=quote))  # Not supplied.
+    for page in (235, 236):
+        result.document.pages.append(DocumentPage(page_number=page,
+            text=quote if page in matching_pages else 'Different source passage.'))
+    other_id = 'other-retained-page'
+    result.insights.append(result.insights[0].model_copy(update={'id': other_id}))
+    original_sources = retained.page_sources
+
+    def sources(current, linked):
+        context = original_sources(current, linked)
+        context['source_pages'].extend(dict(page=p.page_number, text=p.text)
+            for p in current.document.pages if p.page_number in (235, 236))
+        return context
+
+    monkeypatch.setattr(retained, 'page_sources', sources)
+    draft = proposal.model_dump(exclude_none=True)
+    draft['decisions'][0]['page']['context_evidence'] = [dict(page=234, text=quote)]
+    draft['decisions'].append(dict(insight_id=other_id, decision='include', reason='Other finding.',
+        page=dict(title='Other context', message='Revenue is reported.', companion_ids=[], context_evidence=[])))
+    draft['ordered_insight_ids'].append(other_id)
+    result.failed_stage = 'presentation_selection'
+    result.failure_details = dict(component='RetainedAnalysisSelection')
+    result.validation_warnings.append(ValidationIssue(code='retained_page_draft_rejected', stage='presentation',
+        message=json.dumps(dict(rejected_draft=draft, row_ids={}, diagnostic='The quote uses the wrong page.'))))
+    result.validation_warnings.append(retain_selection_feedback(result))
+    source_before = result.model_dump(include={'document', 'observations', 'insights', 'analysis_results'})
+    accepted = dict(accepted=True, reason='Synthetic coverage only.')
+    corrected = deepcopy(draft['decisions'][0]['page'])
+    corrected['context_evidence'] = [dict(page=235, text=quote)] if matching_pages else []
+    repaired_by_model = len(matching_pages) != 1
+    mock = gateway([accepted, dict(pages={iid: corrected}), accepted] if repaired_by_model else [accepted])
+    retained.select_retained_analysis(mock, result)
+
+    coverage = decode_records(json.loads(mock.client.calls[0][-1]['content'].split('\n', 1)[1].rsplit('\n', 1)[0]))
+    citations = {row['insight_id']: row['source_pages'] for row in coverage['planned_source_citations']}
+    assert citations[other_id] == [234]
+    if repaired_by_model:
+        assert iid not in citations
+        assert 'Quote 1 does not bind to page 234' in coverage['copy_validation_errors'][0]
+        wire = mock.client.calls[1][-1]['content']
+        patch_request = decode_records(json.loads(wire.split('\n', 1)[1].rsplit('\n', 1)[0]))
+        assert set(patch_request['pages_to_correct']) == {iid}
+    else:
+        assert citations[iid] == [234, 235]
+        assert not coverage['copy_validation_errors']
+        assert retained.selected_record(result)['context_page_corrections'] == [dict(
+            insight_id=iid, quote_index=0, original_page=234, source_page=235)]
+    record = retained.selected_record(result)['selection']
+    assert record['ordered_insight_ids'] == draft['ordered_insight_ids']
+    assert record['decisions'][0]['page'] == corrected
+    assert record['decisions'][1] == draft['decisions'][1]
+    assert result.model_dump(include=set(source_before)) == source_before
+    assert not any(w.code == 'presentation_retained_analysis_review' for w in result.validation_warnings)
+
+
 def test_review_packet_and_compiled_slide_use_same_literal_source_footer():
     from adaptive_document_agent.services.pptx_export import _source_footer
     result, context, selection = fixture()

@@ -214,7 +214,8 @@ def _select_retained_analysis(gateway, result):
         'prose can explain drivers but cannot license an unbound additional amount. Name its driver '
         'and cite exact passages in context_evidence when related supplied pages carry material '
         'qualifications outside its primary evidence. Those pages join the footer but do not '
-        'expand numeric eligibility. Preserve the qualified meaning '
+        'expand numeric eligibility. Copy the physical page number from that source_pages entry, '
+        'ignoring the printed folio inside its text. Preserve the qualified meaning '
         'without introducing that extra number. Preserve the raw negative sign or parentheses for '
         'outflows even when using the words "cash used". Never merge explanations for different '
         'dated steps into one broader causal interval. Keep selection reasons '
@@ -238,7 +239,7 @@ def _select_retained_analysis(gateway, result):
         'coverage of the original document or of unselected extracted metrics. ' + authoring + INSTRUCTIONS},
         *instruction_messages(result.profile, purpose='selecting retained analysis for PowerPoint'),
         untrusted_document_message(json.dumps(encode_records(packet), ensure_ascii=False, separators=(',', ':')))]
-    from .retained_page_sources import AuthoredPageErrors, validate_authored_pages
+    from .retained_page_sources import AuthoredPageErrors, rebind_context_evidence, validate_authored_pages
     from .retained_page_revision import revise_retained_pages
     from .retained_selection_coverage import SelectionCoverageError, review_selection_coverage
     from .retained_selection_request import selection_request
@@ -277,6 +278,7 @@ def _select_retained_analysis(gateway, result):
             preserved = (feedback or {}).get('preserved_pages', {}).get(decision.insight_id)
             if decision.decision == 'include' and preserved:
                 decision.page = RetainedPage.model_validate(preserved)
+        context_page_corrections = rebind_context_evidence(selection, context, result) if source_authoring else []
         draft = selection.model_dump(mode='json', exclude_none=True)
         for decision in selection.decisions:
             if decision.page is not None:
@@ -329,6 +331,10 @@ def _select_retained_analysis(gateway, result):
                     except (ValueError, LLMResponseError) as exc:
                         raise ValueError('\n'.join([*failures, f'Page revision failed: {exc}'])) from exc
                     copy_review_ids = sorted(revised)
+                    for decision in selection.decisions:
+                        if decision.insight_id in revised:
+                            decision.page = revised[decision.insight_id]
+                    context_page_corrections.extend(rebind_context_evidence(selection, context, result))
                     draft = {**draft, 'decisions': [
                         {**entry, 'page': revised[entry['insight_id']].model_dump(mode='json')}
                         if entry['insight_id'] in revised else entry for entry in draft['decisions']]}
@@ -342,7 +348,8 @@ def _select_retained_analysis(gateway, result):
                 result.validation_warnings.append(ValidationIssue(code='retained_page_draft_rejected',
                     stage='presentation', severity='warning', message=json.dumps(dict(
                         attempt=attempt + 1, rejected_draft=draft, diagnostic=str(exc), row_ids=aliases,
-                        reviewed_priorities=reviewed_priorities),
+                        reviewed_priorities=reviewed_priorities,
+                        context_page_corrections=context_page_corrections),
                         ensure_ascii=False)))
             priority_retry = priority_change and priority_revisions_left > 0
             if (not source_authoring or isinstance(exc, LLMResponseError)
@@ -365,6 +372,8 @@ def _select_retained_analysis(gateway, result):
                   selection=selection.model_dump(mode='json', exclude_none=True))
     if source_authoring:
         record['source_authoring'] = True
+    if context_page_corrections:
+        record['context_page_corrections'] = context_page_corrections
     result.validation_warnings.append(ValidationIssue(code=SELECTION_CODE, severity='info',
         stage='presentation', message=json.dumps(record, ensure_ascii=False)))
 

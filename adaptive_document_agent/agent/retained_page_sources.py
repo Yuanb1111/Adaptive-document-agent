@@ -77,21 +77,55 @@ class RetainedPage(BaseModel):
         description='Only extra rows used in visible copy. Choose row references from this finding’s '
                     'allowed_companion_rows. Use [] when its primary observations are sufficient.')
     context_evidence: list[BriefQuote] = Field(default_factory=list, max_length=8,
-        description='Exact literal quotations from supplied source_pages supporting qualitative '
+        description='Exact literal quotations from supplied source_pages, keyed by their supplied '
+                    'physical page number, supporting qualitative '
                     'qualifications or drivers outside the primary row evidence. These do not '
                     'authorize additional numeric claims or companion rows.')
+
+
+class ContextEvidenceError(ValueError):
+    """A qualitative citation lacks a literal binding to its supplied page."""
+
+
+def _context_sources(context, result):
+    from adaptive_document_agent.services.source_quotes import normalize_quote
+    allowed = {p['page'] for p in context.get('source_pages', [])}
+    return {p.page_number: normalize_quote(p.text) for p in result.document.pages if p.page_number in allowed}
+
+
+def rebind_context_evidence(selection, context, result):
+    """Correct a page number only when the unchanged quote has one supplied match."""
+    from adaptive_document_agent.services.source_quotes import normalize_quote
+    sources = _context_sources(context, result)
+    corrections = []
+    for decision in selection.decisions:
+        if decision.decision != 'include' or decision.page is None:
+            continue
+        for index, quote in enumerate(decision.page.context_evidence):
+            text = normalize_quote(quote.text)
+            if not text or text in sources.get(quote.page, ''):
+                continue
+            matches = [page for page, source in sources.items() if text in source]
+            if len(matches) == 1:
+                corrections.append(dict(insight_id=decision.insight_id, quote_index=index,
+                                        original_page=quote.page, source_page=matches[0]))
+                decision.page.context_evidence[index] = quote.model_copy(update={'page': matches[0]})
+    return corrections
 
 
 def context_evidence_pages(page, context, result):
     """Bind model-selected qualitative context without expanding numeric eligibility."""
     from adaptive_document_agent.services.source_quotes import normalize_quote
-    allowed = {p['page'] for p in context.get('source_pages', [])}
-    sources = {p.page_number: normalize_quote(p.text) for p in result.document.pages}
+    if page is None or not page.context_evidence:
+        return set()
+    sources = _context_sources(context, result)
     pages = set()
-    for quote in page.context_evidence if page is not None else []:
+    for index, quote in enumerate(page.context_evidence, 1):
         text = normalize_quote(quote.text)
-        if quote.page not in allowed or not text or text not in sources.get(quote.page, ''):
-            raise ValueError('Context evidence must be a literal quote from a supplied source page')
+        if not text or text not in sources.get(quote.page, ''):
+            raise ContextEvidenceError('Context evidence must be a literal quote from a supplied source page. '
+                f'Quote {index} does not bind to page {quote.page}. Copy a contiguous passage and its '
+                'physical page number from the source_pages record, using its page field.')
         pages.add(quote.page)
     return pages
 
@@ -256,7 +290,12 @@ def planned_source_citations(selection, context, result):
             continue
         bound = [observations[k] for k in sorted(ids)]
         pages = evidence_pages(insights[decision.insight_id], bound, document=result.document)
-        pages = sorted(set(pages) | context_evidence_pages(decision.page, context, result))
+        try:
+            pages = sorted(set(pages) | context_evidence_pages(decision.page, context, result))
+        except ContextEvidenceError:
+            # A rejected draft has no publishable footer yet. Keep the other
+            # findings reviewable so the writer can receive localized feedback.
+            continue
         if not pages or set(pages) - available_pages:
             continue
         citation = dict(insight_id=decision.insight_id, observation_ids=sorted(ids),
