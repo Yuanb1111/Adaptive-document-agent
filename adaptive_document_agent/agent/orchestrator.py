@@ -143,6 +143,12 @@ class DocumentOrchestrator:
                     raise ValueError('Retry presentation budget differs from the saved request; start a new analysis.')
             requirements = profile.report_requirements
             analysis_focus = profile.analysis_focus
+            from .final_layout_resume import retry_final_layout
+            final_display = retry_final_layout(resume, self.gateway, requested_focus=requested_focus,
+                                               scope=scope, progress=notify)
+            if final_display is not None:
+                run_state['result'] = final_display
+                return final_display
             from .source_coverage import retry_failed_source_checks
             with record_timing(details, 'retry_source_checks'):
                 retry_failed_source_checks(document, profile, self.gateway, progress=notify)

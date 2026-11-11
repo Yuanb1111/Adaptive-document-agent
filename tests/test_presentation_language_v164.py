@@ -141,6 +141,55 @@ def test_missing_gateway_cannot_certify_default_language(monkeypatch):
         require_consistent_language(deck, result)
 
 
+@pytest.mark.parametrize('accept_original', [True, False])
+def test_same_language_retry_proposes_original_copy_for_a_fresh_review(monkeypatch, accept_original):
+    from adaptive_document_agent.agent.report_localization import prepare_report_language, CopyTranslations
+    from adaptive_document_agent.services import pptx_export
+    source = 'Revenue was 12 in FY2024.'
+    result, deck = deck_result([source])
+    monkeypatch.setattr(pptx_export, 'presentation_for_copy', lambda _: deck)
+    calls = []
+    def generate(messages, model, **kwargs):
+        calls.append(model.__name__)
+        if model is CopyTranslations:
+            return model(items=[dict(id=0, text='Revenue was 99 in FY2024.')])
+        original_retry = calls.count('TranslationReview') == 2
+        return model(items=[dict(id=0, accepted=accept_original or not original_retry,
+                                reason='Synthetic independent language verdict.',
+                                source_already_in_target_language=True)])
+    prepare_report_language(SimpleNamespace(generate_structured=generate), result)
+    assert calls == ['CopyTranslations', 'TranslationReview', 'TranslationReview']
+    audit = json.loads(result.validation_warnings[-1].message)
+    assert audit['attempts'][1]['source_copy_proposed_for_review'] == [0]
+    assert source == deck.slides[0].shapes[-1].text
+    if accept_original:
+        assert result.profile.report_requirements.copy_translations == {source: source}
+        require_consistent_language(deck, result)
+    else:
+        assert not result.profile.report_requirements.copy_translations
+        with pytest.raises(ValueError, match='language verification required'):
+            require_consistent_language(deck, result)
+
+
+def test_mixed_language_string_keeps_its_translation_retry(monkeypatch):
+    from adaptive_document_agent.agent.report_localization import prepare_report_language, CopyTranslations
+    from adaptive_document_agent.services import pptx_export
+    source = '收入12。'
+    result, deck = deck_result([source])  # A mixed string in an English document.
+    monkeypatch.setattr(pptx_export, 'presentation_for_copy', lambda _: deck)
+    calls = []
+    def generate(messages, model, **kwargs):
+        calls.append(model.__name__)
+        if model is CopyTranslations:
+            amount = '99' if calls.count('CopyTranslations') == 1 else '12'
+            return model(items=[dict(id=0, text='Revenue '+amount+'.')])
+        return model(items=[dict(id=0, accepted=True, reason='Synthetic review of a translated string.',
+                                source_already_in_target_language=False)])
+    prepare_report_language(SimpleNamespace(generate_structured=generate), result)
+    assert calls == ['CopyTranslations', 'TranslationReview'] * 2
+    assert result.profile.report_requirements.copy_translations == {source: 'Revenue 12.'}
+
+
 def test_english_quantity_translation_preserves_coefficient_and_scale():
     from adaptive_document_agent.services.translation_atoms import protect_quantities, restore_quantities
     from adaptive_document_agent.services.report_language import translation_errors

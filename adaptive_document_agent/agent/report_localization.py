@@ -25,6 +25,9 @@ class TranslationVerdict(BaseModel):
     id: int = Field(ge=0)
     accepted: bool
     reason: str = Field(min_length=1, max_length=300)
+    source_already_in_target_language: bool = Field(default=False,
+        description='True only when the original copy itself is already in the requested language, '
+                    'allowing literal proper names and source identifiers.')
 
 
 class TranslationReview(BaseModel):
@@ -230,10 +233,13 @@ def _translate_batch(gateway, batch, language, presentation, *, failures=None, t
     try:
         started = perf_counter()
         active_timer = ('localization_translation_requests', started)
-        if (failures and ids <= set(failures.get('fit_only_ids', ()))
+        source_language_ids = {row['id'] for row in (failures or {}).get('review', {}).get('items', [])
+                               if row.get('source_already_in_target_language') is True}
+        if (failures and ids <= (set(failures.get('fit_only_ids', ())) | source_language_ids)
                 and language == getattr(presentation, '_ada_source_language', None)):
-            # The source already has native geometry. Propose its exact text
-            # for a new language/meaning verdict instead of another paraphrase.
+            # Same-language rewriting can introduce numeric or meaning errors.
+            # Propose the exact source for a fresh independent language verdict
+            # within the existing retry budget.
             response = CopyTranslations(items=[CopyTranslation(id=row['id'], text=row['text']) for row in batch])
             audit['source_copy_proposed_for_review'] = sorted(ids)
         else:
@@ -279,7 +285,11 @@ def _translate_batch(gateway, batch, language, presentation, *, failures=None, t
              'Debt/indebtedness must not become total liabilities in Chinese: 债务 and 总负债 '
              'are different measures. Reject that conflation even when all numbers match. '
              'Reject omitted caveats, invented facts, '
-             'wrong-language prose and uncertain equivalence. Do not rewrite or calculate.'},
+             'wrong-language prose and uncertain equivalence. Also assess the ORIGINAL copy for '
+             'source_already_in_target_language: true only if that original itself already uses '
+             'the requested language, allowing literal proper names and source identifiers. '
+             'A document-level source language does not establish the language of each string. '
+             'This separate source-language judgment grants no translation approval. Do not rewrite or calculate.'},
             {'role': 'user', 'content': 'Requested audience-copy language: ' + language},
             {'role': 'system', 'content': name_rule},
             *([untrusted_document_message(json.dumps({'source_name_evidence': name_context}, ensure_ascii=False))]

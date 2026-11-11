@@ -30,7 +30,7 @@ def test_one_source_bound_text_compression_preserves_every_other_field():
             assert messages[0]['content'] == 'Current literal source and constraints'
             assert kwargs['allow_repair'] is False
             assert set(response_model.model_fields) == {'item_0'}
-            return response_model(item_0='The estimate remains conditional.')
+            return response_model(item_0={'text': 'The estimate remains conditional.'})
     value = compact_overlong_patch(Gateway(), [dict(role='system',
         content='Current literal source and constraints')], schema, error, record)
     assert len(calls) == 1
@@ -39,6 +39,68 @@ def test_one_source_bound_text_compression_preserves_every_other_field():
     assert value.item_0.text == 'The estimate remains conditional.'
     assert original['item_0']['text'] == 'Long source discussion. ' * 30
     assert record['raw_response'] == error.response.text
+
+
+@pytest.mark.parametrize('overlong_fields', [{'label'}, {'label', 'text'}])
+def test_copy_compression_edits_only_the_overlong_fields(overlong_fields):
+    schema, original, error = case()
+    original['item_0']['label'] = 'Qualified source finding ' * 4
+    if 'text' not in overlong_fields:
+        original['item_0']['text'] = 'The estimate remains conditional.'
+    error.response.text = json.dumps(original)
+    record = {}
+    class Gateway:
+        def generate_structured(self, messages, response_model, **kwargs):
+            item_schema = response_model.model_fields['item_0'].annotation
+            assert set(item_schema.model_fields) == overlong_fields
+            replacement = dict(label='A qualified finding', text='The estimate remains conditional.')
+            return response_model.model_validate({'item_0': {
+                key: replacement[key] for key in overlong_fields}})
+    value = compact_overlong_patch(Gateway(), [], schema, error, record)
+    assert value.item_0.label == 'A qualified finding'
+    assert value.item_0.text == 'The estimate remains conditional.'
+    assert value.item_0.model_dump(exclude=overlong_fields) == {
+        k: v for k, v in original['item_0'].items() if k not in overlong_fields}
+    assert original['item_0']['label'] == 'Qualified source finding ' * 4
+
+
+@pytest.mark.parametrize('accept_final', [True, False])
+def test_label_capacity_failure_can_reach_its_remaining_independent_meaning_correction(accept_final):
+    from adaptive_document_agent.agent.brief_item_repair import generate_with_item_repair
+    from tests.test_brief_item_repair import audited, item
+    from tests.test_brief_targeted_contract_v147 import Replies
+    from tests.test_executive_brief import result_for
+
+    source = 'Revenue was 12. Cash was 4.'
+    result = result_for([source])
+    original = dict(title='Summary', items=[item('Revenue was 12.', label='Revenue'),
+                                          item('Cash was 4.', label='Cash')])
+    patch = {**original['items'][0], 'text': 'Reported revenue was 12.',
+             'label': 'The source provides a detailed revenue qualification that must survive'}
+    error = LLMStructuredOutputError('Overlong label',
+        response=LLMResponse(text=json.dumps({'item_0': patch})))
+    replies = Replies([original, error, {'item_0': {'label': 'Revenue context'}},
+                       {'item_0': {'text': 'The source reports revenue of 12.'}}])
+    reviewed = []
+    def review(brief):
+        reviewed.append(brief.model_dump())
+        if not accept_final or brief.items[0].text != 'The source reports revenue of 12.':
+            return {0: ['Preserve the source attribution.']}
+        return {}
+    def run():
+        return generate_with_item_repair(replies, [dict(role='system', content='Use only the literal source.')],
+            result=result, excerpts={1: source}, topics=[], source_context={}, semantic_validator=review)
+    if accept_final:
+        final = run()
+        assert final.items[0].text == 'The source reports revenue of 12.'
+        assert final.items[1].model_dump() == original['items'][1]
+        assert audited(result)['post_source_meaning_correction']['status'] == 'accepted'
+    else:
+        with pytest.raises(ValueError, match='source attribution'):
+            run()
+    assert len(replies.calls) == 4
+    assert replies.calls[2][1] == {'item_0'}
+    assert any(row['items'][0]['label'] == 'Revenue context' for row in reviewed)
 
 
 @pytest.mark.parametrize('mutation', ['truncated', 'wrong_key', 'unknown_field', 'quote_limit'])
