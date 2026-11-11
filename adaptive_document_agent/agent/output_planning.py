@@ -33,8 +33,19 @@ def plan_outputs(
         except Exception as exc:
             return None, exc
 
-    from .retained_analysis import can_reuse, select_retained_analysis
+    from .retained_analysis import can_reuse, select_retained_analysis, selected_record, fingerprint, selection_context
     if gateway is not None and can_reuse(gateway, result):
+        record = selected_record(result)
+        if record and record.get('input_fingerprint') == fingerprint(selection_context(result)):
+            from .retained_analysis import RetainedAnalysisSelection, _validate_selection
+            from .retained_page_sources import validate_authored_pages
+            context = selection_context(result)
+            selection = RetainedAnalysisSelection.model_validate(record['selection'])
+            _validate_selection(selection, context)
+            if record.get('source_authoring'):
+                validate_authored_pages(selection, context, result)
+            notify('Rechecking the retained report selection before presentation compilation')
+            return result.report_plan, None, None
         notify('Planning report from validated analysis findings')
         report_plan = report()
         result.report_plan = report_plan

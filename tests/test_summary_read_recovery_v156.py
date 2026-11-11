@@ -89,7 +89,7 @@ def test_successful_batches_survive_another_batch_failure_and_are_revalidated(tm
     monkeypatch.setattr(reader, 'reading_batches', lambda supplied: [[b] for b in supplied])
     first, second = [reading(result, [b]) for b in blocks]
     malformed = second.model_dump_json().replace('"quote_start_line":', 'quote_start_line":', 1)
-    client = MockLLMClient([first.model_dump_json(), malformed, '{invalid'])
+    client = MockLLMClient([first.model_dump_json(), malformed, '{invalid', '{invalid', '{invalid'])
     real = LLMGateway(client, gateway(local=True).settings, cache=DiskCache(tmp_path))
     def review():
         return SummaryReview(document_id=result.document.document_id, document_sha256=result.document.sha256,
@@ -101,13 +101,35 @@ def test_successful_batches_survive_another_batch_failure_and_are_revalidated(tm
     resumed = review()
     read_summary(real, result, resumed)
     assert resumed.read_audits[0]['validated_batch_cache'] is True
-    assert len(client.calls) == 4  # Only the previously failed batch needs a new request.
+    assert len(client.calls) == 6  # Initial + bounded source reread failed; only that batch is retried.
     assert len(resumed.parts) == len(first.parts) + len(second.parts)
     # Same SHA is insufficient: current source evidence is always rechecked.
     result.document.pages[0].text = result.document.pages[0].text.replace('Cedar', 'Other')
     from adaptive_document_agent.agent.summary_read_cache import cached_reading, reading_cache_key
     key = reading_cache_key(real, result, [blocks[0]], reader._RULES)
     assert cached_reading(real, key, result, [blocks[0]]) is None
+
+
+@pytest.mark.parametrize('persistent', [False, True])
+def test_failed_structure_repair_uses_only_existing_final_source_read_slot(persistent):
+    result, blocks, valid, client, real = setup()
+    malformed = valid.model_dump(mode='json')
+    malformed['parts'].append(malformed['parts'][1]['facts'][0])
+    bad = json.dumps(malformed)
+    client.responses.clear()
+    client.responses.extend([bad, valid.model_dump_json(),
+        *([bad, valid.model_dump_json()] if persistent else [valid.model_dump_json()])])
+    outcome = _read_batch(real, result, blocks, Event())
+    assert len(outcome.audit['attempts']) == 2
+    assert outcome.audit['attempts'][0]['source_reread_requested'] is True
+    assert len(client.calls) == (4 if persistent else 3)
+    if persistent:
+        assert outcome.error is not None and outcome.parts == []
+    else:
+        assert outcome.error is None
+        assert outcome.audit['attempts'][1]['errors'] == []
+        assert all(f.source_quote in p.source_text for p in outcome.parts for f in p.facts)
+        assert 'Re-read the SAME original numbered source blocks' in str(client.calls[-1])
 
 
 def test_format_fingerprint_preserves_string_punctuation_and_scalar_types():

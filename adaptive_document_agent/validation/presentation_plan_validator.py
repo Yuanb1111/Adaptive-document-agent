@@ -16,8 +16,11 @@ class PresentationPlanValidator:
         errors: list[str] = []
         from adaptive_document_agent.services.presentation_evidence import calculation_catalog
         from .narrative_plan_validator import validate_narrative_plan
-        from adaptive_document_agent.agent.retained_page_sources import retained_context_citations
+        from adaptive_document_agent.agent.retained_page_sources import (
+            retained_context_citations, retained_context_dates, retained_context_day_counts)
         qualitative_pages = retained_context_citations(result)
+        qualitative_dates = retained_context_dates(result, checked_citations=qualitative_pages)
+        qualitative_day_counts = retained_context_day_counts(result, checked_citations=qualitative_pages)
         calculations = calculation_catalog(result.observations) if any(s.calculation_ids for s in plan.slides) else {}
         errors.extend(validate_narrative_plan(plan, result, calculations, qualitative_pages=qualitative_pages))
         slide_ids = [slide.id for slide in plan.slides]
@@ -208,13 +211,18 @@ class PresentationPlanValidator:
             # "Net declined" does not name a measure and can conceal a loss
             # claim. Never allow the phrase to pass simply because another
             # metric on the slide has a supported downward trend.
-            for text in (slide.title, slide.message, *slide.bullets):
-                if re.search(r"(?i)\bnet\s+(?:declined|decreased|increased|rose|fell|grew|widened|narrowed)\b", text):
-                    errors.append(f"slide {slide.id} contains an incomplete net movement claim")
             observation_ids = {
                 *slide.observation_ids,
                 *(identifier for block in slide.visual_blocks for identifier in block.observation_ids),
             }
+            from .presentation_metric_binding import mask_metric_labels, source_label_forms
+            labels = {oid: list(source_label_forms(observation_by_id[oid].metric_original))
+                      for oid in observation_ids if oid in observation_by_id
+                      and len(re.findall(r'\w+', observation_by_id[oid].metric_original)) > 1}
+            for text in (slide.title, slide.message, *slide.bullets):
+                predicate_text = mask_metric_labels(text, labels)
+                if re.search(r"(?i)\bnet\s+(?:declined|decreased|increased|rose|fell|grew|widened|narrowed)\b", predicate_text):
+                    errors.append(f"slide {slide.id} contains an incomplete net movement claim")
             insight_ids = {
                 *slide.insight_ids,
                 *(identifier for block in slide.visual_blocks for identifier in block.insight_ids),
@@ -385,6 +393,9 @@ class PresentationPlanValidator:
                 # a grouped amount followed by a year ("341,055 2023") into
                 # one false numeric token and hide the supported year.
                 allowed_numbers = set().union(*(self._numbers(part) for part in allowed_text_parts))
+                for identifier in insight_ids:
+                    for context_date in qualitative_dates.get(identifier, ()):
+                        allowed_numbers.update(self._numbers(context_date))
                 for cid in slide.calculation_ids:
                     if cid in calculations:
                         calc = calculations[cid]
@@ -417,6 +428,9 @@ class PresentationPlanValidator:
                 from .flow_date_notation import normalize_bound_flow_dates
                 fields = (slide.title, copies.get(slide.message, slide.message), slide.analytical_question,
                           reason, *(copies.get(b, b) for b in slide.bullets), *block_titles)
+                from adaptive_document_agent.services.source_day_count import mask_day_count_conventions
+                conventions = set().union(*(qualitative_day_counts.get(iid, set()) for iid in insight_ids))
+                fields = tuple(mask_day_count_conventions(field, conventions) for field in fields)
                 claimed_numbers = set().union(*(self._numbers(normalize_bound_flow_dates(
                     without_source_label_annotations(field, selected_observations), selected_observations, result))
                     for field in fields))

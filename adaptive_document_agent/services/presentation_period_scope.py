@@ -28,7 +28,10 @@ _META = {"column_role", "table_context", "section", "period_basis"}
 def _scopes_display(text, match, sources):
     """Preserve a literal source scope inside an attributed sentence."""
     prefix = re.split(r"(?<=[.!?;])\s+|\n", text[:match.start()])[-1]
-    if not _ATTRIBUTION.search(prefix):
+    suffix = re.split(r"(?<=[.!?;])\s+|\n", text[match.end():], maxsplit=1)[0]
+    # An attributed scope may precede its subject: "During the ... period,
+    # the source attributes ..." has the same literal scope as the inverse.
+    if not _ATTRIBUTION.search(prefix + ' ' + suffix):
         return True
     literal = r"\b" + r"\s+".join(re.escape(word) for word in match["scope"].split()) + r"\b"
     return not any(re.search(literal, source, re.I) for source in sources)

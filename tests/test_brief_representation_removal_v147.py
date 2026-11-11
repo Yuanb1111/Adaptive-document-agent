@@ -152,4 +152,9 @@ def test_residual_metadata_change_still_requires_fresh_independent_meaning_verdi
         with pytest.raises(ValueError, match='Independent meaning rejection'):
             generate_with_item_repair(client, [{'role': 'system', 'content': 'Use source evidence.'}], **args)
     assert client.calls == (3 if accepted else 4) and reviewed
-    assert all(not value['items'][0]['quantity_representations'] for value in reviewed)
+    # Initial review now includes the unapproved source-invalid draft so its
+    # material omissions reach the full-item patch. Approval still requires a
+    # separate review after the obsolete metadata has actually been removed.
+    assert reviewed[0]['items'] == original.model_dump(mode='json')['items']
+    assert len(reviewed) >= 2
+    assert all(not value['items'][0]['quantity_representations'] for value in reviewed[1:])

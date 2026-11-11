@@ -21,6 +21,7 @@ _REVIEW_RECEIPTS = {
     'presentation_insight_recovery', 'presentation_physical_budget_review',
     'presentation_reference_binding', 'presentation_reference_repair',
     'presentation_retained_analysis_review', 'presentation_retained_analysis_selection',
+    'retained_physical_budget_audit',
     'presentation_topic_coverage_review', 'presentation_topic_evidence_review',
     'presentation_topic_reference_map', 'presentation_topic_takeaway_repair',
     'report_audit_scope_review', 'report_localization_audit', 'source_integration_review',

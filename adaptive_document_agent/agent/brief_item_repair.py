@@ -78,6 +78,7 @@ def _item_errors(item: ExecutiveBriefItem, result: PipelineResult, excerpts: dic
 def _classify(original: dict[str, Any], result: PipelineResult, excerpts: dict[int, str], semantic_validator=None):
     locked: dict[int, ExecutiveBriefItem] = {}
     invalid: dict[int, list[str]] = {}
+    reviewable: dict[int, ExecutiveBriefItem] = {}
     seen = set()
     supported_numbers = set()
     for index, value in enumerate(original['items']):
@@ -86,6 +87,7 @@ def _classify(original: dict[str, Any], result: PipelineResult, excerpts: dict[i
         except ValidationError as exc:
             invalid[index] = [str(exc)]
             continue
+        reviewable[index] = item
         # Only literal, correctly located quotations may support the title,
         # even if this item's claim independently needs repair.
         for quote in item.evidence:
@@ -100,13 +102,17 @@ def _classify(original: dict[str, Any], result: PipelineResult, excerpts: dict[i
         else:
             locked[index] = item
             seen.add(key)
-    if semantic_validator and locked:
-        positions = list(locked)
-        meaning_errors = semantic_validator(ExecutiveBrief(title='Executive Summary', items=list(locked.values())))
+    if semantic_validator and reviewable:
+        # Source-invalid copy is unapproved but still needs its contextual
+        # omissions identified before the one full-item patch. Otherwise a
+        # missing companion amount is discovered only after quantities lock.
+        # Review the whole parseable draft so companion context stays intact.
+        positions = list(reviewable)
+        meaning_errors = semantic_validator(ExecutiveBrief(title='Executive Summary', items=list(reviewable.values())))
         for position, errors in meaning_errors.items():
             index = positions[position]
-            invalid[index] = ['Meaning review: ' + error for error in errors]
-            del locked[index]
+            invalid.setdefault(index, []).extend('Meaning review: ' + error for error in errors)
+            locked.pop(index, None)
     title_errors = []
     title = original.get('title', 'Key takeaways')
     try:
@@ -383,11 +389,23 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
          'fields (zero-based original positions), and title only when present in the response schema. '
          'Verified locked_items are immutable; never return them or a whole briefing. '
          'Keep the original lead and material counterpoints in the invalid positions. '
+         'Adding a requested companion measure must not erase an already-supported qualitative '
+         'explanation, exception or limitation in that same finding. Reconcile all earlier failed '
+         'questions against the original source together; shorten redundant metric history first. '
+         'Every calendar-date endpoint must include its source-supported four-digit year, or '
+         'belong to an explicit common year scope. Do not shorten a complete date to month/day '
+         'and leave its year implicit: later meaning-only corrections cannot add missing years. '
          'Resolve every current contextual objection in this same patch. A newly added companion '
          'measure needs its own explicit period and source-bound assurance; "those periods" does '
          'not transfer a parenthetical status from a different measure. Keep the material '
          'qualification even if you must shorten the primary explanation. For comparisons, use '
          'an evidence-supported strict direction or independently dated facts with both endpoints. '
+         'When restoring an omitted companion rate or change, retain its own definition, '
+         'population and BOTH exact source endpoints. Cite the period headers as well as the '
+         'narrative; a date attached to another metric does not date this comparison. If its '
+         'source gives only a named reporting interval, retain that literal scope and do not '
+         'invent endpoint dates. Resolve the material omission within this full-item patch '
+         'before the later meaning-only correction locks its displayed quantities and periods. '
          'Do not replace a rejected comparison with a negated inequality such as "not lower": '
          'that still asserts a comparison but does not specify increase versus equality. '
          'Preserve the literal measurement basis of every metric you compare or use to explain a change. '

@@ -260,10 +260,14 @@ def _select_retained_analysis(gateway, result):
     # earlier copy repairs must not consume that opportunity.
     priority_revisions_left = 1
     max_copy_revisions = copy_revisions_left = 2
-    earlier_page_issues = {}
+    earlier_page_issues = (feedback or {}).get('earlier_page_issues', {})
     for attempt in range(3):
         schema = SourceAuthoredAnalysisSelection if source_authoring else RetainedAnalysisSelection
-        reusing_draft = (attempt == 0 and feedback is not None and not feedback.get('source_review')
+        reusing_source_draft = (attempt == 0 and feedback is not None and feedback.get('source_review')
+                                and reviewed_priorities and feedback.get('selection_unchanged')
+                                and bool(earlier_page_issues))
+        reusing_draft = (attempt == 0 and feedback is not None
+                         and (not feedback.get('source_review') or reusing_source_draft)
                          and (not feedback['current_binding_errors'] or feedback.get('selection_unchanged')))
         if reusing_draft:
             # A structurally valid unchanged selection can repair its rejected
@@ -291,6 +295,22 @@ def _select_retained_analysis(gateway, result):
             if source_authoring:
                 # Run both checks before choosing between selection and copy repair.
                 copy_review_ids = []
+                if reusing_source_draft:
+                    # Final review accepted the selection and rejected only
+                    # specific copy. Use the existing local correction budget;
+                    # do not serialize every frozen page through the writer.
+                    copy_revisions_left -= 1
+                    revised = revise_retained_pages(gateway, result, packet, aliases, draft, earlier_page_issues)
+                    copy_review_ids = sorted(revised)
+                    draft = {**draft, 'decisions': [
+                        {**entry, 'page': revised[entry['insight_id']].model_dump(mode='json')}
+                        if entry['insight_id'] in revised else entry for entry in draft['decisions']]}
+                    for decision in selection.decisions:
+                        if decision.insight_id in revised:
+                            page = revised[decision.insight_id]
+                            decision.page = page.model_copy(update={
+                                'companion_ids': [aliases.get(ref, ref) for ref in page.companion_ids]})
+                    context_page_corrections.extend(rebind_context_evidence(selection, context, result))
                 while True:
                     failures, page_issues = [], {}
                     localizable = True
@@ -303,6 +323,7 @@ def _select_retained_analysis(gateway, result):
                             page_issues = exc.by_insight
                     try:
                         review_selection_coverage(gateway, {**context, 'reviewed_priorities': reviewed_priorities,
+                                                           'earlier_review_questions': earlier_page_issues,
                                                            'copy_validation_errors': failures,
                                                            'copy_review_ids': copy_review_ids},
                                                   selection, result)

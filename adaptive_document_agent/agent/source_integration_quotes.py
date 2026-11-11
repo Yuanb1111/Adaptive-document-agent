@@ -7,6 +7,7 @@ from adaptive_document_agent.services.source_quotes import normalize_quote
 
 
 def numbered_source_pages(pages):
+    from .source_table_cells import phrase_cell_options
     output = []
     for page in pages:
         lines = page['text'].splitlines(keepends=True)
@@ -24,7 +25,9 @@ def numbered_source_pages(pages):
             start = end
         output.append(dict(**{k: v for k, v in page.items() if k != 'text'}, lines=[
             f'{n} | {line}' for n, line in enumerate(page['text'].splitlines(), 1)],
-            evidence_reference_options=options))
+            evidence_reference_options=options,
+            table_cell_reference_options=[dict(ref=o['ref'], chars=o['characters'], preview=o['text'][:48])
+                for o in phrase_cell_options(page['page'], page['text'])]))
     return output
 
 
@@ -69,7 +72,7 @@ def _literal_parts(literal, slots):
     return None
 
 
-def bind_source_quotes(draft, pages):
+def bind_source_quotes(draft, pages, *, selected_phrase_evidence=False):
     bound = draft.model_copy(deep=True)
     for item in [*bound.decisions, *bound.additions]:
         evidence = []
@@ -98,4 +101,6 @@ def bind_source_quotes(draft, pages):
                                  f'at most {quote_limit} representative quotations fit this object.')
             evidence.extend(type(quote)(page=quote.page, text=part) for part in parts)
         item.evidence = evidence
+        from .source_table_cells import bind_table_cells
+        bind_table_cells(item, pages, selected_phrase_evidence=selected_phrase_evidence)
     return bound

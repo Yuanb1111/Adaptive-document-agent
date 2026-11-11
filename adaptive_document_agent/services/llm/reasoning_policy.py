@@ -51,15 +51,21 @@ _SIMPLE_OPERATIONS = frozenset({("presentation", "IntroductionPages"), ("report"
                               ("presentation", "IntroductionAudienceReview"),
                               ("presentation", "SummaryLayoutPages"),
                               ("presentation", "PhysicalBudgetSelection"),
+                              ("presentation", "RetainedPhysicalBudgetSelection"),
                               ("presentation", "RetainedAnalysisSelection"),
                               ("presentation", "IntroductionMeaningRevision"),
                               ("presentation", "IntroductionMeaningResolution"),
                               ("presentation", "SummaryCoverageReview"),
                               ("presentation", "PhysicalBudgetReview"),
                               ("report", "BriefClaimDirectionReview"),
-                              # Compress one owned body with locked evidence; the
-                              # independent source reviewer retains full reasoning.
-                              ("report", "SourceAdditionCopy"),
+                              # Local source patches have fixed owners, frozen siblings
+                              # and literal-reference constraints. Full independent
+                              # SourceIntegrationReview still judges every section.
+                              ("report", "ReopenedSourceAdditions"),
+                              ("report", "ReopenedSourceAdditionFormat"),
+                              # SourceAdditionCopy chooses which secondary facts
+                              # can be omitted while preserving qualifications.
+                              # Keep provider-default reasoning for that semantic task.
                               # AuditScopeDraft/AuditScopeReview/BriefMeaningReview reconcile original
                               # source ownership, not already validated copy. They
                               # retain provider-default reasoning (v212).

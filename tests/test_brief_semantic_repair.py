@@ -5,6 +5,23 @@ from adaptive_document_agent.models.executive_brief import ExecutiveBrief
 from tests.test_executive_brief import result_for, payload
 
 
+def test_initial_meaning_review_includes_source_invalid_items_before_quantities_lock():
+    from adaptive_document_agent.agent.brief_item_repair import _classify
+    source = 'Revenue was USD 12 million in 2024. The complementary rate was 75.8%.'
+    result = result_for([source])
+    brief = ExecutiveBrief.model_validate(payload('Revenue was USD 12 million in 2024.'))
+    brief.items[0].evidence[0].text = source
+    brief.items.append(brief.items[0].model_copy(update={
+        'label': 'Companion finding', 'text': 'Revenue was USD 99 million in 2024.'}))
+    def meaning(candidate):
+        assert candidate.items == brief.items
+        return {1: ['The missing complementary rate materially qualifies this conclusion.']}
+    locked, invalid, _ = _classify(brief.model_dump(mode='json'), result, {1: source}, meaning)
+    assert set(locked) == {0} and set(invalid) == {1}
+    assert any('unsupported' in reason or 'amount changes' in reason for reason in invalid[1])
+    assert invalid[1][-1] == 'Meaning review: The missing complementary rate materially qualifies this conclusion.'
+
+
 def test_rotated_quote_coordinates_keep_same_column_events_together_without_uncited_text():
     from adaptive_document_agent.agent.brief_quote_layout import quoted_layout
     source = '2028 Partner trials Start production'
@@ -45,6 +62,59 @@ def test_displayed_quantity_contract_keeps_signed_source_scale_without_conversio
     assert dict(currency='rmb', signed_coefficient='-70414', unit='thousand',
                 amount_text='RMB -70414 thousand') in contract
     assert not any(row['unit'] == 'million' for row in contract)
+
+
+@pytest.mark.parametrize('addition,retry', [
+    ('Turnover increased in the six months ended June 30, 2024.', True),
+    ('Turnover increased in the six months ended December 31, 2024.', False),
+    ('Turnover increased over six months.', False),
+    ('Turnover increased in the six months ended June 30, 2024; six units remained.', False),
+])
+def test_new_quoted_flow_period_gets_only_a_removal_retry(addition, retry):
+    from adaptive_document_agent.agent.brief_meaning_contract import check_meaning_contract
+    from adaptive_document_agent.agent.brief_audit_scope import source_audit_scope
+    source = ('Inventory was 15 at 2024-06-30. '
+              'Turnover increased in the six months ended June 30, 2024.')
+    result = result_for([source])
+    brief = ExecutiveBrief.model_validate(payload('Inventory was 15 at 2024-06-30.'))
+    brief.items[0].evidence[0].text = source
+    candidate = brief.model_copy(deep=True)
+    candidate.items[0].text += ' ' + addition
+    _, errors, feedback, recoverable = check_meaning_contract(
+        brief, candidate, [0], result=result, excerpts={1: source},
+        inventories={0: source_audit_scope(brief.items[0], result)}, periods={0: []})
+    # Exact quotation grants a retry asking for removal, never acceptance.
+    assert any('introduced new quantities' in error for error in errors)
+    assert recoverable is retry
+    assert feedback['item_0']['new_period_wording_to_remove'] == ([('', '6', '')] if retry else [])
+
+
+def test_quoted_new_period_is_removed_before_fresh_meaning_review():
+    source = ('Inventory was 15 at 2024-06-30. Management assessed NRV. '
+              'Turnover increased in the six months ended June 30, 2024.')
+    result = result_for([source])
+    brief = ExecutiveBrief.model_validate(payload('Inventory was 15 at 2024-06-30.'))
+    brief.items[0].evidence[0].text = source
+    reviewed = []
+    def meaning(value):
+        reviewed.append(value)
+        return {} if 'Management assessed NRV.' in value.items[0].text else {0: ['Keep the NRV qualification.']}
+    class Client:
+        calls = 0
+        def generate_structured(self, messages, schema, **kwargs):
+            self.calls += 1
+            text = brief.items[0].text + ' Management assessed NRV.'
+            if self.calls == 1:
+                text += ' Turnover increased in the six months ended June 30, 2024.'
+            else:
+                assert 'new_period_wording_to_remove' in str(messages)
+            return schema(item_0=dict(text=text))
+    client, audit = Client(), {}
+    corrected = correct_new_meaning_errors(client, brief, result=result, excerpts={1: source},
+        topics=[], source_context={}, evidence_catalog=None, semantic_validator=meaning, audit=audit)
+    assert client.calls == 2 and len(reviewed) == 2
+    assert corrected.items[0].text == brief.items[0].text + ' Management assessed NRV.'
+    assert audit['post_source_meaning_correction']['status'] == 'accepted'
 
 
 @pytest.mark.parametrize('invented_label', [False, True])

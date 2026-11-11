@@ -45,10 +45,14 @@ def _final_source_retry(previous):
 def retained_brief_reporting(previous, current, gateway, requested_focus=None, scope=None):
     """Return only the stages whose saved bindings still match current inputs."""
     timed_out = is_reporting_timeout(previous)
+    budget_retry = (previous is not None and previous.failed_stage == 'presentation_budget'
+                    and previous.failure_details.get('component') == 'PresentationBudget')
+    from .retained_selection_feedback import can_retry_source_review
+    source_copy_retry = previous is not None and can_retry_source_review(previous)
     if (previous is None or previous.pipeline_state != 'partial' or previous.retry_from != 'reporting'
             or ((previous.failed_stage, previous.failure_details.get('component')) not in
                 {('executive_brief', 'ExecutiveBrief'), ('source_integration', 'SourceIntegration')}
-                and not timed_out and not _final_source_retry(previous))
+                and not source_copy_retry and not budget_retry and not timed_out and not _final_source_retry(previous))
             or previous.presentation_topics is not None or not previous.presentation_plan
             or not previous.report_plan or not previous.charts or not previous.report_markdown
             or not previous.insights or not any(w.code == SELECTION_CODE for w in previous.validation_warnings)
@@ -72,6 +76,10 @@ def retained_brief_reporting(previous, current, gateway, requested_focus=None, s
                                   if w.code == 'retained_selection_coverage'),
                                 selection_issue.model_copy(deep=True)],
     })
+    if budget_retry or source_copy_retry:
+        candidate.validation_warnings.extend(w.model_copy(deep=True) for w in previous.validation_warnings
+            if w.code in {'source_integration_review', 'source_integration_unresolved',
+                          'executive_brief_review_checkpoint', 'report_audit_scope_review'})
     try:
         record = selected_record(candidate)
         context = selection_context(candidate)
@@ -96,9 +104,56 @@ def retained_brief_reporting(previous, current, gateway, requested_focus=None, s
         charts=candidate.charts)
     candidate.validation_warnings.extend(
         ReportValidator().validate(candidate.report_markdown, candidate.analysis_results).issues)
-    if previous.failed_stage == 'source_integration' or timed_out:
+    if budget_retry or source_copy_retry:
+        candidate.executive_brief = checked_published_brief(previous, candidate)
+        if candidate.executive_brief is None:
+            return None
+        if source_copy_retry:
+            from .retained_source_retry import repair_retained_source_copy
+            from adaptive_document_agent.services.llm.exceptions import LLMResponseError
+            try:
+                repair_retained_source_copy(gateway, candidate, previous)
+            except (LLMResponseError, ValueError) as exc:
+                # Keep the last complete source-bound shell when the bounded
+                # local edit fails. A partially merged selection is not a new
+                # publication checkpoint and cannot inherit any approval.
+                failed = previous.model_copy(deep=True)
+                failed.failure_details = {**failed.failure_details,
+                    'message': f'Retained publication-copy correction failed: {exc}'}
+                return failed
+    elif previous.failed_stage == 'source_integration' or timed_out:
         candidate.executive_brief = checked_integration_input(previous, candidate)
     return candidate
+
+
+def checked_published_brief(previous, current):
+    """Reuse identical source-complete published copy, never a failed draft verdict."""
+    from adaptive_document_agent.services.pipeline_completion import source_review_complete
+    from adaptive_document_agent.services.executive_brief import validate_executive_brief
+    from .source_integration_review import _fingerprint
+    if previous is not None and not (previous.profile.source_coverage
+            and previous.profile.source_coverage.checks_by_review_id()):
+        return checked_integration_input(previous, current)
+    brief = previous.executive_brief if previous is not None else None
+    if (brief is None or not source_review_complete(previous)
+            or current.executive_brief is not None and current.executive_brief != brief
+            or current.presentation_plan is None or previous.presentation_plan is None
+            or current.presentation_plan.company != previous.presentation_plan.company
+            or [s for s in current.presentation_plan.slides if s.slide_type != 'analysis']
+                != [s for s in previous.presentation_plan.slides if s.slide_type != 'analysis']
+            or any(getattr(previous, key) != getattr(current, key) for key in
+                   ('document', 'observations', 'analysis_plan', 'analysis_results', 'insights', 'report_plan', 'charts'))):
+        return None
+    try:
+        record = selected_record(current)
+        if (not record or record.get('input_fingerprint') != fingerprint(selection_context(current))
+                or record['selection']['ordered_insight_ids'] != selected_record(previous)['selection']['ordered_insight_ids']
+                or _fingerprint(previous, brief) != _fingerprint(current, brief)
+                or validate_executive_brief(brief, current)):
+            return None
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return None
+    return brief.model_copy(deep=True)
 
 
 def checked_integration_input(previous, current):

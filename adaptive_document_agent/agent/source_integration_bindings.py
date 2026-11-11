@@ -15,8 +15,18 @@ MERGED_BRIEF_INSTRUCTIONS = (
     'An include decision must bind an addition; an addition is not missing merely because '
     'its index is at or above original_brief_item_count. A covered decision binds an original '
     'item. resolved_source_bindings supplies the already validated addresses for each section. '
-    'These addresses establish only which text to inspect, never semantic approval: independently '
+    'These addresses establish only which text to inspect, never semantic approval. '
+    'audience_text includes the published label, body and comparison_table cells. The table is '
+    'visible audience copy, not private evidence or a footnote. Review its complete rows alongside '
+    'the body; a material qualification present there is not omitted merely because it is absent '
+    'from the body paragraph. Still reject incomplete or ambiguous conditions, wrong attribution '
+    'or unsupported scope, and check the cells against their own source quotations. Independently '
     'assess material coverage of each section against the pages enumerated in its check.pages. '
+    'This is a concise briefing, not an exhaustive inventory of each checked page. Reject an '
+    'omission when it changes interpretation of an actual conclusion or the assessment of a '
+    'material source issue; explain that effect. Do not require every contextual number or '
+    'routine detail merely because it appears nearby. Material assumptions, counterevidence '
+    'and the stated basis of a qualified judgment still need faithful audience coverage. '
     'Require every material qualification on those pages. When judging an omission, identify the '
     'section page that supplies it. Other pages quoted by the original brief can explain existing '
     'claims but do not enlarge the chosen section range or require new conclusions from those pages. '
@@ -35,12 +45,14 @@ MERGED_BRIEF_INSTRUCTIONS = (
 def merged_review_context(context: dict, draft: SourceIntegrationDraft, merged: ExecutiveBrief) -> dict:
     """Preserve full sources and content; expose exact, prevalidated index ownership."""
     review = deepcopy(context)
+    from adaptive_document_agent.models.executive_brief import brief_claim_text
     original = review.pop('current_brief')
     original_count = len(original['items'])
     review.update(original_brief=original, original_brief_item_count=original_count,
         merged_brief_title=merged.title,
         merged_brief_items=[dict(index=index,
             origin='original' if index < original_count else 'addition',
+            audience_text=brief_claim_text(item),
             item=item.model_dump(mode='json')) for index, item in enumerate(merged.items)],
         resolved_source_bindings=[dict(section_id=decision.section_id,
             disposition=decision.disposition,

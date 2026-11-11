@@ -233,8 +233,16 @@ def prepare_presentation_claims(result: PipelineResult, plan: PresentationPlan |
     definitions = ratio_definitions(result)
     notes, replacements, restored_titles = [*closing_notes, *composition_notes], {}, defaultdict(set)
     restored_labels = defaultdict(set)
+    from adaptive_document_agent.agent.retained_page_sources import bound_authored_slide_ids
+    source_authored = bound_authored_slide_ids(result, plan)
     for slide in plan.slides:
         if slide.slide_type != "analysis":
+            continue
+        if slide.id in source_authored:
+            # Do not silently delete model-authored source qualifications merely
+            # because their prose-only proportions have no chart share rows.
+            # Exact source/numeric bindings and final semantic review remain
+            # required; this preservation grants no share or ranking verdict.
             continue
         # Cached plans may have been narrowed by the old one-subject / Total-only
         # check. Reconsider only that exact repair, using the retained model claim

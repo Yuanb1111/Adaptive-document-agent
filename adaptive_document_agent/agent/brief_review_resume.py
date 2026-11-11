@@ -35,7 +35,8 @@ def resume_brief_review(gateway, result, *, cancelled=None):
             if complete_rejection:
                 from .brief_retry_feedback import current_feedback
                 feedback = current_feedback(result)
-                if feedback and feedback.get('rejected_strategy') == 'unchanged-rejected-brief-text-correction':
+                if feedback and (feedback.get('rejected_strategy') == 'unchanged-rejected-brief-text-correction'
+                                 or feedback.get('source_correction_required')):
                     # A text-only edit cannot add new quoted endpoints. On an
                     # explicit retry let the source-bound item repair pick
                     # evidence, then require independent review of that draft.

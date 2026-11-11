@@ -62,6 +62,46 @@ def test_unbound_percentage_repair_feedback_identifies_the_offending_claim():
     assert any('Unbound percentage claim: 3%' in message for message in diagnostics)
 
 
+@pytest.mark.parametrize('mutation', [None, 'missing_quote', 'wrong_date', 'extra_amount'])
+def test_literal_context_date_supports_an_event_without_licensing_prose_amounts(mutation):
+    from adaptive_document_agent.agent.retained_page_sources import RetainedPage, page_bindings
+    result = _linked_result()
+    source = 'As of October 31, 2028, most balances had been settled. The amount was RMB987654321 thousand.'
+    result.document.pages[0].text += '\n' + source
+    context = retained.selection_context(result, source_authoring=True)
+    insight, primary, _ = next(iter(retained.findings(result, allow_new_copy=True).values()))
+    date = '2028-10-30' if mutation == 'wrong_date' else '2028-10-31'
+    page = RetainedPage(title='Revenue', message=f'The source reports subsequent settlement as of {date}.',
+        context_evidence=[] if mutation == 'missing_quote' else [dict(page=234, text=source)])
+    if mutation == 'extra_amount':
+        page.message += ' The amount was RMB987654321 thousand.'
+    if mutation:
+        with pytest.raises(ValueError, match='outside its bound evidence'):
+            page_bindings(page, insight, primary, context, result)
+    else:
+        assert page_bindings(page, insight, primary, context, result)[2] == primary
+
+
+@pytest.mark.parametrize('extra_amount', [False, True])
+def test_quoted_qualitative_effect_does_not_require_a_new_numeric_comparison(extra_amount):
+    from adaptive_document_agent.agent.retained_page_sources import RetainedPage, page_bindings
+    result = _linked_result()
+    source = ('The company says material stocking lengthened the collection cycle. '
+              'The related amount was RMB987654321 thousand.')
+    result.document.pages[0].text += '\n' + source
+    context = retained.selection_context(result, source_authoring=True)
+    insight, primary, _ = next(iter(retained.findings(result, allow_new_copy=True).values()))
+    page = RetainedPage(title='Revenue',
+        message='The company attributes a longer collection cycle to material stocking.',
+        context_evidence=[dict(page=234, text=source)])
+    if extra_amount:
+        page.message += ' The related amount was RMB987654321 thousand.'
+        with pytest.raises(ValueError, match='outside its bound evidence'):
+            page_bindings(page, insight, primary, context, result)
+    else:
+        assert page_bindings(page, insight, primary, context, result)[2] == primary
+
+
 def test_positioned_source_can_restore_a_finding_without_publishing_its_rejected_copy():
     result = _linked_result()
     page = result.document.pages[0]

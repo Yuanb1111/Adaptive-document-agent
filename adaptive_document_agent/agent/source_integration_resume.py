@@ -25,11 +25,15 @@ def rejected_matching_proposal(previous, retained):
     return False
 
 
-def editable_rejected_sections(draft, verdicts, original_count):
+def editable_rejected_sections(draft, verdicts, original_count, *, allow_full_capacity=False):
     """A partial rejection is editable only within its own existing additions."""
     rejected = {sid for sid, verdict in verdicts.items() if not verdict.accepted}
-    if not rejected or rejected == set(verdicts):
+    if not rejected:
         return []
+    if rejected == set(verdicts) and (
+            not allow_full_capacity or len(draft.additions) < min(4, 7 - original_count)
+            or any(d.disposition != 'include' for d in draft.decisions)):
+        return []  # Unused capacity or omitted sections still need full planning.
     owners = {d.section_id: {i for i in d.brief_item_indexes if i >= original_count}
               for d in draft.decisions}
     if any(not owners.get(sid) for sid in rejected):
@@ -66,7 +70,7 @@ def rejected_addition_sections(previous, retained, checks, original_count):
             verdicts = {v.section_id: v for v in review.verdicts}
             if len(verdicts) != len(review.verdicts) or set(verdicts) != set(checks):
                 return None
-            sections = editable_rejected_sections(retained, verdicts, original_count)
+            sections = editable_rejected_sections(retained, verdicts, original_count, allow_full_capacity=True)
             return (verdicts, sections) if sections else None
     except (ValueError, KeyError, TypeError, AttributeError):
         return None

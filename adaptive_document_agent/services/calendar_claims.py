@@ -20,6 +20,24 @@ _DATES = re.compile(
     r'|(?P<cn_month>1[0-2]|[1-9])\s*月\s*(?P<cn_day>3[01]|[12]\d|[1-9])\s*日')
 
 
+def literal_calendar_dates(text: str) -> set[str]:
+    """Extract complete literal calendar coordinates, without expanding period labels."""
+    dates = set()
+    for match in _ISO_PERIOD.finditer(text):
+        try:
+            dates.add(date.fromisoformat(match[0]).isoformat())
+        except ValueError:
+            pass
+    for match in _DATED_PERIOD.finditer(text):
+        try:
+            dates.add(date(int(match['year']),
+                _MONTH_NUMBER[(match['month'] or match['month_last']).casefold()],
+                int(match['day'] or match['day_first'])).isoformat())
+        except ValueError:
+            pass
+    return dates
+
+
 def bound_period_dates(text, periods, *, mask=False):
     """Normalize complete dates only if the exact date is a selected source period."""
     owners = set(periods)

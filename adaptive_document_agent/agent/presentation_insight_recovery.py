@@ -36,7 +36,8 @@ def _chart_cagr_values(clause, reported, calculations):
             and [c['periods'][0], c['periods'][-1]] == [start, end]]
 
 
-def _numeric_support(text, observations, computed_percentages=(), *, diagnostics=None):
+def _numeric_support(text, observations, computed_percentages=(), *, diagnostics=None, context_dates=(),
+                     context_day_counts=()):
     """Ground existing prose in source values and deterministic derived values.
 
     This does not write findings or infer relationships. Currency amounts can
@@ -130,7 +131,9 @@ def _numeric_support(text, observations, computed_percentages=(), *, diagnostics
     for start, end in spans:
         masked[start:end] = " " * (end - start)
     exact_values = {abs(float(token.rstrip("%"))) for token in source_numbers}
-    bare = bound_period_dates("".join(masked), (o.period for o in observations), mask=True)
+    from adaptive_document_agent.services.source_day_count import mask_day_count_conventions
+    bare = bound_period_dates(mask_day_count_conventions("".join(masked), context_day_counts),
+        [*(o.period for o in observations), *context_dates], mask=True)
     if bare is None:
         if diagnostics is not None:
             diagnostics.append('A calendar date is outside the bound periods. Use these exact labels, '

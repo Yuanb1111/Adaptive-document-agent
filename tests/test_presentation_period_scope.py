@@ -66,13 +66,16 @@ def test_same_full_series_does_not_narrow_valid_original_copy():
 
 
 @pytest.mark.parametrize("cited_scope", [True, False])
-def test_display_scope_does_not_replace_attributed_literal_source_scope(cited_scope):
+@pytest.mark.parametrize("scope_first", [True, False])
+def test_display_scope_does_not_replace_attributed_literal_source_scope(cited_scope, scope_first):
     result = _sample()
     result.document.pages = [DocumentPage(page_number=10, text=(
         "Defects increased during the Track Record Period as production expanded." if cited_scope else
         "The source discusses defects and production."))]
     slide = result.presentation_plan.slides[0]
     attribution = "The filing cites higher production in explaining defects during the Track Record Period."
+    if scope_first:
+        attribution = 'During the Track Record Period, the filing cites higher production in explaining defects.'
     slide.message = attribution
     assert prepare_presentation_period_scope(result) == ["movements"]
     assert "over FY2021–FY2023" in slide.title

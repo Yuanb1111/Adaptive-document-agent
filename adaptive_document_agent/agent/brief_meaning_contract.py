@@ -4,7 +4,9 @@ from adaptive_document_agent.services.brief_table_evidence import canonical_quan
 from .brief_audit_scope import (
     AUDIT_STATUS_SCOPE_RULE, audit_status_errors, audit_status_options, misplaced_parenthetical_statuses,
 )
-from .brief_period_clarification import original_period_identities, quantity_text_with_bound_dates
+from .brief_period_clarification import (
+    original_period_identities, quantity_text_with_bound_dates, without_quoted_flow_periods,
+)
 
 
 def displayed_quantity_contract(item):
@@ -50,7 +52,11 @@ def check_meaning_contract(original, candidate, indices, *, result, excerpts, in
             context = quoted_table_context(before, result, excerpts=excerpts)
             quoted = set(context.quantities) | {('', value, '%') for value in context.percentages}
             quoted.update(canonical_quantity(*q) for quote in before.evidence for q in _quantities(quote.text))
-            recoverable &= all((currency or unit) and quantity in quoted
+            without_periods = without_quoted_flow_periods(checked_text, before, result, inventories[index])
+            outside_periods = {canonical_quantity(*q) for q in _quantities(without_periods)}
+            outside_periods.update(canonical_quantity(*q) for q in _quantities(item.label))
+            period_only = introduced - outside_periods
+            recoverable &= all(quantity in period_only or ((currency or unit) and quantity in quoted)
                                for quantity in introduced for currency, _, unit in [quantity])
         statuses = audit_status_errors(item, result, inventory=inventories[index],
             bindings=(assurance_bindings or {}).get(index))
@@ -73,6 +79,7 @@ def check_meaning_contract(original, candidate, indices, *, result, excerpts, in
             feedback[f'item_{index}'] = {'errors': item_errors,
                 'permitted_quantities': sorted(permitted),
                 'new_table_quantities_to_remove': sorted(introduced),
+                'new_period_wording_to_remove': sorted(period_only) if introduced else [],
                 'period_clarifications': periods[index],
                 'source_status_options': audit_status_options(item, result, inventory=inventories[index]),
                 'source_status_scope_rule': AUDIT_STATUS_SCOPE_RULE,

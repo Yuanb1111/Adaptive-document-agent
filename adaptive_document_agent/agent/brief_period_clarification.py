@@ -80,6 +80,34 @@ def _standalone_period(match):
             and (match.end() == len(text) or not text[match.end()].isalnum()))
 
 
+def without_quoted_flow_periods(text, item, result, inventory):
+    """Identify a quoted new period for removal feedback, never for acceptance.
+
+    A meaning patch cannot add this period. Recognizing its exact source identity
+    only permits the existing bounded contract retry to remove the new wording.
+    """
+    # A newly added reporting year or a changed original flow duration remains
+    # terminal. This removal retry concerns only a companion flow attached to
+    # an already displayed standalone closing date, as in an inventory finding.
+    displayed = set()
+    for match in _PERIOD.finditer(item.text):
+        if not match['flow'] and not match['label'] and _standalone_period(match):
+            try:
+                displayed.add(date.fromisoformat(match[0]) if match['iso'] else _calendar_date(match[0]))
+            except ValueError:
+                pass
+    closings = {day.isoformat() for day in displayed if day is not None}
+    source = {_flow_identity(match) for quote in item.evidence
+              for match in _PERIOD.finditer(' '.join(quote.text.split()))
+              if match['flow'] and _standalone_period(match)}
+    from .brief_period_geometry import quoted_table_period_identities
+    source.update(quoted_table_period_identities(item, result, inventory))
+    source.discard(None)
+    return _PERIOD.sub(lambda match: ' ' if (_standalone_period(match)
+        and (identity := _flow_identity(match)) in source
+        and identity[1] in closings) else match[0], text)
+
+
 def original_period_identities(item, inventory, *, result=None):
     """Bind aliases of displayed periods, without making duration a free quantity.
 

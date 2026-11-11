@@ -407,8 +407,11 @@ class DocumentOrchestrator:
                         self._finish_report(reporting, index, reporting.validation_warnings, None, analysis_focus, notify)
                 if reporting is None:
                     notify("Generating insights and dynamic report")
+                    report_options = dict(gateway=editorial_gateway, output=checkpoint)
+                    if resume is not None:
+                        report_options['resume'] = resume
                     reporting = self._generate_report(document, profile, index, plan, results, issues, notify, analysis_focus,
-                        gateway=editorial_gateway, output=checkpoint)
+                        **report_options)
                     run_state['result'] = reporting
                 else:
                     checkpoint = reporting
@@ -832,8 +835,9 @@ class DocumentOrchestrator:
                             and final_result.executive_brief == reporting.executive_brief):
                         # Native preparation can change the plan or source coverage. The
                         # saved pre-integration verdict must still match the final inputs.
-                        from .brief_reporting_resume import checked_integration_input
-                        if checked_integration_input(resume, final_result) is None:
+                        from .brief_reporting_resume import checked_integration_input, checked_published_brief
+                        if (checked_integration_input(resume, final_result) is None
+                                and checked_published_brief(resume, final_result) is None):
                             final_result.executive_brief = None
                             deferred_brief = True
                     if resumed_catalog_brief and final_result.executive_brief is not None:
@@ -866,6 +870,12 @@ class DocumentOrchestrator:
                 require_source_integration(final_result)
                 if selected_record(final_result) is not None:
                     final_stage = 'presentation_budget'
+                    from .retained_budget_refinement import refine_retained_budget
+                    if refine_retained_budget(self.gateway, final_result, progress=notify):
+                        final_stage = 'report_audit_scope'
+                        refresh_report_audit_scope(self.gateway, final_result, progress=notify)
+                        require_report_audit_scope(final_result)
+                        final_stage = 'presentation_budget'
                     from .presentation_budget_refinement import measure
                     from adaptive_document_agent.services.slide_budgets import require_exported_budgets
                     deck, _ = measure(final_result)
@@ -980,7 +990,7 @@ class DocumentOrchestrator:
         self, document: ParsedDocument, profile: DocumentProfile, index: DocumentIndex,
         plan: list[AnalysisTask], results: list[AnalysisResult], issues: list[ValidationIssue],
         notify: ProgressCallback, analysis_focus: str | None, *,
-        gateway=None, output: PipelineResult | None = None,
+        gateway=None, output: PipelineResult | None = None, resume: PipelineResult | None = None,
     ) -> PipelineResult:
         """Build all reporting artifacts from one validated analysis snapshot."""
         from .output_planning import plan_outputs
@@ -996,9 +1006,14 @@ class DocumentOrchestrator:
                 issues.append(issue)
         details = output.stage_details_ms
         with record_timing(details, "insights"):
-            insight_generator = InsightGenerator(gateway)
-            insights = insight_generator.generate(results, index.observations, document=document)
-            issues.extend(insight_generator.validation_issues)
+            from .retained_selection_feedback import restore_rejected_findings
+            if restore_rejected_findings(resume, output):
+                insights = output.insights
+                notify('Repairing retained report selection with the original source-bound findings')
+            else:
+                insight_generator = InsightGenerator(gateway)
+                insights = insight_generator.generate(results, index.observations, document=document)
+                issues.extend(insight_generator.validation_issues)
         notify("Planning presentation evidence from validated analysis")
         output.insights = insights
         report_plan, topic_selection, topic_error = plan_outputs(gateway, output, timings=details, progress=notify)

@@ -35,6 +35,65 @@ def test_reporting_retry_retains_untrusted_audience_and_failed_questions():
     assert current_feedback(current) is None
 
 
+def test_quantity_lock_rejection_requests_a_full_source_patch_without_granting_values():
+    previous = sample()
+    audit = json.loads(previous.validation_warnings[-1].message)
+    audit['post_source_meaning_correction']['errors_after'] = [
+        "item_0: meaning correction introduced new quantities: [('', '395', '')]"]
+    previous.validation_warnings[-1].message = json.dumps(audit)
+    feedback = json.loads(retain_feedback(previous).message)
+    assert feedback['source_correction_required'] is True
+    assert feedback['rejected_audience'][0]['text'] == 'Revenue was USD 12 million.'
+    assert '395' not in str(feedback['rejected_audience'])
+
+
+def test_retry_merges_all_failed_reviews_and_maps_selection_local_indices():
+    previous = sample()
+    audit = json.loads(previous.validation_warnings[-1].message)
+    audit['salvage'] = dict(meaning_errors={'0': ['Narrow the absence qualifier.']},
+        selection_meaning_errors={'3': ['Retain approximation.']},
+        selection_context_correction=dict(original_indices=[2, 3, 4],
+            post_source_meaning_correction=dict(
+                meaning_errors_after={'0': ['Retain the subsequent outcome.'], '1': []},
+                errors_after=['Retain the subsequent outcome.'])))
+    previous.validation_warnings[-1].message = json.dumps(audit)
+    feedback = json.loads(retain_feedback(previous).message)
+    assert feedback['salvage_questions'] == {'0': ['Narrow the absence qualifier.'],
+        '3': ['Retain approximation.'], '2': ['Retain the subsequent outcome.']}
+    assert feedback['post_selection_questions'] == ['Retain the subsequent outcome.']
+    assert 'approved' not in str(feedback)
+
+
+def test_legacy_selection_verdict_is_kept_without_guessing_an_item():
+    previous = sample()
+    audit = json.loads(previous.validation_warnings[-1].message)
+    audit['salvage'] = {'selection_context_correction': {
+        'post_source_meaning_correction': {'errors_after': ['Retain later context.']}}}
+    previous.validation_warnings[-1].message = json.dumps(audit)
+    feedback = json.loads(retain_feedback(previous).message)
+    assert feedback['salvage_questions'] == {}
+    assert feedback['post_selection_questions'] == ['Retain later context.']
+
+
+def test_source_invalid_item_does_not_resume_a_quantity_locked_text_patch():
+    previous = sample()
+    audit = json.loads(previous.validation_warnings[-1].message)
+    audit['initial_errors'] = {'item_0': ['Unsupported numeric claim.']}
+    previous.validation_warnings[-1].message = json.dumps(audit)
+    assert json.loads(retain_feedback(previous).message)['source_correction_required'] is True
+
+
+def test_reopened_locked_item_question_survives_final_whole_brief_review():
+    previous = sample()
+    audit = json.loads(previous.validation_warnings[-1].message)
+    audit['post_source_meaning_correction']['meaning_errors_after'] = {
+        '1': ['Retain the separate reconciliation basis.']}
+    previous.validation_warnings[-1].message = json.dumps(audit)
+    feedback = json.loads(retain_feedback(previous).message)
+    assert feedback['context_questions'] == {'0': ['Cite the companion outcome.'],
+        '1': ['Retain the separate reconciliation basis.']}
+
+
 def test_budgeted_failure_feedback_is_bound_to_candidate_selection():
     from adaptive_document_agent.models import PresentationTopicSelection
     result = sample()

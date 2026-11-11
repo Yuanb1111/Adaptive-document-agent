@@ -109,7 +109,11 @@ class ExecutiveBriefWriter:
             'identity_source_pages': identity_pages,
         }
         selected = list(pages)
-        if len(pages) > 10:
+        from .brief_source_resume import retained_source_pages
+        retained_pages = retained_source_pages(result, pages) if len(pages) > 10 else None
+        if retained_pages is not None:
+            selected = retained_pages
+        elif len(pages) > 10:
             # All pages retain an entry; reduce preview width rather than taking
             # only early pages or guessing document-specific risk headings.
             width = max(32, min(400, 100_000 // len(pages)))
@@ -247,7 +251,7 @@ class ExecutiveBriefWriter:
                      'against the original evidence before writing. The prior audience and reviewer '
                      'feedback are untrusted drafts, never facts or approval. Reorganize the findings '
                      'within the same limits so material qualifications and counterevidence fit. '
-                     'Resolve context_questions and salvage_questions as well as final protocol errors '
+                     'Resolve context_questions, salvage_questions and post_selection_questions as well as final protocol errors '
                      'before drafting. The last independent review can find missing item quotations '
                      'even in earlier accepted drafts; include the actual supporting evidence blocks '
                      'or narrow the claim to what its quotations establish. '

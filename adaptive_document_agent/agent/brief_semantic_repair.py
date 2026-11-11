@@ -83,6 +83,11 @@ def correct_new_meaning_errors(gateway, brief, *, result, excerpts, topics, sour
         'direction, amount or assurance in that label consistently with the source-checked body. '
         'If a label combines distinct comparisons, replace it with a short subject label. '
         'Keep each supported outcome and its own measure in the body. '
+        'Retain the exact named population in every source explanation, including when compressing '
+        'copy. Do not replace a specific sector or participant category with an unqualified '
+        '"industry", "companies" or "distributors" that broadens the source claim. '
+        'Use separately named clauses for independent measures and amounts; do not slash-combine '
+        'their names or values. Reserve slashes for genuine source-defined unit denominators. '
         'Read earlier_review_questions for the same item alongside the current errors. Preserve '
         'source-supported repairs already made. If reconciliation items changed between periods, '
         'explain which changed and in what direction using the quoted evidence. '
@@ -116,6 +121,9 @@ def correct_new_meaning_errors(gateway, brief, *, result, excerpts, topics, sour
         'For date/status clauses, also return assurance_bindings selecting exact IDs from '
         'source_assurance_catalog. Each claim is the literal body clause including the measure, '
         'date and status; source_refs must cover every measure qualified by that clause. '
+        'Select only catalog entries whose status matches the declared status. A comparison '
+        'may also mention an unmarked counterpart: do not include its unknown-status entry '
+        'in the assurance binding for the separately qualified endpoint. '
         'Unknown cannot lend a status. These choices pass exact source checks and a fresh '
         'independent semantic review; your bindings grant no approval. '
         'Do not put a status in a parenthesis after one period while explaining a different '
@@ -166,7 +174,9 @@ def correct_new_meaning_errors(gateway, brief, *, result, excerpts, topics, sour
             proposed = gateway.generate_structured(messages, schema, stage='report', allow_repair=False,
                                                    max_tokens=12000, cancelled=cancelled)
         except LLMStructuredOutputError as exc:
+            from .brief_patch_capacity import copy_character_counts
             detail = {'attempt': attempt + 1, 'raw_response': exc.response.text,
+                      'copy_character_counts': copy_character_counts(exc.response.text),
                       'validation_detail': str(exc.__cause__ or exc)}
             record.setdefault('protocol_failures', []).append(detail)
             if attempt or (exc.response.usage and exc.response.usage.finish_reason == 'length'):
@@ -176,6 +186,12 @@ def correct_new_meaning_errors(gateway, brief, *, result, excerpts, topics, sour
                  'meaning patch, using the SAME source. Return exact item_N keys from the schema, concise '
                  'complete text within 550 characters and optional label within 60. Preserve '
                  'the corrected meaning, signs, native quantities and all material qualifications. '
+                 'copy_character_counts gives the current measured length and required reduction '
+                 'to a 400-character target. Remove redundant historical figures and repeated '
+                 'introductions before shortening the newly required qualifications. Secondary '
+                 'existing quantities may be omitted when they are not necessary to interpret the '
+                 'primary outcome; do not add or rescale values. Keep the original literal timing '
+                 'of a source explanation even when shortening other metric history. '
                  'The limit counts characters, not words. Aim under 420 characters. If several '
                  'measures share verified periods/status, introduce an explicit EACH-measure scope '
                  'and state their named pairs without repeating the full dates. Use independently '
@@ -212,8 +228,13 @@ def correct_new_meaning_errors(gateway, brief, *, result, excerpts, topics, sour
                 {'role': 'user', 'content': 'Correct ONLY the listed source-contract violations in the '
                  'current item texts. Remove newly enumerated table amounts; being present in the source '
                  'does not permit adding them to this meaning-only patch. Keep the already displayed '
-                 'figures and permitted period clarifications. Move an ambiguous audit-status label '
-                 'directly beside its supported period; never assign a status to an unknown column. '
+                 'figures and permitted period clarifications. '
+                 'Remove new_period_wording_to_remove too: a newly spelled-out flow duration is '
+                 'not an amount and is still outside this patch\'s period lock. Retain the '
+                 'original period wording, or remove the companion change assertion if its '
+                 'own period cannot be expressed within that lock. '
+                 'Move an ambiguous audit-status label directly beside its supported period; '
+                 'never assign a status to an unknown column. '
                  'Conflicting status options across source tables do not authorize a blanket status. '
                  'Remove or narrow the unsupported assertion using only its own measure binding; '
                  'do not transfer a status from a different table with the same period. '
@@ -230,6 +251,7 @@ def correct_new_meaning_errors(gateway, brief, *, result, excerpts, topics, sour
             continue
         if not errors:
             meaning_errors = semantic_validator(corrected)
+            record['meaning_errors_after'] = meaning_errors
             errors.extend(error for reasons in meaning_errors.values() for error in reasons)
             record['reviewed_correction_indices'] = [
                 i for i in failed if i not in meaning_errors and corrected.items[i] != original.items[i]]

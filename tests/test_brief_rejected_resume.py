@@ -48,6 +48,16 @@ def test_rejected_candidate_receives_only_a_targeted_patch_and_fresh_complete_re
     assert audit['outcome'] == 'repaired' and audit['discarded_indices'] == []
 
 
+def test_new_source_values_cannot_be_fixed_by_repeating_a_text_only_resume(monkeypatch):
+    from adaptive_document_agent.agent.brief_retry_feedback import _identity
+    from adaptive_document_agent.models import ValidationIssue
+    result, _, gateway, reviewed = fixture(monkeypatch)
+    result.validation_warnings.append(ValidationIssue(code='executive_brief_retry_feedback', stage='report',
+        message=json.dumps(dict(identity=_identity(result), source_correction_required=True))))
+    assert resume_brief_review(gateway, result) is None
+    assert gateway.calls == [] and reviewed == []
+
+
 @pytest.mark.parametrize('accepted', [False, True])
 def test_resumed_pending_review_repairs_fresh_rejection_without_regenerating(monkeypatch, accepted):
     result, candidate, gateway, reviewed = fixture(monkeypatch, accepted=accepted)

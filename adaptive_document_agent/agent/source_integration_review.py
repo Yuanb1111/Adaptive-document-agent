@@ -152,7 +152,7 @@ def _retry_draft(previous, result, brief, checks, pages):
     for entry in reversed(attempts if isinstance(attempts, list) else []):
         try:
             proposal = SourceIntegrationDraft.model_validate(entry['draft'])
-            bound = bind_source_quotes(proposal, pages)
+            bound = bind_source_quotes(proposal, pages, selected_phrase_evidence=True)
             _bind_legacy_check_ids(bound, checks)
             bind_unique_inclusions(bound, checks, len(brief.items))
             _validate(bound, result, brief, checks)
@@ -256,6 +256,12 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
             'include the source lines for each stated date, condition and qualification. You may also copy '
             'a literal substring of the page, excluding line-number prefixes. '
             'Each addition needs its own evidence for its dates and units. '
+            'Keep PDF page numbers and page ranges out of audience copy; the application renders '
+            'citations from each item\'s own quotations. A requested check question is not itself '
+            'a source finding. If these excerpts do not answer it, record that bounded retrieval '
+            'limitation in decision.reason rather than opening an unrelated substantive finding '
+            'with a boilerplate absence claim. A material evidence limit must still qualify '
+            'the actual conclusion, without implying that the whole document lacks a disclosure. '
             'Leave quantity_representations empty for ordinary source '
             'amounts, including positive cost estimates. That field is ONLY for expressing an explicitly '
             'negative source coefficient as its positive absolute magnitude: quantity_text must be the '
@@ -276,6 +282,9 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
             'indicates a table exists, not that any particular amount belongs to it. Otherwise state '
             'the source-supported plan, assumption or limitation qualitatively. '
             'Preserve all original conclusions unchanged; add only material missing findings or qualifications. '
+            'When capacity permits, give distinct source findings separate concise additions instead '
+            'of packing unrelated checks into one paragraph. Several material findings from one '
+            'check can also use separate additions within the same total capacity. '
             'Compare each check.finding with the exact audience text bound to that check. Recheck its '
             'material qualifications against the pages, including timing, dependencies and limits of '
             'coverage. Carry the supported qualifications into the bound brief items themselves. '
@@ -288,6 +297,22 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
             'whole-document absence claims or boilerplate review-status text. Return at most seven merged brief items. '
             f'With {len(brief.items)} original items, use at most {maximum_additions} additions. '
             'Each added item text must be at most 550 characters including spaces; aim under 450. '
+            'If material reasons, conditions or supporting qualifications cannot fit concise prose, '
+            'use the existing comparison_table in that addition. It appears beside the body and '
+            'undergoes the same source and meaning review. Keep the central finding and attribution '
+            'in text; place the complete supporting cases or basis in 2–4 short columns and at most '
+            '8 rows. Every body cell must be a contiguous literal phrase from that item\'s own '
+            'quotes, at most 180 characters. Use separate short cells for a condition and its '
+            'scope. Use the exact @phrase references from table_cell_reference_options '
+            'for EVERY body cell, including the first column: Python restores that exact source '
+            'phrase after checking that your own evidence quotes cover it. '
+            'The directory preview is abbreviated; read the complete original source before '
+            'selecting a phrase. Python restores the full continuous phrase, never the preview. '
+            'Use descriptive column headers, not invented category labels in body cells. References grant no approval. '
+            'Choose coherent complete clauses, pairing each condition with its own scope. Do not '
+            'cut one condition across several rows or pair fragments from different conditions. '
+            'Never paraphrase cells, invent values or pack a whole paragraph into one cell. '
+            'Do not repeat all table content in prose or drop a material qualification to fit. '
             'Each decision permits at most four representative evidence quotes; additions retain '
             'their own complete evidence. Cite the entire supporting sentence: if a selected line '
             'ends before a numeric target or condition, include its continuation in that SAME item. '
@@ -315,7 +340,7 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
             if scoped_retry is None and rejected_matching_proposal(previous, retained):
                 retained = None
         if scoped_retry is not None:
-            prior_review = bind_source_quotes(retained, pages), scoped_retry[0]
+            prior_review = bind_source_quotes(retained, pages, selected_phrase_evidence=True), scoped_retry[0]
             audit['retry_rejected_sections'] = scoped_retry[1]
             audit['attempts'].append(dict(proposal_checkpoint=True, draft=retained.model_dump(mode='json'),
                 review=dict(verdicts=[v.model_dump(mode='json') for v in scoped_retry[0].values()])))
@@ -356,7 +381,7 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
                         audit_key='draft_output_attempts', token_limits=SOURCE_OUTPUT_TOKEN_LIMITS, stage='report')
                 submitted = draft.model_dump(mode='json')
                 entry['draft'] = submitted
-                draft = bind_source_quotes(draft, pages)
+                draft = bind_source_quotes(draft, pages, selected_phrase_evidence=True)
                 _bind_legacy_check_ids(draft, checks)
                 if prior_review is not None:
                     entry['preserved_sections'] = keep_accepted_dispositions(

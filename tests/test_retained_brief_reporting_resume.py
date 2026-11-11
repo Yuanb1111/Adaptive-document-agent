@@ -155,6 +155,56 @@ def approve_preintegration_input(source):
     save_checks(source, context_key(brief, context, source), brief, {0: []}, {}, context)
 
 
+def test_failed_local_source_edit_returns_complete_previous_checkpoint(monkeypatch):
+    from adaptive_document_agent.agent import retained_selection_feedback, retained_source_retry
+    source, current, reuse_gateway = checkpoint()
+    approve_preintegration_input(source)
+    source.failed_stage = 'presentation_coverage'
+    source.failure_details = dict(component='PresentationCoverage', message='Source copy requires repair.')
+    monkeypatch.setattr(retained_selection_feedback, 'can_retry_source_review', lambda _: True)
+    original = source.model_copy(deep=True)
+    def fail(_gateway, candidate, _previous):
+        candidate.presentation_plan.slides[0].title = 'Partially merged invalid copy'
+        raise ValueError('Exact source binding rejected the edit.')
+    monkeypatch.setattr(retained_source_retry, 'repair_retained_source_copy', fail)
+    failed = retained_brief_reporting(source, current, reuse_gateway)
+    assert source == original
+    assert failed.pipeline_state == 'partial' and failed.failed_stage == 'presentation_coverage'
+    assert 'Exact source binding rejected' in failed.failure_details['message']
+    assert failed.presentation_plan == source.presentation_plan
+    assert failed.executive_brief == source.executive_brief
+    assert failed.validation_warnings == source.validation_warnings
+
+
+@pytest.mark.parametrize('stale', [False, True])
+def test_physical_budget_retry_preserves_only_unchanged_source_complete_published_brief(stale):
+    from adaptive_document_agent.models.coverage import SourceCheck, SourceCoverage
+    from adaptive_document_agent.agent.source_integration_review import review_supplementary_sources
+    from tests.test_retained_analysis_v216 import gateway as mock_gateway
+    source, current, reuse_gateway = checkpoint()
+    source.profile.source_coverage = SourceCoverage(checks=[SourceCheck(section_id='source-check',
+        pages=[234], reason='Check the disclosed measure', decision_impact='Source interpretation',
+        status='checked_found', finding='Revenue is reported.',
+        evidence_quotes={234: ['Revenue RMB thousands']})])
+    approve_preintegration_input(source)
+    review_gateway = mock_gateway([dict(additions=[], decisions=[dict(section_id='source-check',
+        disposition='covered', reason='The unchanged audience finding carries this synthetic source fact.',
+        evidence=[dict(page=234, text='Revenue RMB thousands')], brief_item_indexes=[0])]),
+        dict(verdicts=[dict(section_id='source-check', accepted=True, reason='Synthetic protocol approval.')])])
+    source.executive_brief = review_supplementary_sources(review_gateway, source, source.executive_brief)
+    source.failed_stage, source.failure_details = 'presentation_budget', {'component': 'PresentationBudget'}
+    current.profile = source.profile.model_copy(deep=True)
+    if stale:
+        source.executive_brief.items[0].text += ' A different conclusion.'
+    restored = retained_brief_reporting(source, current, reuse_gateway)
+    if stale:
+        assert restored is None
+    else:
+        assert restored is not None and restored.executive_brief == source.executive_brief
+        with pytest.raises(ValueError, match='Retained-analysis evidence'):
+            require_topic_coverage(restored)
+
+
 @pytest.mark.parametrize('mutation', [None, 'body', 'evidence', 'context', 'environment', 'error',
                                       'pending', 'unavailable', 'missing_index', 'later_rejected'])
 def test_integration_retry_requires_latest_exact_candidate_complete_approval_and_source(mutation):

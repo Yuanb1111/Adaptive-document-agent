@@ -14,7 +14,7 @@ from adaptive_document_agent.services.summary_validation import reading_errors
 from adaptive_document_agent.services.llm.exceptions import PrivacyViolationError
 from .summary_read_binding import bind_reading, line_coverage, missing_ranges, reconcile_layout
 from .prompting import untrusted_document_message
-from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
+from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError, LLMResponseError, LLMTransportError
 from .summary_read_request import reading_failure_kind, reading_request
 
 
@@ -143,7 +143,28 @@ def _read_batch_impl(gateway, result, blocks, cancelled: Event) -> ReadOutcome:
                 raise CancelledError('Summary reading cancelled')
             record = {}
             audit['attempts'].append(record)
-            response = reading_request(gateway, messages, SummaryReadBatch, blocks, cancelled, record)
+            try:
+                response = reading_request(gateway, messages, SummaryReadBatch, blocks, cancelled, record)
+            except LLMResponseError as exc:
+                failure = record.get('format_repair', {})
+                if (attempt or failure.get('status') != 'failed' or isinstance(exc, LLMTransportError)
+                        or isinstance(exc, LLMStructuredOutputError) and exc.response.usage
+                        and exc.response.usage.finish_reason == 'length'):
+                    raise
+                # A format repair cannot invent quote boundaries or relocate
+                # facts between parts. Use the existing second source-read slot
+                # with the original numbered evidence, never accept bad JSON.
+                record['source_reread_requested'] = True
+                messages = messages[:2] + [untrusted_document_message(json.dumps(failure, ensure_ascii=False)),
+                    dict(role='user', content='Re-read the SAME original numbered source blocks and return '
+                    'a fresh, complete parts array. The format repair could not preserve structure; '
+                    'this is the existing final source-read correction, not another format loop. '
+                    'Each part needs block_id, start_line, end_line, title, role and reading_note. '
+                    'Keep facts INSIDE their owning part, at most two per part; every fact needs '
+                    'quote_start_line and quote_end_line from the supplied lines. Partition all '
+                    'source lines exactly once. Never guess missing evidence endpoints, move a '
+                    'fact to another owner, omit qualifications or return top-level facts.')]
+                continue
             record['response'] = response.model_dump(mode='json')
             parts, unknown = bind_reading(response, blocks, result, record, literal_fallback=bool(attempt))
             parts = reconcile_layout(parts, blocks, record)

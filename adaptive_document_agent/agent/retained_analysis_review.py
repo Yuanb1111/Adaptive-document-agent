@@ -70,6 +70,10 @@ def review_context(result):
         raise ValueError('Final analytical pages no longer match the retained model selection')
     context = selection_context(result)
     context['selection_record'] = selected_record(result)
+    if context['selection_record'].get('physical_budget'):
+        context['existing_audience_context'] = dict(
+            briefing=result.executive_brief.model_dump(mode='json') if result.executive_brief else None,
+            introduction=[p.model_dump(mode='json') for p in plan.company.summary_pages])
     deferred = []
     for issue in result.validation_warnings:
         if issue.code != 'retained_selection_coverage':
@@ -180,6 +184,12 @@ def _review_retained_analysis(gateway, result, *, progress=None):
         progress('Checking reused analysis against original pages and omitted findings')
     PresentationPlanValidator().validate(result.presentation_plan, result)
     context = review_context(result)
+    context_fingerprint = fingerprint(context)
+    from .retained_page_sources import planned_source_citations
+    selected = RetainedAnalysisSelection.model_validate(context['selection_record']['selection'])
+    # Derived transport hints add no source authority. Keep the checkpoint's
+    # binding identity on its complete original inputs, not duplicated hints.
+    context['planned_source_citations'] = planned_source_citations(selected, context, result)
     from adaptive_document_agent.utils.record_encoding import encode_records, INSTRUCTIONS
     from .audit_source_layout import LAYOUT_INSTRUCTIONS
     from .retained_page_sources import PERIOD_AND_ASSURANCE_RULES
@@ -198,8 +208,26 @@ def _review_retained_analysis(gateway, result, *, progress=None):
         'missing values. Reject misleading comparisons or omitted material qualifications, '
         'latest comparable periods, definitions, counterevidence or source caveats. Unknown '
         'assurance may remain unknown; it cannot be upgraded to audited or unaudited by inference. '
-        'Also independently assess every selected/omitted finding against user requirements and '
-        'the complete retained analysis within selection_capacity. The user physical-page maximum '
+        'For source-authored pages, planned_source_citations identifies bound observation_ids '
+        'and eligible_companion_rows by original source-row ID. Assess numeric completeness '
+        'within those eligible rows. Other source prose can require a material qualitative '
+        'qualification, but cannot authorize an additional amount, percentage, count or '
+        'numeric threshold on that page. Check the actual adverse effect, source-defined '
+        'category and population in words, supported by exact context_evidence; do not '
+        'demand unbound numeric disclosures as a correction. Distinguish an absolute amount '
+        'trajectory from a percentage trajectory. Complete context_calendar_dates may date '
+        'an attributed source event; they do not create a measurement endpoint or an amount. '
+        'context_day_count_conventions separately identifies literal calculation-definition '
+        'parameters. Exact phrases may remain in that method description with the complete '
+        'supporting quotation; this does not authorize an unrelated amount or a calculation. '
+        'Also independently assess every selected/omitted finding against user requirements, '
+        'the complete retained analysis within selection_capacity, and the native counts and '
+        'whole-finding decisions in selection_record.physical_budget when present. '
+        'The existing briefing and introduction can retain important context without '
+        'a separate analytical chart. Measured fit grants no approval: reject the omission of '
+        'indispensable counterevidence, but do not require additional physical pages beyond '
+        'the actual remaining body budget just to fill structural selection_capacity. '
+        'The user physical-page maximum '
         'also covers continuation pages; it is not an instruction to fill every available page. '
         'The provisional report outline is not a mandate to publish every candidate. A distinct '
         'candidate or different ranking preference alone is not a material gap; explain how an '
@@ -226,7 +254,7 @@ def _review_retained_analysis(gateway, result, *, progress=None):
                                      assurance_changes=[])) if v.slide_id in contradicted else v
             for v in review.verdicts]})
     result.validation_warnings.append(ValidationIssue(code=REVIEW_CODE, stage='presentation',
-        severity='info', message=json.dumps(dict(contract=1, fingerprint=fingerprint(context),
+        severity='info', message=json.dumps(dict(contract=1, fingerprint=context_fingerprint,
             review=review.model_dump(mode='json', exclude_none=True),
             **(dict(contradicted_assurance_slide_ids=contradicted,
                     effective_review=effective.model_dump(mode='json', exclude_none=True))

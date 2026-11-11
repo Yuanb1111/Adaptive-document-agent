@@ -24,16 +24,40 @@ PERIOD_AND_ASSURANCE_RULES = (
     'establish that scope. Attribute a driver to the period stated in its own paragraph; a '
     'within-period explanation does not establish a comparison with another period. If the '
     'paragraph scope is unavailable, report the uncertainty instead of supplying an interval. '
+    'When a discussion has a literal dated window but does not separately date a related '
+    'effect, distinguish those scopes explicitly: describe the effect within that named '
+    'discussion and state that no separate comparison pair is supplied. Do not assign the '
+    'window as new metric endpoints or discard the known discussion context. '
     'For source prose without eligible numeric rows, preserve the supported qualitative driver '
-    'and its literal period. Use noun phrases describing the source-supported factors and their '
-    'positive or negative contribution to that period. Reserve directional predicates '
-    '(increase, decrease, higher, lower) for comparisons with bound rows and explicit endpoints; '
-    'do not turn prose-only factors into additional numerical trend claims. Do not require '
+    'and the actual effect attributed by the source. An explicitly attributed qualitative '
+    'explanation, supported by exact context_evidence, may say that a factor lengthened a '
+    'cycle or shifted exposure without supplying new numeric endpoints. Do not invent a '
+    'comparison interval when the source gives none; retain any literal timing qualifier. '
+    'Keep the stated role without adding a favorable or adverse judgment the source '
+    'does not make. Preserve a material composition shift toward or away from a source-defined '
+    'category in attributed words, with its literal interval and exact supporting quotation. '
+    'Do not replace that shift with a generic mention of adverse context. Numeric comparisons '
+    'require bound rows and explicit endpoints; distinguish them from a literally supported '
+    'source-attributed qualitative explanation. Do not turn prose-only factors into additional '
+    'numerical trend claims. Do not require '
     'their unbound amounts on the analysis page. '
+    'For a source-only trajectory without an eligible numeric series, retain a source-attributed '
+    'qualitative shape, such as an initial dip followed by a rebound, rather than asserting '
+    'an additional row-bound comparison for that unbound metric. Keep its literal scope and '
+    'exact quotation; this does not authorize new amounts or calculated endpoints. '
+    'A calculation definition may retain its literal day-count convention when complete '
+    'context_evidence quotes the method and exact parameter phrases. Copy those phrases '
+    'verbatim, such as [number] days for a given year or [number] days for a [duration]-month '
+    'period. These are quoted method parameters, not additional measurements. Do not use '
+    'them as amounts elsewhere or invent a calendar conversion. '
     'For material source-only qualifications without eligible rows, preserve their qualitative '
     'meaning, including adverse or limiting effects, and distinguish related gross/net or other '
-    'populations. Do not require unbound percentages or thresholds. Do not retain uncalibrated '
-    'reassurance such as "relatively low" when omitted numeric qualifications materially limit it. '
+    'populations. Do not require unbound percentages or thresholds. Do not present reassurance '
+    'such as "relatively low" as an objective, population-wide conclusion. A source-attributed '
+    'management judgment may remain alongside the material adverse shift and its exact '
+    'source-defined scope, supported by literal context_evidence. Preserve those qualitative '
+    'limits in the same discussion; neither the judgment nor the adverse shift substitutes '
+    'for the other. Do not broaden a judgment about a subset. '
     'Only use an audit label for a row explicitly marked with that status. Unknown means unmarked. '
     'Never propagate a label to another period or measure based on a shared heading. '
     'When a chart reports CAGR alongside its raw levels, cite the matching reported CAGR companion row. '
@@ -80,7 +104,10 @@ class RetainedPage(BaseModel):
         description='Exact literal quotations from supplied source_pages, keyed by their supplied '
                     'physical page number, supporting qualitative '
                     'qualifications or drivers outside the primary row evidence. These do not '
-                    'authorize additional numeric claims or companion rows.')
+                    'authorize additional amounts or companion rows. Complete literal calendar '
+                    'dates in these quotations can support the dates of attributed source events. '
+                    'Complete literal calculation definitions may bind their exact day-count parameters '
+                    'in a method description, never an unrelated measurement.')
 
 
 class ContextEvidenceError(ValueError):
@@ -145,6 +172,57 @@ def retained_context_citations(result):
             for d in selection.decisions if d.decision == 'include'}
 
 
+def bound_authored_slide_ids(result, plan):
+    """Recognize exact compiled model copy; this is never semantic approval.
+
+    Generic chart-share retrieval cannot interpret source-only qualifications.
+    Preserve this bound copy for the mandatory independent publication review.
+    Numeric, literal-source and native presentation validation still apply.
+    """
+    from .retained_analysis import selected_record, selection_context, fingerprint, RetainedAnalysisSelection, findings
+    record = selected_record(result)
+    if not record or not record.get('source_authoring'):
+        return set()
+    context = selection_context(result)
+    if record.get('input_fingerprint') != fingerprint(context):
+        return set()
+    selection = RetainedAnalysisSelection.model_validate(record['selection'])
+    linked = findings(result, allow_new_copy=True)
+    bound = {}
+    for decision in selection.decisions:
+        if decision.decision != 'include' or decision.page is None:
+            continue
+        insight, primary, _ = linked[decision.insight_id]
+        bound[decision.insight_id] = page_bindings(decision.page, insight, primary, context, result)
+    return {s.id for s in plan.slides if s.slide_type == 'analysis' and len(s.insight_ids) == 1
+            and s.insight_ids[0] in bound
+            and (s.title, s.message, set(s.observation_ids)) == bound[s.insight_ids[0]]}
+
+
+def retained_context_dates(result, *, checked_citations=None):
+    """Return only calendar identities from revalidated literal context quotes."""
+    from adaptive_document_agent.services.calendar_claims import literal_calendar_dates
+    return _retained_context_literals(result, literal_calendar_dates, checked_citations)
+
+
+def retained_context_day_counts(result, *, checked_citations=None):
+    """Return only literal parameters of revalidated calculation definitions."""
+    from adaptive_document_agent.services.source_day_count import literal_day_count_conventions
+    return _retained_context_literals(result, literal_day_count_conventions, checked_citations)
+
+
+def _retained_context_literals(result, extract, checked_citations):
+    from .retained_analysis import RetainedAnalysisSelection, selected_record
+    checked = retained_context_citations(result) if checked_citations is None else checked_citations
+    record = selected_record(result)
+    if not checked or not record:
+        return {}
+    selection = RetainedAnalysisSelection.model_validate(record['selection'])
+    return {d.insight_id: set().union(*(extract(q.text)
+            for q in d.page.context_evidence if q.page in checked.get(d.insight_id, ())))
+            for d in selection.decisions if d.decision == 'include' and d.page}
+
+
 def page_sources(result, linked):
     from adaptive_document_agent.services.source_citations import evidence_pages
     ids = set().union(*(entry[1] for entry in linked.values()))
@@ -167,8 +245,11 @@ def page_sources(result, linked):
 
 def page_bindings(page, insight, primary, context, result):
     from .presentation_insight_recovery import _numeric_support
-    from adaptive_document_agent.services.calendar_claims import bound_period_dates
+    from adaptive_document_agent.services.calendar_claims import bound_period_dates, literal_calendar_dates
+    from adaptive_document_agent.services.source_day_count import literal_day_count_conventions
     context_evidence_pages(page, context, result)
+    context_dates = set().union(*(literal_calendar_dates(q.text) for q in page.context_evidence))
+    day_counts = set().union(*(literal_day_count_conventions(q.text) for q in page.context_evidence))
     by_id = {o.id: o for o in result.observations}
     tables = {by_id[k].effective_table_id for k in primary}
     allowed = {r['id'] for r in context['source_rows'] if r['table_id'] in tables}
@@ -184,12 +265,15 @@ def page_bindings(page, insight, primary, context, result):
         raise ValueError(f'{insight.id}: {len(ids)} distinct observations exceed the 40-row slide limit')
     obs = [by_id[k] for k in ids]
     periods = [o.period for o in obs]
-    title, copy = (bound_period_dates(s, periods) for s in (page.title, page.message))
+    title, copy = (bound_period_dates(s, [*periods, *context_dates]) for s in (page.title, page.message))
     for field, text in [('title', title), ('message', copy)]:
         diagnostics = []
-        if not _numeric_support(text, obs, diagnostics=diagnostics):
+        if not _numeric_support(text, obs, diagnostics=diagnostics, context_dates=context_dates,
+                                context_day_counts=day_counts):
             raise ValueError(f'{insight.id}.{field}: amount, date or rate outside its bound evidence: {text}. '
-                f'Details: {diagnostics}. Bind any used table components to their exact '
+                f'Details: {diagnostics}. Exact quoted day-count parameters: {sorted(day_counts)}. '
+                'For a day-count description, quote the complete method and copy its literal parameter '
+                'phrases verbatim; this does not authorize other values. Bind any used table components to their exact '
                 'allowed companion rows. Do not introduce amounts found only in unbound source prose; '
                 'retain the source explanation without that additional numeric claim. Preserve signed raw outflows.')
         try:
@@ -221,7 +305,8 @@ def validate_authored_pages(selection, context, result):
             failures[insight.id] = [str(exc).removeprefix(f'{insight.id}: ')]
             continue
         probe = PresentationSlide(id=insight.id, slide_type='analysis', title=title, message=copy,
-                                  observation_ids=sorted(ids))
+                                  observation_ids=sorted(ids),
+                                  source_pages=sorted(context_evidence_pages(decision.page, context, result)))
         observations = [o for o in result.observations if o.id in ids]
         errors = ClaimValidator().validate_slide(probe, observations)
         if not errors:
@@ -229,14 +314,19 @@ def validate_authored_pages(selection, context, result):
         issues = failures[insight.id] = [e.message for e in errors]
         if any(e.code == 'direction_scope_ambiguous' for e in errors):
             periods = sorted({o.period for o in observations if o.id in primary and o.period})
+            metrics = sorted({o.metric_original for o in observations})
             issues.append(f'Primary source periods are {periods}. In each directional clause, explicitly '
                 'name the source metric and both source-supported endpoints for a comparison. '
                 '"The decrease through [end]" supplies only one endpoint. Never infer the '
                 'start from the earliest data. Separate the headline comparison from its drivers. '
                 'If a driver has no source-supported interval, describe the supported event without '
-                'claiming a change over an unspecified period. For a prose-only single-period driver, '
-                'use attributed qualitative noun phrases with its original period and positive or '
-                'negative role, without increase/decrease/higher/lower predicates or extra amounts.')
+                'claiming a change over an unspecified period. '
+                f'Bound source metrics are {metrics}. Naming an unbound metric more explicitly '
+                'cannot create a numeric comparison binding. For a prose-only trajectory, retain '
+                'its source-attributed qualitative shape (for example an initial dip followed by '
+                'a rebound), literal discussion scope and exact quotation, without new amounts '
+                'or invented measurement endpoints. For a qualitative driver, preserve the '
+                'actual source-attributed effect, not just a generic favorable/adverse label.')
         if any(e.target_component == 'title' for e in errors):
             issues.append('Use a neutral metric/scope title, or explicitly write both '
                             'comparison endpoints in the title itself. Dates in the message do not '
@@ -269,6 +359,8 @@ def source_row_assurance(result, row_refs):
 
 def planned_source_citations(selection, context, result):
     """Expose the compiler's actual page references, never model-proposed citations."""
+    from adaptive_document_agent.services.calendar_claims import literal_calendar_dates
+    from adaptive_document_agent.services.source_day_count import literal_day_count_conventions
     from adaptive_document_agent.services.source_citations import evidence_pages, source_footer
     observations = {o.id: o for o in result.observations}
     insights = {i.id: i for i in result.insights}
@@ -300,7 +392,13 @@ def planned_source_citations(selection, context, result):
             continue
         citation = dict(insight_id=decision.insight_id, observation_ids=sorted(ids),
                         source_pages=pages, footer=source_footer(pages),
-                        bound_periods=sorted({o.period for o in bound if o.period}))
+                        bound_periods=sorted({o.period for o in bound if o.period}),
+                        eligible_companion_rows=[r['id'] for r in context.get('source_rows', [])
+                                                 if r['table_id'] in tables],
+                        context_calendar_dates=sorted(set().union(*(literal_calendar_dates(q.text)
+                            for q in decision.page.context_evidence))) if decision.page else [],
+                        context_day_count_conventions=sorted(set().union(*(literal_day_count_conventions(q.text)
+                            for q in decision.page.context_evidence))) if decision.page else [])
         marked_tables = {o.effective_table_id for o in bound
                          if o.effective_table_id and o.audited_status in {'audited', 'unaudited'}}
         if marked_tables:

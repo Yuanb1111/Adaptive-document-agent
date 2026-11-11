@@ -1906,14 +1906,25 @@ class ClaimValidator:
 
                 for m_name, dir_word, direction_start, direction_end in assocs:
                     if m_name == "__ambiguous_source_metric__":
+                        from .source_qualitative_shape import source_shape_noun
+                        if (comp_type != 'title' and slide.source_pages and source_shape_noun(
+                                clause, direction_start, direction_end, metric_spans=metric_spans,
+                                periods=[o.period for o in observations if o.period])):
+                            # A quoted-source nominal pattern is qualitative
+                            # context, not an extra row-bound calculation. Its
+                            # facts still need independent source/meaning review.
+                            continue
                         issue_key = (slide.id, comp_type, bullet_idx, clause_index, direction_start, "ambiguous_metric")
                         if issue_key not in seen_issues:
                             seen_issues.add(issue_key)
                             issues.append(DirectionalClaimIssue(
                                 code="direction_scope_ambiguous", severity="error", stage="presentation",
-                                message=f"Slide {slide.id} {comp_type}: '{dir_word}' has no unique source metric.",
+                                message=(f"Slide {slide.id} {comp_type}: '{dir_word}' has no unique source metric. "
+                                         f"Offending clause: {clause!r}"),
                                 slide_id=slide.id, target_component=comp_type, bullet_index=bullet_idx,
                                 offending_direction=dir_word, expected_direction="UNRESOLVED_SCOPE",
+                                claim_start=clause_offset + direction_start,
+                                claim_end=clause_offset + direction_end,
                             ))
                         continue
                     if m_name not in metric_series_map:
@@ -1930,11 +1941,12 @@ class ClaimValidator:
                     if inherited_error:
                         issues.append(DirectionalClaimIssue(
                             code="direction_scope_ambiguous", severity="error", stage="presentation",
-                            message=f"Slide {slide.id} {comp_type}: '{m_name}' — {inherited_error}.",
+                            message=f"Slide {slide.id} {comp_type}: '{m_name}' — {inherited_error}. Offending clause: {clause!r}",
                             slide_id=slide.id, metric_name=m_name, target_component=comp_type,
                             bullet_index=bullet_idx, offending_direction=dir_word,
                             expected_direction="UNRESOLVED_SCOPE",
                             related_ids=[o.id for s in series_list for o in s["sorted_obs"]],
+                            claim_start=clause_offset + direction_start, claim_end=clause_offset + direction_end,
                         ))
                         continue
                     if inherited_range:
@@ -1945,7 +1957,7 @@ class ClaimValidator:
                         if len(qualified) != 1:
                             issues.append(DirectionalClaimIssue(
                                 code="direction_scope_ambiguous", severity="error", stage="presentation",
-                                message=f"Slide {slide.id} {comp_type}: '{m_name}' needs one explicit source category.",
+                                message=f"Slide {slide.id} {comp_type}: '{m_name}' needs one explicit source category. Offending clause: {clause!r}",
                                 slide_id=slide.id, metric_name=m_name, target_component=comp_type,
                                 bullet_index=bullet_idx, offending_direction=dir_word,
                                 expected_direction="UNRESOLVED_SCOPE",
@@ -2061,7 +2073,7 @@ class ClaimValidator:
                             if has_temporal_sequence(clause, assocs, m_name, metric_spans):
                                 issues.append(DirectionalClaimIssue(
                                     code="direction_scope_ambiguous", severity="error", stage="presentation",
-                                    message=f"Slide {slide.id} {comp_type}: '{m_name}' temporal sequence has multiple possible period series; explicit periods are required.",
+                                    message=f"Slide {slide.id} {comp_type}: '{m_name}' temporal sequence has multiple possible period series; explicit periods are required. Offending clause: {clause!r}",
                                     slide_id=slide.id, metric_name=m_name, target_component=comp_type,
                                     bullet_index=bullet_idx, offending_direction=dir_word,
                                     expected_direction="UNRESOLVED_SCOPE",
@@ -2193,11 +2205,12 @@ class ClaimValidator:
                         if scope.error:
                             issues.append(DirectionalClaimIssue(
                                 code="direction_scope_ambiguous", severity="error", stage="presentation",
-                                message=f"Slide {slide.id} {comp_type}: '{m_name}' — {scope.error}; explicit period evidence is required.",
+                                message=f"Slide {slide.id} {comp_type}: '{m_name}' — {scope.error}; explicit period evidence is required. Offending clause: {clause!r}",
                                 slide_id=slide.id, metric_name=m_name, target_component=comp_type,
                                 bullet_index=bullet_idx, offending_direction=dir_word,
                                 expected_direction="UNRESOLVED_SCOPE",
                                 related_ids=[o.id for o in info["sorted_obs"]],
+                                claim_start=clause_offset + direction_start, claim_end=clause_offset + direction_end,
                             ))
                             continue
                         if scope.observations is not None:

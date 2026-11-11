@@ -133,3 +133,12 @@ def test_a_failed_compression_keeps_original_diagnostics_without_a_second_retry(
         compact_overlong_patch(Gateway(), [], schema, error, record)
     assert failed.value is error and len(calls) == 1
     assert record['capacity_correction']['raw_response'] == '{}'
+def test_copy_size_feedback_counts_characters_without_accepting_draft_content():
+    from adaptive_document_agent.agent.brief_patch_capacity import copy_character_counts
+    raw = '{"item_2":{"text":"' + 'A' * 583 + '","label":"范围","evidence":[]}}'
+    sizes = copy_character_counts(raw)
+    assert sizes['item_2']['text'] == dict(characters=583, target=400, characters_to_remove=183)
+    assert sizes['item_2']['label']['characters'] == 2
+    assert sizes['item_2']['label']['target'] == 40
+    assert 'evidence' not in sizes['item_2']
+    assert copy_character_counts('{"item_2":') == {}
