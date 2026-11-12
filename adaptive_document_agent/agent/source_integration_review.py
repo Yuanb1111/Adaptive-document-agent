@@ -19,7 +19,7 @@ from .structured_output_correction import schema_feedback, format_correction_mes
 from .source_integration_output import review_output, SourceReviewContractError
 from .source_integration_bindings import (MERGED_BRIEF_INSTRUCTIONS, bind_unique_inclusions,
     keep_accepted_dispositions, merged_review_context)
-from .source_integration_quotes import bind_source_quotes, numbered_source_pages
+from .source_integration_quotes import SourceQuoteCapacityError, bind_source_quotes, numbered_source_pages
 from .audit_source_layout import audit_source_page, LAYOUT_INSTRUCTIONS
 from adaptive_document_agent.services.brief_column_quantities import column_quantities
 
@@ -156,6 +156,10 @@ def _retry_draft(previous, result, brief, checks, pages):
             _bind_legacy_check_ids(bound, checks)
             bind_unique_inclusions(bound, checks, len(brief.items))
             _validate(bound, result, brief, checks)
+            return proposal
+        except SourceQuoteCapacityError:
+            # A draft with a representational overflow is not approval. Keep it
+            # for addressed reference repair, then run all current source gates.
             return proposal
         except (ValueError, KeyError, TypeError):
             continue
@@ -381,7 +385,9 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
                         audit_key='draft_output_attempts', token_limits=SOURCE_OUTPUT_TOKEN_LIMITS, stage='report')
                 submitted = draft.model_dump(mode='json')
                 entry['draft'] = submitted
-                draft = bind_source_quotes(draft, pages, selected_phrase_evidence=True)
+                from .source_quote_capacity import bind_with_capacity_repair
+                draft = bind_with_capacity_repair(gateway, draft, pages, entry, budget,
+                                                 selected_phrase_evidence=True)
                 _bind_legacy_check_ids(draft, checks)
                 if prior_review is not None:
                     entry['preserved_sections'] = keep_accepted_dispositions(

@@ -31,6 +31,37 @@ def context_key(brief, source_context, result):
     return hashlib.sha256(json.dumps(values, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
+def checkpoint_context_matches(record, brief, result):
+    """Recognize only exact inputs, allowing deterministic navigation bookkeeping.
+
+    link_coverage runs after briefing and fills section observation/topic IDs.
+    Those IDs are derived from the complete observations and plan already in
+    the hash. They are not source findings, scope decisions or approval.
+    """
+    context = record['source_context']
+    def matches(sample):
+        return (context_key(None, None, sample) == record.get('environment_key')
+                and context_key(brief, context, sample) == record.get('context_key'))
+    if matches(result):
+        return True
+    if result is None or result.profile.source_coverage is None:
+        return False
+    from .source_coverage import link_coverage
+    linked = result.profile.model_copy(deep=True)
+    link_coverage(linked.source_coverage, result.observations, result.presentation_plan)
+    # Do not normalize arbitrary foreign navigation IDs into a valid record.
+    for current, expected in zip(result.profile.source_coverage.sections,
+                                 linked.source_coverage.sections, strict=True):
+        if (current.observation_ids not in ([], expected.observation_ids)
+                or current.planned_topic_ids not in ([], expected.planned_topic_ids)):
+            return False
+    empty = result.profile.model_copy(deep=True)
+    for section in empty.source_coverage.sections:
+        section.observation_ids, section.planned_topic_ids = [], []
+    return any(matches(result.model_copy(update={'profile': profile}))
+               for profile in (empty, linked))
+
+
 def load_checks(result, key, count):
     if result is None:
         return {}

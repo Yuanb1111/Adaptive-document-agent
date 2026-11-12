@@ -1,5 +1,8 @@
 # Adaptive Document Intelligence Agent
 
+The [.589 timeout fix](docs/TIMEOUT_RECHECK_589.md) scopes local copy rechecks
+and repairs invalid saved page copy before resuming completed reporting work.
+
 The [v202 fallback measurement and checkpoint fix](docs/FALLBACK_SOURCE_CHECKPOINT_V202.md)
 remeasures supplementary conclusion changes even when topic selection is absent,
 and retains downloadable partial diagnostics for unexpected final reporting errors.

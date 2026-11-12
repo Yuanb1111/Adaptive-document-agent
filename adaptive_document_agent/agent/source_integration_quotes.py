@@ -6,6 +6,10 @@ from itertools import accumulate
 from adaptive_document_agent.services.source_quotes import normalize_quote
 
 
+class SourceQuoteCapacityError(ValueError):
+    """A selected literal range cannot fit the object's remaining quote slots."""
+
+
 def numbered_source_pages(pages):
     from .source_table_cells import phrase_cell_options
     output = []
@@ -95,7 +99,7 @@ def bind_source_quotes(draft, pages, *, selected_phrase_evidence=False):
             remaining = len(item.evidence) - position - 1
             parts = _literal_parts(literal, quote_limit - len(evidence) - remaining)
             if parts is None:
-                raise ValueError(f'Evidence range {locator} on PDF page {quote.page} '
+                raise SourceQuoteCapacityError(f'Evidence range {locator} on PDF page {quote.page} '
                                  f'has {len(literal)} characters; it must resolve to 8–1800 literal characters. '
                                  'Choose a shorter evidence_reference_options span or a smaller exact range; '
                                  f'at most {quote_limit} representative quotations fit this object.')

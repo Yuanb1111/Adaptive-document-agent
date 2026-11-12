@@ -3,7 +3,7 @@ import json
 
 from adaptive_document_agent.models.executive_brief import ExecutiveBrief
 from adaptive_document_agent.services.executive_brief import validate_executive_brief
-from .brief_review_checkpoint import context_key
+from .brief_review_checkpoint import checkpoint_context_matches
 from .brief_review_progress import report_brief_progress
 
 
@@ -11,7 +11,6 @@ def resume_brief_review(gateway, result, *, cancelled=None):
     from .brief_meaning_review import meaning_validator
     from .brief_item_repair import topic_coverage_errors
     from .brief_source_checks import record_uncited_checks
-    environment = None
     seen = set()
     for warning in reversed(result.validation_warnings):
         if warning.code != 'executive_brief_review_checkpoint':
@@ -27,10 +26,6 @@ def resume_brief_review(gateway, result, *, cancelled=None):
                 and not record.get('unavailable') and any(checks.values()))
             completed = record.get('semantic_approval') is True and not record.get('pending') and not record.get('unavailable')
             if not (record.get('unavailable') or complete_rejection or completed) or not record.get('source_context'):
-                continue
-            if environment is None:
-                environment = context_key(None, None, result)
-            if record.get('environment_key') != environment:
                 continue
             if complete_rejection:
                 from .brief_retry_feedback import current_feedback
@@ -49,7 +44,7 @@ def resume_brief_review(gateway, result, *, cancelled=None):
                                for reasons in checks.values())):
                 continue
             context = record['source_context']
-            if context_key(candidate, context, result) != record['context_key']:
+            if not checkpoint_context_matches(record, candidate, result):
                 continue
             topics = [(t['title'], t['pages']) for t in context.get('selected_analysis_topics', [])]
             maximum = context.get('output_limits', {}).get('maximum_findings', 7)

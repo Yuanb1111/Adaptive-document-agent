@@ -11,7 +11,7 @@ from .company_introduction import _has_valid_introduction
 from .report_generator import ReportGenerator
 from .retained_analysis import (
     SELECTION_CODE, RetainedAnalysisSelection, _validate_selection, can_reuse, fingerprint,
-    selected_record, selection_context,
+    selected_record, selection_context, selection_input_matches,
 )
 
 
@@ -83,7 +83,7 @@ def retained_brief_reporting(previous, current, gateway, requested_focus=None, s
     try:
         record = selected_record(candidate)
         context = selection_context(candidate)
-        if not can_reuse(gateway, previous) or record['contract'] != 1 or record['input_fingerprint'] != fingerprint(context):
+        if not can_reuse(gateway, previous) or record['contract'] != 1 or not selection_input_matches(record, context, candidate):
             return None
         selection = RetainedAnalysisSelection.model_validate(record['selection'])
         _validate_selection(selection, context)
@@ -93,6 +93,26 @@ def retained_brief_reporting(previous, current, gateway, requested_focus=None, s
         if not _has_valid_introduction(candidate.presentation_plan, candidate):
             return None
         require_verified_introduction(candidate)
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return None
+    if timed_out and record.get('source_authoring'):
+        from .retained_page_sources import AuthoredPageErrors, validate_authored_pages
+        try:
+            validate_authored_pages(selection, context, candidate)
+        except AuthoredPageErrors as errors:
+            from .retained_timeout_copy import repair_timeout_copy
+            from adaptive_document_agent.services.llm.exceptions import LLMResponseError
+            try:
+                repair_timeout_copy(gateway, candidate, selection, context, errors)
+            except (ValueError, LLMResponseError) as exc:
+                candidate.pipeline_state, candidate.retry_from = 'partial', 'reporting'
+                candidate.failed_stage = 'presentation_selection'
+                candidate.failure_details = dict(component='RetainedAnalysisSelection',
+                    error_type=type(exc).__name__, message=str(exc))
+                return candidate
+        except ValueError:
+            return None
+    try:
         PresentationPlanValidator().validate(candidate.presentation_plan, candidate)
     except (ValueError, TypeError, KeyError, AttributeError):
         return None
@@ -146,7 +166,7 @@ def checked_published_brief(previous, current):
         return None
     try:
         record = selected_record(current)
-        if (not record or record.get('input_fingerprint') != fingerprint(selection_context(current))
+        if (not record or not selection_input_matches(record, selection_context(current), current)
                 or record['selection']['ordered_insight_ids'] != selected_record(previous)['selection']['ordered_insight_ids']
                 or _fingerprint(previous, brief) != _fingerprint(current, brief)
                 or validate_executive_brief(brief, current)):
@@ -160,7 +180,7 @@ def checked_integration_input(previous, current):
     """Recognize only the latest completed review of this exact pre-integration input."""
     from adaptive_document_agent.services.executive_brief import validate_executive_brief
     from .brief_item_repair import topic_coverage_errors
-    from .brief_review_checkpoint import context_key
+    from .brief_review_checkpoint import checkpoint_context_matches
 
     brief = previous.executive_brief
     last = next((w for w in reversed(previous.validation_warnings)
@@ -174,8 +194,7 @@ def checked_integration_input(previous, current):
         if (record['semantic_approval'] is not True or record['pending'] != [] or record['unavailable'] != {}
                 or record['checked'] != {str(i): [] for i in range(len(brief.items))}
                 or record['candidate'] != brief.model_dump(mode='json')
-                or context_key(None, None, current) != record['environment_key']
-                or context_key(brief, context, current) != record['context_key']):
+                or not checkpoint_context_matches(record, brief, current)):
             return None
         topics = [(topic['title'], topic['pages']) for topic in context['selected_analysis_topics']]
         if (len(brief.items) > context['output_limits']['maximum_findings']

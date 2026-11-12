@@ -159,13 +159,13 @@ def context_evidence_pages(page, context, result):
 
 def retained_context_citations(result):
     """Recheck persisted quotation provenance for slide/theme validators."""
-    from .retained_analysis import selected_record, selection_context, fingerprint, RetainedAnalysisSelection
+    from .retained_analysis import selected_record, selection_context, selection_input_matches, RetainedAnalysisSelection
     record = selected_record(result)
     if not record or not any(d.get('page', {}).get('context_evidence')
                             for d in record['selection']['decisions'] if d.get('page')):
         return {}
     context = selection_context(result)
-    if not record.get('source_authoring') or record['input_fingerprint'] != fingerprint(context):
+    if not record.get('source_authoring') or not selection_input_matches(record, context, result):
         raise ValueError('Retained qualitative context has stale source bindings')
     selection = RetainedAnalysisSelection.model_validate(record['selection'])
     return {d.insight_id: context_evidence_pages(d.page, context, result)
@@ -179,12 +179,12 @@ def bound_authored_slide_ids(result, plan):
     Preserve this bound copy for the mandatory independent publication review.
     Numeric, literal-source and native presentation validation still apply.
     """
-    from .retained_analysis import selected_record, selection_context, fingerprint, RetainedAnalysisSelection, findings
+    from .retained_analysis import selected_record, selection_context, selection_input_matches, RetainedAnalysisSelection, findings
     record = selected_record(result)
     if not record or not record.get('source_authoring'):
         return set()
     context = selection_context(result)
-    if record.get('input_fingerprint') != fingerprint(context):
+    if not selection_input_matches(record, context, result):
         return set()
     selection = RetainedAnalysisSelection.model_validate(record['selection'])
     linked = findings(result, allow_new_copy=True)
@@ -223,13 +223,16 @@ def _retained_context_literals(result, extract, checked_citations):
             for d in selection.decisions if d.decision == 'include' and d.page}
 
 
-def page_sources(result, linked):
+def page_sources(result, linked, *, include_neighbors=True):
     from adaptive_document_agent.services.source_citations import evidence_pages
     ids = set().union(*(entry[1] for entry in linked.values()))
     anchors = [o for o in result.observations if o.id in ids]
     pages = {e.page for o in anchors for e in o.evidence}
     for insight, _, _ in linked.values():
         pages.update(evidence_pages(insight, [], document=result.document))
+    if include_neighbors:
+        pages = {n for page in pages for n in (page - 1, page, page + 1)
+                 if 1 <= n <= result.document.page_count}
     originals = [p for p in result.document.pages if p.page_number in pages]
     tables = {o.effective_table_id for o in anchors if o.effective_table_id}
     ambiguous = ambiguous_source_table_ids(result)
@@ -313,6 +316,12 @@ def validate_authored_pages(selection, context, result):
             continue
         issues = failures[insight.id] = [e.message for e in errors]
         if any(e.code == 'direction_scope_ambiguous' for e in errors):
+            for error in errors:
+                if error.code == 'direction_scope_ambiguous' and error.offending_direction:
+                    issues.append(f'The exact rejected direction token is {error.offending_direction!r} '
+                        f'in {error.target_component} at offsets {error.claim_start}:{error.claim_end}. '
+                        'Correct this occurrence, including an attributive direction inside a driver '
+                        'phrase; do not replace a different qualitative effect elsewhere in the clause.')
             periods = sorted({o.period for o in observations if o.id in primary and o.period})
             metrics = sorted({o.metric_original for o in observations})
             issues.append(f'Primary source periods are {periods}. In each directional clause, explicitly '

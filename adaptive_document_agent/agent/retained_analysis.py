@@ -75,6 +75,23 @@ def fingerprint(context):
     return sha256(json.dumps(context, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
+def selection_input_matches(record, context, result):
+    """Recognize an exact input or the legacy anchor-only writer packet.
+
+    This preserves structural selections, never publication approval. The
+    independent final review fingerprints all adjacent original source pages.
+    New selections bind the complete expanded writer context.
+    """
+    if record.get('input_fingerprint') == fingerprint(context):
+        return True
+    if not record.get('source_authoring') or 'source_pages' not in context:
+        return False
+    from .retained_page_sources import page_sources as original_sources
+    legacy = {**context, 'source_pages': original_sources(result,
+        findings(result, allow_new_copy=True), include_neighbors=False)['source_pages']}
+    return record.get('input_fingerprint') == fingerprint(legacy)
+
+
 def can_reuse(gateway, result):
     settings = getattr(gateway, 'settings', None)
     if getattr(settings, 'presentation_strategy', None) != 'retained_analysis':
@@ -294,7 +311,7 @@ def _select_retained_analysis(gateway, result):
                 raise ValueError(f'The corrected selection must retain the independently chosen priorities: {reviewed_priorities}')
             if source_authoring:
                 # Run both checks before choosing between selection and copy repair.
-                copy_review_ids = []
+                copy_review_ids = (feedback or {}).get('copy_review_ids', []) if reusing_draft else []
                 if reusing_source_draft:
                     # Final review accepted the selection and rejected only
                     # specific copy. Use the existing local correction budget;
@@ -404,7 +421,7 @@ def compile_retained_analysis(result):
     if not record:
         raise ValueError('Retained-analysis selection is missing')
     context = selection_context(result)
-    if record.get('input_fingerprint') != fingerprint(context):
+    if not selection_input_matches(record, context, result):
         raise ValueError('Retained-analysis selection is stale')
     selection = RetainedAnalysisSelection.model_validate(record['selection'])
     _validate_selection(selection, context)

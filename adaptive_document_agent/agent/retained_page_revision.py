@@ -1,6 +1,7 @@
 """Revise only the source-authored pages rejected after selection has settled."""
 import json
 import re
+from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -28,6 +29,10 @@ class RetainedPageEdits(BaseModel):
     model_config = ConfigDict(extra='forbid')
     title: list[RetainedCopyEdit] = Field(default_factory=list, max_length=12)
     message: list[RetainedCopyEdit] = Field(default_factory=list, max_length=20)
+    message_append: list[Annotated[str, Field(min_length=1, max_length=2000)]] = Field(
+        default_factory=list, max_length=4,
+        description='New source-supported qualification sentences appended without retranscribing existing copy. '
+                    'Prefer this for a missing qualification when the current sentences are accurate.')
     companion_ids: list[str] | None = Field(default=None, max_length=40)
     context_evidence: list[BriefQuote] | None = Field(default=None, max_length=8)
 
@@ -98,6 +103,8 @@ def merge_page_revisions(revision, decisions, expected):
         values = original.model_dump(mode='json')
         for field in ('title', 'message'):
             values[field] = apply_copy_edits(values[field], getattr(edits, field))
+        if edits.message_append:
+            values['message'] = ' '.join([values['message'], *edits.message_append])
         for field in ('companion_ids', 'context_evidence'):
             value = getattr(edits, field)
             if value is not None:
@@ -171,6 +178,12 @@ def revise_retained_pages(gateway, result, packet, aliases, draft, issues, *, ea
              'A legacy before locator may select one exact unique literal span instead; choose '
              'exactly one locator per edit. Use nonoverlapping edits to replace a complete clause or sentence '
              'addressing an issue, preserving the surrounding source-supported statements verbatim. '
+             'For a missing qualification whose current sentences are source-correct, use '
+             'message_append for the additional complete sentences and leave the existing message '
+             'edits empty. The application appends them without asking you to recopy accepted '
+             'sentences. Do not rewrite an accepted broad explanation merely to add a later '
+             'period-specific qualification. Both the old copy and added sentences must remain '
+             'accurate, fully scoped and within the complete message limit. '
              'Address EVERY current errors entry at its actual defective clause. Changing a nearby '
              'supported numeric comparison does not repair the scope of a different attributed driver. '
              'When preserve_numeric_inputs is true, keep every original companion ID. Leave '
@@ -181,7 +194,6 @@ def revise_retained_pages(gateway, result, packet, aliases, draft, issues, *, ea
              'Do not gratuitously rewrite already corrected drivers, dates or qualifications. '
              'Earlier questions must remain resolved, not trigger another rewrite of valid copy. '
              'All edits in one field address the original draft, not the result of a preceding edit. '
-             'To add a qualification, replace a nearby complete sentence with itself plus that qualification. '
              'The complete merged title and message must fit page_copy_limits. If adding material '
              'context would exceed a limit, shorten redundant existing copy through separate exact '
              'edits while preserving every material value, period and qualification. '

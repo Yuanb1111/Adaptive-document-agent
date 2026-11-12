@@ -52,6 +52,8 @@ def review_selection_coverage(gateway, context, selection, result):
                        {row['id']: row['id'] for row in context.get('source_rows', [])}),
                    planned_source_citations=citations, verified_column_assurance=bindings)
     copy_review_ids = set(context.get('copy_review_ids', ()))
+    from .retained_copy_review import copy_review_payload
+    wire_payload = copy_review_payload(payload)
     review_scope = (
         'Selection coverage has already been assessed for these exact findings. This pass only checks '
         'the revised pages identified by copy_review_ids. Check all claims on those pages against their '
@@ -152,7 +154,7 @@ def review_selection_coverage(gateway, context, selection, result):
              'its absence without resolving the same original source scope. '
              + review_scope + PERIOD_AND_ASSURANCE_RULES + ASSURANCE_REVIEW_RULES
              + LAYOUT_INSTRUCTIONS + INSTRUCTIONS),
-        untrusted_document_message(json.dumps(encode_records(payload), ensure_ascii=False,
+        untrusted_document_message(json.dumps(encode_records(wire_payload), ensure_ascii=False,
                                              separators=(',', ':')))
     ]
     audit = {}
@@ -191,6 +193,11 @@ def review_selection_coverage(gateway, context, selection, result):
             input_fingerprint=fingerprint(payload), review=review.model_dump(mode='json', exclude_none=True),
             **(dict(copy_review_ids=sorted(copy_review_ids), selected_ids=selection.ordered_insight_ids)
                if copy_review_ids else {}),
+            **(dict(copy_review_packet=dict(
+                finding_ids=[f['insight']['id'] for f in wire_payload['findings']],
+                source_pages=[p['page'] for p in wire_payload['source_pages']],
+                source_row_count=len(wire_payload['source_rows']),
+                wire_fingerprint=fingerprint(wire_payload))) if copy_review_ids else {}),
             **(dict(effective_review=effective.model_dump(mode='json', exclude_none=True))
                if effective is not review else {}),
             **(dict(contradicted_assurance_issue_ids=contradicted) if contradicted else {}),

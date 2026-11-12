@@ -17,7 +17,7 @@ def feedback_fingerprint(context):
 
 def can_retry_source_review(previous):
     """One bounded correction of source-authored pages before catalog fallback."""
-    from .retained_analysis import selected_record, selection_context, fingerprint
+    from .retained_analysis import selected_record, selection_context, fingerprint, selection_input_matches
     if (previous.failed_stage != 'presentation_coverage'
             or previous.failure_details.get('component') != 'PresentationCoverage'):
         return False
@@ -38,7 +38,7 @@ def can_retry_source_review(previous):
             return False
         record = selected_record(previous)
         return bool(record and record.get('source_authoring')
-                    and record['input_fingerprint'] == fingerprint(selection_context(previous)))
+                    and selection_input_matches(record, selection_context(previous), previous))
     except (ValueError, KeyError, TypeError):
         return False
 
@@ -165,6 +165,7 @@ def selection_retry_feedback(result, context):
                 reviewed_priorities=priorities,
                 earlier_page_issues=record.get('earlier_page_issues', {}),
                 preserved_pages=record.get('preserved_pages', {}),
+                copy_review_ids=record.get('copy_review_ids', []),
                 final_approval=False)
 
 
@@ -179,14 +180,14 @@ def restore_rejected_findings(previous: PipelineResult | None, current: Pipeline
             or any(getattr(previous, key) != getattr(current, key) for key in
                    ('document', 'profile', 'observations', 'analysis_plan', 'analysis_results'))):
         return False
-    from .retained_analysis import SELECTION_CODE, fingerprint, selected_record, selection_context
+    from .retained_analysis import SELECTION_CODE, fingerprint, selected_record, selection_context, selection_input_matches
     candidate = current.model_copy(update={
         'insights': [i.model_copy(deep=True) for i in previous.insights],
         'report_plan': previous.report_plan.model_copy(deep=True)})
     if previous.failed_stage == 'presentation_planning' or intro_retry:
         record = selected_record(previous)
         context = selection_context(candidate, source_authoring=bool((record or {}).get('source_authoring')))
-        if not record or record.get('input_fingerprint') != fingerprint(context):
+        if not record or not selection_input_matches(record, context, candidate):
             return False
         current.validation_warnings.extend(w.model_copy(deep=True) for w in previous.validation_warnings
             if w.code in {SELECTION_CODE, 'retained_selection_coverage'})

@@ -33,10 +33,10 @@ def plan_outputs(
         except Exception as exc:
             return None, exc
 
-    from .retained_analysis import can_reuse, select_retained_analysis, selected_record, fingerprint, selection_context
+    from .retained_analysis import can_reuse, select_retained_analysis, selected_record, selection_input_matches, selection_context
     if gateway is not None and can_reuse(gateway, result):
         record = selected_record(result)
-        if record and record.get('input_fingerprint') == fingerprint(selection_context(result)):
+        if record and selection_input_matches(record, selection_context(result), result):
             from .retained_analysis import RetainedAnalysisSelection, _validate_selection
             from .retained_page_sources import validate_authored_pages
             context = selection_context(result)
