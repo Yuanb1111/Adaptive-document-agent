@@ -171,10 +171,36 @@ def require_retained_review(result):
         raise ValueError('Retained-analysis evidence review is incomplete, rejected or stale. Retry reporting.')
 
 
-def review_retained_analysis(gateway, result, *, progress=None):
+def review_retained_analysis(gateway, result, *, progress=None, repair_copy=False):
     scope = getattr(gateway, 'validated_cache_scope', nullcontext)
     with scope():
-        return _review_retained_analysis(gateway, result, progress=progress)
+        for attempt in range(3 if repair_copy else 1):
+            try:
+                return _review_retained_analysis(gateway, result, progress=progress)
+            except ValueError:
+                if not repair_copy or attempt == 2:
+                    raise
+                from .retained_selection_feedback import can_retry_source_review
+                if not can_retry_source_review(result, live_review=True):
+                    raise
+                latest = next(w for w in reversed(result.validation_warnings) if w.code == REVIEW_CODE)
+                audit = json.loads(latest.message)
+                review = RetainedAnalysisReview.model_validate(audit.get('effective_review', audit['review']))
+                if not review.omissions_accepted or not any(not v.accepted for v in review.verdicts):
+                    raise  # Copy correction has no authority to settle missing findings.
+                if progress:
+                    progress(f'Correcting rejected final page copy ({attempt + 1}/2) within this run')
+                from .retained_source_retry import repair_retained_source_copy
+                repair_retained_source_copy(gateway, result)
+                # A copy edit grants no publication approval and cannot silently
+                # exceed the actual physical budget or stale the source gates.
+                from .presentation_budget_refinement import measure
+                from adaptive_document_agent.services.slide_budgets import require_exported_budgets
+                from .report_audit_scope import refresh_report_audit_scope, require_report_audit_scope
+                refresh_report_audit_scope(gateway, result, progress=progress)
+                require_report_audit_scope(result)
+                deck, _ = measure(result)
+                require_exported_budgets(deck, result)
 
 
 def _review_retained_analysis(gateway, result, *, progress=None):

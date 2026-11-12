@@ -883,7 +883,7 @@ class DocumentOrchestrator:
                 final_stage = 'presentation_coverage'
                 from .retained_analysis_review import review_retained_analysis
                 with record_timing(final_result.stage_details_ms, 'retained_analysis_review'):
-                    review_retained_analysis(self.gateway, final_result, progress=notify)
+                    review_retained_analysis(self.gateway, final_result, progress=notify, repair_copy=True)
                 require_topic_coverage(final_result)
                 final_stage = 'presentation_budget'
                 if final_result.executive_brief != original_brief:

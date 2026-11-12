@@ -9,14 +9,15 @@ from .retained_analysis import (
 )
 
 
-def repair_retained_source_copy(gateway, result, previous):
+def repair_retained_source_copy(gateway, result, previous=None):
     from .retained_selection_feedback import retain_selection_feedback
     from .retained_page_sources import (
         writer_context, source_row_assurance, validate_authored_pages,
         page_bindings, context_evidence_pages,
     )
     from .retained_page_revision import revise_retained_pages
-    issue = retain_selection_feedback(previous)
+    issue = retain_selection_feedback(result if previous is None else previous,
+                                      live_review=previous is None)
     if issue is None:
         raise ValueError('The retained source correction has no bound reviewer feedback.')
     feedback = json.loads(issue.message)

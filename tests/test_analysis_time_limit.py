@@ -201,3 +201,24 @@ def test_deadline_is_checked_after_background_cleanup(budget, monkeypatch):
 
 
 from tests.test_interrupted_analysis_reruns import flow  # Shared Streamlit harness.
+
+
+def test_configured_budget_is_one_clock_including_workers_and_repairs(monkeypatch):
+    monkeypatch.setenv('ANALYSIS_TIMEOUT_SECONDS', '2700')
+    clock = SimpleNamespace(now=2690.)
+    deadline = AnalysisDeadline(clock=lambda: clock.now, started_at=0)
+    assert deadline.limit_seconds == 2700 and deadline.limit_label == '45-minute'
+    with request_deadline(deadline):
+        assert request_timeout(120) == 10
+        clock.now = 2700
+        with pytest.raises(AnalysisTimeLimitExceeded, match='45-minute') as caught:
+            request_timeout(120)
+        assert caught.value.diagnostics['limit_seconds'] == 2700
+    assert AnalysisDeadline(limit_seconds=120).limit_seconds == 120
+
+
+@pytest.mark.parametrize('value', ['nan','inf','0','-1','7201'])
+def test_analysis_budget_rejects_unbounded_or_invalid_values(monkeypatch,value):
+    monkeypatch.setenv('ANALYSIS_TIMEOUT_SECONDS',value)
+    with pytest.raises(ValueError):
+        AnalysisDeadline()

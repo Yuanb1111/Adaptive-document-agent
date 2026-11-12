@@ -33,8 +33,11 @@ def reading_request(gateway, messages, schema, blocks, cancelled, record):
             diagnostic['status'] = 'truncated'
             raise
         try:
-            response = gateway.repair_structured_output(exc, schema, stage='presentation',
-                cancelled=cancelled, request_metadata=metadata, diagnostics=diagnostic)
+            from .summary_read_fact_format import repair_fact_lists
+            response = repair_fact_lists(gateway, exc, messages, schema, cancelled, metadata, diagnostic)
+            if response is None:
+                response = gateway.repair_structured_output(exc, schema, stage='presentation',
+                    cancelled=cancelled, request_metadata=metadata, diagnostics=diagnostic)
         except Exception as failure:
             diagnostic.update(status='failed', repair_error=str(failure),
                               repair_validation_detail=str(failure.__cause__ or failure))

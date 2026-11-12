@@ -1,7 +1,7 @@
 """Run or resume analysis with a real LLMGateway and the matching original PDF.
 
 Credentials are read from the chosen environment file and never printed or saved.
-Every invocation has the normal shared 15-minute deadline; no provider fallback.
+Every invocation has one shared configurable deadline; no provider fallback.
 """
 import argparse
 from datetime import datetime, timezone
@@ -80,9 +80,14 @@ def settings_for(path: Path, provider: str, model: str) -> LLMSettings:
 
 
 def run(args) -> dict:
-    source = PipelineResult.model_validate_json(args.checkpoint.read_bytes())
+    source = None
+    if not args.fresh:
+        if args.checkpoint is None:
+            raise ValueError('--checkpoint is required for a reporting continuation')
+        source = PipelineResult.model_validate_json(args.checkpoint.read_bytes())
     raw_pdf = args.pdf.read_bytes()
-    if hashlib.sha256(raw_pdf).hexdigest() != source.document.sha256:
+    source_hash = hashlib.sha256(raw_pdf).hexdigest()
+    if source is not None and source_hash != source.document.sha256:
         raise ValueError('Original PDF does not match the saved checkpoint')
     settings = settings_for(args.env, args.provider, args.model)
     args.output.mkdir(parents=True, exist_ok=False)
@@ -113,11 +118,13 @@ def run(args) -> dict:
 
     gateway = DiagnosticGateway(create_llm_client(settings), settings, cache_enabled=False)
     started = perf_counter()
-    gateway.run_deadline = AnalysisDeadline()
+    gateway.run_deadline = AnalysisDeadline(limit_seconds=args.analysis_timeout_seconds)
     summary = dict(started_at=datetime.now(timezone.utc).isoformat(),
-        provider=settings.provider.value, model=settings.model, original_sha256=source.document.sha256,
-        checkpoint=str(args.checkpoint),
-        mode='live_fresh_pdf' if args.fresh else 'live_reporting_resume', limit_seconds=900,
+        provider=settings.provider.value, model=settings.model, original_sha256=source_hash,
+        checkpoint=None if args.fresh else str(args.checkpoint), resume_supplied=source is not None,
+        request_cache_enabled=False,
+        mode='live_fresh_pdf' if args.fresh else 'live_reporting_resume',
+        limit_seconds=gateway.run_deadline.limit_seconds,
         status='running', complete=False)
     summary_lock = Lock()
 
@@ -177,14 +184,15 @@ def run(args) -> dict:
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--checkpoint', type=Path, required=True)
+    parser.add_argument('--checkpoint', type=Path)
     parser.add_argument('--pdf', type=Path, required=True)
     parser.add_argument('--env', type=Path, required=True)
     parser.add_argument('--provider', required=True)
     parser.add_argument('--model', required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--export-pptx', action='store_true')
-    parser.add_argument('--fresh', action='store_true', help='Use the checkpoint only to verify the PDF hash; run from ingestion without any saved analysis')
+    parser.add_argument('--fresh', action='store_true', help='Read only the original PDF; ignore checkpoints and start from ingestion without any saved analysis')
+    parser.add_argument('--analysis-timeout-seconds', type=float, help='One shared attempt budget, 60–7200 seconds; default ANALYSIS_TIMEOUT_SECONDS or 900')
     parser.add_argument('--skip-probe', action='store_true', help='Reuse an already verified connection; all analysis requests remain real')
     parser.add_argument('--render-node', type=Path)
     parser.add_argument('--render-module', type=Path)

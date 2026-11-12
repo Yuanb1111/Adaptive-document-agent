@@ -181,7 +181,9 @@ class TableExtractor:
             if reference:
                 labels[column], periods[column], types[column] = reference, None, 'reference'
                 currencies[column], scales[column] = None, None
+        from .source_column_assurance import literal_column_statuses
         analytical=literal.model_copy(deep=True,update={'headers':labels,'column_periods':periods,'column_types':types,
+            'column_audit_statuses':literal_column_statuses(literal,periods),
             'column_currencies':currencies,'column_scales':scales,
             'rows':self._build_table_rows(literal.raw_cells,literal.page),
             'raw_cells_include_headers':False,

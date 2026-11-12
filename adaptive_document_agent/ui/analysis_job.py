@@ -22,7 +22,7 @@ def new_attempt():
 def snapshot(attempt):
     with attempt['lock']:
         if attempt['state'] == 'running' and not attempt['deadline'].remaining:
-            attempt['progress'].fail('15-minute limit reached; stopping, no new model requests')
+            attempt['progress'].fail(f"{attempt['deadline'].limit_label} limit reached; stopping, no new model requests")
             attempt['progress'].stopped_at = attempt['deadline'].expires_at
         return {**attempt, 'progress': attempt['progress'].snapshot()}
 
@@ -76,11 +76,11 @@ def execute(attempt, *, gateway_factory, orchestrator_factory, raw_pdf, scope_ke
                     message += f' {detail.rstrip(".")}.'
                 attempt['failure'] = {
                     'scope_key': scope_key, 'scope': scope,
-                    'message': (str(AnalysisTimeLimitExceeded()) if result.failed_stage == 'analysis_time_limit' else
+                    'message': (str(AnalysisTimeLimitExceeded(attempt['deadline'].limit_seconds)) if result.failed_stage == 'analysis_time_limit' else
                         f'{message} Retry to continue from retained evidence.'),
                     'usage': list(gateway.usage)}
                 message = stage if stage.startswith('Analysis incomplete') else 'Analysis incomplete: ' + stage
-                attempt['progress'].fail('15-minute analysis limit reached' if result.failed_stage == 'analysis_time_limit'
+                attempt['progress'].fail(f"{attempt['deadline'].limit_label} analysis limit reached" if result.failed_stage == 'analysis_time_limit'
                                          else message)
                 attempt['state'] = 'partial'
     except BaseException as exc:

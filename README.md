@@ -1,5 +1,8 @@
 # Adaptive Document Intelligence Agent
 
+The [single-invocation fresh-PDF fix](docs/SINGLE_FRESH_PDF_RUN.md) keeps bounded
+source/copy corrections inside one run, with no checkpoint input and one explicit time budget.
+
 The [.813 selection-output fix](docs/SELECTION_TRUNCATION_813.md) bounds output-capacity
 recovery and repairs literal source references without transferring review approval.
 

@@ -489,7 +489,9 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
                     if key == 'additions' else value for key, value in supplied.items()}
         supplied = {key: _retain_cited_context(value, original['items'][int(key[5:])], excerpts)
                     if key.startswith('item_') else value for key, value in supplied.items()}
-        patch_values = patch_model.model_validate(supplied).model_dump(mode='json')
+        from .brief_expanded_capacity import validate_expanded_patch
+        patch_values = validate_expanded_patch(gateway, repair_messages, patch_model,
+            patch.model_dump(mode='json'), supplied, audit, cancelled=cancelled).model_dump(mode='json')
         audit['patch'] = patch_values
         for index in invalid:
             merged[index] = patch_values[f'item_{index}']
@@ -567,7 +569,7 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
                     return brief
             except (ValueError, TypeError, ValidationError):
                 pass
-    if semantic_validator and audit.get('patch'):
+    if semantic_validator and (audit.get('patch') or audit.get('partial_patch_items')):
         from .brief_source_repair import correct_residual_source_errors
         from .brief_semantic_repair import correct_new_meaning_errors
         try:
@@ -576,7 +578,7 @@ def generate_with_item_repair(gateway: LLMGateway, messages: list[dict[str, Any]
                 excerpts=excerpts, initial_errors=audit['initial_errors'], audit=audit, cancelled=cancelled,
                 evidence_catalog=evidence_catalog, previously_source_valid={i: ExecutiveBriefItem.model_validate(
                     bounded_quote_item(original['items'][i], excerpts)) for i in invalid
-                    if all(error.startswith('Meaning review:') for error in invalid[i])})
+                    if all(error.startswith('Meaning review:') for error in invalid[i])}) if audit.get('patch') else None
             if source_corrected is not None:
                 candidate = source_corrected
                 merged = [item.model_dump(mode='json') for item in candidate.items]

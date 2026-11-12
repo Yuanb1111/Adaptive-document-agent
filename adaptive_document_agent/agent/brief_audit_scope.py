@@ -45,21 +45,35 @@ def geometric_column_statuses(page, table, labels):
             box = line.get('bbox')
             if valid_box(box) and isinstance(line.get('text'), str) and line['text'].strip():
                 words.append(dict(text=line['text'], x0=box[0], x1=box[2], top=box[1], bottom=box[3]))
-    width = len(table.headers) - 1
-    unresolved = [None] * max(width, 0)
+    period_columns = [i for i, period in enumerate(table.column_periods) if i and period]
+    width = len(period_columns)
+    unresolved = [None] * max(len(table.headers) - 1, 0)
     if not words or not valid_box(table.bbox) or width < 1 or table.source_rotation or page.reading_rotation:
         return unresolved
     lines = source_lines(page, page.text, str.strip, words=words)
     compact = lambda text: ''.join(normalize_quote(text).split())
     year_headers = {compact(raw) for raw in table.raw_header_lines
                     if len(re.findall(_YEAR, raw)) >= 2}
+    header_limit = table.bbox[1]
+    header_floor = float('-inf')
+    if table.source_layout_status == 'checked' and table.raw_header_cells:
+        # A ruled grid's box includes its header. Locate the actual first body
+        # line, rather than requiring its own year header to be above the box.
+        bodies = {compact(raw) for raw in table.raw_body_lines if raw.strip()}
+        body_tops = [line.top for line in lines if compact(line.text) in bodies
+                     and line.top is not None and table.bbox[1] <= line.top < table.bbox[3]]
+        if not body_tops:
+            return unresolved
+        header_floor = table.bbox[1]
+        header_limit = min(body_tops)
     candidates = [i for i, line in enumerate(lines) if compact(line.text) in year_headers
-                  and line.bottom is not None and line.bottom < table.bbox[1]]
+                  and line.bottom is not None and line.bottom < header_limit
+                  and line.top is not None and line.top >= header_floor]
     if not candidates:
         return unresolved
     year_index = max(candidates, key=lambda i: lines[i].bottom)
     annotations = [line for line in lines[year_index + 1:]
-                   if line.top is not None and line.top < table.bbox[1]
+                   if line.top is not None and line.top < header_limit
                    and normalize_quote(line.text) in labels]
     from adaptive_document_agent.extraction.period_header_geometry import geometric_periods
     periods = geometric_periods(lines[max(0, year_index - 5):year_index], lines[year_index], width)
@@ -67,8 +81,10 @@ def geometric_column_statuses(page, table, labels):
         return unresolved
     statuses = geometric_audit_statuses(annotations, lines[year_index], width)
     header_text = ' '.join(table.raw_header_lines)
+    result = list(unresolved)
     for i, actual in enumerate(periods):
-        stored = table.column_periods[i + 1] if i + 1 < len(table.column_periods) else ''
+        column = period_columns[i]
+        stored = table.column_periods[column]
         stored = re.sub(r'\s+', '', stored or '').upper()
         equivalent = {actual.upper()}
         interim = re.fullmatch(r'6M(\d{4})', actual, re.I)
@@ -78,8 +94,9 @@ def geometric_column_statuses(page, table, labels):
             elif re.search(r'December\s*31', header_text, re.I):
                 equivalent.update((f'2H{interim[1]}', f'H2{interim[1]}'))
         if stored not in equivalent:
-            statuses[i] = None
-    return statuses
+            continue
+        result[column - 1] = statuses[i]
+    return result
 
 
 def source_audit_scope(item, result):

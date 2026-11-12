@@ -15,10 +15,10 @@ def feedback_fingerprint(context):
     return fingerprint({k: v for k, v in context.items() if k != 'report_outline'})
 
 
-def can_retry_source_review(previous):
+def can_retry_source_review(previous, *, live_review=False):
     """One bounded correction of source-authored pages before catalog fallback."""
     from .retained_analysis import selected_record, selection_context, fingerprint, selection_input_matches
-    if (previous.failed_stage != 'presentation_coverage'
+    if not live_review and (previous.failed_stage != 'presentation_coverage'
             or previous.failure_details.get('component') != 'PresentationCoverage'):
         return False
     try:
@@ -43,8 +43,8 @@ def can_retry_source_review(previous):
         return False
 
 
-def retain_selection_feedback(previous):
-    if can_retry_source_review(previous):
+def retain_selection_feedback(previous, *, live_review=False):
+    if can_retry_source_review(previous, live_review=live_review):
         from .retained_analysis import selected_record, selection_context, fingerprint
         from .retained_page_sources import writer_context
         context = selection_context(previous)
