@@ -59,7 +59,7 @@ def make_gateway(client, *, workers=4, local=False):
         discovery_workers=workers))
 
 
-@pytest.mark.parametrize("workers,local,stateful", [(4, False, False), (2, False, False),
+@pytest.mark.parametrize("workers,local,stateful", [(8, False, False), (4, False, False), (2, False, False),
                                                      (1, False, False), (4, True, False), (4, False, True)])
 def test_combined_text_structured_and_repair_calls_respect_gateway_limit(workers, local, stateful):
     limit = 1 if local or stateful else workers

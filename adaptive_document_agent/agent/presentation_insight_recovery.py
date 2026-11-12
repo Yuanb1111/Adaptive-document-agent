@@ -20,12 +20,20 @@ _PERCENT = re.compile(r"(?<!\w)(?P<number>[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d
 _CAGR_PERIOD = re.compile(r'\b((?:FY)?(?:19|20)\d{2}E?)\s*(?:[-–—]|\bto\b)\s*((?:FY)?(?:19|20)\d{2}E?)\b', re.I)
 
 
-def _chart_cagr_values(clause, reported, calculations):
+def _chart_cagr_values(clause, reported, calculations, *, rate_start=None, rate_end=None):
     """Resolve the exact source cell or the exact calculated interval, never both."""
-    intervals = _CAGR_PERIOD.findall(clause)
+    intervals = list(_CAGR_PERIOD.finditer(clause))
+    if len(intervals) > 1 and rate_start is not None:
+        # A list of reported rates may share attribution, but each rate must
+        # have one directly adjacent interval. Never choose by numeric value.
+        intervals = [m for m in intervals if (
+            rate_end <= m.start() and re.fullmatch(r'\s*(?:CAGR\s*)?(?:for|from|over)\s*',
+                                                  clause[rate_end:m.start()], re.I)) or (
+            m.end() <= rate_start and re.fullmatch(r'\s*(?:CAGR\s*)?(?:(?:was|is|of)\s*)?',
+                                                   clause[m.end():rate_start], re.I))]
     if len(intervals) != 1:
         return []
-    start, end = (p.upper() for p in intervals[0])
+    start, end = (p.upper() for p in intervals[0].groups())
     recalculated = bool(re.search(r'\b(?:recalculated|recomputed|calculated|computed)\b', clause, re.I))
     source_attributed = bool(re.search(r'\b(?:reported|reports?|lists?|shows?|labels?)\b', clause, re.I))
     if recalculated == source_attributed:
@@ -89,7 +97,8 @@ def _numeric_support(text, observations, computed_percentages=(), *, diagnostics
         computed_cagr = (re.search(r'\bCAGR\b', clause, re.I)
                          and re.search(r'\b(?:recalculated|recomputed|calculated|computed)\b', clause, re.I))
         if re.search(r'\bCAGR\b', clause, re.I) and (chart_units or chart_reported or computed_cagr):
-            rates = _chart_cagr_values(clause, chart_reported, calculations.values())
+            rates = _chart_cagr_values(clause, chart_reported, calculations.values(),
+                                       rate_start=len(prefix), rate_end=len(prefix) + len(match[0]))
             if unit == "pp" or "point" in unit or not rates or not any(
                     round(rate, places) == float(literal) for rate in rates):
                 if diagnostics is not None:
@@ -109,7 +118,10 @@ def _numeric_support(text, observations, computed_percentages=(), *, diagnostics
                 r"\b(?:grew|growth|increased|decreased|rose|fell|declined|widened|narrowed|changed|was|were|reached|at)\b",
                 prefix, re.I,
             )
-            if not matches(derived_rates) or not predicates or predicates[-1].casefold() in {"was", "were", "reached", "at"}:
+            from adaptive_document_agent.validation.calculated_change_label import labelled_change_supported
+            labelled_change = labelled_change_supported(clause, prefix, literal, calculations.values())
+            if not matches(derived_rates) or (not labelled_change and (
+                    not predicates or predicates[-1].casefold() in {"was", "were", "reached", "at"})):
                 if diagnostics is not None:
                     diagnostics.append(f'Unbound percentage claim: {match[0]}. No matching reported rate '
                         'or correctly labelled change is bound to this page. Remove this numeric claim '

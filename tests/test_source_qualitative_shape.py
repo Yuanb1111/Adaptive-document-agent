@@ -49,6 +49,12 @@ def test_known_metrics_cannot_use_nominal_shape_to_disable_direction_checks():
         metric_spans=[(text.index('revenue'), len(text) - 1)], periods=['FY2023', 'FY2025'])
 
 
+def test_source_only_composition_uses_a_qualitative_shift_without_inventing_a_numeric_series():
+    slide=PresentationSlide(id='composition',slide_type='analysis',title='Context',source_pages=[234],
+        message='The source describes a shift toward long-aged gross inventory during the Track Record Period.')
+    assert not ClaimValidator().validate_slide(slide,observations())
+
+
 def test_ambiguous_word_feedback_identifies_the_exact_occurrence_and_clause():
     rows = observations()
     invalid = 'The source says the provisions share of inventory costs increased from FY2023 to FY2025.'

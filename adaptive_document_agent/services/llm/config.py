@@ -33,7 +33,8 @@ class LLMSettings(BaseModel):
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     privacy_mode: PrivacyMode = PrivacyMode.AUTO
     stage_models: dict[str, str] = Field(default_factory=dict)
-    discovery_workers: int = Field(default=4, ge=1, le=4)
+    discovery_workers: int = Field(default=4, ge=1, le=8)
+    brief_initial_findings: int = Field(default=7, ge=3, le=7)
     discovery_chunk_tokens: int = Field(default=12000, ge=2000, le=24000)
     semantic_batch_size: int = Field(default=96, ge=24, le=128)
     discovery_thinking: Literal["disabled", "enabled", "provider_default"] = "disabled"
@@ -84,6 +85,7 @@ class LLMSettings(BaseModel):
             privacy_mode=PrivacyMode(privacy_raw),
             stage_models=stage_models,
             discovery_workers=int(os.getenv("LLM_DISCOVERY_WORKERS", "4")),
+            brief_initial_findings=int(os.getenv("LLM_BRIEF_INITIAL_FINDINGS", "7")),
             discovery_chunk_tokens=int(os.getenv("LLM_DISCOVERY_CHUNK_TOKENS", "12000")),
             semantic_batch_size=int(os.getenv("LLM_SEMANTIC_BATCH_SIZE", "96")),
             discovery_thinking=os.getenv("LLM_DISCOVERY_THINKING", "disabled"),

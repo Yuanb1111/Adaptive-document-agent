@@ -5,7 +5,9 @@ TABLE = '$record_table'
 LITERAL = '$literal_object'
 INSTRUCTIONS = ('Evidence uses lossless column encoding: {"$record_table":{"columns":[...],'
     '"rows":[...]}} represents an array of records; match each row cell to its column name. '
-    'Nested cells use the same encoding. {"$literal_object":[[key,value],...]} escapes a literal '
+    'An optional constants object supplies identical fields inherited by EVERY row; '
+    'columns lists only the varying fields. Nested cells use the same encoding. '
+    '{"$literal_object":[[key,value],...]} escapes a literal '
     'object with reserved keys. All values, nulls, row ordering and geometry are unchanged.')
 
 
@@ -28,7 +30,14 @@ def encode_records(value):
         return encoded
     table = {TABLE: dict(columns=columns,
         rows=[[encode_records(v[k]) for k in columns] for v in value])}
-    return table if _size(table) < _size(encoded) else encoded
+    # JSON identity keeps bool/int/float distinctions, including nested values.
+    signature = lambda cell: json.dumps(cell, ensure_ascii=False, sort_keys=True)
+    constants = {key: value[0][key] for key in columns
+                 if len({signature(row[key]) for row in value}) == 1}
+    varying = [key for key in columns if key not in constants]
+    factored = {TABLE: dict(columns=varying, constants=encode_records(constants),
+        rows=[[encode_records(row[key]) for key in varying] for row in value])}
+    return min((encoded, table, factored), key=_size)
 
 
 def decode_records(value):
@@ -41,6 +50,7 @@ def decode_records(value):
         return {k: decode_records(v) for k, v in value[LITERAL]}
     if set(value) == {TABLE}:
         table = value[TABLE]
-        return [dict(zip(table['columns'], (decode_records(v) for v in row), strict=True))
+        constants = decode_records(table.get('constants', {}))
+        return [{**constants, **dict(zip(table['columns'], (decode_records(v) for v in row), strict=True))}
                 for row in table['rows']]
     return {k: decode_records(v) for k, v in value.items()}

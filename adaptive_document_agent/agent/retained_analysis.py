@@ -278,6 +278,7 @@ def _select_retained_analysis(gateway, result):
     priority_revisions_left = 1
     max_copy_revisions = copy_revisions_left = 2
     earlier_page_issues = (feedback or {}).get('earlier_page_issues', {})
+    priority_draft = None
     for attempt in range(3):
         schema = SourceAuthoredAnalysisSelection if source_authoring else RetainedAnalysisSelection
         reusing_source_draft = (attempt == 0 and feedback is not None and feedback.get('source_review')
@@ -286,7 +287,12 @@ def _select_retained_analysis(gateway, result):
         reusing_draft = (attempt == 0 and feedback is not None
                          and (not feedback.get('source_review') or reusing_source_draft)
                          and (not feedback['current_binding_errors'] or feedback.get('selection_unchanged')))
-        if reusing_draft:
+        if priority_draft is not None:
+            from .retained_priority_patch import priority_patch
+            selection = priority_patch(gateway, messages, schema, result, attempt,
+                priority_draft, reviewed_priorities, earlier_page_issues)
+            priority_draft = None
+        elif reusing_draft:
             # A structurally valid unchanged selection can repair its rejected
             # pages directly. Keep the other draft pages stable; all numeric,
             # coverage and final source checks still run before export.
@@ -399,6 +405,7 @@ def _select_retained_analysis(gateway, result):
                 raise
             if priority_retry:
                 priority_revisions_left -= 1
+                priority_draft = draft
             messages = [*messages, untrusted_document_message(json.dumps(dict(
                 rejected_draft=draft, error=str(exc)), ensure_ascii=False)),
                 dict(role='user', content='Correct the indicated evidence binding or copy and return the '

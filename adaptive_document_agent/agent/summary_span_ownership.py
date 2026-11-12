@@ -1,4 +1,31 @@
 """Reconcile redundant boundary ownership only when every fact keeps its quote."""
+from collections import Counter
+
+
+def quarantine_empty_terminal_layout(response, blocks, record):
+    """Withhold a one-past-end annotation only if all real lines have one owner.
+
+    No real range is clipped, moved or classified. Facts and all original source
+    ownership remain unchanged, and the exact rejected record stays in the audit.
+    Unknown blocks, substantive parts and any real gap/overlap still fail closed.
+    """
+    lengths = {b.id: len(b.text.splitlines(keepends=True)) for b in blocks}
+    candidates, owners = [], {bid: Counter() for bid in lengths}
+    for part in response.parts:
+        length = lengths.get(part.block_id)
+        if length is None:
+            return response
+        if part.role == 'layout' and not part.facts and part.start_line == part.end_line == length + 1:
+            candidates.append(part)
+        elif 1 <= part.start_line <= part.end_line <= length:
+            owners[part.block_id].update(range(part.start_line, part.end_line + 1))
+        else:
+            return response
+    if not candidates or any(any(counts[i] != 1 for i in range(1, lengths[bid] + 1))
+                             for bid, counts in owners.items()):
+        return response
+    record['quarantined_empty_terminal_layout'] = [p.model_dump(mode='json') for p in candidates]
+    return response.model_copy(update={'parts': [p for p in response.parts if p not in candidates]})
 
 
 def reconcile_contained_spans(response, blocks, record):

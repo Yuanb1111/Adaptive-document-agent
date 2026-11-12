@@ -9,8 +9,9 @@ from .summary_literal_evidence import literal_facts, quarantine_annotation, term
 
 def bind_reading(response, blocks, result, record, *, literal_fallback=False, recover_cross_part=False):
     if literal_fallback:
-        from .summary_span_ownership import reconcile_contained_spans
+        from .summary_span_ownership import reconcile_contained_spans, quarantine_empty_terminal_layout
         response = reconcile_contained_spans(response, blocks, record)
+        response = quarantine_empty_terminal_layout(response, blocks, record)
     by_id = {b.id: b for b in blocks}
     parts, errors = [], []
     for part in response.parts:

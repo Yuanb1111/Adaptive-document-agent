@@ -1,0 +1,66 @@
+"""A priority correction authors only changed pages, then earns fresh review."""
+from copy import deepcopy
+
+import pytest
+
+from adaptive_document_agent.agent import retained_analysis as retained
+from adaptive_document_agent.agent.retained_priority_patch import priority_patch
+from tests.test_retained_analysis_v216 import gateway
+from tests.test_retained_source_citations import fixture
+
+
+def proposal():
+    result,_,selection = fixture()
+    original=selection.ordered_insight_ids[0]
+    result.insights.append(result.insights[0].model_copy(update={'id':'additional'}))
+    draft=selection.model_dump(mode='json',exclude_none=True)
+    draft['decisions'].append(dict(insight_id='additional',decision='omit',reason='Lower priority.'))
+    added=dict(insight_id='additional',decision='include',reason='Material counterevidence.',
+               page=deepcopy(draft['decisions'][0]['page']))
+    return result,original,draft,added
+
+
+def test_missing_priority_only_authors_new_page_and_still_reviews_full_selection():
+    result,iid,draft,added=proposal()
+    before=deepcopy(result)
+    llm=gateway([draft,dict(accepted=False,missing_insight_ids=['additional'],
+        prioritized_insight_ids=[iid,'additional'],reason='Retain this material counterpoint.'),
+        dict(decisions=[added],ordered_insight_ids=[iid,'additional']),
+        dict(accepted=True,reason='Complete fresh coverage review.')])
+    retained.select_retained_analysis(llm,result)
+    selected=retained.selected_record(result)['selection']
+    assert selected['decisions'][0]==draft['decisions'][0]
+    assert selected['decisions'][1]==added
+    assert [u['operation'] for u in llm.usage]==['SourceAuthoredAnalysisSelection',
+        'RetainedSelectionCoverage','SourceAuthoredAnalysisSelection','RetainedSelectionCoverage']
+    assert 'editable_decision_ids' in str(llm.client.calls[2])
+    for field in ('document','observations','analysis_results','insights'):
+        assert getattr(result,field)==getattr(before,field)
+
+
+@pytest.mark.parametrize('defect',['missing','duplicate','foreign','changed_frozen','wrong_priority'])
+def test_invalid_delta_cannot_modify_frozen_page_or_skip_requested_decisions(defect):
+    result,iid,draft,added=proposal()
+    response=dict(decisions=[deepcopy(added)],ordered_insight_ids=[iid,'additional'])
+    if defect=='missing':response['decisions']=[]
+    elif defect=='duplicate':response['decisions'].append(deepcopy(added))
+    elif defect=='foreign':response['decisions'].append(dict(added,insight_id='unknown'))
+    elif defect=='changed_frozen':
+        frozen=deepcopy(draft['decisions'][0]);frozen['page']['message']='A different claim.'
+        response['decisions'].append(frozen)
+    else:response['ordered_insight_ids']=[iid]
+    llm=gateway([response]);before=deepcopy(draft)
+    with pytest.raises(ValueError):
+        priority_patch(llm,[],retained.SourceAuthoredAnalysisSelection,result,1,draft,
+                       [iid,'additional'],{})
+    assert draft==before and retained.selected_record(result) is None
+
+
+def test_priority_order_alone_needs_no_retranscription_request():
+    result,iid,draft,added=proposal()
+    draft['decisions'][1]=added;draft['ordered_insight_ids'].append('additional')
+    llm=gateway([])
+    selection=priority_patch(llm,[],retained.SourceAuthoredAnalysisSelection,result,1,draft,
+                             ['additional',iid],{})
+    assert selection.ordered_insight_ids==['additional',iid] and not llm.usage
+    assert selection.model_dump(mode='json',exclude_none=True)['decisions']==draft['decisions']

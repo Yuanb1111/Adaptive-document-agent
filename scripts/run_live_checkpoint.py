@@ -75,6 +75,7 @@ def settings_for(path: Path, provider: str, model: str) -> LLMSettings:
         base_url=base_url, privacy_mode=PrivacyMode(mode),
         timeout_seconds=float(values.get('LLM_TIMEOUT_SECONDS', '120')),
         discovery_workers=int(values.get('LLM_DISCOVERY_WORKERS', '4')),
+        brief_initial_findings=int(values.get('LLM_BRIEF_INITIAL_FINDINGS', '7')),
         simple_task_reasoning=values.get('LLM_SIMPLE_TASK_REASONING', 'reduced'),
         presentation_strategy='retained_analysis')
 
@@ -90,6 +91,12 @@ def run(args) -> dict:
     if source is not None and source_hash != source.document.sha256:
         raise ValueError('Original PDF does not match the saved checkpoint')
     settings = settings_for(args.env, args.provider, args.model)
+    overrides = {key: getattr(args, argument) for key, argument in (
+        ('discovery_workers', 'workers'), ('brief_initial_findings', 'brief_findings'))
+        if getattr(args, argument, None) is not None}
+    if overrides:
+        settings = settings.model_copy(update=overrides)
+        settings = LLMSettings.model_validate(settings.model_dump())
     args.output.mkdir(parents=True, exist_ok=False)
 
     class DiagnosticGateway(LLMGateway):
@@ -123,8 +130,11 @@ def run(args) -> dict:
         provider=settings.provider.value, model=settings.model, original_sha256=source_hash,
         checkpoint=None if args.fresh else str(args.checkpoint), resume_supplied=source is not None,
         request_cache_enabled=False,
+        cloud_request_limit=gateway.discovery_workers,
+        initial_brief_capacity=settings.brief_initial_findings,
         mode='live_fresh_pdf' if args.fresh else 'live_reporting_resume',
         limit_seconds=gateway.run_deadline.limit_seconds,
+        limit_includes_pptx_qa=bool(args.export_pptx),
         status='running', complete=False)
     summary_lock = Lock()
 
@@ -161,8 +171,10 @@ def run(args) -> dict:
         (args.output / 'analysis_data.json').write_text(result.model_dump_json(indent=2), encoding='utf-8')
         (args.output / 'analysis_report.md').write_text(result.report_markdown, encoding='utf-8')
         if args.export_pptx and ready:
+            gateway.run_deadline.check()
             progress('Exporting the complete report through native and rendered PowerPoint QA')
             summary.update(export_verified(result, raw_pdf, args))
+            gateway.run_deadline.check()
             summary.update(complete=True, status='complete')
             (args.output / 'analysis_data.json').write_text(result.model_dump_json(indent=2), encoding='utf-8')
     except Exception as exc:
@@ -193,6 +205,8 @@ if __name__ == '__main__':
     parser.add_argument('--export-pptx', action='store_true')
     parser.add_argument('--fresh', action='store_true', help='Read only the original PDF; ignore checkpoints and start from ingestion without any saved analysis')
     parser.add_argument('--analysis-timeout-seconds', type=float, help='One shared attempt budget, 60–7200 seconds; default ANALYSIS_TIMEOUT_SECONDS or 900')
+    parser.add_argument('--workers', type=int, choices=range(1, 9), help='Shared cloud request limit (1–8); local and stateful clients remain serial')
+    parser.add_argument('--brief-findings', type=int, choices=range(3, 8), help='Initial material brief finding capacity (3–7), preserving reserved supplementary capacity')
     parser.add_argument('--skip-probe', action='store_true', help='Reuse an already verified connection; all analysis requests remain real')
     parser.add_argument('--render-node', type=Path)
     parser.add_argument('--render-module', type=Path)

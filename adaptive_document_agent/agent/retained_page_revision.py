@@ -273,7 +273,12 @@ def revise_retained_pages(gateway, result, packet, aliases, draft, issues, *, ea
              'Keep only companion references used in the replacement. '
              + PERIOD_AND_ASSURANCE_RULES + LAYOUT_INSTRUCTIONS + INSTRUCTIONS),
         dict(role='user', content='Apply the requested local corrections and preserve the existing source-supported '
-             'amounts and composition. Check that every bound numeric comparison names exactly one metric and its own '
+             'amounts and composition. '
+             'For a source-only composition shift with no eligible percentage row, explicitly write '
+             '"The source describes a shift toward [source-defined category] during [literal source scope]" '
+             'or "away from" as supported. Preserve its real adverse effect and exact context_evidence; '
+             'do not substitute "the share increased/decreased" as an unbound measurement predicate. '
+             'Check that every bound numeric comparison names exactly one metric and its own '
              'literal endpoints for a comparison. Separate attributed drivers with their original paragraph scope '
              'into their own sentences. Verify feedback against the full source context; correct a feedback error '
              'instead of preserving an unsupported period or amount. Measurement periods and '

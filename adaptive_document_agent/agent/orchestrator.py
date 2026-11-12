@@ -861,6 +861,8 @@ class DocumentOrchestrator:
                                   if issue.code == 'executive_brief_unavailable')
                     raise ValueError(reason)
                 final_stage = 'source_integration'
+                from .prepared_retained_review import prepare_retained_review
+                early_review = resources.enter_context(prepare_retained_review(self.gateway, final_result))
                 original_brief = final_result.executive_brief
                 if original_brief is not None:
                     from .source_integration_review import review_supplementary_sources
@@ -883,7 +885,9 @@ class DocumentOrchestrator:
                 final_stage = 'presentation_coverage'
                 from .retained_analysis_review import review_retained_analysis
                 with record_timing(final_result.stage_details_ms, 'retained_analysis_review'):
-                    review_retained_analysis(self.gateway, final_result, progress=notify, repair_copy=True)
+                    initial_failure = early_review.attach(final_result) if early_review else None
+                    review_retained_analysis(self.gateway, final_result, progress=notify, repair_copy=True,
+                                             initial_failure=initial_failure)
                 require_topic_coverage(final_result)
                 final_stage = 'presentation_budget'
                 if final_result.executive_brief != original_brief:
@@ -1044,7 +1048,8 @@ class DocumentOrchestrator:
                         + " ".join(str(topic_error).split())[:800],
                 severity="warning", stage="presentation",
             ))
-        notify('Generating charts from selected presentation questions')
+        notify('Preparing diagnostics for incomplete report selection' if output.failed_stage
+               else 'Generating charts from selected presentation questions')
         charts = ChartPlanner().plan(
             plan, results, index, preferred_metrics=profile.metrics, insights=insights,
             report_plan=report_plan, analysis_focus=analysis_focus,

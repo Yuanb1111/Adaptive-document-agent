@@ -109,8 +109,14 @@ def execute_review(gateway, *, brief, pending, messages, catalogs, errors, check
             if requested:
                 request_messages = [messages[0], untrusted_document_message(json.dumps(requested, ensure_ascii=False)),
                                     *messages[2:]]
-                complete_meaning_output(gateway, request_messages, BriefMeaningReview, requested, record,
-                    capacity, cancelled=cancelled, on_complete=complete)
+                if split is not None and getattr(gateway, 'discovery_workers', 1) >= 8 and len(requested) > 1:
+                    from .brief_literal_partitions import literal_partitions
+                    for response, rows, request in literal_partitions(gateway, request_messages,
+                            BriefMeaningReview, requested, record, cancelled=cancelled):
+                        complete(response, rows, request)
+                else:
+                    complete_meaning_output(gateway, request_messages, BriefMeaningReview, requested, record,
+                        capacity, cancelled=cancelled, on_complete=complete)
             if literal_checks is not None and cached:
                 context_errors = finish_context()
                 for i in cached:

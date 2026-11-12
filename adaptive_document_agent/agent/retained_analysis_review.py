@@ -171,11 +171,13 @@ def require_retained_review(result):
         raise ValueError('Retained-analysis evidence review is incomplete, rejected or stale. Retry reporting.')
 
 
-def review_retained_analysis(gateway, result, *, progress=None, repair_copy=False):
+def review_retained_analysis(gateway, result, *, progress=None, repair_copy=False, initial_failure=None):
     scope = getattr(gateway, 'validated_cache_scope', nullcontext)
     with scope():
         for attempt in range(3 if repair_copy else 1):
             try:
+                if attempt == 0 and initial_failure is not None:
+                    raise initial_failure
                 return _review_retained_analysis(gateway, result, progress=progress)
             except ValueError:
                 if not repair_copy or attempt == 2:

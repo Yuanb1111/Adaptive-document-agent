@@ -2,6 +2,9 @@
 
 The [single-invocation fresh-PDF fix](docs/SINGLE_FRESH_PDF_RUN.md) keeps bounded
 source/copy corrections inside one run, with no checkpoint input and one explicit time budget.
+The performance follow-up supports eight shared cloud requests, bounded priority
+patches and fingerprint-bound overlapping final review, with a 900-second live
+verification budget that includes PPTX QA.
 
 The [.813 selection-output fix](docs/SELECTION_TRUNCATION_813.md) bounds output-capacity
 recovery and repairs literal source references without transferring review approval.
@@ -969,7 +972,7 @@ The `2026-09-22-evidence-scope-readability-v18` pipeline invalidates older extra
 
 Company facts paginate with their evidence instead of disappearing into notes. Analytical commentary uses 18-point type with measured text capacity, and short KPI series can reflow into a complete same-page table. All capacity rules depend on content and available space, never an issuer, page number or fixed amount. Fresh model planning is still required to improve the wording/selection of a previously downloaded deck.
 
-- Independent discovery chunks run with up to four concurrent cloud requests by default. `LLM_DISCOVERY_WORKERS=1` restores serial operation (allowed range: 1-4); existing deployment overrides remain effective, and you should reduce the value if your provider rate-limits concurrent requests. Loopback/local models and adapters that have not opted into thread-safe requests remain serial. All requests still go through `LLMGateway`. Chunk results are merged in source order, and a failed chunk cannot produce a successful partial profile.
+- Independent cloud requests share four admission slots by default. `LLM_DISCOVERY_WORKERS=8` enables up to eight slots when provider quotas permit; `1` restores serial operation (allowed range: 1–8). Existing deployment overrides remain effective. Loopback/local models and adapters that have not opted into thread-safe requests remain serial. All requests still go through `LLMGateway`. Chunk results are merged in source order, and a failed chunk cannot produce a successful partial profile.
 - For thread-safe cloud clients, semantic resolution of more than 96 unique metrics uses batches of at most 96 (`LLM_SEMANTIC_BATCH_SIZE`, range 24–128) under the same concurrency limit. Each batch sees the complete metric vocabulary and shared source context; no terms are dropped, missing mappings remain explicitly unresolved, and any failed batch fails the stage. Smaller vocabularies and local/stateful clients retain a single request. The shared vocabulary/context is placed before changing batch assignments for provider prefix caching. Doubling the former 48-term batch size halves repeated context for large even batches; provider cache hits still depend on the provider and are measured rather than assumed. This does not guarantee a particular end-to-end speedup or identical model wording.
 - Table-header lookups reuse page word geometry, and completed pdfplumber page layout caches are released after copying raw cells and evidence. Extraction strategies and validation gates are unchanged.
 - Hosted logs now include `stage_started` and `stage_finished` with duration and completion/failure status, without document text, API keys, or exception payloads. A process killed by the host may have a start event but no finish event. These timings diagnose bottlenecks; they do not provide background execution or reconnect recovery.

@@ -138,7 +138,7 @@ def prepare_report_language(gateway, result, *, progress=None):
             audits.extend(records)
             for key,value in clock.items():
                 details[key] = details.get(key,0)+value
-        workers = min(2,getattr(gateway,'discovery_workers',1),len(batches))
+        workers = min(3,getattr(gateway,'discovery_workers',1),len(batches))
         if workers>1:
             notify(f'Translating and reviewing display text (0/{len(batches)} batches complete)')
             with ThreadPoolExecutor(max_workers=workers,thread_name_prefix='display-translation') as pool:

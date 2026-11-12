@@ -22,7 +22,9 @@ def generate_patch(gateway, messages, schema, context, audit, *, cancelled=None)
     """
     item_keys = [key for key in schema.model_fields if key.startswith('item_')]
     workers = getattr(gateway, 'discovery_workers', 1)
-    if len(item_keys) < 3 or workers < 2:
+    reference_items = set(context.get('source_quantity_reference_options', {})) & set(item_keys)
+    mixed_transport = bool(reference_items) and reference_items != set(item_keys)
+    if (len(item_keys) < 3 and not mixed_transport) or workers < 2:
         try:
             return gateway.generate_structured(messages, schema, stage='report',
                 allow_repair=False, max_tokens=12000, cancelled=cancelled)
@@ -51,6 +53,10 @@ def generate_patch(gateway, messages, schema, context, audit, *, cancelled=None)
         part_messages = [*messages[:-1], untrusted_document_message(json.dumps(scoped, ensure_ascii=False)),
             dict(role='user', content='This is one independent partition of the SAME bounded patch. '
                  'Return only these exact fields: ' + ', '.join(keys) + '. '
+                 + ('Use the item-owned quantity reference array from this partition only. '
+                    if key in reference_items else
+                    'This item has NO quantity reference transport: text MUST be a literal STRING; '
+                    'never return an array or borrow reference IDs from another item. ') +
                  'Resolve every listed error for this item using the complete original source context. '
                  'Other parallel_sibling_drafts are unverified context, not facts or editable fields. '
                  'Do not depend on a sibling to carry this item’s required qualification. '

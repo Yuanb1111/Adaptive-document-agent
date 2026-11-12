@@ -50,14 +50,16 @@ NaN, infinity and invalid/out-of-range settings are rejected. An existing
 clock is never reset between phases. Exceptions, partial diagnostics and UI
 labels report the actual configured duration.
 
-For a large source-rich PDF with real model reviews, the verification run uses
-an explicit 2700-second (45-minute) budget. This changes the spending limit,
-not the model's source/semantic reasoning or any publication gate.
+The current performance requirement is completion within 900 seconds, including
+PPTX export and rendered QA. The fresh driver checks the same deadline before
+and after export: an artifact finishing after that boundary cannot be reported
+as a complete successful run. The earlier 2700-second baseline below did not
+meet this performance requirement.
 
 Example (supply the configured local renderer paths when needed):
 
 ```powershell
-python -m scripts.run_live_checkpoint --fresh --pdf input.pdf --env .env --provider openai --model gpt-6-luna --analysis-timeout-seconds 2700 --output output/fresh-run --export-pptx --render-node <node.exe> --render-module <artifact_tool.mjs>
+python -m scripts.run_live_checkpoint --fresh --pdf input.pdf --env .env --provider openai --model gpt-6-luna --workers 8 --brief-findings 3 --analysis-timeout-seconds 900 --output output/fresh-run --export-pptx --render-node <node.exe> --render-module <artifact_tool.mjs>
 ```
 
 There is deliberately no `--checkpoint` argument in the fresh command.
@@ -75,7 +77,68 @@ Reporting continuation remains a separate explicit operation.
 - Live-copy tests require a new independent verdict after each correction,
   enforce the two-edit bound and prevent omission approval through copy edits.
 
-## Real original-PDF verification
+## Performance changes for the 15-minute requirement
+
+- The gateway supports 1–8 shared cloud request slots, still serial for local
+  or stateful clients. `--workers 8` is an explicit verification setting; the
+  application can use the same setting through `LLM_DISCOVERY_WORKERS=8`.
+- When an independent coverage model gives a complete replacement priority
+  list, the existing bounded correction authors only new, removed or flagged
+  decisions. Unchanged decisions and page copy stay frozen. The complete merged
+  selection still receives fresh source and independent coverage validation.
+- A final analytical-page review can overlap supplementary briefing work on an
+  isolated snapshot. Its verdict attaches only if its full original context
+  fingerprint still matches after source integration and budget preparation.
+  Source, observation, chart, analysis or audience-scope changes invalidate it.
+  Audience-dependent physical selections remain serial. Rejected current-context
+  verdicts use the existing two-edit correction bound without repeating their
+  first review. All background work is drained before the invocation ends.
+- Lossless record tables factor identical field values into explicit inherited
+  constants. Nulls, raw values, signs, source geometry, JSON types and repeated
+  row counts are retained; decoding must restore the full original payload.
+- Three independent localization batches may overlap under the shared gateway
+  admission limit; every translation still receives its independent review.
+- In the eight-slot mode, independent owned-item literal reviews may overlap.
+  The separate whole-brief context gate still reads every shared source block.
+  Workers return unapproved verdicts; only the caller validates source bindings,
+  arithmetic and blind audience direction, merges context errors and checkpoints.
+  A context rejection or unavailable literal verdict still blocks publication.
+- Mixed native-quantity-array and plain-string item patches are partitioned even
+  with only two editable items. Each request receives its own exact schema and
+  item-owned quantity catalog; it cannot borrow a sibling's reference IDs.
+- `--brief-findings 3` explicitly limits initial synthesis to three material
+  findings, preserving independent supplementary capacity and all detailed
+  analysis pages. The app setting is `LLM_BRIEF_INITIAL_FINDINGS=3`; the legacy
+  default capacity remains seven before supplementary reservation.
+- Explicit computed cumulative-change labels bind to exact Python calculation
+  kind, metric, period pair, sign and rounding. Multiple reported CAGRs in one
+  sentence need unique adjacent rate/interval bindings. Levels, mismatched
+  intervals and annualized rates cannot borrow cumulative changes.
+- After the existing source reread, a fact-free layout record exactly one line
+  past the source may be quarantined only if every real line already has exactly
+  one owner. Its raw record stays in the audit. Gaps, overlaps, unknown blocks,
+  substantive parts and crossing/outlying ranges remain errors.
+- The eight-slot introduction route adds a separate source-entailment verdict
+  after audience selection is accepted. Unsupported stronger assertions in the
+  central-meaning inventory must be corrected through the existing bounded
+  meaning-repair path before audience authoring. A source bound or top-N
+  membership cannot become an exact value or ordinal merely because an earlier
+  relevance reviewer accepted it.
+
+The earlier performance revision passed 7109 full regression checks (39 optional
+skips), with 76 further checks for terminal-layout ownership. The subsequent
+briefing/gateway regression passed 911 checks (two optional skips), and the latest
+source-entailment change passed 63 targeted introduction checks.
+
+At the user's request, work stopped after committing and pushing this revision.
+Four fresh 900-second attempts ended at validation gates without producing a
+PPTX; none was resumed to claim success. The last attempt exposed a central-meaning
+inventory that strengthened a source ranking bound. The new source-entailment
+gate addresses that defect but has not yet been verified in another real-model
+run. Completion within 15 minutes remains unverified. The older successful
+17-minute baseline below does not satisfy the current performance requirement.
+
+## Earlier real original-PDF baseline (over 15 minutes)
 
 On 2026-11-12 a new `live_fresh_pdf` invocation completed analysis and exported
 the presentation in 1041.434 seconds (17 minutes 21 seconds). It started from

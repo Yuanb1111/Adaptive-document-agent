@@ -27,6 +27,9 @@ QUALIFIED_ASSERTION_RULE = (
     'Separate independently checkable status, operating-stage and threshold assertions; keep a '
     'threshold together with its timing and conditions. This evidence inventory is not a slide, '
     'so fitting several assertions into one sentence does not save an audience page. '
+    'Preserve bounds, membership sets and approximations exactly. A top-N membership '
+    'claim does not establish exact ordinal rank N; an upper/lower bound is not an '
+    'exact value. Keep the source\'s qualified phrase instead of strengthening it. '
 )
 
 
@@ -191,7 +194,17 @@ def select_introduction_audience(gateway, result, review, *, cancelled=None):
             attempt=attempt, meaning_revision_base=meaning_revision_base,
             inventory_revision_base=inventory_revision_base, binding_budget=binding_budget,
             cancelled=cancelled, meaning_resolution=meaning_resolution)
-        attempts.append({'decisions':values,'review':verdict.model_dump()})
+        primary_verdict = verdict
+        if verdict.accepted and getattr(gateway, 'discovery_workers', 1) >= 8:
+            from .introduction_source_entailment import SOURCE_ENTAILMENT_RULES
+            verdict = review_current_selection(gateway, source, values, SOURCE_ENTAILMENT_RULES, review,
+                attempt=attempt, meaning_revision_base=meaning_revision_base,
+                inventory_revision_base=inventory_revision_base, binding_budget=binding_budget,
+                cancelled=cancelled, meaning_resolution=meaning_resolution)
+        attempts.append({'decisions':values,'review':verdict.model_dump(),
+                         **({'selection_review':primary_verdict.model_dump(),
+                             'source_entailment_review':verdict.model_dump()}
+                            if primary_verdict is not verdict else {})})
         # Retain rejected proposals too: a failed selection must be diagnosable
         # without assigning it the independently accepted audience state.
         if not verdict.accepted:

@@ -184,6 +184,8 @@ class ExecutiveBriefWriter:
         # Independent source integration may discover a material qualification.
         # Reserve bounded capacity before selecting/locking the initial findings.
         maximum_findings = 7 - min(4, len(source_checks))
+        maximum_findings = min(maximum_findings, getattr(getattr(self.gateway, 'settings', None),
+                                                        'brief_initial_findings', 7))
         payload = {'document_context': document_context,
                    'user_focus': result.profile.analysis_focus,
                    'analysis_scope': result.profile.analysis_page_ranges,
