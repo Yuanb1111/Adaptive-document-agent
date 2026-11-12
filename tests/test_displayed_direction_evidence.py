@@ -105,3 +105,53 @@ def test_undisplayed_intermediate_period_cannot_hide_a_reversal():
     last = observations[1].model_copy(update={"id": "last", "period": "FY2021", "value": 90})
     selected = _on_displayed_series([*observations[:2], last], {observations[0].id, last.id})
     assert {item.id for item in selected} == {observations[0].id, observations[1].id, last.id}
+
+
+@pytest.mark.parametrize('wrong', [False, True])
+def test_explicit_bound_interim_comparison_survives_annual_chart_scope(wrong):
+    plan, observations, charts = _sample()
+    detail = plan.slides[1]
+    direction = 'declined' if wrong else 'increased'
+    detail.message = (f'Revenue increased from FY2019 to FY2020. '
+                      f'Revenue {direction} from 6M2020 to 6M2021.')
+    before = plan.model_dump(), copy.deepcopy(observations)
+    issues = ClaimValidator().validate_plan(plan, observations, charts)
+    if wrong:
+        assert any(e.slide_id == 'detail' and e.target_component == 'message'
+                   and e.code == 'directional_contradiction' for e in issues)
+    else:
+        assert not issues
+    assert (plan.model_dump(), observations) == before
+
+
+def test_explicit_periods_cannot_authorize_unbound_or_cross_basis_comparison():
+    plan, observations, charts = _sample()
+    detail = plan.slides[1]
+    for text in ['Revenue increased from 6M2020 to 6M2022.',
+                 'Revenue increased from FY2019 to 6M2021.']:
+        detail.message = text
+        assert ClaimValidator().validate_plan(plan, observations, charts)
+
+
+def test_explicit_message_periods_do_not_expand_unqualified_title_scope():
+    plan, observations, charts = _sample()
+    observations[-1].value = 40
+    detail = plan.slides[1]
+    detail.message = 'Revenue declined from 6M2020 to 6M2021.'
+    assert not ClaimValidator().validate_plan(plan, observations, charts)
+    detail.title = 'Revenue declined.'
+    issues = ClaimValidator().validate_plan(plan, observations, charts)
+    assert any(e.slide_id == 'detail' and e.target_component == 'title'
+               and e.code == 'directional_contradiction' for e in issues)
+
+
+def test_explicit_copy_outside_chart_keeps_intermediate_reversals():
+    plan, observations, charts = _sample()
+    early = [observations[0].model_copy(update=dict(id=f'early-{year}', period=f'FY{year}',
+        value=value, raw_value=str(value))) for year, value in [(2015, 80), (2016, 60), (2017, 90)]]
+    detail = plan.slides[1]
+    detail.observation_ids.extend(o.id for o in early)
+    detail.message = 'Revenue increased continuously from FY2015 to FY2017.'
+    issues = ClaimValidator().validate_plan(plan, [*observations, *early], charts)
+    assert any(e.code == 'non_monotonic_claim' and set(e.related_ids) == {o.id for o in early}
+               for e in issues)

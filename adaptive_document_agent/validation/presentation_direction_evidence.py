@@ -1,4 +1,5 @@
-"""Keep directional validation on displayed series, outside coverage references."""
+"""Bind unqualified claims to displays and explicit claims to bound periods."""
+import re
 
 
 def _displayed_ids(slide, charts):
@@ -8,7 +9,7 @@ def _displayed_ids(slide, charts):
         for oid in block.observation_ids}
 
 
-def _on_displayed_series(observations, displayed):
+def _on_displayed_series(observations, displayed, *, copy_text=''):
     """Keep unrelated metrics testable; only scope a represented metric's series."""
     from adaptive_document_agent.document_model import period_sort_key
     from adaptive_document_agent.document_model.series import source_context_key
@@ -21,6 +22,10 @@ def _on_displayed_series(observations, displayed):
                 tuple(sorted({e.row_label for e in item.evidence if e.row_label})),
                 tuple(sorted((key, str(value)) for key, value in dimensions.items()
                              if key not in {"table_context", "section", "column_role", "period_basis"})))
+    # Explicit existing endpoints extend the represented ranges, preserving
+    # compatible intermediate observations needed to detect hidden reversals.
+    displayed = set(displayed) | {item.id for item in observations if item.period and
+        re.search(r'(?<!\w)' + re.escape(item.period) + r'(?!\w)', copy_text, re.I)}
     shown = {}
     for item in observations:
         if item.id in displayed:
@@ -47,18 +52,23 @@ def validate_displayed_claims(validator, slide, observations, plan, charts):
     A distinct, explicitly bound summary statement retains its own period scope.
     """
     displayed = _displayed_ids(slide, charts) if slide.slide_type == "analysis" else set()
-    headline = _on_displayed_series(observations, displayed) if displayed else observations
-    base = slide.model_copy(update={"bullets": [], "bullet_observation_ids": []})
-    issues = validator.validate_slide(base, headline)
+    issues = []
+    for field in ('title', 'message'):
+        text = getattr(slide, field)
+        selected = _on_displayed_series(observations, displayed, copy_text=text) if displayed else observations
+        base = slide.model_copy(update={"title": "", "message": "", "bullets": [],
+                                        "bullet_observation_ids": [], field: text})
+        issues.extend(validator.validate_slide(base, selected))
     scoped = bool(slide.bullet_observation_ids) and len(slide.bullet_observation_ids) == len(slide.bullets)
     for index, text in enumerate(slide.bullets):
+        headline = _on_displayed_series(observations, displayed, copy_text=text) if displayed else observations
         ids = set(slide.bullet_observation_ids[index]) if scoped else {item.id for item in headline}
         selected = [item for item in observations if item.id in ids]
         if slide.slide_type in {"summary", "executive_summary"}:
             owners = [candidate for candidate in plan.slides if candidate.slide_type == "analysis"
                       and text in {candidate.title, candidate.message}]
             if len(owners) == 1:
-                selected = _on_displayed_series(selected, _displayed_ids(owners[0], charts))
+                selected = _on_displayed_series(selected, _displayed_ids(owners[0], charts), copy_text=text)
         part = slide.model_copy(update={"title": "", "message": "", "bullets": [text],
                                         "bullet_observation_ids": []})
         for issue in validator.validate_slide(part, selected):

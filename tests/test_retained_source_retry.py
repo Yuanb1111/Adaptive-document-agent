@@ -31,6 +31,8 @@ def rejected_checkpoint():
 
 def test_direct_source_fix_freezes_good_pages_data_and_selection_without_final_approval():
     previous, iid = rejected_checkpoint()
+    diagnostic = 'A prior local correction failed at an attributive direction token.'
+    previous.failure_details['message'] = diagnostic
     target = next(s for s in previous.presentation_plan.slides if s.insight_ids == [iid])
     target.bullets.append('Separate source coverage remains available.')
     target.bullet_observation_ids.append(list(target.observation_ids))
@@ -59,6 +61,9 @@ def test_direct_source_fix_freezes_good_pages_data_and_selection_without_final_a
     assert fixed.bullets[1:] == target.bullets[1:]
     assert fixed.bullet_observation_ids == target.bullet_observation_ids
     assert [row['operation'] for row in mock.usage] == ['RetainedPageRevisions']
+    from adaptive_document_agent.utils.record_encoding import decode_records
+    source_packet = mock.client.calls[0][-1]['content'].split('\n', 1)[1].rsplit('\n', 1)[0]
+    assert decode_records(json.loads(source_packet))['earlier_review_questions'][iid] == [diagnostic]
     assert not review_complete(current)
 
 

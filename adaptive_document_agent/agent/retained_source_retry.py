@@ -33,7 +33,10 @@ def repair_retained_source_copy(gateway, result, previous):
     for decision in draft['decisions']:
         if decision['page']:
             decision['page']['companion_ids'] = [reverse.get(k, k) for k in decision['page']['companion_ids']]
+    previous_contract = feedback['rejected'].get('diagnostic', '')
     revised = revise_retained_pages(gateway, result, packet, aliases, draft, issues,
+                                   earlier_issues={iid: [previous_contract] for iid in issues}
+                                   if previous_contract else None,
                                    preserve_numeric_inputs=True)
     for decision in selection.decisions:
         if decision.insight_id not in revised:

@@ -180,3 +180,58 @@ copy while retaining the original source data and original valid copy for
 the synthetic repair response. They test recovery only, never real approval.
 The newly available full local suite is also running; it has reported failures
 that remain to be diagnosed, so no full-suite success is claimed for this commit.
+
+## Verified real-model continuation and PowerPoint export
+
+The twelfth continuation passed final original-page review, completed all three
+translation/review batches and reached a complete analysis in 232.612 seconds,
+using ten real `gpt-6-luna` gateway calls. Its diagnostics are retained locally
+under `output/live-589-20261112-12/`. Previous local-correction diagnostics now
+reach the next writer as untrusted feedback, alongside the source review's
+questions; they grant no approval or new numeric eligibility.
+
+Its first export revealed a separate scope bug. Financial QA narrowed the
+whole analysis message to the chart's annual series, discarding already-bound
+interim periods explicitly compared in the same message. Direction checks
+now retain literal source periods named by each individual text component.
+An unqualified title still follows its displayed series, and cannot borrow
+the message's scope. Unknown endpoints, cross-basis comparisons, reversals,
+other entities/currencies and wrong directions retain their normal checks.
+The original observations and reviewed prose are unchanged. The dedicated
+direction/mixed-period/source-retry suite passed 32 tests.
+
+Exporting that same complete analysis through the normal financial, native
+preflight and rendered gates then succeeded in 28.894 seconds, with no new
+model calls, no forced export, no visual repairs and no reported visual issues.
+The editable deck contains 20 slides. All slides were also rendered with
+installed Microsoft PowerPoint and visually inspected. Local outputs are in
+`output/live-589-20261112-export-01/`; the PPTX SHA-256 is
+`6f94bc6b75d5d09e364680f11a79d98c7133f067b21387cc8ce41dd84bfb1dfa`.
+
+This verifies the original .589 checkpoint's real-model continuation through
+successful export. It does not establish a fresh full-PDF latency guarantee.
+The initial full-test failures were traced to Windows sandbox temp-path
+length and blocked Streamlit loopback sockets; the complete suite was
+restarted with short workspace temp paths, working loopback access and
+repository-compatible pandas. An older unsupplied-page test now explicitly
+withholds the page because neighboring pages are intentionally supplied by
+default; its source rejection boundary is unchanged.
+
+Final validation:
+
+- The complete local Python run finished with 6,997 passes, 38 optional skips
+  and six environment failures. Three failures came from missing `pytz` in
+  the isolated pandas installation; three came from lazy tokenizer vocabulary
+  initialization inside transport tests that intentionally forbid network
+  access and clear the environment. After installing `pytz` and initializing
+  the public tokenizer vocabulary before those tests, both affected test
+  modules passed all 154 tests with the original network/leak mocks intact.
+- All 104 final direction/source-retry regressions passed, including a case proving
+  that explicitly named endpoints outside a chart retain their intermediate
+  source observations, so a hidden reversal cannot become a continuous trend.
+- All 19 notification/timer frontend tests passed.
+- Direct comparison with .589 confirmed an unchanged original document,
+  unchanged raw values/periods/units/evidence for all 1,521 observations and
+  unchanged calculation results. ZIP integrity, 20 slides and six editable
+  native charts were confirmed. The PowerPoint-rendered PNGs and visual review
+  record remain local alongside the verified PPTX.

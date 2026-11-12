@@ -15,7 +15,11 @@ def test_related_qualitative_evidence_adds_provenance_but_never_numeric_eligibil
     source = 'A fulfillment constraint applies. The separately defined amount is RMB 987654321 thousand.'
     result.document.pages.append(DocumentPage(page_number=235, text=source))
     context = retained.selection_context(result, source_authoring=True)
-    if mutation != 'unsupplied_page':
+    if mutation == 'unsupplied_page':
+        # Neighbor pages are now supplied by default. Explicitly withhold
+        # this page to continue testing the unsupplied-citation boundary.
+        context['source_pages'] = [p for p in context['source_pages'] if p['page'] != 235]
+    else:
         context['source_pages'].append(dict(page=235, text=source))
     insight, primary, _ = next(iter(retained.findings(result, allow_new_copy=True).values()))
     page = RetainedPage(title='Revenue', message='The source describes a fulfillment constraint.',

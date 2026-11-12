@@ -2,6 +2,7 @@
 .venv/
 .test-deps/
 .test-llm-deps/
+.test-compat-deps/
 __pycache__/
 *.py[cod]
 .pytest_cache/
