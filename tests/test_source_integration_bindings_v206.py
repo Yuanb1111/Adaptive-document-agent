@@ -51,7 +51,7 @@ def test_full_brief_repairs_rejected_additions_in_place_and_resumes_after_timeou
     class Gateway:
         def generate_structured(self, messages, schema, **kwargs):
             calls.append(schema.__name__)
-            if schema is SourceIntegrationDraft:
+            if issubclass(schema, SourceIntegrationDraft):
                 assert len(calls) == 1
                 context = json.loads(messages[-1]['content'].split('\n', 1)[1].rsplit('\n', 1)[0])
                 assert context['maximum_additions'] == 3
@@ -109,7 +109,7 @@ def test_retry_edits_only_rejected_addition_but_rechecks_every_section(accept_fr
                 if numeric_correction and len(calls) == 1:
                     values['item_3'].text += ' Invented value 987654321.'
                 return schema(**values)
-            if schema is SourceIntegrationDraft:
+            if issubclass(schema, SourceIntegrationDraft):
                 return draft
             return schema(verdicts=[dict(section_id=d.section_id, accepted=accept_fresh,
                 reason='Fresh complete source review.') for d in draft.decisions])
@@ -173,7 +173,7 @@ def test_reviewer_sees_exact_addition_at_index_four_and_still_owns_semantic_verd
         calls = 0
         def generate_structured(self, messages, schema, **kwargs):
             self.calls += 1
-            if schema is SourceIntegrationDraft:
+            if issubclass(schema, SourceIntegrationDraft):
                 return draft.model_copy(deep=True)
             context = json.loads(messages[1]['content'].split('\n', 1)[1].rsplit('\n', 1)[0])
             assert context['original_brief_item_count'] == 3
@@ -214,7 +214,7 @@ def test_invalid_addresses_never_reach_the_independent_reviewer(mutation):
         calls = 0
         def generate_structured(self, messages, schema, **kwargs):
             self.calls += 1
-            assert schema is SourceIntegrationDraft
+            assert issubclass(schema, SourceIntegrationDraft)
             return draft
     gateway = Gateway()
     original = result.executive_brief.model_copy(deep=True)
@@ -236,7 +236,7 @@ def test_revised_draft_keeps_only_separately_accepted_additions(shared):
         drafts = 0
         reviews = 0
         def generate_structured(self, messages, schema, **kwargs):
-            if schema is SourceIntegrationDraft:
+            if issubclass(schema, SourceIntegrationDraft):
                 self.drafts += 1
                 return draft if self.drafts == 1 else revision
             self.reviews += 1
@@ -273,7 +273,7 @@ def test_reopened_unchanged_section_gets_its_first_correction_after_companion_ch
                 if mixed_rejection:
                     values['item_4'] = draft.additions[1].model_copy(update={'label': 'Forecast scope'})
                 return schema(**values)
-            if schema is SourceIntegrationDraft:
+            if issubclass(schema, SourceIntegrationDraft):
                 self.drafts += 1
                 value = draft.model_copy(deep=True)
                 if self.drafts >= 2:

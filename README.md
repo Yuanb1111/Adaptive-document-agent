@@ -1,5 +1,8 @@
 # Adaptive Document Intelligence Agent
 
+The [.813 selection-output fix](docs/SELECTION_TRUNCATION_813.md) bounds output-capacity
+recovery and repairs literal source references without transferring review approval.
+
 The [.589 timeout fix](docs/TIMEOUT_RECHECK_589.md) scopes local copy rechecks
 and repairs invalid saved page copy before resuming completed reporting work.
 

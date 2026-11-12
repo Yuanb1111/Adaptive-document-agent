@@ -28,7 +28,7 @@ def test_literal_cells_bind_from_own_resolved_quotes_without_rewriting_source():
     ('@cell[3:1-9]', '@lines[1-2]'), ('@cell[3:no]', '@lines[1-2]'),
     ('@cell[3:1-1]', 'Invented quotation containing the contract.')])
 def test_unowned_missing_and_invalid_cell_references_cannot_supply_evidence(cell, quote):
-    with pytest.raises(ValueError, match='cell'):
+    with pytest.raises(ValueError, match='cell|Quotation does not bind literally'):
         bind_source_quotes(draft(cell, quote), {3: 'The contract may be cancelled.\nNo compensation is payable.\nOther matters.',
                                                4: 'Unowned source.'})
 

@@ -19,7 +19,7 @@ from .structured_output_correction import schema_feedback, format_correction_mes
 from .source_integration_output import review_output, SourceReviewContractError
 from .source_integration_bindings import (MERGED_BRIEF_INSTRUCTIONS, bind_unique_inclusions,
     keep_accepted_dispositions, merged_review_context)
-from .source_integration_quotes import SourceQuoteCapacityError, bind_source_quotes, numbered_source_pages
+from .source_integration_quotes import SourceQuoteCapacityError, SourceQuoteBindingError, bind_source_quotes, numbered_source_pages
 from .audit_source_layout import audit_source_page, LAYOUT_INSTRUCTIONS
 from adaptive_document_agent.services.brief_column_quantities import column_quantities
 
@@ -157,8 +157,8 @@ def _retry_draft(previous, result, brief, checks, pages):
             bind_unique_inclusions(bound, checks, len(brief.items))
             _validate(bound, result, brief, checks)
             return proposal
-        except SourceQuoteCapacityError:
-            # A draft with a representational overflow is not approval. Keep it
+        except (SourceQuoteCapacityError, SourceQuoteBindingError):
+            # A draft with an invalid literal representation is not approval. Keep it
             # for addressed reference repair, then run all current source gates.
             return proposal
         except (ValueError, KeyError, TypeError):
@@ -248,11 +248,11 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
             'outline_section_id, when present, only identifies the parent outline section. '
             'A section disposition may cite only pages listed in that check.pages. '
             'Pages cited by the existing brief or another check can supply context, but cannot be '
-            'submitted as evidence for this section. When lines are numbered, prefer a page and set the entire evidence text field to '
+            'submitted as evidence for this section. When evidence_reference_options are present, select a page and set the entire evidence text field to '
             'a single reference such as "@lines[4]" or "@lines[4-6]", without appending a transcription. '
             'Each reference copies one contiguous span of original lines. '
             'evidence_reference_options lists premeasured valid ranges and their character counts. '
-            'Select representative ranges from those options when useful; do not join them into '
+            'Select only representative ranges from those options; do not transcribe source text or join them into '
             'one oversized range. Each quote must resolve to 8–1800 characters, and each decision '
             f'may cite at most four quotes; an addition may cite at most {BRIEF_EVIDENCE_LIMIT}. Full source lines remain available for '
             'meaning and materiality; this directory does not select what matters. '
@@ -325,6 +325,8 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
             + LAYOUT_INSTRUCTIONS},
             *instruction_messages(result.profile, purpose='supplementary source integration'),
             untrusted_document_message(encoded)]
+        from .source_reference_schema import source_draft_schema
+        wire_schema = source_draft_schema(messages, SourceIntegrationDraft)
         budget = dict(review_format=0)
         audit['corrections_used'] = budget
         prior_review = None
@@ -381,7 +383,7 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
                     draft = retained
                     entry['recovered_proposal'] = True
                 else:
-                    draft = complete_budget_output(gateway, messages, SourceIntegrationDraft, entry,
+                    draft = complete_budget_output(gateway, messages, wire_schema, entry,
                         audit_key='draft_output_attempts', token_limits=SOURCE_OUTPUT_TOKEN_LIMITS, stage='report')
                 submitted = draft.model_dump(mode='json')
                 entry['draft'] = submitted
@@ -454,16 +456,16 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
                             continue
                     if draft is not None or pending_copy is not None:
                         raise  # Reviewer capacity/refusal failure must not regenerate the writer.
-                    feedback = schema_feedback(exc, SourceIntegrationDraft)
+                    feedback = schema_feedback(exc, wire_schema)
                     entry['format_failure'] = feedback
                     # A single overlong body needs the same local correction as
                     # several overlong fields. Regenerating the whole proposal
                     # can repeat the length failure and discard valid bindings.
-                    copy_repair = overlong_additions(exc, feedback, SourceIntegrationDraft)
+                    copy_repair = overlong_additions(exc, feedback, wire_schema)
                     if format_corrections and not length_progress_used and copy_repair is not None:
                         from .source_integration_copy import format_to_copy_progress
                         previous_format = audit['attempts'][-2].get('format_failure')
-                        if format_to_copy_progress(previous_format, copy_repair, SourceIntegrationDraft):
+                        if format_to_copy_progress(previous_format, copy_repair, wire_schema):
                             pending_copy = copy_repair
                             length_progress_used = True
                             entry['length_progress_retry'] = True

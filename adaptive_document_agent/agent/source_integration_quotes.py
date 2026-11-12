@@ -4,10 +4,15 @@ from bisect import bisect_left, bisect_right
 from functools import lru_cache
 from itertools import accumulate
 from adaptive_document_agent.services.source_quotes import normalize_quote
+from adaptive_document_agent.models.executive_brief import BriefQuote
 
 
 class SourceQuoteCapacityError(ValueError):
     """A selected literal range cannot fit the object's remaining quote slots."""
+
+
+class SourceQuoteBindingError(ValueError):
+    """A copied quote is not continuous literal text on its claimed source page."""
 
 
 def numbered_source_pages(pages):
@@ -77,13 +82,20 @@ def _literal_parts(literal, slots):
 
 
 def bind_source_quotes(draft, pages, *, selected_phrase_evidence=False):
-    bound = draft.model_copy(deep=True)
+    from .source_integration_review import SourceIntegrationDraft
+    # Wire enums describe reference IDs. The restored result uses the ordinary
+    # literal models, including table cells, with the same structural limits.
+    bound = SourceIntegrationDraft.model_validate(draft.model_dump(mode='json'))
     for item in [*bound.decisions, *bound.additions]:
         evidence = []
         quote_limit = type(item).model_json_schema()['properties']['evidence']['maxItems']
         for position, quote in enumerate(item.evidence):
             reference = re.fullmatch(r'(@lines\[(\d{1,6})(?:-(\d{1,6}))?\])(?:\s+(.+))?', quote.text, re.S)
             if not reference:
+                literal = normalize_quote(quote.text)
+                if not literal or literal not in normalize_quote(pages.get(quote.page, '')):
+                    raise SourceQuoteBindingError(f'Quotation does not bind literally to PDF page {quote.page}. '
+                        'Choose an original contiguous range; do not reconstruct table columns or combine passages.')
                 evidence.append(quote)
                 continue
             locator, first, last, transcription = reference.groups()
@@ -103,7 +115,7 @@ def bind_source_quotes(draft, pages, *, selected_phrase_evidence=False):
                                  f'has {len(literal)} characters; it must resolve to 8–1800 literal characters. '
                                  'Choose a shorter evidence_reference_options span or a smaller exact range; '
                                  f'at most {quote_limit} representative quotations fit this object.')
-            evidence.extend(type(quote)(page=quote.page, text=part) for part in parts)
+            evidence.extend(BriefQuote(page=quote.page, text=part) for part in parts)
         item.evidence = evidence
         from .source_table_cells import bind_table_cells
         bind_table_cells(item, pages, selected_phrase_evidence=selected_phrase_evidence)

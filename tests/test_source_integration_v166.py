@@ -21,8 +21,8 @@ class Gateway:
 
     def generate_structured(self, messages, schema, **kwargs):
         self.calls.append((messages, schema))
-        if schema is SourceIntegrationDraft:
-            return schema(additions=payload(self.constraint, 12, 'Contract risk')['items']
+        if issubclass(schema, SourceIntegrationDraft):
+            return SourceIntegrationDraft(additions=payload(self.constraint, 12, 'Contract risk')['items']
                           if self.disposition == 'include' else [], decisions=[dict(
                 section_id='contracts', disposition=self.disposition,
                 reason='Cancellation rights qualify demand certainty.' if self.disposition == 'include'
@@ -80,7 +80,7 @@ def test_checks_in_the_same_outline_section_still_require_independent_verdicts(m
 
     class CheckGateway:
         def generate_structured(self, messages, schema, **kwargs):
-            if schema is SourceIntegrationDraft:
+            if issubclass(schema, SourceIntegrationDraft):
                 assert any(all(key in message['content'] for key in check_ids) for message in messages)
                 return draft.model_copy(deep=True)
             assert not mixed_pages
@@ -104,6 +104,11 @@ def test_first_overlong_addition_keeps_sources_through_copy_and_independent_revi
         def generate_structured(self, messages, schema, **kwargs):
             if not self.calls:
                 raw = super().generate_structured(messages, schema, **kwargs).model_dump()
+                context = json.loads(messages[-1]['content'].split('\n', 1)[1].rsplit('\n', 1)[0])
+                refs = {p['page']: p['evidence_reference_options'][0]['ref'] for p in context['source_pages']}
+                for item in [*raw['decisions'], *raw['additions']]:
+                    for quote in item['evidence']:
+                        quote['text'] = refs[quote['page']]
                 raw['additions'][0]['text'] *= 60
                 raw['additions'][0]['label'] *= 12
                 raise LLMStructuredOutputError('Overlong addition', response=LLMResponse(text=json.dumps(raw)))
@@ -149,7 +154,7 @@ def test_rejected_source_proposal_carries_objections_into_revision_before_fresh_
     current = saved.model_copy(deep=True)
     gateway = Gateway(constraint)
     merged = review_supplementary_sources(gateway, current, current.executive_brief, previous=saved)
-    assert gateway.calls[0][1] is SourceIntegrationDraft
+    assert issubclass(gateway.calls[0][1], SourceIntegrationDraft)
     assert 'The source limitation is not sufficiently represented.' in gateway.calls[0][0][-2]['content']
     assert resolved_source_check_ids(current, merged) == {'contracts'}
 
@@ -213,10 +218,11 @@ def test_forged_quote_is_rejected_before_independent_approval():
     gateway = Gateway(constraint, quote='Customers cannot cancel purchases.')
     original = result.executive_brief.model_copy(deep=True)
     assert review_supplementary_sources(gateway, result, original) == original
-    assert all(schema is SourceIntegrationDraft for _, schema in gateway.calls)
+    assert all(schema.__name__ != 'SourceIntegrationReview' for _, schema in gateway.calls)
+    assert sum(schema.__name__ == 'SourceQuoteReferences' for _, schema in gateway.calls) == 1
     assert not resolved_source_check_ids(result, original)
     from adaptive_document_agent.services.pipeline_completion import require_source_integration
-    with pytest.raises(ValueError, match=r'contracts: expected a literal quotation on PDF page 12'):
+    with pytest.raises(ValueError, match=r'literal.*PDF page 12'):
         require_source_integration(result)
 
 
@@ -226,7 +232,7 @@ def test_review_uses_original_pdf_text_for_numbered_line_ranges():
     class LineGateway(Gateway):
         def generate_structured(self, messages, schema, **kwargs):
             output = super().generate_structured(messages, schema, **kwargs)
-            if schema is SourceIntegrationDraft:
+            if issubclass(schema, SourceIntegrationDraft):
                 assert '2 | ' + constraint in messages[-1]['content']
                 output.decisions[0].evidence[0].text = '@lines[2-2]'
                 output.additions[0].evidence[0].text = '@lines[2] ' + constraint
@@ -247,7 +253,7 @@ def test_invalid_source_line_references_stop_before_review(reference):
     gateway = Gateway(constraint, quote=reference)
     original = result.executive_brief.model_copy(deep=True)
     assert review_supplementary_sources(gateway, result, original) == original
-    assert all(schema is SourceIntegrationDraft for _, schema in gateway.calls)
+    assert all(issubclass(schema, SourceIntegrationDraft) for _, schema in gateway.calls)
     assert 'Invalid evidence range' in json.loads(result.validation_warnings[-1].message)['reason']
 
 
@@ -281,7 +287,7 @@ def test_split_reference_preserves_siblings_when_the_minimum_split_needs_a_word_
               dict(page=3, text='@lines[1]')]
     draft = SourceIntegrationDraft(decisions=[dict(section_id='source', disposition='omit',
         reason='Complete source choice.', evidence=quotes)])
-    resolved = bind_source_quotes(draft, {1:text, 3:'Last sibling.'}).decisions[0].evidence
+    resolved = bind_source_quotes(draft, {1:text, 2:'Original sibling.', 3:'Last sibling.'}).decisions[0].evidence
     assert [q.page for q in resolved] == [1, 1, 2, 3]
     assert resolved[0].text + resolved[1].text == text
     assert [q.text for q in resolved[2:]] == ['Original sibling.', 'Last sibling.']

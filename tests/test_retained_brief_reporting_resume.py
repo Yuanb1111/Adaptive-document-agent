@@ -189,7 +189,7 @@ def test_physical_budget_retry_preserves_only_unchanged_source_complete_publishe
     approve_preintegration_input(source)
     review_gateway = mock_gateway([dict(additions=[], decisions=[dict(section_id='source-check',
         disposition='covered', reason='The unchanged audience finding carries this synthetic source fact.',
-        evidence=[dict(page=234, text='Revenue RMB thousands')], brief_item_indexes=[0])]),
+        evidence=[dict(page=234, text='@lines[1-2]')], brief_item_indexes=[0])]),
         dict(verdicts=[dict(section_id='source-check', accepted=True, reason='Synthetic protocol approval.')])])
     source.executive_brief = review_supplementary_sources(review_gateway, source, source.executive_brief)
     source.failed_stage, source.failure_details = 'presentation_budget', {'component': 'PresentationBudget'}

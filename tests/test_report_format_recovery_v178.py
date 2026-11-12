@@ -10,7 +10,7 @@ from adaptive_document_agent.agent.source_integration_review import (
 from adaptive_document_agent.agent.report_audit_scope import _context, _review_batch
 from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError, LLMTransportError, PrivacyViolationError
 from tests.test_budget_output_v145 import gateway, response
-from tests.test_source_completion_capacity_v173 import _outputs, _audit
+from tests.test_source_completion_capacity_v173 import _outputs, _audit, _wire_draft, wire_response
 from tests.test_source_integration_v166 import fixture
 from tests.test_report_audit_scope_v174 import fixture as audit_fixture
 from tests.test_audit_review_contract_v174 import unknown_draft, unknown_review
@@ -25,9 +25,9 @@ def test_overlong_or_missing_field_is_corrected_with_complete_original_context(r
     draft, review = _outputs(constraint)
     invalid = draft.model_dump()
     invalid['decisions'][0]['reason'] = 'x' * 1001
-    raw = json.dumps(invalid) if role == 'draft' else '{"verdicts":[{"section_id":"contracts","accepted":true}]}'
-    outputs = ([response(raw, finish=finish), response(draft), response(review)] if role == 'draft'
-               else [response(draft), response(raw, finish=finish), response(review)])
+    raw = json.dumps(_wire_draft(invalid)) if role == 'draft' else '{"verdicts":[{"section_id":"contracts","accepted":true}]}'
+    outputs = ([response(raw, finish=finish), wire_response(draft), response(review)] if role == 'draft'
+               else [wire_response(draft), response(raw, finish=finish), response(review)])
     llm, client = gateway(outputs)
     result.executive_brief = review_supplementary_sources(llm, result, original)
     assert len(client.requests) == 3
@@ -54,7 +54,7 @@ def test_overlong_or_missing_field_is_corrected_with_complete_original_context(r
 def test_repeated_format_error_leaves_original_brief_and_unresolved_checkpoint(role):
     result, constraint = fixture()
     draft, _ = _outputs(constraint)
-    outputs = ([] if role == 'draft' else [response(draft)]) + [response('{}')] * 2
+    outputs = ([] if role == 'draft' else [wire_response(draft)]) + [response('{}')] * 2
     llm, client = gateway(outputs)
     original = deepcopy(result.executive_brief)
     assert review_supplementary_sources(llm, result, original) == original
@@ -68,7 +68,7 @@ def test_repeated_format_error_leaves_original_brief_and_unresolved_checkpoint(r
 def test_transport_and_privacy_errors_never_trigger_format_regeneration(role, error):
     result, constraint = fixture()
     draft, _ = _outputs(constraint)
-    outputs = ([] if role == 'draft' else [response(draft)]) + [error]
+    outputs = ([] if role == 'draft' else [wire_response(draft)]) + [error]
     llm, client = gateway(outputs)
     original = deepcopy(result.executive_brief)
     if isinstance(error, PrivacyViolationError):
@@ -85,8 +85,8 @@ def test_reviewer_id_correction_keeps_same_draft_and_does_not_discard_semantic_r
     draft, review = _outputs(constraint)
     rejected = review.model_copy(deep=True)
     rejected.verdicts[0].accepted = False
-    llm, client = gateway([response(draft), response('{"verdicts":[]}'), response(rejected),
-                           response(draft), response('{"verdicts":[]}')])
+    llm, client = gateway([wire_response(draft), response('{"verdicts":[]}'), response(rejected),
+                           wire_response(draft), response('{"verdicts":[]}')])
     original = deepcopy(result.executive_brief)
     assert review_supplementary_sources(llm, result, original) == original
     assert len(client.requests) == 5
@@ -105,7 +105,7 @@ def test_draft_format_correction_cannot_bypass_literal_evidence_or_borrow_semant
     original = deepcopy(result.executive_brief)
     assert review_supplementary_sources(llm, result, original) == original
     assert len(client.requests) == 2
-    assert 'literal quotation' in _audit(result)[1]['reason']
+    assert 'decisions.0.evidence' in _audit(result)[1]['reason']
 
 
 def test_overlong_source_revision_reports_failed_fields_without_another_request():
@@ -115,7 +115,7 @@ def test_overlong_source_revision_reports_failed_fields_without_another_request(
     invalid = draft.model_dump()
     invalid['additions'][0]['text'] = 'x' * 551
     invalid['decisions'][0]['evidence'] *= 5
-    llm, client = gateway([response(draft), response(review), response(json.dumps(invalid))])
+    llm, client = gateway([wire_response(draft), response(review), wire_response(invalid)])
     original = deepcopy(result.executive_brief)
     assert review_supplementary_sources(llm, result, original) == original
     reason = _audit(result)[1]['reason']

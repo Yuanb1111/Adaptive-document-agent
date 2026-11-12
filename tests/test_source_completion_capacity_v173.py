@@ -44,6 +44,20 @@ def _audit(result):
     return issue.code, json.loads(issue.message)
 
 
+def _wire_draft(value):
+    """Encode this fixture's single literal line on page 12 for the writer schema."""
+    values = value.model_dump(mode='json') if isinstance(value, SourceIntegrationDraft) else deepcopy(value)
+    for item in [*values['decisions'], *values['additions']]:
+        for quote in item['evidence']:
+            assert quote['page'] == 12
+            quote['text'] = '@lines[1-1]'
+    return values
+
+
+def wire_response(value):
+    return response(json.dumps(_wire_draft(value)))
+
+
 def test_overlong_semantic_revision_gets_one_format_repair_and_fresh_review():
     result, constraint = fixture()
     draft, accepted = _outputs(constraint)
@@ -51,7 +65,7 @@ def test_overlong_semantic_revision_gets_one_format_repair_and_fresh_review():
     rejected.verdicts[0].accepted = False
     overlong = draft.model_dump(mode='json')
     overlong['additions'][0]['text'] = 'x' * 551
-    llm, client = gateway([response(draft), response(rejected), response(json.dumps(overlong)),
+    llm, client = gateway([wire_response(draft), response(rejected), wire_response(overlong),
                            response(json.dumps({'addition_0_text': [
                                dict(label='Cancellation rights', text=constraint),
                                dict(label='Commitment period', text='The purchases do not require a long-term commitment.')]})),
@@ -71,11 +85,11 @@ def test_length_retry_uses_complete_identical_prompt_and_preserves_approved_draf
     source = deepcopy(result.document.model_dump())
     draft, review = _outputs(constraint)
     if operation == "draft":
-        outputs = [response(TRUNCATED_DRAFT, finish="length"), response(draft), response(review)]
+        outputs = [response(TRUNCATED_DRAFT, finish="length"), wire_response(draft), response(review)]
         retry_positions = (0, 1)
         expected_limits = [LIMITS[0], LIMITS[1], LIMITS[0]]
     else:
-        outputs = [response(draft), response(TRUNCATED_REVIEW, finish="length"), response(review)]
+        outputs = [wire_response(draft), response(TRUNCATED_REVIEW, finish="length"), response(review)]
         retry_positions = (1, 2)
         expected_limits = [LIMITS[0], LIMITS[0], LIMITS[1]]
     llm, client = gateway(outputs)
@@ -116,7 +130,7 @@ def test_two_length_failures_exhaust_capacity_and_cannot_mark_result_complete(op
     original = result.executive_brief.model_copy(deep=True)
     draft, _ = _outputs(constraint)
     truncated = TRUNCATED_DRAFT if operation == "draft" else TRUNCATED_REVIEW
-    outputs = ([] if operation == "draft" else [response(draft)]) + [
+    outputs = ([] if operation == "draft" else [wire_response(draft)]) + [
         response(truncated, finish="length"), response(truncated, finish="length")]
     llm, client = gateway(outputs)
 
@@ -145,7 +159,7 @@ def test_invalid_non_length_output_is_not_capacity_retried(operation, finish):
     result, constraint = fixture()
     original = result.executive_brief.model_copy(deep=True)
     draft, review = _outputs(constraint)
-    outputs = ([] if operation == "draft" else [response(draft)]) + [
+    outputs = ([] if operation == "draft" else [wire_response(draft)]) + [
         response('{"incomplete":', finish=finish), response(review)]
     llm, client = gateway(outputs)
 

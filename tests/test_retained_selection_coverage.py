@@ -133,7 +133,7 @@ def test_final_copy_revision_preserves_selection_and_requires_fresh_validation(o
     issue = dict(accepted=False, reason='Copy needs source correction.',
                  page_issues=[dict(insight_id=iid, reason='Remove the unbound amount.')])
     accepted = dict(accepted=True, reason='Synthetic complete coverage verdict.')
-    responses = [bad, issue, bad, issue]
+    responses = [bad, issue]
     if outcome == 'material_omission':
         responses[-1] = dict(issue, missing_insight_ids=['omitted'], prioritized_insight_ids=[iid, 'omitted'])
         responses.append(deepcopy(bad))  # Ignoring the priority correction must still fail closed.
@@ -158,9 +158,9 @@ def test_final_copy_revision_preserves_selection_and_requires_fresh_validation(o
         assert retained.selected_record(result) is None
 
     revision_calls = [i for i, usage in enumerate(mock.usage) if usage['operation'] == 'RetainedPageRevisions']
-    assert revision_calls == {'material_omission': [], 'unchanged': [4, 6]}.get(outcome, [4])
+    assert revision_calls == {'material_omission': [], 'unchanged': [2, 4]}.get(outcome, [2])
     if revision_calls:
-        wire = mock.client.calls[4][-1]['content']
+        wire = mock.client.calls[revision_calls[0]][-1]['content']
         payload = decode_records(json.loads(wire.split('\n', 1)[1].rsplit('\n', 1)[0]))
         assert set(payload['pages_to_correct']) == {iid}
         assert payload['pages_to_correct'][iid]['source_page_numbers'] == [234]
@@ -228,7 +228,7 @@ def test_copy_review_cannot_reopen_selection_but_retains_remaining_copy_error():
         missing_insight_ids=['omitted'], prioritized_insight_ids=[iid, 'omitted'],
         page_issues=[copy_issue, dict(insight_id='unchanged', reason='Review an untouched page.')])
     accepted = dict(accepted=True, reason='The revised page is source-faithful.')
-    mock = gateway([draft, needs_copy, deepcopy(draft), needs_copy,
+    mock = gateway([draft, needs_copy,
                     dict(pages={iid: draft['decisions'][0]['page']}), conflicting,
                     dict(pages={iid: corrected}), accepted])
 
@@ -291,7 +291,7 @@ def test_writer_cannot_drop_independently_reviewed_priorities(obeys):
 
 
 @pytest.mark.parametrize('settles', [True, False])
-def test_late_priority_change_gets_one_independent_correction_after_copy_retry(settles):
+def test_late_priority_change_gets_one_independent_correction_after_proposal_retry(settles):
     from copy import deepcopy
     from adaptive_document_agent.agent import retained_analysis as retained
     from tests.test_retained_source_citations import fixture
@@ -301,8 +301,10 @@ def test_late_priority_change_gets_one_independent_correction_after_copy_retry(s
     result.insights.append(result.insights[0].model_copy(update={'id': 'required'}))
     initial = proposal.model_dump(exclude_none=True)
     initial['decisions'].append(dict(insight_id='required', decision='omit', reason='Lower priority.'))
-    copy_issue = dict(accepted=False, reason='Correct attribution.',
-                      page_issues=[dict(insight_id=original, reason='Name the company.')])
+    # A non-localizable proposal failure still permits a complete correction.
+    # Addressed copy issues now repair locally and defer out-of-scope ranking
+    # objections to the mandatory final review instead of reopening priorities.
+    proposal_issue = dict(accepted=False, reason='The complete selection needs correction.')
     corrected = deepcopy(initial)
     corrected['decisions'][0]['page']['message'] = 'The company reported revenue.'
     replacement = dict(decisions=[
@@ -314,7 +316,7 @@ def test_late_priority_change_gets_one_independent_correction_after_copy_retry(s
     final_review = (dict(accepted=True, reason='Source-backed corrected selection.') if settles else
                     dict(accepted=False, missing_insight_ids=[original],
                          prioritized_insight_ids=[original], reason='Another priority reversal.'))
-    mock = gateway([initial, copy_issue, corrected, priority_issue, replacement, final_review])
+    mock = gateway([initial, proposal_issue, corrected, priority_issue, replacement, final_review])
     if settles:
         retained.select_retained_analysis(mock, result)
         assert retained.selected_record(result)['selection'] == replacement

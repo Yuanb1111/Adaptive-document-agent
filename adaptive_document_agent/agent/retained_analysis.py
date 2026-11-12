@@ -259,7 +259,7 @@ def _select_retained_analysis(gateway, result):
     from .retained_page_sources import AuthoredPageErrors, rebind_context_evidence, validate_authored_pages
     from .retained_page_revision import revise_retained_pages
     from .retained_selection_coverage import SelectionCoverageError, review_selection_coverage
-    from .retained_selection_request import selection_request
+    from .retained_selection_request import selection_request, SELECTION_TOKEN_LIMITS
     from .retained_selection_feedback import selection_retry_feedback
     feedback = selection_retry_feedback(result, context) if source_authoring else None
     if feedback is not None:
@@ -293,7 +293,8 @@ def _select_retained_analysis(gateway, result):
             selection = schema.model_validate(feedback['rejected_draft'])
         else:
             selection = selection_request(gateway, messages, schema, result, attempt,
-                                          max_tokens=12000 if source_authoring else 8000)
+                max_tokens=SELECTION_TOKEN_LIMITS[0] if source_authoring else 8000,
+                capacity_tokens=SELECTION_TOKEN_LIMITS[1] if source_authoring else 16000)
         repair_omission_ids(selection, context)
         for decision in selection.decisions:
             preserved = (feedback or {}).get('preserved_pages', {}).get(decision.insight_id)
@@ -360,7 +361,10 @@ def _select_retained_analysis(gateway, result):
                     previous_issues = {iid: list(reasons) for iid, reasons in earlier_page_issues.items()}
                     for iid, reasons in page_issues.items():
                         earlier_page_issues[iid] = list(dict.fromkeys([*earlier_page_issues.get(iid, []), *reasons]))
-                    if (not attempt and not reusing_draft) or not copy_revisions_left or not localizable or not page_issues:
+                    # An addressed copy defect does not require regenerating
+                    # every selected page first. Ranking changes still take
+                    # the separate bounded priority-revision path.
+                    if not copy_revisions_left or not localizable or not page_issues:
                         raise ValueError('\n'.join(failures))
                     copy_revisions_left -= 1
                     try:

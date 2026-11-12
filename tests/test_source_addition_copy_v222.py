@@ -9,7 +9,7 @@ from adaptive_document_agent.agent.source_integration_review import (
     review_supplementary_sources, resolved_source_check_ids,
 )
 from tests.test_budget_output_v145 import gateway, response
-from tests.test_source_completion_capacity_v173 import _outputs, _audit
+from tests.test_source_completion_capacity_v173 import _outputs, _audit, _wire_draft, wire_response
 from tests.test_source_integration_v166 import fixture
 
 
@@ -177,7 +177,7 @@ def test_mixed_schema_correction_only_gets_copy_slot_after_strict_length_progres
     invalid['decisions'][0]['evidence'] *= 5
     corrected = draft.model_dump(mode='json')
     corrected['additions'][0]['text'] = constraint * (12 if progress else 20)
-    outputs = [response(json.dumps(invalid)), response(json.dumps(corrected))]
+    outputs = [wire_response(invalid), wire_response(corrected)]
     if progress:
         outputs.extend([response(json.dumps({'addition_0_text': constraint})), response(review)])
     llm, _ = gateway(outputs)
@@ -256,8 +256,8 @@ def test_semantic_revision_keeps_its_own_format_correction_after_initial_shorten
     rejected = review.model_copy(deep=True)
     rejected.verdicts[0].accepted = False
     patch = response(json.dumps({'addition_0_text': constraint}))
-    llm, _ = gateway([response(json.dumps(invalid)), patch, response(rejected),
-        response(json.dumps(invalid)), patch, response(review)])
+    llm, _ = gateway([wire_response(invalid), patch, response(rejected),
+        wire_response(invalid), patch, response(review)])
     merged = review_supplementary_sources(llm, result, original)
     assert resolved_source_check_ids(result, merged) == {'contracts'}
     assert len(_audit(result)[1]['attempts']) == 4
@@ -283,11 +283,11 @@ def test_shorter_complete_copy_stays_bounded_and_preserves_semantic_correction(a
     shorter = constraint * 12
     assert 550 < len(shorter) < len(invalid['additions'][0]['text'])
     review.verdicts[0].accepted = accepted
-    outputs = [response(json.dumps(invalid)),
+    outputs = [wire_response(invalid),
         response(json.dumps({'addition_0_text': shorter})),
         response(json.dumps({'addition_0_text': constraint})), response(review)]
     if not accepted:
-        outputs.extend([response(draft), response(review)])
+        outputs.extend([wire_response(draft), response(review)])
     llm, _ = gateway(outputs)
     merged = review_supplementary_sources(llm, result, original)
     assert [u['operation'] for u in llm.usage] == [
@@ -323,12 +323,12 @@ def test_first_single_overlong_body_only_rewrites_requested_copy(slots, outcome)
         text *= 12
     part = dict(label=draft.additions[0].label, text=text)
     patch = {'addition_0_text': text if slots == 1 else [part]}
-    outputs = [response(json.dumps(invalid)), response(json.dumps(patch))]
+    outputs = [wire_response(invalid), response(json.dumps(patch))]
     if outcome in {'accepted', 'rejected'}:
         review.verdicts[0].accepted = outcome == 'accepted'
         outputs.append(response(review))
         if outcome == 'rejected':
-            outputs.extend([response(draft), response(review)])
+            outputs.extend([wire_response(draft), response(review)])
     llm, client = gateway(outputs)
 
     merged = review_supplementary_sources(llm, result, original)
@@ -343,7 +343,7 @@ def test_first_single_overlong_body_only_rewrites_requested_copy(slots, outcome)
     assert set(packet['fields_to_replace']) == {'addition_0_text'}
     assert packet['fields_to_replace']['addition_0_text']['maximum_characters'] == 550
     assert packet['fields_to_replace']['addition_0_text']['original'] == invalid['additions'][0]['text']
-    assert packet['fields_to_replace']['addition_0_text']['locked_evidence'] == invalid['additions'][0]['evidence']
+    assert packet['fields_to_replace']['addition_0_text']['locked_evidence'] == _wire_draft(invalid)['additions'][0]['evidence']
     if outcome == 'accepted':
         assert operations == ['SourceIntegrationDraft', 'SourceAdditionCopy', 'SourceIntegrationReview'], _audit(result)[1].get('reason')
         assert merged.items[:len(original.items)] == original.items

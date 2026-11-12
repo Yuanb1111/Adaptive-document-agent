@@ -28,7 +28,7 @@ def test_report_recovery_enters_source_review_and_requires_fresh_acceptance(monk
                 return self._typed(response_model, dict(additions=[], decisions=[dict(
                     section_id='operating_counts', disposition='covered',
                     reason='The first conclusion retains the exact separately dated counts.',
-                    evidence=[dict(page=1, text=quote)], brief_item_indexes=[0])]))
+                    evidence=[dict(page=1, text=f'@lines[1-{len(quote.splitlines())}]')], brief_item_indexes=[0])]))
             if name == 'SourceIntegrationReview':
                 self.calls.append(name)
                 return self._typed(response_model, dict(verdicts=[dict(section_id='operating_counts',

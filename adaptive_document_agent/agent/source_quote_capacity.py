@@ -1,4 +1,4 @@
-"""One addressed reference correction without rewriting source dispositions."""
+"""One literal-reference correction without rewriting source dispositions."""
 import json
 from typing import Literal
 
@@ -7,7 +7,10 @@ from pydantic import ConfigDict, Field, create_model
 from adaptive_document_agent.models.executive_brief import BriefQuote
 from .presentation_budget_output import complete_budget_output
 from .prompting import untrusted_document_message
-from .source_integration_quotes import SourceQuoteCapacityError, bind_source_quotes, numbered_source_pages, _literal_parts
+from .structured_output_correction import schema_feedback
+from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
+from .source_integration_quotes import (SourceQuoteCapacityError, SourceQuoteBindingError,
+    bind_source_quotes, numbered_source_pages, _literal_parts)
 
 
 def reference_options(pages):
@@ -33,7 +36,7 @@ def reference_options(pages):
 def bind_with_capacity_repair(gateway, draft, pages, entry, budget, *, selected_phrase_evidence=False):
     try:
         return bind_source_quotes(draft, pages, selected_phrase_evidence=selected_phrase_evidence)
-    except SourceQuoteCapacityError:
+    except (SourceQuoteCapacityError, SourceQuoteBindingError):
         if budget.get('quote_capacity'):
             raise
     targets, fields = {}, {}
@@ -44,14 +47,16 @@ def bind_with_capacity_repair(gateway, draft, pages, entry, budget, *, selected_
                 additions=[item] if collection == 'additions' else []), deep=True)
             try:
                 bind_source_quotes(probe, pages, selected_phrase_evidence=selected_phrase_evidence)
-            except SourceQuoteCapacityError as error:
+            except (SourceQuoteCapacityError, SourceQuoteBindingError) as error:
                 key = f'{collection}_{index}_evidence'
                 limit = type(item).model_json_schema()['properties']['evidence']['maxItems']
                 allowed_pages = sorted({q.page for q in item.evidence})
                 choices = [ref for ref, quote in options.items() if quote['page'] in allowed_pages]
                 if not choices:
                     raise ValueError('No bounded literal reference options for this source object')
-                fields[key] = (list[Literal[tuple(choices)]], Field(min_length=1, max_length=limit))
+                fields[key] = (list[Literal[tuple(choices)]], Field(min_length=1, max_length=limit,
+                    description=f'Literal reference IDs for {collection}[{index}] only. '
+                    f'Allowed source pages: {allowed_pages}. Other objects may have different page scopes.'))
                 targets[key] = dict(current_object=item.model_dump(mode='json'), error=str(error),
                                     quote_limit=limit, allowed_pages=allowed_pages, allowed_options=choices)
     # This is a reference selection, never a licence to shorten the source or
@@ -76,8 +81,41 @@ def bind_with_capacity_repair(gateway, draft, pages, entry, budget, *, selected_
         'The resulting proposal will be validated and independently reviewed.'),
         untrusted_document_message(json.dumps(payload, ensure_ascii=False))]
     entry['quote_capacity_failure'] = dict(targets=targets, original_draft=draft.model_dump(mode='json'))
-    patch = complete_budget_output(gateway, messages, schema, entry,
-        audit_key='quote_capacity_output_attempts', token_limits=(8000, 16000), stage='report')
+    try:
+        patch = complete_budget_output(gateway, messages, schema, entry,
+            audit_key='quote_capacity_output_attempts', token_limits=(8000, 16000), stage='report')
+    except LLMStructuredOutputError as error:
+        # A complete reference response can confuse two objects' page scopes.
+        # Correct only the invalid fields; valid siblings and the proposal stay
+        # immutable. Truncation, refusal and malformed output cannot enter here.
+        feedback = schema_feedback(error, schema)
+        errors = feedback.get('schema_errors', [])
+        if not errors or any(e['type'] != 'literal_error' for e in errors):
+            raise
+        try:
+            submitted = json.loads(error.response.text)
+        except (ValueError, TypeError):
+            raise error
+        invalid = {e['loc'][0] for e in errors if e.get('loc')}
+        if (not isinstance(submitted, dict) or set(submitted) != set(fields)
+                or not invalid or not invalid <= set(fields) or budget.get('quote_capacity_format')):
+            raise error
+        budget['quote_capacity_format'] = 1
+        correction_schema = create_model('SourceQuoteReferenceCorrection',
+            __config__=ConfigDict(extra='forbid'), **{k: fields[k] for k in sorted(invalid)})
+        entry['quote_reference_format_failure'] = feedback
+        correction = complete_budget_output(gateway, [*messages,
+            untrusted_document_message(json.dumps(dict(rejected_response=submitted,
+                invalid_fields={k: targets[k] for k in sorted(invalid)}, errors=errors), ensure_ascii=False)),
+            dict(role='user', content='Correct only the requested invalid reference fields. Each field has its '
+                'own allowed_options and allowed_pages: an option permitted for a decision can be forbidden '
+                'for an addition. Select IDs only from that exact field\'s allowed_options. Do not expand '
+                'page scope, change the proposal or return valid sibling fields. This is format repair, '
+                'never source approval; the complete result still requires independent source review.')],
+            correction_schema, entry, audit_key='quote_reference_format_attempts',
+            token_limits=(8000, 16000), stage='report')
+        patch = schema.model_validate({**submitted, **correction.model_dump(mode='python')})
+        entry['quote_reference_format_patch'] = correction.model_dump(mode='json')
     values = patch.model_dump(mode='python')
     corrected = draft.model_copy(deep=True)
     for key in targets:

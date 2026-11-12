@@ -1,4 +1,4 @@
-"""Resume a saved analysis with a real LLMGateway and the matching original PDF.
+"""Run or resume analysis with a real LLMGateway and the matching original PDF.
 
 Credentials are read from the chosen environment file and never printed or saved.
 Every invocation has the normal shared 15-minute deadline; no provider fallback.
@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from threading import Lock
 from time import perf_counter
 
 from dotenv import dotenv_values
@@ -103,6 +104,8 @@ def run(args) -> dict:
                 target.write_text(json.dumps(dict(operation=response_model.__name__, errors=chain),
                     ensure_ascii=False, indent=2), encoding='utf-8')
                 raise
+            finally:
+                save_summary()
             if response_model.__name__ == 'RetainedPageRevisions':
                 (args.output / f'copy-revisions-{len(self.usage):03}.json').write_text(
                     value.model_dump_json(indent=2), encoding='utf-8')
@@ -113,14 +116,17 @@ def run(args) -> dict:
     gateway.run_deadline = AnalysisDeadline()
     summary = dict(started_at=datetime.now(timezone.utc).isoformat(),
         provider=settings.provider.value, model=settings.model, original_sha256=source.document.sha256,
-        checkpoint=str(args.checkpoint), mode='live_reporting_resume', limit_seconds=900,
+        checkpoint=str(args.checkpoint),
+        mode='live_fresh_pdf' if args.fresh else 'live_reporting_resume', limit_seconds=900,
         status='running', complete=False)
+    summary_lock = Lock()
 
     def save_summary():
-        summary['elapsed_seconds'] = round(perf_counter() - started, 3)
-        summary['llm_calls'] = len(gateway.usage)
-        (args.output / 'run_summary.json').write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding='utf-8')
-        (args.output / 'llm_usage.json').write_text(json.dumps(gateway.usage, ensure_ascii=False, indent=2), encoding='utf-8')
+        with summary_lock:
+            summary['elapsed_seconds'] = round(perf_counter() - started, 3)
+            summary['llm_calls'] = len(gateway.usage)
+            (args.output / 'run_summary.json').write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding='utf-8')
+            (args.output / 'llm_usage.json').write_text(json.dumps(gateway.usage, ensure_ascii=False, indent=2), encoding='utf-8')
 
     def progress(stage):
         event = dict(elapsed_seconds=round(perf_counter() - started, 3), stage=stage,
@@ -135,9 +141,11 @@ def run(args) -> dict:
         if not args.skip_probe:
             progress('Checking the configured live model')
             gateway.generate_text([dict(role='user', content='Reply OK only.')], stage='diagnostic', max_tokens=64)
-        progress('Resuming the saved reporting checkpoint')
+        progress('Analysing the original PDF from ingestion' if args.fresh
+                 else 'Resuming the saved reporting checkpoint')
         from adaptive_document_agent.agent.orchestrator import DocumentOrchestrator
-        result = DocumentOrchestrator(gateway).analyse_pdf(raw_pdf, resume=source, progress=progress)
+        result = DocumentOrchestrator(gateway).analyse_pdf(raw_pdf,
+            resume=None if args.fresh else source, progress=progress)
         ready = is_complete(result)
         summary.update(status=result.pipeline_state, pipeline_complete=ready,
             complete=ready and not args.export_pptx,
@@ -176,6 +184,7 @@ if __name__ == '__main__':
     parser.add_argument('--model', required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--export-pptx', action='store_true')
+    parser.add_argument('--fresh', action='store_true', help='Use the checkpoint only to verify the PDF hash; run from ingestion without any saved analysis')
     parser.add_argument('--skip-probe', action='store_true', help='Reuse an already verified connection; all analysis requests remain real')
     parser.add_argument('--render-node', type=Path)
     parser.add_argument('--render-module', type=Path)

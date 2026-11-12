@@ -169,6 +169,27 @@ def selection_retry_feedback(result, context):
                 final_approval=False)
 
 
+def selection_output_truncated(previous):
+    """Recognize incomplete generation, never a partially approved selection."""
+    if (previous.pipeline_state != 'partial' or previous.retry_from != 'reporting'
+            or previous.presentation_topics is not None
+            or previous.failed_stage != 'presentation_selection'
+            or previous.failure_details.get('error_type') != 'LLMStructuredOutputError'):
+        return False
+    for warning in reversed(previous.validation_warnings):
+        if warning.code not in {'retained_selection_format_repair', 'retained_selection_output_capacity'}:
+            continue
+        try:
+            audit = json.loads(warning.message)
+            if not isinstance(audit, dict):
+                return False
+            return (audit.get('status') == 'truncated' or
+                    bool(audit.get('attempts')) and audit['attempts'][-1]['status'] == 'truncated')
+        except (ValueError, KeyError, TypeError):
+            return False
+    return False
+
+
 def restore_rejected_findings(previous: PipelineResult | None, current: PipelineResult) -> bool:
     """Restore unchanged findings and completed selection across downstream failures."""
     intro_retry = previous is not None and (previous.failed_stage or '').startswith('introduction')
@@ -191,6 +212,11 @@ def restore_rejected_findings(previous: PipelineResult | None, current: Pipeline
             return False
         current.validation_warnings.extend(w.model_copy(deep=True) for w in previous.validation_warnings
             if w.code in {SELECTION_CODE, 'retained_selection_coverage'})
+    elif selection_output_truncated(previous):
+        current.validation_warnings.append(ValidationIssue(code='retained_selection_upstream_resume',
+            stage='presentation', severity='info', message='Reused source-identical provisional findings '
+            'and outline after truncated selection output. Selection, numeric binding, omission and '
+            'independent source reviews remain pending. No partial response was restored.'))
     elif selection_retry_feedback(candidate, selection_context(candidate, source_authoring=True)) is None:
         return False
     current.insights, current.report_plan = candidate.insights, candidate.report_plan
