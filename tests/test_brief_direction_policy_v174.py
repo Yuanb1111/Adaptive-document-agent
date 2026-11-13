@@ -82,7 +82,7 @@ def test_only_new_operation_cache_identity_changes_without_global_policy_bump(mo
         llm.generate_structured([], schema, stage='report', allow_repair=False, max_tokens=8192)
     assert complete.call_count == 2
     monkeypatch.setattr(reasoning_policy, '_SIMPLE_OPERATIONS', current)
-    assert reasoning_policy.REASONING_POLICY_VERSION == 'operation-reasoning-v9'
+    assert reasoning_policy.REASONING_POLICY_VERSION == 'operation-reasoning-v11'
     assert old_classifier != policy(settings)
     assert old_audit == policy(settings, operation='AuditScopeReview')
     for schema in (BriefClaimDirectionReview, AuditScopeReview):

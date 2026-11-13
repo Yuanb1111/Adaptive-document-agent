@@ -85,7 +85,9 @@ def test_declared_null_field_is_preserved_when_removing_an_extra_null():
     from adaptive_document_agent.services.llm.structured import repair_extra_null_fields
     original = dict(selection(_linked_result()), unused=None)
     original['decisions'][0]['page'] = None
-    repaired, paths = repair_extra_null_fields(json.dumps(original), retained.SourceAuthoredAnalysisSelection)
+    # Legacy selections permit an absent authored page. Source-authored include
+    # decisions now require it; a null there must not become a successful repair.
+    repaired, paths = repair_extra_null_fields(json.dumps(original), retained.RetainedAnalysisSelection)
     assert paths == [['unused']]
     assert 'page' in repaired.decisions[0].model_fields_set and repaired.decisions[0].page is None
 

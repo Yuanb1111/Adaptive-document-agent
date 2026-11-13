@@ -106,7 +106,7 @@ def test_audit_default_reasoning_invalidates_only_changed_operation_caches(monke
         gateway.generate_structured([], schema, stage='report', allow_repair=False, max_tokens=12000)
     assert complete.call_count == len(schemas)
     monkeypatch.setattr(reasoning_policy, '_SIMPLE_OPERATIONS', current)
-    assert reasoning_policy.REASONING_POLICY_VERSION == 'operation-reasoning-v9'
+    assert reasoning_policy.REASONING_POLICY_VERSION == 'operation-reasoning-v11'
     for schema in schemas:
         assert (before[schema.__name__] != policy(settings, schema)) is (schema in AUDIT_SCHEMAS)
         gateway.generate_structured([], schema, stage='report', allow_repair=False, max_tokens=12000)

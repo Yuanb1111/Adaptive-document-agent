@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 from threading import Lock
 from time import perf_counter
+from uuid import uuid4
 
 from dotenv import dotenv_values
 from pydantic import SecretStr
@@ -112,14 +113,15 @@ def run(args) -> dict:
                         entry['response'] = response.text
                     chain.append(entry)
                     current = current.__cause__
-                target = args.output / f'structured-error-{len(self.usage):03}.json'
+                target = args.output / f'structured-error-{len(self.usage):03}-{uuid4().hex[:8]}.json'
                 target.write_text(json.dumps(dict(operation=response_model.__name__, errors=chain),
                     ensure_ascii=False, indent=2), encoding='utf-8')
                 raise
             finally:
                 save_summary()
-            if response_model.__name__ == 'RetainedPageRevisions':
-                (args.output / f'copy-revisions-{len(self.usage):03}.json').write_text(
+            if response_model.__name__ in {'RetainedPageRevisions','PriorityPagePatch'}:
+                prefix='copy-revisions' if response_model.__name__=='RetainedPageRevisions' else 'priority-patch'
+                (args.output / f'{prefix}-{len(self.usage):03}-{uuid4().hex[:8]}.json').write_text(
                     value.model_dump_json(indent=2), encoding='utf-8')
             return value
 

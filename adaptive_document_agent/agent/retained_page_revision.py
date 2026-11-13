@@ -115,7 +115,7 @@ def merge_page_revisions(revision, decisions, expected):
 
 def copy_contract_errors(replacements, packet, aliases, result):
     from .retained_analysis import RetainedAnalysisSelection
-    from .retained_page_sources import AuthoredPageErrors, validate_authored_pages
+    from .retained_page_sources import AuthoredPageErrors, validate_authored_pages,rebind_context_evidence
     probe = RetainedAnalysisSelection(decisions=[dict(insight_id=iid, decision='include',
         reason='Unapproved local copy candidate.', page=page.model_dump())
         for iid, page in replacements.items()], ordered_insight_ids=list(replacements))
@@ -123,6 +123,11 @@ def copy_contract_errors(replacements, packet, aliases, result):
         decision.page.companion_ids = [aliases.get(ref, ref) for ref in decision.page.companion_ids]
     context = {**packet, 'source_rows': [{**row, 'id': aliases.get(row['id'], row['id'])}
                                        for row in packet['source_rows']]}
+    corrections=rebind_context_evidence(probe,context,result)
+    if corrections:
+        for decision in probe.decisions:
+            replacements[decision.insight_id].context_evidence=decision.page.context_evidence
+            replacements[decision.insight_id].source_context=decision.page.source_context
     try:
         validate_authored_pages(probe, context, result)
     except AuthoredPageErrors as exc:
@@ -132,6 +137,18 @@ def copy_contract_errors(replacements, packet, aliases, result):
 
 def revise_retained_pages(gateway, result, packet, aliases, draft, issues, *, earlier_issues=None,
                           preserve_numeric_inputs=False):
+    """Isolate flagged pages in fast cloud mode; no worker merges or approves copy."""
+    if getattr(gateway, 'discovery_workers', 1) >= 8 and len(issues) > 1:
+        from .retained_page_revision_parallel import revise_owned_pages
+        return revise_owned_pages(issues, lambda own_issues: _revise_page_batch(
+            gateway, result, packet, aliases, draft, own_issues,
+            earlier_issues=earlier_issues, preserve_numeric_inputs=preserve_numeric_inputs))
+    return _revise_page_batch(gateway, result, packet, aliases, draft, issues,
+        earlier_issues=earlier_issues, preserve_numeric_inputs=preserve_numeric_inputs)
+
+
+def _revise_page_batch(gateway, result, packet, aliases, draft, issues, *, earlier_issues=None,
+                       preserve_numeric_inputs=False):
     from adaptive_document_agent.services.source_citations import evidence_pages
     from adaptive_document_agent.services.presentation_evidence import calculation_catalog
     findings = {f['insight']['id']: f for f in packet['findings']}
@@ -162,13 +179,29 @@ def revise_retained_pages(gateway, result, packet, aliases, draft, issues, *, ea
     source_pages = sorted({n for page in by_page.values() for n in page['source_page_numbers']}
                           | {p['page'] for p in packet.get('source_pages', [])})
     properties = RetainedPage.model_json_schema()['properties']
+    trace = {row['planned_slide_id']:len(row['slide_numbers'])
+             for row in result.presentation_export_trace if row.get('planned_slide_id')}
+    costs = {iid:trace.get(slide.id,1) for slide in (result.presentation_plan.slides
+             if result.presentation_plan else []) if slide.slide_type=='analysis'
+             for iid in slide.insight_ids}
+    local_limits = ({iid: (properties['message']['maxLength'] if costs.get(iid,1)>1
+                          else max(600,len(page['draft']['message'])))
+                     for iid,page in by_page.items()} if preserve_numeric_inputs else {
+                         iid:properties['message']['maxLength'] for iid in by_page})
     payload = dict(pages_to_correct=by_page, source_pages=[audit_source_page(pages[n]) for n in source_pages],
                    preserve_numeric_inputs=preserve_numeric_inputs,
+                   local_message_character_limits=local_limits,
                    page_copy_limits={field: properties[field]['maxLength'] for field in ('title', 'message')},
                    current_copy_characters={iid: {field: len(page['draft'][field])
                        for field in ('title', 'message')} for iid, page in by_page.items()},
                    earlier_review_questions={iid: reasons for iid, reasons in (earlier_issues or {}).items()
                                              if iid in issues})
+    if getattr(gateway, 'discovery_workers', 1) >= 8 and len(issues) == 1:
+        from .compact_publication_copy import compact_publication_copy
+        iid, = issues
+        return compact_publication_copy(gateway, iid, payload, local_limits[iid],
+            lambda pages: copy_contract_errors(pages, packet, aliases, result),
+            preserve_inputs=preserve_numeric_inputs)
     messages = [
         dict(role='system', content=
              'Revise only the flagged analysis pages. Return edits keyed by each supplied insight ID '
@@ -186,8 +219,13 @@ def revise_retained_pages(gateway, result, packet, aliases, draft, issues, *, ea
              'accurate, fully scoped and within the complete message limit. '
              'Address EVERY current errors entry at its actual defective clause. Changing a nearby '
              'supported numeric comparison does not repair the scope of a different attributed driver. '
-             'When preserve_numeric_inputs is true, keep every original companion ID. Leave '
-             'companion_ids null unless a current reviewer objection requires additional eligible '
+             'When preserve_numeric_inputs is true, keep every original companion ID. '
+             'The local_message_character_limits also bound each complete merged message. '
+             'Preserve every source value and required meaning by shortening redundant wording '
+             'and repeated level/direction clauses; do not append a long qualification to an '
+             'already verbose page. Keep exact dates, units, attribution and adverse context. '
+             'Never truncate, remove evidence or weaken a source condition to fit. '
+             'Leave companion_ids null unless a current reviewer objection requires additional eligible '
              'source rows; then return the complete original list plus those exact eligible IDs. '
              'Never remove an existing input or invent a row. Any added quantitative context '
              'must name its own metric, units and period in the copy. '
@@ -302,6 +340,13 @@ def revise_retained_pages(gateway, result, packet, aliases, draft, issues, *, ea
             errors = copy_contract_errors(proposed, packet, aliases, result) if revision.edits else {}
             if preserve_numeric_inputs:
                 for iid, page in proposed.items():
+                    if len(page.message) > local_limits[iid]:
+                        errors.setdefault(iid, []).append(
+                            f'The complete merged message has {len(page.message)} characters; '
+                            f'its local copy limit is {local_limits[iid]}. Shorten redundant '
+                            'phrasing while preserving every value, exact scope, source qualification '
+                            'and prior correction. This limit is not permission to omit evidence; '
+                            'the final native physical-page budget is still mandatory.')
                     if not set(decisions[iid]['page']['companion_ids']) <= set(page.companion_ids):
                         errors.setdefault(iid, []).append(
                             'Existing numeric inputs are frozen: retain every original companion_id '

@@ -13,7 +13,7 @@ def repair_retained_source_copy(gateway, result, previous=None):
     from .retained_selection_feedback import retain_selection_feedback
     from .retained_page_sources import (
         writer_context, source_row_assurance, validate_authored_pages,
-        page_bindings, context_evidence_pages,
+        page_bindings, context_evidence_pages,authored_message,
     )
     from .retained_page_revision import revise_retained_pages
     issue = retain_selection_feedback(result if previous is None else previous,
@@ -30,6 +30,21 @@ def repair_retained_source_copy(gateway, result, previous=None):
     reverse = {value: key for key, value in aliases.items()}
     record = selected_record(result)
     selection = RetainedAnalysisSelection.model_validate(record['selection'])
+    linked = findings(result, allow_new_copy=True)
+    from .reported_source_context import reported_source_components,observation_context_labels
+    from adaptive_document_agent.services.calendar_claims import bound_period_dates,literal_calendar_dates
+    original_parts={}
+    for decision in selection.decisions:
+        if decision.decision!='include' or decision.page is None:
+            continue
+        ids=linked[decision.insight_id][1] | set(decision.page.companion_ids)
+        periods=[o.period for o in result.observations if o.id in ids and o.period]
+        dates=set().union(*(literal_calendar_dates(q.text) for q in decision.page.all_context_evidence))
+        text=authored_message(decision.page,[*periods,*dates])
+        original_parts[decision.insight_id]=reported_source_components(
+            text,decision.page.all_context_evidence,periods=[*periods,*dates],
+            labels=observation_context_labels([o for o in result.observations if o.id in ids]),
+            declared=decision.page.source_context)
     draft = selection.model_dump(mode='json')
     for decision in draft['decisions']:
         if decision['page']:
@@ -62,17 +77,21 @@ def repair_retained_source_copy(gateway, result, previous=None):
         iid = slide.insight_ids[0]
         insight, primary, _ = linked[iid]
         page = next(d.page for d in selection.decisions if d.insight_id == iid)
-        title, copy, ids = page_bindings(page, insight, primary, context, result)
+        title, copy, ids, reported = page_bindings(page, insight, primary, context, result,
+                                                  with_source_context=True)
         if not set(slide.observation_ids) <= ids:
             raise ValueError('Local copy correction removed its compiled observation scope.')
         # Native source assurance can append a separate coverage bullet. Its
         # evidence bindings must survive an edit of the authored main copy.
-        if not slide.bullets or slide.bullets[0] != slide.message:
+        old=original_parts[iid]
+        owned_count=1+len(old[1])
+        if not slide.bullets or slide.bullets[:owned_count] != [old[0],*old[1]]:
             raise ValueError('Local copy correction requires the original authored first bullet.')
         slide.title, slide.message = title, copy
-        slide.bullets = [copy, *slide.bullets[1:]]
+        slide.bullets = [copy,*reported,*slide.bullets[owned_count:]]
         slide.observation_ids = sorted(ids)
-        slide.bullet_observation_ids[0] = sorted(ids)
+        slide.bullet_observation_ids = [sorted(ids),*[[] for _ in reported],
+                                       *slide.bullet_observation_ids[owned_count:]]
         slide.section_title = slide.analytical_question = title
         slide.source_pages = sorted(set(evidence_pages(insight, [by_id[k] for k in ids], document=result.document))
                                     | context_evidence_pages(page, context, result))

@@ -41,6 +41,10 @@ def test_live_rejection_is_corrected_without_loading_checkpoint_or_restarting_an
     llm=gateway([verdict(result,False),dict(edits={iid:dict(message=[dict(before=text,
         after='The source reports revenue with its period labels.')])}),verdict(result)])
     review_retained_analysis(llm,result,repair_copy=True)
+    prompt=' '.join(message['content'] for message in llm.client.calls[0])
+    assert 'omissions_accepted concerns ONLY whether excluded FINDINGS' in prompt
+    assert 'reject that slide' in prompt
+    assert 'must be corrected and receive a fresh independent review' in prompt
     assert review_complete(result) and result.failed_stage is None
     assert calls==['audit','measure']
     assert [u['operation'] for u in llm.usage]==['RetainedAnalysisReview','RetainedPageRevisions','RetainedAnalysisReview']
@@ -65,3 +69,24 @@ def test_copy_correction_cannot_settle_a_missing_finding(monkeypatch):
     with pytest.raises(ValueError,match='Omitted findings'):
         review_retained_analysis(llm,result,repair_copy=True)
     assert len(llm.usage)==1 and not review_complete(result)
+
+
+def test_material_copy_over_budget_uses_model_selection_then_fresh_source_verdict(monkeypatch):
+    calls=measured(monkeypatch)
+    from adaptive_document_agent.agent import retained_budget_refinement
+    from adaptive_document_agent.services import slide_budgets
+    checks=[]
+    def require(*args):
+        checks.append('measure')
+        if len(checks)==1:
+            raise ValueError('Analysis has an extra physical page')
+    monkeypatch.setattr(slide_budgets,'require_exported_budgets',require)
+    monkeypatch.setattr(retained_budget_refinement,'refine_retained_budget',
+        lambda *a,**k:calls.append('model-owned-selection'))
+    result,iid=ready()
+    llm=gateway([verdict(result,False),dict(edits={iid:{}}),verdict(result)])
+    review_retained_analysis(llm,result,repair_copy=True)
+    assert calls==['audit','model-owned-selection'] and checks==['measure','measure']
+    assert review_complete(result)
+    assert [row['operation'] for row in llm.usage]==[
+        'RetainedAnalysisReview','RetainedPageRevisions','RetainedAnalysisReview']

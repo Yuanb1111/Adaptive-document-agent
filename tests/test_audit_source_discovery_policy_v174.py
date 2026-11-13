@@ -88,7 +88,7 @@ def test_only_new_navigation_identity_changes_preserving_policy_version_and_audi
         gateway.generate_structured([], schema, stage='report', allow_repair=False, max_tokens=8192)
     assert complete.call_count == 4
     monkeypatch.setattr(reasoning_policy, '_SIMPLE_OPERATIONS', current)
-    assert reasoning_policy.REASONING_POLICY_VERSION == 'operation-reasoning-v9'
+    assert reasoning_policy.REASONING_POLICY_VERSION == 'operation-reasoning-v11'
     for schema in schemas:
         assert (before[schema.__name__] != policy(settings, operation=schema.__name__)) is (schema is AuditSourceDiscovery)
         gateway.generate_structured([], schema, stage='report', allow_repair=False, max_tokens=8192)

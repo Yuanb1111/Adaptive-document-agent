@@ -21,7 +21,10 @@ from tests.test_retained_analysis_v216 import _linked_result, selection
 
 def test_empty_reasoning_only_truncation_retries_complete_sources_at_larger_capacity():
     result = _linked_result()
-    value = SourceAuthoredAnalysisSelection.model_validate(selection(result))
+    draft=selection(result)
+    for decision in draft['decisions']:
+        decision['page']=dict(title='Source measure',message='The source reports the measure.')
+    value = SourceAuthoredAnalysisSelection.model_validate(draft)
     truncated = response('', finish='length')
     truncated.usage.output_tokens = truncated.usage.reasoning_tokens = SELECTION_TOKEN_LIMITS[0]
     llm, client = gateway([truncated, response(value)])

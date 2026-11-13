@@ -12,7 +12,7 @@ from .config import LLMSettings, ProviderName
 from .costs import direct_deepseek
 from .credentials import DEFAULT_ENDPOINTS, provider_endpoint
 
-REASONING_POLICY_VERSION = "operation-reasoning-v9"
+REASONING_POLICY_VERSION = "operation-reasoning-v11"
 # Documented model IDs, independent of pricing data. New aliases/models do not
 # inherit transport capabilities by prefix. See docs/LLM_REASONING_POLICY.md.
 _DEEPSEEK_THINKING_MODELS = frozenset({"deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro"})
@@ -53,6 +53,14 @@ _SIMPLE_OPERATIONS = frozenset({("presentation", "IntroductionPages"), ("report"
                               ("presentation", "PhysicalBudgetSelection"),
                               ("presentation", "RetainedPhysicalBudgetSelection"),
                               ("presentation", "RetainedAnalysisSelection"),
+                              # Rank the already validated finding catalog once.
+                              # Owned source interpretation and independent omission
+                              # and page reviews retain provider-default reasoning.
+                              ("presentation", "SourcePrioritySelection"),
+                              # Reviewed priorities, owned copy spans and frozen inputs;
+                              # fresh full-source publication review still uses defaults.
+                              ("presentation", "PriorityPagePatch"),
+                              ("presentation", "RetainedPageRevisions"),
                               ("presentation", "IntroductionMeaningRevision"),
                               ("presentation", "IntroductionMeaningResolution"),
                               ("presentation", "SummaryCoverageReview"),

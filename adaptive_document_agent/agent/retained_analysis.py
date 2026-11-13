@@ -6,7 +6,7 @@ catalogue has been reviewed. Raw extraction and the full analysis remain intact.
 import json
 from contextlib import nullcontext
 from hashlib import sha256
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -124,8 +124,20 @@ class RetainedAnalysisSelection(BaseModel):
     ordered_insight_ids: list[str] = Field(min_length=1, max_length=8)
 
 
+class SourceIncludedFinding(FindingDecision):
+    decision: Literal['include']
+    page: RetainedPage
+
+
+class SourceOmittedFinding(FindingDecision):
+    decision: Literal['omit']
+    page: None = None
+
+
 class SourceAuthoredAnalysisSelection(RetainedAnalysisSelection):
     """Source interpretation keeps provider reasoning defaults; legacy selection only ranks findings."""
+    decisions: list[Annotated[SourceIncludedFinding | SourceOmittedFinding,
+                              Field(discriminator='decision')]]
 
 
 def repair_omission_ids(selection: RetainedAnalysisSelection, context: dict) -> bool:
@@ -276,7 +288,10 @@ def _select_retained_analysis(gateway, result):
     # A late coverage decision needs its own bounded selection correction;
     # earlier copy repairs must not consume that opportunity.
     priority_revisions_left = 1
-    max_copy_revisions = copy_revisions_left = 2
+    # Owned source reviews can discover a further material qualification after
+    # the first correction. Keep a finite fast-mode source revision allowance;
+    # every round still consumes the same run deadline and earns new verdicts.
+    max_copy_revisions = copy_revisions_left = (3 if getattr(gateway,'discovery_workers',1)>=8 else 2)
     earlier_page_issues = (feedback or {}).get('earlier_page_issues', {})
     priority_draft = None
     for attempt in range(3):
@@ -297,6 +312,9 @@ def _select_retained_analysis(gateway, result):
             # pages directly. Keep the other draft pages stable; all numeric,
             # coverage and final source checks still run before export.
             selection = schema.model_validate(feedback['rejected_draft'])
+        elif source_authoring and feedback is None and getattr(gateway,'discovery_workers',1)>=8:
+            from .retained_source_authoring_parallel import select_owned_source_pages
+            selection=select_owned_source_pages(gateway,result,context,packet,aliases,messages,authoring)
         else:
             selection = selection_request(gateway, messages, schema, result, attempt,
                 max_tokens=SELECTION_TOKEN_LIMITS[0] if source_authoring else 8000,
@@ -453,8 +471,10 @@ def compile_retained_analysis(result):
         primary = ids
         decision = next(d for d in selection.decisions if d.insight_id == iid)
         title = insight.title
+        reported=[]
         if decision.page is not None:
-            title, copy, ids = page_bindings(decision.page, insight, primary, context, result)
+            title, copy, ids, reported = page_bindings(decision.page, insight, primary, context, result,
+                                                      with_source_context=True)
         observations = [o for o in result.observations if o.id in ids]
         # Exact provenance only. Prefer one complete existing visual; otherwise
         # native observation rendering retains all inputs on the same page.
@@ -467,8 +487,8 @@ def compile_retained_analysis(result):
         pages = sorted(set(pages) | context_evidence_pages(decision.page, context, result))
         sid = f'retained_analysis_{n}'
         slide = PresentationSlide(id=sid, slide_type='analysis', title=title,
-            section_id=sid, section_title=title, message=copy, bullets=[copy],
-            bullet_observation_ids=[sorted(ids)], observation_ids=sorted(ids),
+            section_id=sid, section_title=title, message=copy, bullets=[copy,*reported],
+            bullet_observation_ids=[sorted(ids),*[[] for _ in reported]], observation_ids=sorted(ids),
             insight_ids=[iid], chart_ids=chart_ids, source_pages=pages,
             theme_id=sid, analytical_question=title, selection_reason=decision.reason)
         if not chart_ids:
@@ -487,6 +507,9 @@ def compile_retained_analysis(result):
         owned = [calc for calc in calculations.values() if set(calc['observation_ids']) <= ids]
         display_calculations = set()
         for _, _, matched_ids in checked_money_amounts(copy, observations, owned):
+            display_calculations.update(matched_ids)
+        from adaptive_document_agent.validation.calculated_count_change import checked_count_changes
+        for _,_,matched_ids in checked_count_changes(copy,observations,owned):
             display_calculations.update(matched_ids)
         for calc in owned:
             cid = calc['id']

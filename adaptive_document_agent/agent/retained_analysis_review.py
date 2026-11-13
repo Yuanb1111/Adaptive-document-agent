@@ -53,8 +53,14 @@ class RetainedSlideVerdict(BaseModel):
 class RetainedAnalysisReview(BaseModel):
     model_config = ConfigDict(extra='forbid')
     verdicts: list[RetainedSlideVerdict]
-    omissions_accepted: bool
-    omission_reason: str = Field(min_length=1, max_length=2000)
+    omissions_accepted: bool = Field(description=
+        'Whether excluding the omitted FINDINGS is defensible. Missing caveats, source context or '
+        'counterevidence on an INCLUDED page belong to its rejected slide verdict; they do not '
+        'make this selection-only flag false. True does not approve any slide copy.')
+    omission_reason: str = Field(min_length=1, max_length=2000, description=
+        'Explain selection coverage of excluded findings only. If false, identify which omitted '
+        'finding must displace a retained one within the page budget. Included-page defects '
+        'must be reported in their slide verdicts, independently of this selection decision.')
 
 
 def review_context(result):
@@ -110,22 +116,23 @@ def review_context(result):
     ids.update(oid for c in charts for oid in [*c.observation_ids, *c.total_observation_ids])
     # Complete source rows/periods for every retained calculation, including
     # unselected findings. The reviewer can see omitted companion periods.
-    from .presentation_topic_selector import series_directory
-    _, lookup = series_directory(result)
-    related = [group for group in lookup.values() if ids & {o.id for o in group}]
-    ids.update(o.id for group in related for o in group)
-    observations = [o for o in result.observations if o.id in ids]
+    from .retained_source_inventory import complete_source_observations
+    observations = complete_source_observations(result,ids)
     context['observations'] = [o.model_dump(mode='json') for o in observations]
     from adaptive_document_agent.services.chart_review_evidence import chart_scale_evidence
     context['chart_scale_evidence'] = [chart_scale_evidence(c, observations) for c in charts]
+    provided_pages = {p['page'] for p in context.get('source_pages',[])}
     pages = {e.page for o in observations for e in o.evidence}
-    pages.update(p for s in slides for p in s.source_pages)
+    # Author-provided context quotations already have a complete-page envelope.
+    # Do not recursively grow that envelope from a citation to its neighbor.
+    pages.update(p for s in slides for p in s.source_pages if p not in provided_pages)
     available = {p.page_number for p in result.document.pages if p.text.strip() or p.tables or p.raw_tables}
     if not pages <= available:
         raise ValueError('Retained review is missing original source pages')
     # Adjacent physical pages preserve carry-over headings/footnotes. Use the
     # same full-text/column-position view as the independent audit scope gate.
-    pages = {n for p in pages for n in (p - 1, p, p + 1) if 1 <= n <= result.document.page_count}
+    pages = provided_pages | {n for p in pages for n in (p - 1, p, p + 1)
+                              if 1 <= n <= result.document.page_count}
     selected_pages = [p for p in result.document.pages if p.page_number in pages]
     from .audit_source_layout import audit_source_page
     context['source_pages'] = [audit_source_page(p) for p in selected_pages]
@@ -202,7 +209,17 @@ def review_retained_analysis(gateway, result, *, progress=None, repair_copy=Fals
                 refresh_report_audit_scope(gateway, result, progress=progress)
                 require_report_audit_scope(result)
                 deck, _ = measure(result)
-                require_exported_budgets(deck, result)
+                try:
+                    require_exported_budgets(deck, result)
+                except ValueError:
+                    # Material copy is never truncated to preserve an old page
+                    # count. Let the existing model-owned physical selection
+                    # decide whole-finding value, then remeasure and earn a new
+                    # full source/omission verdict with the complete audience.
+                    from .retained_budget_refinement import refine_retained_budget
+                    refine_retained_budget(gateway, result, progress=progress)
+                    deck, _ = measure(result)
+                    require_exported_budgets(deck, result)
 
 
 def _review_retained_analysis(gateway, result, *, progress=None):
@@ -266,8 +283,17 @@ def _review_retained_analysis(gateway, result, *, progress=None):
         'also covers continuation pages; it is not an instruction to fill every available page. '
         'The provisional report outline is not a mandate to publish every candidate. A distinct '
         'candidate or different ranking preference alone is not a material gap; explain how an '
-        'omission makes the report misleading or fails an explicit user requirement. Reject '
-        'materially misleading omissions or duplicate '
+        'omission makes the report misleading or fails an explicit user requirement. '
+        'Selection omissions and included-page omissions have separate verdict owners: '
+        'omissions_accepted concerns ONLY whether excluded FINDINGS must replace retained '
+        'findings within the budget. When the selected topics are defensible but an included '
+        'page omits a driver, caveat, counterevidence or other source context, reject that '
+        'slide with its exact missing meaning and keep omissions_accepted true. This does '
+        'not approve publication: the rejected slide must be corrected and receive a fresh '
+        'independent review. Do not set the selection flag false merely because the report '
+        'as a whole is not yet publishable. If an actually excluded finding is indispensable, '
+        'set it false and identify that omitted finding and the needed displacement. '
+        'Reject materially misleading omissions or duplicate '
         'pages with no added analytical value. This review covers retained model-selected '
         'analysis, not exhaustive coverage of every extracted series. Explain specific failures; '
         'If deferred_copy_review_objections is supplied, verify those concerns against the current '

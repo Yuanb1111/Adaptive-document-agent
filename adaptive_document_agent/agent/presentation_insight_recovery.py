@@ -56,10 +56,30 @@ def _numeric_support(text, observations, computed_percentages=(), *, diagnostics
 
     calculations = calculation_catalog(observations)
     spans = []
+    from adaptive_document_agent.validation.calculated_count_change import checked_count_changes
+    for match,supported,_ in checked_count_changes(text,observations,calculations.values()):
+        if not supported:
+            if diagnostics is not None:
+                diagnostics.append('Unbound calculated count change: '+match[0]+'. Keep the exact '
+                    'source metric, native unit, signed Python result and both explicit periods.')
+            return False
+        spans.append(match.span('number'))
     for match, supported, _ in checked_money_amounts(text, observations, calculations.values()):
         if not supported:
             if diagnostics is not None:
                 diagnostics.append(f'Unbound typed amount: {match[0]}')
+                from adaptive_document_agent.services.source_amount_literal import source_amount_literal
+                raw = match['number'].replace(',', '').replace('−', '-')
+                for item in observations:
+                    cell = item.raw_value.strip().strip('()').replace(',', '')
+                    if (cell == raw and item.currency and match['currency']
+                            and normalize_currency_symbol(item.currency)
+                            == normalize_currency_symbol(match['currency'])
+                            and (literal := source_amount_literal(item))):
+                        diagnostics.append(f'Bound raw cell {item.raw_value!r} uses unit '
+                            f'{item.raw_unit!r}; its exact supported amount spelling is {literal!r}. '
+                            'Correct the visible unit/scale rather than deleting this bound amount. '
+                            'This hint does not approve its metric, date or direction.')
             return False
         spans.append(match.span())
     chart_reported = [o for o in observations if o.value is not None and 'chart_reported_cagr' in o.dimensions]

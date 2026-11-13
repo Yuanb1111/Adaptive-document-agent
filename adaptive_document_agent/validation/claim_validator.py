@@ -2236,10 +2236,19 @@ class ClaimValidator:
                         local_start = max((end for start, end in label_spans if end <= direction_start), default=0)
                         local_end = min((start for start, end in label_spans if start >= direction_end), default=len(clause))
                         local_copy = clause[local_start:local_end]
+                        from .explicit_magnitude import magnitude_comparison
+                        magnitude=magnitude_comparison(clause,direction_start,direction_end,
+                            [o.value for o in info['sorted_obs']])
+                        comparison_family=family
+                        non_monotonic=info.get('non_monotonic',{})
+                        if magnitude is not None:
+                            trend_state=TrendState(magnitude['state'])
+                            comparison_family=MetricSemanticFamily.GENERIC
+                            non_monotonic=magnitude['non_monotonic']
                         continuous = re.search(r"(?i)\b(?:steadily|continuously|consistently|monotonically|at each (?:subsequent )?(?:reported )?(?:date|period)|every (?:reported )?(?:year|period))\b", local_copy)
                         through_end = re.search(r"(?i)\b(?:declined|decreased|fell|rose|increased|grew)\s+through\s+(?:the\s+)?(?:latest|last|final)\b", local_copy)
                         qualified = re.search(r"(?i)\b(?:overall|net|rebound|recovery|recovered|except|however|but)\b", local_copy)
-                        if (info.get("non_monotonic", {}).get("is_non_monotonic")
+                        if (non_monotonic.get("is_non_monotonic")
                                 and (continuous or (through_end and not qualified))):
                             issues.append(ValidationIssue(code="non_monotonic_claim", severity="error", stage="presentation",
                                 related_ids=[o.id for o in info["sorted_obs"]],
@@ -2278,12 +2287,11 @@ class ClaimValidator:
                             )
                             continue
 
-                        offending = _detect_offending_in_text(dir_word, trend_state, family)
+                        offending = _detect_offending_in_text(dir_word, trend_state, comparison_family)
                         if (dir_word == "turned negative" and val_end >= 0
                                 or dir_word == "turned positive" and val_end <= 0):
                             offending = dir_word
                         if offending:
-                            non_monotonic = info.get("non_monotonic", {})
                             if scope.observations is None and non_monotonic.get("is_non_monotonic"):
                                 clause_lower = clause.casefold()
                                 is_exempt = (
@@ -2314,7 +2322,9 @@ class ClaimValidator:
                                     code="directional_contradiction",
                                     message=(
                                         f"Slide {slide.id} {comp_type} asserts '{offending}' for '{m_name}', "
-                                        f"but underlying values {verb} from {val_start} to {val_end} ({trend_state.value})."
+                                        f"but underlying {'absolute magnitudes' if magnitude else 'values'} {verb} "
+                                        f"from {magnitude['start'] if magnitude else val_start} to "
+                                        f"{magnitude['end'] if magnitude else val_end} ({trend_state.value})."
                                     ),
                                     severity="error",
                                     stage="presentation",
@@ -2332,7 +2342,9 @@ class ClaimValidator:
                                     start_period=info["start_period"],
                                     end_period=info["end_period"],
                                     period_basis=info["period_basis"],
-                                    has_rebound=bool(non_monotonic.get("had_rebound") and info["sorted_obs"][-1].value > info["sorted_obs"][-2].value),
+                                    has_rebound=bool(non_monotonic.get("had_rebound") and
+                                        (magnitude['increasing_end'] if magnitude else
+                                         info["sorted_obs"][-1].value > info["sorted_obs"][-2].value)),
                                     has_intermediate_decline=bool(non_monotonic.get("had_intermediate_decline")),
                                     claim_start=clause_offset + direction_start + dir_word.index(offending),
                                     claim_end=clause_offset + direction_start + dir_word.index(offending) + len(offending),

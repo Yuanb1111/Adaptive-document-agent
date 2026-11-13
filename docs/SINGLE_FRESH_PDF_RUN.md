@@ -166,3 +166,32 @@ timeouts: restored quantity text exceeded its copy limit (1279.546 seconds,
 84 real model calls), then a ruled-header assurance marker was missing from its
 observation (595.796 seconds, 65 real model calls). Neither attempt was resumed
 to verify this change. Each verification attempt starts again from the PDF.
+
+
+## 2026-11-13 paused development checkpoint
+
+This checkpoint preserves the current source-authoring and validation repairs;
+it is not a verified 15-minute completion. Fresh runs continue to start from
+the original PDF with real OpenAI `gpt-6-luna`, cache disabled and no supplied
+checkpoint. The latest attempt stopped at source-selection validation after
+368.162 seconds and 82 model calls, before PowerPoint export. It produced no
+qualifying PPTX.
+
+The changes separate model-owned priority selection, source-page authoring and
+independent owned-page reviews under the shared eight-call limit. Source-bound
+qualitative context retains its original page and verbatim proof. Complete
+supplementary source requests have an explicit 36,000-character capacity; oversized
+requests still fail without truncation. Calculated amounts and count changes
+must bind to exact Python results, units and period pairs. Explicit magnitude
+comparisons preserve the signed raw observations.
+
+The final identifier, count-change and magnitude repairs have not yet been
+verified in another fresh real-model run. Work is paused at the user's request
+after committing and pushing this checkpoint. The earlier 17-minute success
+remains the only completed original-PDF baseline documented here.
+
+Pre-commit regression checks ran 1,077 cases: 1,063 passed, 13 were optional
+skips, and one fiscal-label/identifier regression failed. After excluding fiscal
+and quarter/half-year period identifiers from the qualitative identifier rule,
+all 64 source-context, publication-copy and declared-amount checks passed.
+The full regression suite was not rerun for this paused checkpoint.

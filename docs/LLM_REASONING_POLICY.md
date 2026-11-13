@@ -6,12 +6,26 @@ without changing prompts, response validation, routing, credentials or privacy:
 - `IntroductionPages` in `presentation` and `BriefSourcePages` in `report` reduce
   reasoning when the exact configured model and transport support it
 - The single existing format-only repair attempt uses the same reduction policy
+- Policy v11 adds `SourcePrioritySelection`: it only ranks the already validated
+  finding catalog and emits one membership/order choice. `OwnedSourcePage`,
+  `RetainedPriorityCoverage`, all independent page reviews and the final whole
+  report source review preserve provider-default reasoning. Privacy, exact-route
+  capability guards and the existing reasoning opt-out remain unchanged.
+- Policy v10 adds `PriorityPagePatch` and `RetainedPageRevisions` in
+  `presentation` to the bounded editorial set. The former receives fixed
+  reviewer-owned membership and order; the latter receives exact owned copy
+  spans, source rows and frozen inputs. Both still require deterministic
+  validation and a fresh independent source verdict. Initial source-authored
+  selection, selection coverage and final retained-page source review preserve
+  provider-default reasoning. The existing `provider_default` opt-out, official
+  endpoint checks, privacy, output limits and correction counts remain intact.
 - `TopicCoverageReview` in `presentation` uses the same opt-out reduction. Its
   bounded output must contain explicit evidence decisions rather than spend
   the entire token allowance on internal reasoning. Full point context,
   source validation and the 24-batch, 36-call ceiling remain required; incomplete
   coverage remains unresolved and cannot certify business acceptance.
-- `ExecutiveBriefPatch` uses the same reduction for its single targeted repair.
+- `ExecutiveBriefPatch` preserves provider-default reasoning for source-bound
+  claim and qualification corrections, as described below.
 - Since v212, `BriefMeaningReview` preserves provider-default reasoning too.
   A real report continuation showed its reduced-reasoning reviewer assigning a
   comparative column's unaudited qualifier to the next interim period despite

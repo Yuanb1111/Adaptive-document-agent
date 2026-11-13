@@ -21,6 +21,9 @@ class PresentationPlanValidator:
         qualitative_pages = retained_context_citations(result)
         qualitative_dates = retained_context_dates(result, checked_citations=qualitative_pages)
         qualitative_day_counts = retained_context_day_counts(result, checked_citations=qualitative_pages)
+        from adaptive_document_agent.agent.retained_page_sources import reported_context_bullet_positions
+        reported_positions=(reported_context_bullet_positions(result,plan) if any(
+            any(not ids for ids in s.bullet_observation_ids) for s in plan.slides) else {})
         calculations = calculation_catalog(result.observations) if any(s.calculation_ids for s in plan.slides) else {}
         errors.extend(validate_narrative_plan(plan, result, calculations, qualitative_pages=qualitative_pages))
         slide_ids = [slide.id for slide in plan.slides]
@@ -327,7 +330,9 @@ class PresentationPlanValidator:
             if slide.bullet_observation_ids:
                 if len(slide.bullet_observation_ids) != len(slide.bullets):
                     errors.append(f"slide {slide.id}: bullet evidence must match the bullet count")
-                if any(not ids or not set(ids) <= set(slide.observation_ids) for ids in slide.bullet_observation_ids):
+                if any((not ids and index not in reported_positions.get(slide.id,set()))
+                       or not set(ids) <= set(slide.observation_ids)
+                       for index,ids in enumerate(slide.bullet_observation_ids)):
                     errors.append(f"slide {slide.id}: bullet evidence must use retained slide observation IDs")
             referenced_pages: set[int] = set()
             referenced_observation_ids = set(observation_ids)
@@ -399,7 +404,11 @@ class PresentationPlanValidator:
                 for cid in slide.calculation_ids:
                     if cid in calculations:
                         calc = calculations[cid]
-                        allowed_numbers.update(self._numbers(str(calc["value"]) + " " + calc["display"]))
+                        # These are separate numeric fields. Joining a raw
+                        # negative rate and its rounded negative display makes
+                        # the second minus look like a range separator.
+                        allowed_numbers.update(self._numbers(str(calc["value"])))
+                        allowed_numbers.update(self._numbers(calc["display"]))
                         # A bound signed change may be described as a positive
                         # magnitude ("declined by 1.3 pp" for a -1.3 pp delta).
                         # Preserve its signed value; directional validation below
@@ -427,10 +436,18 @@ class PresentationPlanValidator:
                 errors.extend(f"slide {slide.id} {error}" for error in citation_errors)
                 from .flow_date_notation import normalize_bound_flow_dates
                 fields = (slide.title, copies.get(slide.message, slide.message), slide.analytical_question,
-                          reason, *(copies.get(b, b) for b in slide.bullets), *block_titles)
+                          reason, *(copies.get(b, b) for index,b in enumerate(slide.bullets)
+                                    if index not in reported_positions.get(slide.id,set())), *block_titles)
                 from adaptive_document_agent.services.source_day_count import mask_day_count_conventions
                 conventions = set().union(*(qualitative_day_counts.get(iid, set()) for iid in insight_ids))
                 fields = tuple(mask_day_count_conventions(field, conventions) for field in fields)
+                from .presentation_numeric_evidence import mask_declared_calculated_amounts
+                bound_calculations=[calculations[cid] for cid in slide.calculation_ids if cid in calculations]
+                fields=tuple(mask_declared_calculated_amounts(field,selected_observations,bound_calculations)
+                             for field in fields)
+                from .calculated_count_change import mask_checked_count_changes
+                fields=tuple(mask_checked_count_changes(field,selected_observations,bound_calculations)
+                             for field in fields)
                 claimed_numbers = set().union(*(self._numbers(normalize_bound_flow_dates(
                     without_source_label_annotations(field, selected_observations), selected_observations, result))
                     for field in fields))

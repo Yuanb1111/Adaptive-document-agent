@@ -106,6 +106,10 @@ def test_other_providers_cannot_borrow_static_openai_capability(monkeypatch, pro
     ('semantic', 'SemanticResolution'), ('planner', 'AnalysisPlan'), ('insight', 'InsightList'),
     ('presentation', 'PresentationTopicSelection'), ('presentation', 'IntroductionDraft'),
     ('presentation', 'PresentationPlan'), ('presentation', 'UnknownOperation'),
+    ('presentation', 'SourceAuthoredAnalysisSelection'),
+    ('presentation', 'OwnedSourcePage'),
+    ('presentation', 'RetainedPriorityCoverage'),
+    ('presentation', 'RetainedSelectionCoverage'), ('presentation', 'RetainedAnalysisReview'),
     ('report', 'ExecutiveBrief'), ('report', 'ExecutiveBriefPatch'),
     ('planner', 'IntroductionPages'), ('report', 'text'),
 ])
@@ -113,6 +117,14 @@ def test_luna_analytical_and_unknown_operations_preserve_defaults(monkeypatch, s
     monkeypatch.delitem(sys.modules, 'litellm', raising=False)
     policy = _policy(stage=stage, operation=operation)
     assert policy['options'] == {} and policy['intent'] == 'preserve'
+
+
+@pytest.mark.parametrize('operation',['PriorityPagePatch','RetainedPageRevisions','SourcePrioritySelection'])
+def test_owned_editorial_patches_use_existing_low_effort_and_honor_opt_out(operation):
+    assert _policy(operation=operation)['options']=={'reasoning_effort':'low'}
+    assert _policy(_settings(simple_task_reasoning='provider_default'),operation=operation)['options']=={}
+    assert _policy(_settings(base_url='https://proxy.example/v1'),operation=operation)['options']=={}
+    assert _policy(stage='report',operation=operation)['options']=={}
 
 
 @pytest.mark.parametrize('stage,operation', [('presentation', 'TopicCoverageReview'),

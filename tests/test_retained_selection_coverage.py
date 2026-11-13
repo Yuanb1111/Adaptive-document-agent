@@ -136,7 +136,8 @@ def test_final_copy_revision_preserves_selection_and_requires_fresh_validation(o
     responses = [bad, issue]
     if outcome == 'material_omission':
         responses[-1] = dict(issue, missing_insight_ids=['omitted'], prioritized_insight_ids=[iid, 'omitted'])
-        responses.append(deepcopy(bad))  # Ignoring the priority correction must still fail closed.
+        # Copy transport cannot substitute its old page set for the reviewer's fixed priorities.
+        responses.append(dict(reasons={iid:'Still selected.'},pages={iid:bad['decisions'][0]['page']}))
     else:
         page = (bad if outcome == 'unchanged' else good)['decisions'][0]['page']
         responses.append(dict(pages={'other-page' if outcome == 'wrong_id' else iid: page}))
@@ -152,8 +153,9 @@ def test_final_copy_revision_preserves_selection_and_requires_fresh_validation(o
         assert mock.usage[-1]['operation'] == 'RetainedSelectionCoverage'
     else:
         error = {'unchanged': 'outside its bound evidence', 'wrong_id': 'exactly the flagged insight IDs',
-                 'material_omission': 'independently chosen priorities'}[outcome]
-        with pytest.raises(ValueError, match=error):
+                 'material_omission': 'invalid after one repair'}[outcome]
+        from adaptive_document_agent.services.llm.exceptions import LLMResponseError
+        with pytest.raises((ValueError,LLMResponseError), match=error):
             retained.select_retained_analysis(mock, result)
         assert retained.selected_record(result) is None
 
@@ -278,14 +280,17 @@ def test_writer_cannot_drop_independently_reviewed_priorities(obeys):
         corrected['decisions'] = [dict(insight_id=original, decision='omit', reason='Reviewed lower priority.'),
                                  dict(insight_id='required', decision='include', reason='Reviewed priority.', page=page)]
         corrected['ordered_insight_ids'] = ['required']
+    patch=dict(reasons={original:'Reviewed lower priority.','required':'Reviewed priority.'},
+               pages={'required':page} if obeys else {original:page})
     mock = gateway([initial, dict(accepted=False, missing_insight_ids=['required'],
                         prioritized_insight_ids=['required'], reason='This is the material priority.'),
-                    corrected, dict(accepted=True, missing_insight_ids=[], reason='The correction preserves priorities.')])
+                    patch, dict(accepted=True, missing_insight_ids=[], reason='The correction preserves priorities.')])
     if obeys:
         retained.select_retained_analysis(mock, result)
         assert retained.selected_record(result)['selection']['ordered_insight_ids'] == ['required']
     else:
-        with pytest.raises(ValueError, match='independently chosen priorities'):
+        from adaptive_document_agent.services.llm.exceptions import LLMResponseError
+        with pytest.raises(LLMResponseError, match='invalid after one repair'):
             retained.select_retained_analysis(mock, result)
         assert retained.selected_record(result) is None
 
@@ -316,7 +321,9 @@ def test_late_priority_change_gets_one_independent_correction_after_proposal_ret
     final_review = (dict(accepted=True, reason='Source-backed corrected selection.') if settles else
                     dict(accepted=False, missing_insight_ids=[original],
                          prioritized_insight_ids=[original], reason='Another priority reversal.'))
-    mock = gateway([initial, proposal_issue, corrected, priority_issue, replacement, final_review])
+    patch=dict(reasons={original:'Reviewed lower priority.','required':'Independent priority.'},
+               pages={'required':corrected['decisions'][0]['page']})
+    mock = gateway([initial, proposal_issue, corrected, priority_issue, patch, final_review])
     if settles:
         retained.select_retained_analysis(mock, result)
         assert retained.selected_record(result)['selection'] == replacement
@@ -326,4 +333,5 @@ def test_late_priority_change_gets_one_independent_correction_after_proposal_ret
             retained.select_retained_analysis(mock, result)
         assert retained.selected_record(result) is None
     assert [u['operation'] for u in mock.usage] == [
-        'SourceAuthoredAnalysisSelection', 'RetainedSelectionCoverage'] * 3
+        'SourceAuthoredAnalysisSelection', 'RetainedSelectionCoverage'] * 2 + [
+        'PriorityPagePatch','RetainedSelectionCoverage']

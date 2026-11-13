@@ -1,15 +1,53 @@
 """Bind source-authored analysis pages to their calculation and companion rows."""
 import re
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field,model_serializer
 from adaptive_document_agent.models.executive_brief import BriefQuote
 
 from adaptive_document_agent.services.presentation_evidence import (
     ambiguous_source_table_ids, observation_uses_ambiguous_table)
 from .audit_source_layout import audit_source_page
+from .reported_source_context import QualifiedSourceCopy,qualified_source_statement
 
 
 PERIOD_AND_ASSURANCE_RULES = (
+    'Source-attributed qualitative paraphrases may preserve a material effect with exact '
+    'context_evidence, without publishing any unbound amounts, rates or measurements. '
+    'Do not demand a verbatim visible quote instead of a faithful qualitative paraphrase. '
+    'source_context provides explicitly declared source-only explanations with a full '
+    'literal proof and scope; the compiler displays them separately from row calculations. '
+    'Its quote already supplies the source proof; do not repeat that same passage in '
+    'context_evidence. Use compact exact bound period labels for its scope. '
+    'Verify every effect, population, condition, direction and attribution against the '
+    'complete original source. Declaring source context is never semantic approval. '
+    'A source_context explanation need not repeat its proof verbatim. Preserve its '
+    'actual effect, timing, population and qualifications without new measurements. '
+    'Do not demand a visible literal quotation or numeric comparison endpoints for '
+    'a faithful declared source-only explanation. Its complete original quotation '
+    'is proof for the independent semantic review, not another measured series. '
+    'Every raw amount uses its row unit INCLUDING its scale, not just its currency code. '
+    'source_rows.amount_literal supplies an exact supported spelling when available. '
+    'For example, a raw cell 1,250 in USD thousands means USD 1,250 thousand, never '
+    'USD 1,250. Use a scale suffix on EVERY amount, including components, or put an '
+    'explicit "(USD in thousands)" declaration at the beginning of that same message '
+    'paragraph. This declaration governs later same-currency raw numerals in that paragraph; '
+    'an explicit amount suffix overrides it. Prefer amount_literal on every typed amount '
+    'to avoid ambiguity. A title or chart unit does not govern the message. Preserve the actual '
+    'bound currency and scale; the example does not authorize USD or thousands elsewhere. '
+    'When a bound raw value fails only because its scale was omitted, correct its unit; '
+    'do not delete that supported value or add unrelated companion rows. '
+    'For a source-only causal effect with no eligible numeric series, use an attributed '
+    'qualitative effect rather than an increase/decrease predicate: for example, '
+    '"Within [literal source scope], the source links [factors] to a longer [source-defined '
+    'cycle]" or "The source describes [factors] as consuming cash within [literal scope]." '
+    'Choose words faithful to the actual source, preserving direction, affected measure, '
+    'factors and qualifications. Do not reuse the example if unsupported. A source-only '
+    'effect has no invented measurement endpoints, but must keep its exact context_evidence. '
+    'In the main quantitative message, phrases such as "an increase in [unbound metric]" '
+    'still need row bindings; adding "the source says" does not resolve them. Put '
+    'source-only effects in source_context and verify them against its original proof. '
+    'For source-defined nonnumeric category descriptions, retain the complete boundary '
+    'in words with its exact quotation; never change it or turn it into a measured level. '
     'Use the exact bound period labels, even in parentheses and source attributions. '
     'Do not expand a fiscal-year or interim label into a calendar date. If the levels have '
     'different reporting bases, list their exact dated values separately instead of asserting a '
@@ -113,6 +151,31 @@ class RetainedPage(BaseModel):
                     'dates in these quotations can support the dates of attributed source events. '
                     'Complete literal calculation definitions may bind their exact day-count parameters '
                     'in a method description, never an unrelated measurement.')
+    source_context: list[QualifiedSourceCopy] = Field(default_factory=list,max_length=8,
+        description='Optional qualitative source explanations, each with its literal proof and '
+                    'scope. No new measurements or calculated conclusions. They remain visible '
+                    'and require fresh independent original-source review.')
+
+    @model_serializer(mode='wrap')
+    def _compatible_source_context(self,handler):
+        values=handler(self)
+        if not self.source_context:
+            values.pop('source_context',None)
+        elif 'context_evidence' in values:
+            proofs={(item.quote.page,item.quote.text) for item in self.source_context}
+            values['context_evidence']=[q for q in values['context_evidence']
+                if (q['page'],q['text']) not in proofs]
+        return values
+
+    @property
+    def all_context_evidence(self):
+        from adaptive_document_agent.services.source_quotes import normalize_quote
+        quotes=list(self.context_evidence)
+        for item in self.source_context:
+            if not any(q.page==item.quote.page and normalize_quote(item.quote.text)
+                       in normalize_quote(q.text) for q in quotes):
+                quotes.append(item.quote)
+        return quotes
 
 
 class ContextEvidenceError(ValueError):
@@ -142,17 +205,25 @@ def rebind_context_evidence(selection, context, result):
                 corrections.append(dict(insight_id=decision.insight_id, quote_index=index,
                                         original_page=quote.page, source_page=matches[0]))
                 decision.page.context_evidence[index] = quote.model_copy(update={'page': matches[0]})
+        for item in decision.page.source_context:
+            text=normalize_quote(item.quote.text)
+            if text and text not in sources.get(item.quote.page,''):
+                matches=[page for page,source in sources.items() if text in source]
+                if len(matches)==1:
+                    corrections.append(dict(insight_id=decision.insight_id,source_context=True,
+                        original_page=item.quote.page,source_page=matches[0]))
+                    item.quote=item.quote.model_copy(update={'page':matches[0]})
     return corrections
 
 
 def context_evidence_pages(page, context, result):
     """Bind model-selected qualitative context without expanding numeric eligibility."""
     from adaptive_document_agent.services.source_quotes import normalize_quote
-    if page is None or not page.context_evidence:
+    if page is None or not page.all_context_evidence:
         return set()
     sources = _context_sources(context, result)
     pages = set()
-    for index, quote in enumerate(page.context_evidence, 1):
+    for index, quote in enumerate(page.all_context_evidence, 1):
         text = normalize_quote(quote.text)
         if not text or text not in sources.get(quote.page, ''):
             raise ContextEvidenceError('Context evidence must be a literal quote from a supplied source page. '
@@ -166,7 +237,7 @@ def retained_context_citations(result):
     """Recheck persisted quotation provenance for slide/theme validators."""
     from .retained_analysis import selected_record, selection_context, selection_input_matches, RetainedAnalysisSelection
     record = selected_record(result)
-    if not record or not any(d.get('page', {}).get('context_evidence')
+    if not record or not any(d.get('page', {}).get('context_evidence') or d.get('page', {}).get('source_context')
                             for d in record['selection']['decisions'] if d.get('page')):
         return {}
     context = selection_context(result)
@@ -177,7 +248,7 @@ def retained_context_citations(result):
             for d in selection.decisions if d.decision == 'include'}
 
 
-def bound_authored_slide_ids(result, plan):
+def _bound_authored_context(result, plan):
     """Recognize exact compiled model copy; this is never semantic approval.
 
     Generic chart-share retrieval cannot interpret source-only qualifications.
@@ -187,10 +258,10 @@ def bound_authored_slide_ids(result, plan):
     from .retained_analysis import selected_record, selection_context, selection_input_matches, RetainedAnalysisSelection, findings
     record = selected_record(result)
     if not record or not record.get('source_authoring'):
-        return set()
+        return {}
     context = selection_context(result)
     if not selection_input_matches(record, context, result):
-        return set()
+        return {}
     selection = RetainedAnalysisSelection.model_validate(record['selection'])
     linked = findings(result, allow_new_copy=True)
     bound = {}
@@ -198,10 +269,23 @@ def bound_authored_slide_ids(result, plan):
         if decision.decision != 'include' or decision.page is None:
             continue
         insight, primary, _ = linked[decision.insight_id]
-        bound[decision.insight_id] = page_bindings(decision.page, insight, primary, context, result)
-    return {s.id for s in plan.slides if s.slide_type == 'analysis' and len(s.insight_ids) == 1
+        bound[decision.insight_id] = page_bindings(decision.page, insight, primary, context, result,
+                                                 with_source_context=True)
+    return {s.id:bound[s.insight_ids[0]][3] for s in plan.slides if s.slide_type == 'analysis' and len(s.insight_ids) == 1
             and s.insight_ids[0] in bound
-            and (s.title, s.message, set(s.observation_ids)) == bound[s.insight_ids[0]]}
+            and (s.title, s.message, set(s.observation_ids)) == bound[s.insight_ids[0]][:3]
+            and (not bound[s.insight_ids[0]][3] or
+                 s.bullets[:1+len(bound[s.insight_ids[0]][3])] == [s.message,*bound[s.insight_ids[0]][3]])}
+
+
+def bound_authored_slide_ids(result,plan):
+    return set(_bound_authored_context(result,plan))
+
+
+def reported_context_bullet_positions(result,plan):
+    """Only exact compiled, source-bound qualitative quotations have no row scope."""
+    return {sid:set(range(1,len(parts)+1)) for sid,parts in _bound_authored_context(result,plan).items()
+            if parts}
 
 
 def retained_context_dates(result, *, checked_citations=None):
@@ -224,19 +308,25 @@ def _retained_context_literals(result, extract, checked_citations):
         return {}
     selection = RetainedAnalysisSelection.model_validate(record['selection'])
     return {d.insight_id: set().union(*(extract(q.text)
-            for q in d.page.context_evidence if q.page in checked.get(d.insight_id, ())))
+            for q in d.page.all_context_evidence if q.page in checked.get(d.insight_id, ())))
             for d in selection.decisions if d.decision == 'include' and d.page}
 
 
 def page_sources(result, linked, *, include_neighbors=True):
+    from adaptive_document_agent.services.source_amount_literal import source_amount_literal
     from adaptive_document_agent.services.source_citations import evidence_pages
     ids = set().union(*(entry[1] for entry in linked.values()))
     anchors = [o for o in result.observations if o.id in ids]
-    pages = {e.page for o in anchors for e in o.evidence}
+    from .retained_source_inventory import complete_source_observations
+    sources = complete_source_observations(result,ids) if include_neighbors else anchors
+    pages = {e.page for o in sources for e in o.evidence}
     for insight, _, _ in linked.values():
         pages.update(evidence_pages(insight, [], document=result.document))
     if include_neighbors:
-        pages = {n for page in pages for n in (page - 1, page, page + 1)
+        # A table's discussion can begin on its next page and continue onto
+        # the following page. Keep that bounded complete-page envelope on the
+        # authoring wire too; it grants no extra numeric row eligibility.
+        pages = {n for page in pages for n in range(page - 2, page + 3)
                  if 1 <= n <= result.document.page_count}
     originals = [p for p in result.document.pages if p.page_number in pages]
     tables = {o.effective_table_id for o in anchors if o.effective_table_id}
@@ -247,17 +337,31 @@ def page_sources(result, linked, *, include_neighbors=True):
     return dict(source_pages=[audit_source_page(p) for p in originals],
                 source_rows=[dict(id=o.id, table_id=o.effective_table_id,
                     metric=o.metric_original, parent=o.parent_section, categories=o.category_dimensions,
-                    period=o.period, value=o.raw_value, unit=o.raw_unit, currency=o.currency)
+                    period=o.period, value=o.raw_value, unit=o.raw_unit, currency=o.currency,
+                    amount_literal=source_amount_literal(o))
                     for o in companions])
 
 
-def page_bindings(page, insight, primary, context, result):
+def authored_message(page,periods):
+    from adaptive_document_agent.services.calendar_claims import bound_period_dates
+    from .reported_source_context import qualified_source_statement
+    copy=bound_period_dates(page.message,periods)
+    for item in page.source_context:
+        statement=bound_period_dates(qualified_source_statement(item),periods)
+        if statement not in copy:
+            copy+=' '+statement
+    return copy
+
+
+def page_bindings(page, insight, primary, context, result, *, _copy_errors=None,
+                  with_source_context=False):
+    """Bind provenance first; optionally collect copy failures for combined diagnostics."""
     from .presentation_insight_recovery import _numeric_support
     from adaptive_document_agent.services.calendar_claims import bound_period_dates, literal_calendar_dates
     from adaptive_document_agent.services.source_day_count import literal_day_count_conventions
     context_evidence_pages(page, context, result)
-    context_dates = set().union(*(literal_calendar_dates(q.text) for q in page.context_evidence))
-    day_counts = set().union(*(literal_day_count_conventions(q.text) for q in page.context_evidence))
+    context_dates = set().union(*(literal_calendar_dates(q.text) for q in page.all_context_evidence))
+    day_counts = set().union(*(literal_day_count_conventions(q.text) for q in page.all_context_evidence))
     by_id = {o.id: o for o in result.observations}
     tables = {by_id[k].effective_table_id for k in primary}
     allowed = {r['id'] for r in context['source_rows'] if r['table_id'] in tables}
@@ -273,22 +377,43 @@ def page_bindings(page, insight, primary, context, result):
         raise ValueError(f'{insight.id}: {len(ids)} distinct observations exceed the 40-row slide limit')
     obs = [by_id[k] for k in ids]
     periods = [o.period for o in obs]
-    title, copy = (bound_period_dates(s, [*periods, *context_dates]) for s in (page.title, page.message))
+    title=bound_period_dates(page.title,[*periods,*context_dates])
+    copy=authored_message(page,[*periods,*context_dates])
+    if len(copy)>2000:
+        raise ValueError(f'{insight.id}: complete authored copy exceeds the 2000-character page limit')
+    full_copy=copy
+    from .reported_source_context import reported_source_components,observation_context_labels
+    copy,reported=reported_source_components(copy,page.all_context_evidence,periods=[*periods,*context_dates],
+        labels=observation_context_labels(obs),declared=page.source_context)
+    for item in page.source_context:
+        statement=bound_period_dates(qualified_source_statement(item),[*periods,*context_dates])
+        if statement not in reported:
+            raise ValueError(f'{insight.id}: source_context must be a non-quantitative source '
+                'explanation with its exact bound period labels, original proof and no numerical '
+                'claim or directional scope predicate. For an unbound source-only missing-value '
+                'disclosure, retain the literal named column or discussion scope in words; '
+                'do not introduce an unbound fiscal/interim label or invent a calendar date. '
+                f'Rejected declaration: {item.model_dump(mode="json")}')
     for field, text in [('title', title), ('message', copy)]:
         diagnostics = []
         if not _numeric_support(text, obs, diagnostics=diagnostics, context_dates=context_dates,
                                 context_day_counts=day_counts):
-            raise ValueError(f'{insight.id}.{field}: amount, date or rate outside its bound evidence: {text}. '
+            error = (f'{insight.id}.{field}: amount, date or rate outside its bound evidence: {text}. '
                 f'Details: {diagnostics}. Exact quoted day-count parameters: {sorted(day_counts)}. '
                 'For a day-count description, quote the complete method and copy its literal parameter '
                 'phrases verbatim; this does not authorize other values. Bind any used table components to their exact '
                 'allowed companion rows. Do not introduce amounts found only in unbound source prose; '
                 'retain the source explanation without that additional numeric claim. Preserve signed raw outflows.')
+            if _copy_errors is None:
+                raise ValueError(error)
+            _copy_errors.append(error)
         try:
-            _check_explicit_period_assurance(text, obs)
+            _check_explicit_period_assurance(full_copy if field=='message' else text, obs)
         except ValueError as exc:
-            raise ValueError(f'{insight.id}.{field}: {exc}') from exc
-    return title, copy, ids
+            if _copy_errors is None:
+                raise ValueError(f'{insight.id}.{field}: {exc}') from exc
+            _copy_errors.append(f'{insight.id}.{field}: {exc}')
+    return (title,copy,ids,reported) if with_source_context else (title,copy,ids)
 
 
 class AuthoredPageErrors(ValueError):
@@ -307,19 +432,25 @@ def validate_authored_pages(selection, context, result):
         if decision.decision != 'include':
             continue
         insight, primary, _ = linked[decision.insight_id]
+        copy_errors = []
         try:
-            title, copy, ids = page_bindings(decision.page, insight, primary, context, result)
+            title, copy, ids, reported = page_bindings(decision.page, insight, primary, context, result,
+                _copy_errors=copy_errors,with_source_context=True)
         except ValueError as exc:
             failures[insight.id] = [str(exc).removeprefix(f'{insight.id}: ')]
             continue
         probe = PresentationSlide(id=insight.id, slide_type='analysis', title=title, message=copy,
                                   observation_ids=sorted(ids),
+                                  bullets=reported,bullet_observation_ids=[[] for _ in reported],
                                   source_pages=sorted(context_evidence_pages(decision.page, context, result)))
         observations = [o for o in result.observations if o.id in ids]
         errors = ClaimValidator().validate_slide(probe, observations)
+        if copy_errors:
+            failures[insight.id] = copy_errors
         if not errors:
             continue
-        issues = failures[insight.id] = [e.message for e in errors]
+        issues = failures.setdefault(insight.id, [])
+        issues.extend(e.message for e in errors)
         if any(e.code == 'direction_scope_ambiguous' for e in errors):
             for error in errors:
                 if error.code == 'direction_scope_ambiguous' and error.offending_direction:
@@ -410,9 +541,9 @@ def planned_source_citations(selection, context, result):
                         eligible_companion_rows=[r['id'] for r in context.get('source_rows', [])
                                                  if r['table_id'] in tables],
                         context_calendar_dates=sorted(set().union(*(literal_calendar_dates(q.text)
-                            for q in decision.page.context_evidence))) if decision.page else [],
+                            for q in decision.page.all_context_evidence))) if decision.page else [],
                         context_day_count_conventions=sorted(set().union(*(literal_day_count_conventions(q.text)
-                            for q in decision.page.context_evidence))) if decision.page else [])
+                            for q in decision.page.all_context_evidence))) if decision.page else [])
         marked_tables = {o.effective_table_id for o in bound
                          if o.effective_table_id and o.audited_status in {'audited', 'unaudited'}}
         if marked_tables:

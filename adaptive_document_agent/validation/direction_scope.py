@@ -96,6 +96,14 @@ def inherited_period_range(component: str, predicate_offset: int, local_context:
     mentions = list(re.finditer(rf"\b{_PERIOD}\b", prefix, re.I))
     if not mentions:
         return "", ""
+    from .enumerated_period_scope import explicit_period_list
+    enumeration = explicit_period_list(prefix)
+    if enumeration is not None:
+        return enumeration[0], ""
+    from .dated_level_scope import explicit_dated_levels
+    levels = explicit_dated_levels(prefix)
+    if levels is not None:
+        return levels[0], ""
     ranges = [(r.start(), r.end(), r['start'], r['end'])
               for pattern in (_RANGE, _VALUE_AT_DATE_RANGE, _REVERSED_VALUE_RANGE)
               for r in pattern.finditer(prefix)]
@@ -337,6 +345,18 @@ def resolve_direction_scope(
     local_text = clause[local_start:local_end]
     if inherited_range and not re.search(rf"\b{_PERIOD}\b", local_text, re.I):
         local_text += " " + inherited_range
+    from .enumerated_period_scope import enumerated_segments
+    segments = enumerated_segments(local_text, observations)
+    if segments is not None:
+        if not segments:
+            return DirectionScope(error='The listed periods are missing, duplicated or not adjacent and chronological')
+        return DirectionScope(segments=segments)
+    from .dated_level_scope import dated_level_segments
+    segments = dated_level_segments(local_text, observations)
+    if segments is not None:
+        if not segments:
+            return DirectionScope(error='The listed raw levels do not bind to their own adjacent chronological dates')
+        return DirectionScope(segments=segments)
     # Model prose often places a sourced value before each period, e.g.
     # "from 100 units at 2021-12-31 to 120 units at 2024-10-31" or
     # "from 100 units in FY2021 to 120 in FY2022 and 130 in FY2023".

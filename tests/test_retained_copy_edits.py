@@ -202,6 +202,30 @@ def test_local_numeric_input_freeze_uses_the_shared_bounded_contract_correction(
     assert selection.decisions[0].page.companion_ids == ['kept-row']
 
 
+@pytest.mark.parametrize('corrects',[True,False])
+def test_local_publication_copy_limit_uses_one_existing_contract_correction(corrects):
+    result,context,selection=fixture()
+    iid=selection.ordered_insight_ids[0]
+    packet,aliases=writer_context(context)
+    packet['source_row_assurance']=source_row_assurance(result,aliases)
+    original=selection.decisions[0].page.message
+    long='The source reports revenue. '*28
+    short='The source reports revenue and its qualifications.'
+    mock=gateway([dict(edits={iid:dict(message=[dict(before=original,after=long)])}),
+        dict(edits={iid:dict(message=[dict(before=long,after=short if corrects else long)])})])
+    before=deepcopy(result)
+    if corrects:
+        revised=revise_retained_pages(mock,result,packet,aliases,selection.model_dump(),
+            {iid:['Preserve the source qualification.']},preserve_numeric_inputs=True)
+        assert revised[iid].message==short
+    else:
+        with pytest.raises(ValueError,match='local copy limit is 600'):
+            revise_retained_pages(mock,result,packet,aliases,selection.model_dump(),
+                {iid:['Preserve the source qualification.']},preserve_numeric_inputs=True)
+    assert len(mock.client.calls)==2 and result==before
+    assert 'local copy limit is 600' in str(mock.client.calls[1])
+
+
 def test_recorded_retry_keeps_all_current_source_questions_without_approving_them():
     path = os.getenv('ADA_RETAINED_COPY_DIAGNOSTIC')
     if not path:

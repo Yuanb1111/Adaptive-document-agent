@@ -41,11 +41,16 @@ _MONEY_SCALES = {"": 1, "k": 1_000, "thousand": 1_000, "m": 1_000_000,
                  "bn": 1_000_000_000, "billion": 1_000_000_000, "trillion": 10**12}
 _MONEY_UNIT_DECLARATION = re.compile(
     rf"(?:^[ \t]*|(?P<parenthesis>\())(?P<currency>{_CURRENCY_TOKEN})[ \t]+in[ \t]+"
-    r"(?P<scale>unit|thousand|million|billion|trillion)s?[ \t]*(?(parenthesis)\)|[:.])", re.I | re.M)
+    r"(?P<scale>unit|thousand|million|billion|trillion)s?[ \t]*(?(parenthesis)\.?\)|[:.])", re.I | re.M)
 _ALIASES = {"RMB": "CNY", "CNH": "CNY", "US$": "USD", "$": "USD", "HK$": "HKD",
             "S$": "SGD", "£": "GBP", "€": "EUR", "¥": "CNY"}
 _DECREASE = re.compile(r"\b(?:(?:decrease|decline|reduction|drop) of|(?:decreased|declined|fell|dropped) by)\s*$", re.I)
 _CASH_USE = re.compile(r"\s+used in (?:operations|(?:operating|investing|financing) activities)\b", re.I)
+_CALCULATED_AMOUNT=re.compile(r'\b(?:calculated|computed|recalculated|recomputed)\s+'
+    r'(?P<kind>increase|decrease|change)\s+(?:of|was|is)\s*$',re.I)
+_CALCULATED_INTERVAL=re.compile(r'^\s+from\s+(?P<start>(?:FY\s*|[1369]M\s*)?(?:19|20)\d{2}'
+    r'(?:-\d{2}-\d{2})?)\s+to\s+(?P<end>(?:FY\s*|[1369]M\s*)?(?:19|20)\d{2}'
+    r'(?:-\d{2}-\d{2})?)\b',re.I)
 
 
 def _currency(value):
@@ -68,6 +73,9 @@ def _money_scale(text, match):
 
 def checked_money_amounts(text, observations, calculations=()):
     """Yield the amount, its support status and any required calculation IDs."""
+    calculations=list(calculations)
+    from .calculated_count_change import checked_count_changes
+    count_spans={m.span('number') for m,ok,_ in checked_count_changes(text,observations,calculations) if ok}
     monetary = {o.id: o for o in observations if o.value is not None and o.currency
                 and o.unit_family in {"generic", "currency"} and o.unit in {None, "currency", o.currency}
                 and not split_unit_basis(o.raw_unit)[1]}
@@ -76,13 +84,46 @@ def checked_money_amounts(text, observations, calculations=()):
                if c.get("currency") and set(c["observation_ids"]) <= monetary.keys()]
     currencies = {code for _, code, _ in amounts + changes}
     for match in _MONEY.finditer(text):
-        if not (match["currency"] or match["scale"] or match["outer_scale"]):
-            continue
+        if match.span('number') in count_spans:continue
+        bare=not (match['currency'] or match['scale'] or match['outer_scale'])
+        declared=None;eligible_calculations=None
+        if bare:
+            if re.match(r'\s*(?:[%％]|percent(?:age)?\b|pp\b)',text[match.end():],re.I):
+                continue  # Percentage evidence has its own typed calculation gate.
+            label=_CALCULATED_AMOUNT.search(text[:match.start()])
+            if not label or not monetary:
+                continue
+            start=text.rfind('\n',0,match.start())+1
+            declarations=list(_MONEY_UNIT_DECLARATION.finditer(text,start,match.start()))
+            interval=_CALCULATED_INTERVAL.match(text[match.end():])
+            if not declarations or not interval:
+                yield match,False,set()
+                continue
+            declared=declarations[-1]
+            normalize=lambda s:re.sub(r'\s+','',s).casefold()
+            ends=[normalize(interval['start']),normalize(interval['end'])]
+            sentence=re.split(r'(?<=[.!?])\s+',text[:label.start()])[-1].casefold()
+            eligible_calculations=[c for c in calculations
+                if c['kind'] in {'absolute_change','yoy_absolute_change'}
+                and c.get('currency') and set(c['observation_ids'])<=monetary.keys()
+                and [normalize(c['periods'][0]),normalize(c['periods'][-1])]==ends
+                and re.search(r'(?<!\w)'+re.escape(c['metric'])+r'(?!\w)',sentence,re.I)
+                and (label['kind'].casefold()=='change' or
+                     (label['kind'].casefold()=='increase' and c['value']>0) or
+                     (label['kind'].casefold()=='decrease' and c['value']<0))]
+            if len(eligible_calculations)!=1:
+                yield match,False,set()
+                continue
         currency = _currency(match["currency"])
+        if declared is not None:
+            currency=_currency(declared['currency'])
         if not currency and len(currencies) == 1:
             currency = next(iter(currencies))
         literal = match["number"].replace(",", "").replace("−", "-")
         claimed = Decimal(literal)
+        if bare and label['kind'].casefold()!='change' and (claimed<=0 or match['accounting']):
+            yield match,False,set()
+            continue
         before, after = text[:match.start()].rstrip(), text[match.end():]
         decrease = _DECREASE.search(before)
         cash_use = _CASH_USE.match(after)
@@ -96,13 +137,18 @@ def checked_money_amounts(text, observations, calculations=()):
             continue
         if accounting or negative or cash_use or decrease:
             claimed = -abs(claimed)
-        scale = _money_scale(text, match)
+        if bare and label['kind'].casefold()=='decrease':
+            claimed=-abs(claimed)
+        scale = (_MONEY_SCALES.get(declared['scale'].lower(),1) if declared is not None
+                 else _money_scale(text, match))
         places = -claimed.as_tuple().exponent
         # A decrease by an amount needs a calculated change, while cash used
         # needs an observed outflow. Neither borrows the other's magnitude.
         candidates = amounts + changes
+        if eligible_calculations is not None:
+            candidates=[(c['value'],_currency(c['currency']),c['id']) for c in eligible_calculations]
         if decrease:
-            candidates = changes
+            candidates = candidates if eligible_calculations is not None else changes
         elif cash_use:
             candidates = amounts
         try:
@@ -208,3 +254,12 @@ def mask_finding_amounts(slide, insights, inputs, observations, calculations):
                     masked[match.start():match.end()] = " " * len(match[0])
             copies[copy] = "".join(masked)
     return copies
+
+
+def mask_declared_calculated_amounts(text,observations,calculations):
+    """Mask only strict, explicitly labelled amounts with retained calculation IDs."""
+    masked=list(text)
+    for match,supported,ids in checked_money_amounts(text,observations,calculations):
+        if supported and ids and not (match['currency'] or match['scale'] or match['outer_scale']):
+            masked[match.start():match.end()]=' '*len(match[0])
+    return ''.join(masked)
