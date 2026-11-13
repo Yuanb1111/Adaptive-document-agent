@@ -47,6 +47,11 @@ def test_calculated_value_does_not_authorize_an_unlabelled_level():
     assert not _numeric_support('(USD in thousands) Balance was 2,400.',rows())
 
 
+def test_explicit_signed_change_preserves_the_python_sign():
+    assert _numeric_support('(USD in thousands) Balance had a calculated signed change of 2,400 from 2021-12-31 to 2024-10-31.',rows())
+    assert not _numeric_support('(USD in thousands) Balance had a calculated signed change of -2,400 from 2021-12-31 to 2024-10-31.',rows())
+
+
 def test_percentage_is_not_interpreted_as_an_untyped_monetary_delta():
     text='Balance had a calculated increase of 200.0% from 2021-12-31 to 2024-10-31.'
     assert not list(checked_money_amounts(text,rows(),calculation_catalog(rows()).values()))

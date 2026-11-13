@@ -31,7 +31,7 @@ def repair_retained_source_copy(gateway, result, previous=None):
     record = selected_record(result)
     selection = RetainedAnalysisSelection.model_validate(record['selection'])
     linked = findings(result, allow_new_copy=True)
-    from .reported_source_context import reported_source_components,observation_context_labels
+    from .reported_source_context import reported_source_components,observation_context_labels,source_context_paragraphs
     from adaptive_document_agent.services.calendar_claims import bound_period_dates,literal_calendar_dates
     original_parts={}
     for decision in selection.decisions:
@@ -45,6 +45,8 @@ def repair_retained_source_copy(gateway, result, previous=None):
             text,decision.page.all_context_evidence,periods=[*periods,*dates],
             labels=observation_context_labels([o for o in result.observations if o.id in ids]),
             declared=decision.page.source_context)
+        main,parts=original_parts[decision.insight_id]
+        original_parts[decision.insight_id]=(main,source_context_paragraphs(parts))
     draft = selection.model_dump(mode='json')
     for decision in draft['decisions']:
         if decision['page']:

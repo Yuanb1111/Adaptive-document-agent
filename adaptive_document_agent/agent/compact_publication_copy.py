@@ -38,6 +38,9 @@ def compact_publication_copy(gateway, iid, payload, limit, validate,*,preserve_i
             'Required explicit complete row-reference list. Include eligible source_rows IDs '
             'for EVERY visible amount/period outside primary_observations, including interim '
             'comparisons. A quotation does not bind a number. Use [] only for primary-only copy.'))
+        fields['context_evidence']=(list[BriefQuote],Field(max_length=8,description=
+            'Required complete list of standalone literal proofs. Replace invalid draft citations. '
+            'Use [] when all needed proof is in source_context; never null to retain a rejected quotation.'))
     schema = create_model('RetainedPageRevisions', __base__=PublicationCopy,
         __validators__={'canonical_message':field_validator('message',mode='before')(canonical_message)},
         message=(str, Field(min_length=1, max_length=limit)),
@@ -80,6 +83,9 @@ def compact_publication_copy(gateway, iid, payload, limit, validate,*,preserve_i
         'Otherwise correct the exact row/citation defects identified by the review. '
         'In that initial-draft mode companion_ids must be an explicit list, never null: '
         'bind any displayed eligible interim periods or components outside primary_observations. '
+        'context_evidence must also be an explicit complete list in that mode: use [] when '
+        'all required proof is in source_context. Never leave a rejected original quote in place '
+        'by returning null. '
         'Leave title, companion_ids and context_evidence null '
         'to keep the originals. If adding eligible input rows or source quotes is necessary, '
         'return complete lists. When preserve_numeric_inputs is true, keep every original '

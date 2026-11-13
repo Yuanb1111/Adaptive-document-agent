@@ -37,6 +37,57 @@ def paraphrased():
     return result,selection
 
 
+@pytest.mark.parametrize('identifier',['COVID-19','Model-Q24'])
+def test_source_bound_identifier_survives_compilation_with_empty_numeric_scope(identifier):
+    from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
+    result,selection=paraphrased()
+    item=selection.decisions[0].page.source_context[0]
+    item.description=f'describes demand disruption associated with {identifier}'
+    item.quote.text=f'The source describes demand disruption associated with {identifier}.'
+    result.document.pages[-1].text=item.quote.text
+    retained.select_retained_analysis(gateway([selection.model_dump(),dict(
+        accepted=True,reason='Synthetic complete source selection.')]),result)
+    plan=retained.compile_retained_analysis(result)
+    slide=next(s for s in plan.slides if s.slide_type=='analysis')
+    assert identifier in slide.bullets[1] and slide.bullet_observation_ids[1]==[]
+    assert PresentationPlanValidator().validate(plan,result) is plan
+
+
+@pytest.mark.parametrize('count',[5,8])
+def test_many_qualifications_compile_losslessly_under_the_bullet_limit(count):
+    from adaptive_document_agent.agent.reported_source_context import QualifiedSourceCopy,qualified_source_statement
+    from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
+    from adaptive_document_agent.agent.retained_analysis_review import review_complete
+    result,selection=paraphrased()
+    page=selection.decisions[0].page
+    names=['alpha','beta','gamma','delta','epsilon','zeta','eta','theta'][:count]
+    page.source_context=[QualifiedSourceCopy(scope=f'the {name} discussion',
+        description='describes a material source qualification',quote=BriefQuote(page=235,text=QUOTE))
+        for name in names]
+    expected=' '.join(qualified_source_statement(item) for item in page.source_context)
+    retained.select_retained_analysis(gateway([selection.model_dump(),dict(
+        accepted=True,reason='Synthetic complete source selection.')]),result)
+    plan=retained.compile_retained_analysis(result)
+    slide=next(s for s in plan.slides if s.slide_type=='analysis')
+    assert len(slide.bullets)==5 and ' '.join(slide.bullets[1:])==expected
+    assert all(not ids for ids in slide.bullet_observation_ids[1:])
+    assert PresentationPlanValidator().validate(plan,result) is plan
+    assert not review_complete(result)
+    slide.bullets[-1]+=' An unbound amount of 123 units.'
+    with pytest.raises(ValueError):PresentationPlanValidator().validate(plan,result)
+
+
+@pytest.mark.parametrize('identifier',['Unknown-Q24','USD120','FY2099','Q1-2024'])
+def test_unknown_identifier_currency_and_period_claims_cannot_be_qualitative(identifier):
+    result,selection=paraphrased()
+    item=selection.decisions[0].page.source_context[0]
+    item.description=f'describes demand disruption associated with {identifier}'
+    item.quote.text='The source describes demand disruption associated with Model-Q24 and USD120 in FY2099 and Q1-2024.'
+    result.document.pages[-1].text=item.quote.text
+    with pytest.raises(AuthoredPageErrors):
+        validate_authored_pages(selection,retained.selection_context(result,source_authoring=True),result)
+
+
 def test_declared_qualitative_paraphrase_is_visible_and_needs_a_fresh_semantic_verdict():
     from adaptive_document_agent.agent.retained_analysis_review import review_complete
     result,selection=paraphrased()

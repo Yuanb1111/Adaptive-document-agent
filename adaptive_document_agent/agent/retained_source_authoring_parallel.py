@@ -3,9 +3,10 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from typing import Literal
 
-from pydantic import BaseModel,ConfigDict,Field,create_model,field_validator
+from pydantic import BaseModel,ConfigDict,Field,create_model,field_validator,model_validator
 
 from adaptive_document_agent.models import ValidationIssue
+from adaptive_document_agent.models.executive_brief import BriefQuote
 from adaptive_document_agent.utils.record_encoding import encode_records,INSTRUCTIONS
 from .prompting import untrusted_document_message
 from .retained_page_sources import RetainedPage
@@ -19,6 +20,20 @@ class SourcePrioritySelection(BaseModel):
 
 class OwnedSourcePage(RetainedPage):
     """A source-reading operation, retaining provider-default reasoning."""
+
+    @model_validator(mode='before')
+    @classmethod
+    def preserve_root_evidence_quote(cls,value):
+        # Relocate an exact typed root proof instead of allowing format repair
+        # to erase non-null evidence. This grants no source or semantic approval.
+        if not isinstance(value,dict) or 'quote' not in value:return value
+        proof=BriefQuote.model_validate(value['quote'])
+        evidence=value.get('context_evidence',[])
+        if not isinstance(evidence,list):return value
+        evidence=list(evidence)
+        if not any(BriefQuote.model_validate(q)==proof for q in evidence):
+            evidence.append(proof.model_dump(mode='json'))
+        return {**{k:v for k,v in value.items() if k!='quote'},'context_evidence':evidence}
 
 
 def source_priority_schema(packet):
@@ -103,7 +118,8 @@ def select_owned_source_pages(gateway,result,context,packet,aliases,messages,aut
             'condition and management judgment; all other original source pages remain '
             'available for related context. A short reviewer checklist is not a substitute '
             'for that complete reading. Preserve the exact population and dated scope of '
-            'each qualitative effect. The whole page, including source_context paragraphs, '
+            'each qualitative effect. Put standalone literal proof in context_evidence, '
+            'never a root quote field. The whole page, including source_context paragraphs, '
             'must fit 2000 characters without truncating evidence. Its semantic meaning '
             'will be independently reviewed; this draft is not approval. '+authoring+INSTRUCTIONS),
             *messages[1:-1],

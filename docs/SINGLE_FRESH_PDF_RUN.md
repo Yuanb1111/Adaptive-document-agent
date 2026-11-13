@@ -195,3 +195,38 @@ skips, and one fiscal-label/identifier regression failed. After excluding fiscal
 and quarter/half-year period identifiers from the qualitative identifier rule,
 all 64 source-context, publication-copy and declared-amount checks passed.
 The full regression suite was not rerun for this paused checkpoint.
+
+
+## 2026-11-13 second paused development checkpoint
+
+Further repairs preserve signed count changes and explicit magnitude semantics,
+source-owned discussion years, complete months-ended dates, month/year labels
+and exact future-duration conditions. Unchanged adjacent qualitative statements
+are grouped into at most four paragraphs so they fit the existing bullet limit
+without dropping source qualifications. Complete calendar dates now bind
+calculated percentage changes to their exact Python intervals.
+
+Owned page writers retain a misplaced typed root quotation by moving it unchanged
+into context_evidence. Reading fact locator keys with a duplicated line suffix
+retain their supplied coordinate; conflicting or missing coordinates still fail.
+Initial copy repairs must return an explicit complete evidence list rather than
+silently retaining rejected draft citations through null. A similar original
+paragraph may be shown as correction feedback, but never gains evidence approval
+from similarity. Independent reviewers now receive the applicable exact Python
+calculation catalog and input IDs. Transport recovery allows one same-provider
+retry for an unclassified APIError, records real HTTP status codes when available,
+and preserves the existing authentication, bad-input and unsupported-operation
+failure paths.
+
+Targeted phase checks passed, including 1,086 affected regressions (13 optional
+skips) before the subsequent repairs, and later focused groups covering source
+notation, provider transport, quotation handling, source-line ownership and
+review calculation scope. The last two focused groups passed 97 checks (3 skips)
+and 58 checks (8 skips). The complete suite was not rerun on this checkpoint.
+
+Fresh attempts 19 through 26 stopped before PPT export at validation or provider
+errors. Attempt 27 was stopped at the user's explicit request before completion.
+The final reviewer-input and initial evidence-list changes have not completed a
+fresh real-model run. No new qualifying PPTX exists, and original-PDF completion
+within 15 minutes remains unverified. Source PDFs, model outputs and private run
+diagnostics are excluded from this commit. Work stops after commit and push.

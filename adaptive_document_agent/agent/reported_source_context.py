@@ -25,6 +25,9 @@ _PERIOD_IDENTIFIER=re.compile(r'^(?:FY|Q[1-4]-?|H[12]-?)(?:19|20)\d{2}E?$',re.I)
 _DURATION_CONDITION=re.compile(rf'\b(?:within|under|over|at\s+least|up\s+to|more\s+than|'
     rf'less\s+than|no\s+(?:more|less|later)\s+than)\s+(?:{_CARDINAL_WORDS})'
     rf'(?:[\s-]+(?:{_CARDINAL_WORDS}))*[\s-]+(?:years?|months?|weeks?|days?|hours?)\b',re.I)
+_AGE_BOUNDARY=re.compile(rf'\b(?P<kind>older|younger)[\s-]+than[\s-]+'
+    rf'(?P<number>(?:{_CARDINAL_WORDS})(?:[\s-]+(?:{_CARDINAL_WORDS}))*)'
+    r'[\s-]+(?P<unit>years?|months?|weeks?|days?|hours?)\b',re.I)
 
 
 class QualifiedSourceCopy(BaseModel):
@@ -48,6 +51,17 @@ def qualified_source_statement(item):
     description=item.description.strip()
     description=description[:1].lower()+description[1:]
     return f'For {scope}, the source {description}'+('' if description.endswith(('.','!','?')) else '.')
+
+
+def source_context_paragraphs(parts):
+    """Pack unchanged adjacent statements into at most four audience paragraphs.
+
+    The main comparison owns the fifth bullet. This is lossless layout grouping,
+    not a limit on qualifications, proof or the independently reviewed meaning.
+    """
+    count=min(len(parts),4)
+    return [' '.join(parts[i*len(parts)//count:(i+1)*len(parts)//count])
+            for i in range(count)] if count else []
 
 
 def observation_context_labels(rows):
@@ -78,15 +92,28 @@ def reported_source_components(text,quotes,*,periods=(),labels=(),declared=()):
         words=_IDENTIFIER.sub(lambda m:' ' if not _CURRENCY_IDENTIFIER.match(m[0])
             and not _PERIOD_IDENTIFIER.fullmatch(m[0]) and re.search(
             r'(?<!\w)'+re.escape(m[0])+r'(?!\w)',source,re.I) else m[0],words)
+        from .source_context_periods import mask_source_horizons
+        words=mask_source_horizons(words,source)
         if _QUANTITY.search(words):
             return False
+        def age_condition(match):
+            number=cardinal_claim_text(match['number'])
+            operator=r'(?:older\s+than|more\s+than|over)' if match['kind'].casefold()=='older' else r'(?:younger\s+than|less\s+than|under)'
+            unit=match['unit'].casefold().rstrip('s')
+            proof_words=cardinal_claim_text(source).replace('-',' ')
+            return ' ' if re.search(r'\b'+operator+r'\s+'+re.escape(number)+r'\s+'
+                +re.escape(unit)+r's?\b',proof_words,re.I) else match[0]
+        words=_AGE_BOUNDARY.sub(age_condition,words)
         labels_text=' '.join(labels).casefold()
         words=_LABEL_COMPOUND.sub(lambda m: ' ' if re.search(
             r'(?<!\w)'+re.escape(m[0])+r'(?!\w)',labels_text,re.I) else m[0],words)
         words=_DURATION_CONDITION.sub(' ',words)
         return not _QUANTITY.search(cardinal_claim_text(words))
     from adaptive_document_agent.validation.claim_validator import _ALL_DIRECTIONAL_WORDS
-    def scope_is_literal(scope_text):
+    def scope_is_literal(scope_text,proof=None):
+        if proof is not None:
+            from .source_context_periods import mask_source_periods
+            scope_text=mask_source_periods(scope_text,proof,scope=True,periods=periods)
         scope=bound_period_dates(scope_text,periods,mask=True)
         if scope is None:
             return False
@@ -107,13 +134,14 @@ def reported_source_components(text,quotes,*,periods=(),labels=(),declared=()):
     spans=[(m.start('clause'),m.end('clause'),m['clause']) for m in matches]
     for item in declared:
         statement=bound_period_dates(qualified_source_statement(item),periods)
-        description=bound_period_dates(item.description,periods,mask=True)
+        from .source_context_periods import mask_source_periods
+        description=bound_period_dates(mask_source_periods(item.description,item.quote.text,periods=periods),periods,mask=True)
         if description is not None:
             for period in sorted(set(periods),key=len,reverse=True):
                 description=re.sub(r'(?<!\w)'+re.escape(period)+r'(?!\w)',' ',description,flags=re.I)
         if (statement is None or description is None or not qualitative_quote(description,item.quote.text)
                 or not scope_is_literal(re.sub(r'^(?:(?:For|In|During|Within)\s+)+','',
-                                               item.scope.strip(),flags=re.I))
+                                               item.scope.strip(),flags=re.I),item.quote.text)
                 or not any(q.page==item.quote.page and normalize_quote(item.quote.text)
                            in normalize_quote(q.text) for q in quotes)):
             continue

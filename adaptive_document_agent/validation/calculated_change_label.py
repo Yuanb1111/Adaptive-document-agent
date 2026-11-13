@@ -4,8 +4,8 @@ import re
 _LABEL = re.compile(r'\b(?:calculated|computed|recalculated|recomputed)\s+'
     r'(?:(?:cumulative|percentage|percent|total)\s+)*(?P<kind>increase|decrease|change|growth)'
     r'(?:\s+(?:in|of)\s+(?P<metric>[^;.!?]+?))?\s+(?:was|were|is|equals?)\s*$', re.I)
-_INTERVAL = re.compile(r'\b((?:FY)?(?:19|20)\d{2}E?)\s*(?:[-–—]|\bto\b)\s*'
-                       r'((?:FY)?(?:19|20)\d{2}E?)\b', re.I)
+_PERIOD=r'(?:FY|[1-9]M|1[0-2]M|Q[1-4]|[12]H)?(?:19|20)\d{2}(?:-\d{2}-\d{2})?E?'
+_INTERVAL = re.compile(rf'\b({_PERIOD})\s*(?:[-–—]|\bto\b)\s*({_PERIOD})\b', re.I)
 
 
 def labelled_change_supported(clause, prefix, literal, calculations):

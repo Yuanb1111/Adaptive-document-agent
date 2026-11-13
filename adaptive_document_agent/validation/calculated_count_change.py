@@ -43,6 +43,14 @@ def checked_count_changes(text,observations,calculations):
         ends=[normalize(match['start']),normalize(match['end'])]
         eligible=[c for c in catalog if [normalize(c['periods'][0]),normalize(c['periods'][-1])]==ends
             and re.search(r'(?<!\w)'+re.escape(c['metric'])+r'(?!\w)',subject,re.I)]
+        # A two-row series can have both total and annual-change catalog entries.
+        # They are equivalent only when every input and typed result is identical.
+        unique={}
+        for calc in sorted(eligible,key=lambda c:c['kind']!='absolute_change'):
+            key=(tuple(calc['observation_ids']),tuple(calc['periods']),calc['metric'],
+                 calc['value'],calc.get('unit'),calc.get('currency'))
+            unique.setdefault(key,calc)
+        eligible=list(unique.values())
         if len(eligible)!=1:
             yield match,False,set();continue
         calc=eligible[0];unit=(match['unit'] or '').casefold().rstrip('s')

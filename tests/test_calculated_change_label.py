@@ -6,6 +6,18 @@ from adaptive_document_agent.extraction.chart_growth_evidence import chart_growt
 from tests.test_chart_growth_evidence import source
 
 
+@pytest.mark.parametrize('rate,start,end,kind,accepted',[
+    ('200.0','2021-12-31','2024-10-31','increase',True),
+    ('200.1','2021-12-31','2024-10-31','increase',False),
+    ('200.0','2021-12-30','2024-10-31','increase',False),
+    ('200.0','2024-10-31','2021-12-31','increase',False),
+    ('200.0','2021-12-31','2024-10-31','decrease',False),
+])
+def test_calculated_percentage_uses_complete_exact_balance_sheet_dates(rate,start,end,kind,accepted):
+    from tests.test_declared_calculated_amount import rows
+    assert _numeric_support(f'The calculated {kind} was {rate}% from {start} to {end}.',rows()) is accepted
+
+
 @pytest.mark.parametrize('text,accepted',[
     ('The calculated cumulative increase was 178.3% from 2019 to 2023.',True),
     ('The calculated percentage increase in Health was 178.3% from 2019 to 2023.',True),

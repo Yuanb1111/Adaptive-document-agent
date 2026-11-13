@@ -61,7 +61,12 @@ def _coverage_payload(context,selection,result):
     citations=planned_source_citations(selection,context,result)
     cited_ids={c['insight_id']:set(c['observation_ids']) for c in citations}
     bindings=verified_column_assurance(result,set().union(*cited_ids.values()))
+    from adaptive_document_agent.services.presentation_evidence import calculation_catalog
+    numeric_ids=set().union(*cited_ids.values())
+    derived=[c for c in calculation_catalog(result.observations).values()
+             if set(c['observation_ids'])<=numeric_ids]
     return dict(context,proposed_selection=selection.model_dump(mode='json',exclude_none=True),
+        bound_calculations=derived,
         source_row_assurance=source_row_assurance(result,{row['id']:row['id']
             for row in context.get('source_rows',[])}),planned_source_citations=citations,
         verified_column_assurance=bindings),cited_ids,bindings
@@ -121,7 +126,11 @@ def _review_selection_coverage(gateway, context, selection, result,*,priority_on
              'Also check each included page against its source: material intermediate turning points, '
              'complete comparison endpoints, latest comparable component amounts with dates/units, '
              'source attribution, definitions and column-specific assurance qualifiers must survive '
-             'the rewrite. Check quantitative completeness within the primary observations and '
+             'the rewrite. '
+             'bound_calculations contains exact Python-derived values with input IDs, units and '
+             'periods. Such a calculated growth rate or difference need not occur as a reported '
+             'source cell; verify its exact kind and input scope instead of demanding that it be '
+             'removed merely for being derived. Check quantitative completeness within the primary observations and '
              'eligible companion rows for that finding. For supplementary disclosures supported only '
              'by cited source prose, retain their qualitative meaning when material. The downstream '
              'brief can cite the exact source passage and figures. Do not request a number on this '

@@ -118,7 +118,7 @@ class LiteLLMProvider(LLMClient):
             started = time.perf_counter()
             event = {"attempt": transient_retries + int(compatibility_retry_used) + 1,
                      "started_at": datetime.now(timezone.utc).isoformat(),
-                     "kind": "compatibility_retry" if compatibility_retry_used else "network_retry" if transient_retries else "initial"}
+                     "kind": "network_retry" if transient_retries else "compatibility_retry" if compatibility_retry_used else "initial"}
             event["reasoning_parameters"] = reasoning_parameters(request_kwargs)
             try:
                 with self._request_client() as client_options:
@@ -137,6 +137,8 @@ class LiteLLMProvider(LLMClient):
                 return result
             except Exception as exc:
                 event.update(status="failed", error_type=type(exc).__name__)
+                if (status:=self._failure_status(exc)) is not None:
+                    event['http_status']=status
                 rejected_params = self._rejected_optional_params(exc, request_kwargs)
                 if rejected_params and not compatibility_retry_used:
                     event["compatibility_downgrade"] = sorted(rejected_params)
@@ -164,13 +166,25 @@ class LiteLLMProvider(LLMClient):
                     _attempts.get().append(event)
 
     @staticmethod
-    def _transient_failure(exc: Exception) -> bool:
-        """Retry one transport/server failure, never authentication or bad input."""
+    def _failure_status(exc: Exception) -> int | None:
+        """Keep only a real HTTP status, never an upstream message or response body."""
         status = getattr(exc, 'status_code', None)
         if status is None:
             status = getattr(getattr(exc, 'response', None), 'status_code', None)
-        if isinstance(status, int):
-            return status in {408, 429, 500, 502, 503, 504}
+        if isinstance(status,str) and re.fullmatch(r'\d{3}',status):status=int(status)
+        return status if isinstance(status,int) and 100<=status<600 else None
+
+    @classmethod
+    def _transient_failure(cls,exc: Exception) -> bool:
+        """Retry once for transport/server failures; known client errors fail unchanged."""
+        status=cls._failure_status(exc)
+        if status is not None:
+            # 501 is a known unsupported operation, not a temporary outage.
+            return status in {408,409,429} or (500<=status<600 and status!=501)
+        # LiteLLM can wrap a failed completion as a plain APIError without an
+        # HTTP response (or with a sentinel status). One same-provider retry
+        # is bounded independently of optional-parameter compatibility repair.
+        if type(exc).__name__=='APIError':return True
         return any(marker in type(exc).__name__.casefold() for marker in (
             'timeout', 'ratelimit', 'connection', 'serviceunavailable', 'internalservererror'))
 

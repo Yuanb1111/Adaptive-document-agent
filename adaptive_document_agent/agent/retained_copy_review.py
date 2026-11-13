@@ -34,6 +34,8 @@ def copy_review_payload(payload: dict) -> dict:
         'unavailable_findings': [],
         'analysis_plan': [a for a in payload.get('analysis_plan', []) if a['id'] in tasks],
         'calculations': calculations,
+        'bound_calculations':[c for c in payload.get('bound_calculations',[])
+                              if set(c['observation_ids'])<=row_ids],
         'observations': [o for o in payload.get('observations', []) if o['id'] in row_ids],
         'source_rows': rows,
         'source_row_assurance': {k: v for k, v in payload['source_row_assurance'].items() if k in row_ids},

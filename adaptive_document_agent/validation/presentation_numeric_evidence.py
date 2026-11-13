@@ -47,7 +47,7 @@ _ALIASES = {"RMB": "CNY", "CNH": "CNY", "US$": "USD", "$": "USD", "HK$": "HKD",
 _DECREASE = re.compile(r"\b(?:(?:decrease|decline|reduction|drop) of|(?:decreased|declined|fell|dropped) by)\s*$", re.I)
 _CASH_USE = re.compile(r"\s+used in (?:operations|(?:operating|investing|financing) activities)\b", re.I)
 _CALCULATED_AMOUNT=re.compile(r'\b(?:calculated|computed|recalculated|recomputed)\s+'
-    r'(?P<kind>increase|decrease|change)\s+(?:of|was|is)\s*$',re.I)
+    r'(?:signed\s+)?(?P<kind>increase|decrease|change)\s+(?:of|was|is)\s*$',re.I)
 _CALCULATED_INTERVAL=re.compile(r'^\s+from\s+(?P<start>(?:FY\s*|[1369]M\s*)?(?:19|20)\d{2}'
     r'(?:-\d{2}-\d{2})?)\s+to\s+(?P<end>(?:FY\s*|[1369]M\s*)?(?:19|20)\d{2}'
     r'(?:-\d{2}-\d{2})?)\b',re.I)

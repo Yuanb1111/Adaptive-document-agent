@@ -6,7 +6,7 @@ from threading import Event
 from time import perf_counter
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field,model_validator
 
 from adaptive_document_agent.models.summary import SummaryPart, SummaryReview
 from adaptive_document_agent.services.summary_source import reading_batches
@@ -25,6 +25,20 @@ class ReadFact(BaseModel):
     text: str = Field(min_length=1, max_length=6000)
     quote_start_line: int = Field(ge=1)
     quote_end_line: int = Field(ge=1)
+
+    @model_validator(mode='before')
+    @classmethod
+    def preserve_duplicated_line_suffix(cls,value):
+        """An exact locator-key typo cannot change or invent its source coordinate."""
+        if not isinstance(value,dict):return value
+        renamed=dict(value)
+        for field in ('quote_start_line','quote_end_line'):
+            alias=field+'_line'
+            if alias not in renamed:continue
+            if field in renamed and renamed[field]!=renamed[alias]:
+                raise ValueError('Conflicting quote line coordinates')
+            renamed[field]=renamed.pop(alias)
+        return renamed
 
 
 class ReadPart(BaseModel):

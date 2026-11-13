@@ -70,6 +70,18 @@ def _numeric_support(text, observations, computed_percentages=(), *, diagnostics
                 diagnostics.append(f'Unbound typed amount: {match[0]}')
                 from adaptive_document_agent.services.source_amount_literal import source_amount_literal
                 raw = match['number'].replace(',', '').replace('−', '-')
+                for calculation in calculations.values():
+                    if calculation['kind'] not in {'absolute_change','yoy_absolute_change'} or not calculation.get('currency'):
+                        continue
+                    owners=[o for o in observations if o.id in calculation['observation_ids']]
+                    if any(o.unit_scale and math.isclose(abs(calculation['value'])/o.unit_scale,
+                        abs(float(raw)),rel_tol=1e-12,abs_tol=1e-9) for o in owners):
+                        diagnostics.append('A magnitude resembles this exact signed Python change: '
+                            +str({k:calculation[k] for k in ('metric','value','currency','periods','observation_ids')})
+                            +'. Keep the signed result, a calculated-change label, exact source metric, '
+                            'explicit currency and scale, and both periods. A loss-widening description '
+                            'does not turn a negative signed change into a positive amount. Alternatively '
+                            'describe that direction without adding the derived amount.')
                 for item in observations:
                     cell = item.raw_value.strip().strip('()').replace(',', '')
                     if (cell == raw and item.currency and match['currency']

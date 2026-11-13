@@ -13,6 +13,7 @@ _DATED_PERIOD = re.compile(
 _ISO_PERIOD = re.compile(r'(?<![\w.-])(?:19|20)\d{2}-\d{2}-\d{2}(?![\w-]|\.\w)')
 _ISO_RANGE = re.compile(r'(?<![\w.-])(?P<start>(?:19|20)\d{2}-\d{2}-\d{2})-to-'
                         r'(?P<end>(?:19|20)\d{2}-\d{2}-\d{2})(?![\w-]|\.\w)', re.I)
+_MONTH_YEAR=re.compile(rf'\b(?P<month>{_MONTH})\.?\s+(?P<year>(?:19|20)\d{{2}})\b',re.I)
 _DATES = re.compile(
     rf'(?i)(?<![\w.])(?P<iso_year>(?:19|20)\d{{2}})-(?P<iso_month>\d{{2}})-(?P<iso_day>\d{{2}})(?![\w-]|\.\w)'
     rf'|\b(?P<month>{_MONTH})\.?\s+(?P<day>\d{{1,2}})(?:st|nd|rd|th)?\b'
@@ -36,6 +37,15 @@ def literal_calendar_dates(text: str) -> set[str]:
         except ValueError:
             pass
     return dates
+
+
+def mask_bound_month_years(text,periods,source_text=''):
+    """A month/year may project a bound date, but never supplies a missing day."""
+    owners={value[:7] for period in periods for value in literal_calendar_dates(period or '')}
+    owners.update(f"{m['year']}-{_MONTH_NUMBER[m['month'].casefold()]:02d}"
+                  for m in _MONTH_YEAR.finditer(source_text))
+    return _MONTH_YEAR.sub(lambda m:' ' if
+        f"{m['year']}-{_MONTH_NUMBER[m['month'].casefold()]:02d}" in owners else m[0],text)
 
 
 def bound_period_dates(text, periods, *, mask=False):

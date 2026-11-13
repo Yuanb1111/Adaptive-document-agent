@@ -101,13 +101,21 @@ def test_initial_repair_must_explicitly_select_rows_for_new_period_claims():
     own=source['pages_to_correct']['owned']
     own['primary_observations']=[dict(metric_original='Revenue',period='FY2023')]
     own['source_rows']=[dict(id='interim-row',metric='Revenue',period='6M2024',value='42')]
-    response=dict(message='Revenue is reported for 6M2024.',companion_ids=['bound-row'])
+    response=dict(message='Revenue is reported for 6M2024.',companion_ids=['bound-row'],
+                  context_evidence=source['pages_to_correct']['owned']['draft']['context_evidence'])
     llm=gateway([response,{**response,'companion_ids':['bound-row','interim-row']}])
     def validate(pages):
         return {} if 'interim-row' in pages['owned'].companion_ids else {'owned':['Unbound period 6M2024.']}
     page=compact_publication_copy(llm,'owned',source,400,validate,preserve_inputs=False)['owned']
     assert 'interim-row' in page.companion_ids
     assert 'eligible same-metric' in str(llm.client.calls[1]) and len(llm.usage)==2
+
+
+def test_initial_repair_cannot_silently_keep_a_rejected_draft_quote_via_null():
+    response=dict(message='The source reports levels.',companion_ids=[],context_evidence=None)
+    llm=gateway([response,{**response,'context_evidence':[]}])
+    page=compact_publication_copy(llm,'owned',payload(),400,lambda _: {},preserve_inputs=False)['owned']
+    assert page.context_evidence==[] and len(llm.client.calls)==2
 
 
 def test_summary_references_cannot_overwrite_analysis_continuation_capacity(monkeypatch):

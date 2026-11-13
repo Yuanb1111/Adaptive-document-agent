@@ -22,6 +22,15 @@ PERIOD_AND_ASSURANCE_RULES = (
     'complete original source. Declaring source context is never semantic approval. '
     'A source_context explanation need not repeat its proof verbatim. Preserve its '
     'actual effect, timing, population and qualifications without new measurements. '
+    'Literal source timing may remain in source_context even without a measured row: '
+    'keep quoted annual years and complete months-ended date phrases as discussion scope, '
+    'not new numeric comparison endpoints. Use explicit temporal wording such as '
+    '"during [source year]"; do not turn a measured count or amount into a year. '
+    'A literal source named interval may include those dates in its scope. '
+    'Compact ISO dates and spelled calendar dates are equivalent when they identify the '
+    'same exact bound source date. Do not reject an ISO spelling merely because a '
+    'table uses year columns under a complete as-of date header. Verify the full '
+    'header and bound row; never invent a day from a bare fiscal-year label. '
     'Do not demand a visible literal quotation or numeric comparison endpoints for '
     'a faithful declared source-only explanation. Its complete original quotation '
     'is proof for the independent semantic review, not another measured series. '
@@ -110,6 +119,10 @@ PERIOD_AND_ASSURANCE_RULES = (
     '"The calculated CAGR was [rate] from [exact start period] to [exact end period]" when the '
     'supplied calculation and its input rows support it. Do not remove such a calculated rate '
     'merely because the source does not report a CAGR cell. Do not relabel it as reported. '
+    'For a monetary calculated difference, prefer the exact signed Python change with '
+    'a calculated-change label, full source metric and both periods. Preserve its negative '
+    'sign even when a loss widened in magnitude. A widening description need not add a '
+    'second derived numeral. Never copy a positive loss magnitude as a signed delta. '
 )
 _PERIOD_ASSURANCE = re.compile(
     r'(?P<period>\b(?:FY\d{4}|\d{1,2}M\d{4}|\d{4}-\d{2}-\d{2})\b)\s*'
@@ -226,9 +239,15 @@ def context_evidence_pages(page, context, result):
     for index, quote in enumerate(page.all_context_evidence, 1):
         text = normalize_quote(quote.text)
         if not text or text not in sources.get(quote.page, ''):
+            from adaptive_document_agent.services.literal_quote_feedback import source_passage_hint
+            original=next((p.text for p in result.document.pages
+                           if p.page_number==quote.page and p.page_number in sources),'')
+            candidate=source_passage_hint(quote.text,original)
+            hint=(' Complete original paragraph on the supplied page (untrusted reading aid, '
+                  'not an accepted quote or semantic verdict): '+repr(candidate)) if candidate else ''
             raise ContextEvidenceError('Context evidence must be a literal quote from a supplied source page. '
                 f'Quote {index} does not bind to page {quote.page}. Copy a contiguous passage and its '
-                'physical page number from the source_pages record, using its page field.')
+                'physical page number from the source_pages record, using its page field.'+hint)
         pages.add(quote.page)
     return pages
 
@@ -413,7 +432,8 @@ def page_bindings(page, insight, primary, context, result, *, _copy_errors=None,
             if _copy_errors is None:
                 raise ValueError(f'{insight.id}.{field}: {exc}') from exc
             _copy_errors.append(f'{insight.id}.{field}: {exc}')
-    return (title,copy,ids,reported) if with_source_context else (title,copy,ids)
+    from .reported_source_context import source_context_paragraphs
+    return (title,copy,ids,source_context_paragraphs(reported)) if with_source_context else (title,copy,ids)
 
 
 class AuthoredPageErrors(ValueError):
