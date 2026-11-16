@@ -55,6 +55,43 @@ def test_complete_overlong_output_gets_only_one_source_aware_capacity_correction
     assert all(row['operation']=='RetainedPageRevisions' for row in llm.usage)
 
 
+@pytest.mark.parametrize('corrects',[True,False])
+def test_shared_budget_identifies_overlong_explanations_without_shortening_their_proof(corrects):
+    from adaptive_document_agent.agent.compact_publication_copy import visible_copy_budget
+    from adaptive_document_agent.agent.retained_page_sources import RetainedPage
+    source=payload();proof=source['source_pages'][0]['text']
+    context=dict(scope='the reported discussion',description='describes '+('the source qualification; '*20),
+                 quote=dict(page=2,text=proof))
+    rejected=dict(message='The source reports levels.',source_context=[context])
+    revised={**rejected,'source_context':[{**context,'description':'describes the source qualification'}]}
+    llm=gateway([rejected,revised if corrects else rejected])
+    if corrects:
+        page=compact_publication_copy(llm,'owned',source,400,lambda _: {})['owned']
+        assert page.source_context[0].quote.text==proof
+        assert visible_copy_budget(page,[],400)['total_characters']<=400
+    else:
+        with pytest.raises(AuthoredPageErrors,match='Measured shared visible-copy budget'):
+            compact_publication_copy(llm,'owned',source,400,lambda _: {})
+    assert len(llm.client.calls)==2
+    feedback=str(llm.client.calls[1])
+    assert 'source_context_characters' in feedback and 'required_reduction_characters' in feedback
+    assert 'message_budget_with_current_context' in feedback
+    assert source==payload()
+
+
+def test_long_literal_proof_is_complete_and_excluded_from_visible_copy_budget():
+    from adaptive_document_agent.agent.compact_publication_copy import visible_copy_budget
+    from adaptive_document_agent.agent.retained_page_sources import RetainedPage
+    proof='Complete literal source proof. '*40
+    page=RetainedPage(title='Source',message='Reported levels.',companion_ids=[],source_context=[dict(
+        scope='the source discussion',description='describes the reported qualification',quote=dict(page=2,text=proof))])
+    before=page.model_copy(deep=True)
+    measured=visible_copy_budget(page,[],200)
+    assert measured['total_characters']<200<len(proof)
+    assert not measured['proof_quotations_count_toward_budget'] and not measured['semantic_approval']
+    assert page==before
+
+
 @pytest.mark.parametrize('defect',['rows','quotes','source'])
 def test_source_failure_or_removed_evidence_cannot_be_published(defect):
     response=dict(message='A short paragraph.')

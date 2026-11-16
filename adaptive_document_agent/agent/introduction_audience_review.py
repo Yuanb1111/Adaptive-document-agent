@@ -10,6 +10,7 @@ from adaptive_document_agent.services.introduction_audience import selection_dig
 from adaptive_document_agent.services.llm.exceptions import LLMError
 from adaptive_document_agent.services.source_quotes import normalize_quote
 from .prompting import untrusted_document_message
+from .source_qualifier_scope import SOURCE_QUALIFIER_SCOPE_RULES
 
 
 class IntroductionReviewFinding(BaseModel):
@@ -247,7 +248,7 @@ def review_current_selection(gateway, source, values, rules, review, *, attempt,
         review.plan_audits.append({'introduction_audience_review': record})
         try:
             verdict = complete_response(gateway, [
-                {'role': 'system', 'content': rules + _BINDING_RULES},
+                {'role': 'system', 'content': rules + _BINDING_RULES + SOURCE_QUALIFIER_SCOPE_RULES},
                 untrusted_document_message(json.dumps(payload, ensure_ascii=False))],
                 IntroductionAudienceReview, cancelled=cancelled)
         except (LLMError, ValueError, CancelledError) as exc:

@@ -5,7 +5,6 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field,create_model
 
 from adaptive_document_agent.models import ValidationIssue
-from .presentation_budget_output import complete_budget_output
 from .prompting import untrusted_document_message
 from .retained_audit_scope import (
     ASSURANCE_REVIEW_RULES, AssuranceChange, contradicted_assurance, verified_column_assurance,
@@ -61,9 +60,9 @@ def _coverage_payload(context,selection,result):
     citations=planned_source_citations(selection,context,result)
     cited_ids={c['insight_id']:set(c['observation_ids']) for c in citations}
     bindings=verified_column_assurance(result,set().union(*cited_ids.values()))
-    from adaptive_document_agent.services.presentation_evidence import calculation_catalog
+    from adaptive_document_agent.services.presentation_evidence import scoped_calculation_catalog
     numeric_ids=set().union(*cited_ids.values())
-    derived=[c for c in calculation_catalog(result.observations).values()
+    derived=[c for c in scoped_calculation_catalog(result.observations,cited_ids.values()).values()
              if set(c['observation_ids'])<=numeric_ids]
     return dict(context,proposed_selection=selection.model_dump(mode='json',exclude_none=True),
         bound_calculations=derived,
@@ -249,8 +248,8 @@ def _review_selection_coverage(gateway, context, selection, result,*,priority_on
             'new material contradiction or unmet user requirement. Keep the reason concise. '
             'This verdict does not approve any page copy or final presentation. '+INSTRUCTIONS)
     audit = {}
-    review = complete_budget_output(gateway, messages, schema, audit,
-                                    audit_key='output_attempts', token_limits=limits)
+    from .coverage_verdict_format import complete_coverage_verdict
+    review = complete_coverage_verdict(gateway,messages,schema,audit,result,token_limits=limits)
     priority_response=review.model_dump(mode='json') if priority_only else None
     if priority_only:
         review=RetainedSelectionCoverage(accepted=review.accepted,

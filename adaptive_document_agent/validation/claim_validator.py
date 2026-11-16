@@ -1509,6 +1509,15 @@ def _associate_clause_direction_spans(
                 and re.search(direction_pattern, predicate_clause[boundary.end():], re.I)):
             a = _associate_clause_direction_spans(left, metric_aliases_map, metric_values_map)
             b = _associate_clause_direction_spans(right, metric_aliases_map, metric_values_map)
+            owners={metric for metric,_,_,_ in a}
+            if (not b and len(owners)==1 and ambiguous_metric not in owners
+                    and re.match(r'\s*'+direction_pattern+r'\s+(?:from|between)\b',right,re.I)):
+                # A coordinated dated predicate can explicitly omit the same
+                # subject: "A rose from X to Y and rose from Y to Z". Only
+                # this grammar inherits it; an unknown newly named subject or
+                # an undated driver cannot borrow the preceding metric.
+                b=_associate_clause_direction_spans(right,metric_aliases_map,metric_values_map,
+                    is_only_metric=True,only_metric_name=next(iter(owners)))
             return a + [(metric, word, s + boundary.end(), e + boundary.end()) for metric, word, s, e in b]
     all_alias_pairs: list[tuple[int, str, str]] = []
     for m_name, aliases in metric_aliases_map.items():

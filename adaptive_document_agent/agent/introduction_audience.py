@@ -3,6 +3,7 @@ import json
 from pydantic import BaseModel, ConfigDict, Field
 from adaptive_document_agent.services.introduction_audience import reading_fingerprint, audience_part_ids
 from .prompting import untrusted_document_message, with_presentation_limits
+from .source_qualifier_scope import SOURCE_QUALIFIER_SCOPE_RULES
 from .introduction_audience_review import IntroductionAudienceReview, review_current_selection
 from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
 
@@ -22,6 +23,11 @@ QUALIFIED_ASSERTION_RULE = (
     'another meaning. Coverage elsewhere in the part does not qualify an unconditional claim. '
     'Repeated necessary conditions are not redundant claims. Before returning, read each claim alone '
     'against its complete owned source and check that no conditional statement became unconditional. '
+    'When the source explicitly establishes that several assertions share a qualifier, repeat '
+    'it in EVERY assertion produced by splitting the sentence. Preserve each source-supported '
+    'measurement basis, population and operating condition. A qualifier attached to a sibling ranking, share or '
+    'capability cannot qualify this assertion. Do this for all resulting assertions, not only the '
+    'one singled out in reviewer feedback. '
     'Preserve the exact qualified category names used by the source instead of replacing them with '
     'broader parent categories. Prefer the source’s own qualified phrases over a shorter paraphrase. '
     'Separate independently checkable status, operating-stage and threshold assertions; keep a '
@@ -30,7 +36,7 @@ QUALIFIED_ASSERTION_RULE = (
     'Preserve bounds, membership sets and approximations exactly. A top-N membership '
     'claim does not establish exact ordinal rank N; an upper/lower bound is not an '
     'exact value. Keep the source\'s qualified phrase instead of strengthening it. '
-)
+) + SOURCE_QUALIFIER_SCOPE_RULES
 
 
 class RequiredMeaning(BaseModel):

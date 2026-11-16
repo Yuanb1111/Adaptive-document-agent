@@ -16,3 +16,21 @@ def source_passage_hint(quote,source):
             for part in candidates]
     score,passage=max(scored,key=lambda pair:pair[0])
     return passage if score>=.6 else None
+
+
+def supplied_passage_hints(quote,pages,*,limit=3):
+    """Find bounded original reading aids only within the caller's supplied pages.
+
+    These are diagnostics, not a page relocation or an accepted citation. The
+    caller still rejects the draft and requires a new literal quote and review.
+    """
+    target=normalize_quote(quote).split()
+    if not target:return []
+    candidates=[]
+    for page,source in pages.items():
+        passage=source_passage_hint(quote,source)
+        if passage is not None:
+            score=SequenceMatcher(None,target,normalize_quote(passage).split(),autojunk=False).ratio()
+            candidates.append((score,page,passage))
+    candidates.sort(key=lambda item:(-item[0],item[1]))
+    return [dict(page=page,text=passage) for _,page,passage in candidates[:limit]]

@@ -1,8 +1,14 @@
 """Lossless monetary display hints; never approve or rewrite model copy."""
+from __future__ import annotations
+
 import re
 from decimal import Decimal, InvalidOperation
+from typing import TYPE_CHECKING
 
 from .financial_formatter import split_unit_basis
+
+if TYPE_CHECKING:
+    from adaptive_document_agent.models import Observation
 
 
 def source_amount_literal(observation):
@@ -27,3 +33,19 @@ def source_amount_literal(observation):
         return None
     text = f'{observation.currency} {number}{suffix[observation.unit_scale]}'
     return f'({text})' if accounting else text
+
+
+def calculated_amount_literal(value: float,observation: Observation) -> str | None:
+    """Spell a Python delta in an input's supported display scale without changing it."""
+    if not observation.unit_scale:
+        return None
+    try:
+        amount=Decimal(str(value))/Decimal(str(observation.unit_scale))
+        if not amount.is_finite():return None
+        number=format(amount,',f')
+        if '.' in number:number=number.rstrip('0').rstrip('.')
+        candidate=observation.model_copy(update={'value':value,'raw_value':number})
+        literal=source_amount_literal(candidate)
+    except (InvalidOperation,TypeError,ValueError):
+        return None
+    return literal+(' units' if observation.unit_scale==1 else '') if literal else None

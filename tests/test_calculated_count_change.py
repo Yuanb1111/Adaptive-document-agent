@@ -39,6 +39,25 @@ def test_equivalent_two_row_total_and_annual_deltas_use_one_exact_calculation():
     assert len(checked)==1 and checked[0][1] and len(checked[0][2])==1
 
 
+@pytest.mark.parametrize('unit_family,unit,metric',[
+    ('days','days','Programme processing days'),
+    ('count','count','Programme deliveries'),
+])
+def test_explicit_metric_delta_retains_native_unit_and_exact_python_ownership(unit_family,unit,metric):
+    obs=rows((12,18,27))
+    for item in obs:
+        item.metric_original=metric;item.unit_family=unit_family;item.unit=unit
+        item.raw_unit=unit;item.raw_value=str(item.value)
+    before=deepcopy(obs)
+    suffix='days' if unit=='days' else 'deliveries'
+    text=f'The calculated change in {metric} was 15.0 {suffix} from FY2023 to FY2025.'
+    assert _numeric_support(text,obs)
+    for wrong in [text.replace(metric,'Other measure'),text.replace('15.0','-15.0'),
+                  text.replace('FY2025','FY2024'),text.replace(suffix,'dollars')]:
+        assert not _numeric_support(wrong,obs)
+    assert obs==before
+
+
 @pytest.mark.parametrize('change',[
     '-13 distributors from FY2023 to FY2025',
     '12 distributors from FY2023 to FY2025',

@@ -1,10 +1,12 @@
 """Bind explicitly calculated native count changes to exact Python results."""
 import re
 from decimal import Decimal,InvalidOperation
+from adaptive_document_agent.services.calendar_claims import period_identity
 
 _PERIOD=r'(?:FY\s*|[1-9]M\s*|1[0-2]M\s*|Q[1-4]\s*|[12]H\s*)?(?:19|20)\d{2}(?:-\d{2}-\d{2})?E?'
 _NUMBER=r'[+−-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?'
 _LABEL=r'\b(?:calculated|computed|recalculated|recomputed)\s+(?:signed\s+)?(?P<kind>change|difference|increase|decrease)'
+_LABEL+=r'(?:\s+(?:in|of)\s+(?P<metric>[^;.!?]+?))?'
 _RANGE=rf'from\s+(?P<start>{_PERIOD})\s+to\s+(?P<end>{_PERIOD})\b'
 _AFTER=re.compile(_LABEL+rf'\s+(?:was|is|of)\s*(?P<number>{_NUMBER})'
     rf'(?:\s+(?P<unit>[A-Za-z]+))?\s+{_RANGE}',re.I)
@@ -24,13 +26,13 @@ def _raw(item):
 
 def checked_count_changes(text,observations,calculations):
     """Yield claim/support/IDs; never infer a metric, interval, scale or unit."""
-    counts={o.id:o for o in observations if o.value is not None and o.unit_family=='count'
+    counts={o.id:o for o in observations if o.value is not None and o.unit_family in {'count','days'}
             and o.unit_scale==1 and o.validation_status=='valid' and o.evidence}
     if not counts:return
     catalog=[c for c in calculations if c.get('kind') in {'absolute_change','yoy_absolute_change'}
         and not c.get('currency') and len(c.get('observation_ids',()))==2
         and set(c['observation_ids'])<=counts.keys()]
-    normalize=lambda value:re.sub(r'\s+','',value).casefold()
+    normalize=period_identity
     matches=sorted([*_AFTER.finditer(text),*_BEFORE.finditer(text)],key=lambda m:m.start())
     seen=set()
     for match in matches:
@@ -41,8 +43,11 @@ def checked_count_changes(text,observations,calculations):
         if re.fullmatch(r'\s*The\s+',subject,re.I) and len(sentences)>1:
             subject=sentences[-2]  # One explicit immediately preceding subject only.
         ends=[normalize(match['start']),normalize(match['end'])]
+        from .presentation_metric_binding import source_label_forms
+        metric_normal=lambda value:' '.join(value.casefold().split())
         eligible=[c for c in catalog if [normalize(c['periods'][0]),normalize(c['periods'][-1])]==ends
-            and re.search(r'(?<!\w)'+re.escape(c['metric'])+r'(?!\w)',subject,re.I)]
+            and (metric_normal(match['metric']) in {metric_normal(form) for form in source_label_forms(c['metric'])}
+                 if match['metric'] else re.search(r'(?<!\w)'+re.escape(c['metric'])+r'(?!\w)',subject,re.I))]
         # A two-row series can have both total and annual-change catalog entries.
         # They are equivalent only when every input and typed result is identical.
         unique={}

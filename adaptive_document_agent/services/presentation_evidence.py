@@ -82,6 +82,11 @@ def calculation_catalog(observations: list[Observation]) -> dict[str, dict]:
                 "source_pages": sorted({e.page for o in items for e in o.evidence}),
                 "fact_type": "calculated_result",
             }
+            if kind in {'absolute_change','yoy_absolute_change'} and output[identifier]['currency']:
+                from .source_amount_literal import calculated_amount_literal
+                literal=calculated_amount_literal(value,items[0])
+                if literal is not None:
+                    output[identifier]['amount_literal']=literal
 
         ends = [analysis.observations[0], analysis.observations[-1]]
         delta_unit = "percentage_points" if analysis.is_percentage else first.unit
@@ -94,6 +99,41 @@ def calculation_catalog(observations: list[Observation]) -> dict[str, dict]:
                 add("yoy_absolute_change", change.absolute_change, pair, delta_unit)
                 add("yoy_percentage_change", change.percentage_change, pair, "percent")
     return output
+
+
+def scoped_calculation_catalog(observations: list[Observation],scopes) -> dict[str,dict]:
+    """Recompute exact declared input scopes without deduplicating source cells.
+
+    Other tables can contain the same metric and period. Their conflicts remain
+    visible; they must not replace the explicit source IDs selected for a page.
+    Every scoped calculation still uses the normal comparability/quality gates.
+    """
+    output=calculation_catalog(observations)
+    index={o.id:o for o in observations}
+    for scope in {tuple(sorted(set(ids))) for ids in scopes}:
+        if not scope or set(scope)-index.keys():continue
+        for cid,calculation in calculation_catalog([index[oid] for oid in scope]).items():
+            if cid in output and output[cid]!=calculation:
+                raise ValueError('One calculation ID has conflicting scoped results')
+            output[cid]=calculation
+    return output
+
+
+def plan_calculation_catalog(result: PipelineResult,plan) -> dict[str,dict]:
+    """Rebuild only the plan's explicit row/chart scopes; never infer inputs."""
+    charts={c.id:c for c in result.charts}
+    scopes=[]
+    for slide in plan.slides:
+        ids=set(slide.observation_ids)
+        chart_ids=set(slide.chart_ids)
+        for block in slide.visual_blocks:
+            scopes.append(block.observation_ids)
+            ids.update(block.observation_ids);chart_ids.update(block.chart_ids)
+        for cid in chart_ids&charts.keys():
+            scopes.append([*charts[cid].observation_ids,*charts[cid].total_observation_ids])
+            ids.update(charts[cid].observation_ids);ids.update(charts[cid].total_observation_ids)
+        scopes.append(ids)
+    return scoped_calculation_catalog(result.observations,scopes)
 
 
 def observation_record(o: Observation) -> dict:

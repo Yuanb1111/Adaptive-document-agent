@@ -465,7 +465,6 @@ def compile_retained_analysis(result):
     plan.slides = [s for s in plan.slides if s.slide_type != 'analysis']
     plan.themes = []
     slides = []
-    calculations = calculation_catalog(result.observations)
     for n, iid in enumerate(selection.ordered_insight_ids, 1):
         insight, ids, copy = linked[iid]
         primary = ids
@@ -504,7 +503,7 @@ def compile_retained_analysis(result):
                 for start in range(0, len(ordered_ids), 30)]
         # All IDs are Python calculations, never arbitrary model expressions.
         numbers = PresentationPlanValidator._numbers(copy)
-        owned = [calc for calc in calculations.values() if set(calc['observation_ids']) <= ids]
+        owned = list(calculation_catalog(observations).values())
         display_calculations = set()
         for _, _, matched_ids in checked_money_amounts(copy, observations, owned):
             display_calculations.update(matched_ids)

@@ -230,3 +230,50 @@ The final reviewer-input and initial evidence-list changes have not completed a
 fresh real-model run. No new qualifying PPTX exists, and original-PDF completion
 within 15 minutes remains unverified. Source PDFs, model outputs and private run
 diagnostics are excluded from this commit. Work stops after commit and push.
+
+
+## 2026-11-16 user-requested development checkpoint
+
+Simulation work stops at the user's explicit request. The latest fresh attempt
+ended before briefing and export after 536.259 seconds and 90 GPT-6 Luna calls.
+No new qualifying PPTX was produced. The final changes below have not been
+verified in another fresh real-model run; this checkpoint does not establish
+completion within 15 minutes.
+
+The repairs operate on source-bound types and evidence, without company names,
+document-type workflows, fixed source pages or document-specific decision paths.
+Exact calendar spellings and reporting-period references retain their source
+ownership. Signed monetary, count and day changes bind to deterministic Python
+results, explicit metrics and comparison periods. The compiler, reviewers and
+final validators share calculation catalogs rebuilt from each page's explicit
+input IDs, while other tables' conflicting records remain available. Reported
+currency rates preserve their numerator scale and exact source denominator;
+ordinary totals cannot supply price evidence.
+
+Long or cross-page qualitative proof can retain bounded continuation quotations.
+Each passage keeps its physical page and must bind literally; splitting does not
+delete words, merge missing text, approve meaning or enlarge the existing total
+page evidence capacity. Known misplaced continuation fields can be relocated
+losslessly, while conflicting and unknown fields still fail. Scope feedback
+identifies unsupported fiscal/interim labels rather than converting dated
+balances. Shared qualifier ambiguity remains disclosed and independently
+reviewed. Short finding references reduce identifier transcription errors and
+map back to the original IDs before retention.
+
+Visible-copy feedback measures the combined paragraph and source-context budget.
+The existing copy limits, bounded corrections, independent source review and
+export gates remain mandatory. An omitted overall reviewer rationale receives
+one format correction only when all substantive verdict fields stay identical.
+No model/provider fallback or Local Only policy was changed.
+
+Phase regressions cover multiple currencies, scales, native units, source-date
+notations, wrong signs/periods/metrics, duration conditions, ambiguous qualifiers,
+multi-page proof and malformed evidence transport. Private PDFs, model outputs,
+run diagnostics and credentials remain excluded from the committed tree. No
+further simulation is started before this checkpoint is committed and pushed.
+
+The final local checkpoint regression group passed 447 tests in 115.30 seconds,
+including typed prices, calculation provenance, source-proof transport, semantic
+scope, gateway policy and provider credential isolation. Streamlit's local UI
+checks required running outside the sandbox's loopback restriction. The complete
+suite was not rerun after the final changes.

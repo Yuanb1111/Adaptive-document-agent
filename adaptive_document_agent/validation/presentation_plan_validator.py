@@ -14,7 +14,7 @@ class PresentationPlanValidator:
 
     def validate(self, plan: PresentationPlan, result: PipelineResult) -> PresentationPlan:
         errors: list[str] = []
-        from adaptive_document_agent.services.presentation_evidence import calculation_catalog
+        from adaptive_document_agent.services.presentation_evidence import plan_calculation_catalog
         from .narrative_plan_validator import validate_narrative_plan
         from adaptive_document_agent.agent.retained_page_sources import (
             retained_context_citations, retained_context_dates, retained_context_day_counts)
@@ -24,7 +24,7 @@ class PresentationPlanValidator:
         from adaptive_document_agent.agent.retained_page_sources import reported_context_bullet_positions
         reported_positions=(reported_context_bullet_positions(result,plan) if any(
             any(not ids for ids in s.bullet_observation_ids) for s in plan.slides) else {})
-        calculations = calculation_catalog(result.observations) if any(s.calculation_ids for s in plan.slides) else {}
+        calculations = plan_calculation_catalog(result,plan) if any(s.calculation_ids for s in plan.slides) else {}
         errors.extend(validate_narrative_plan(plan, result, calculations, qualitative_pages=qualitative_pages))
         slide_ids = [slide.id for slide in plan.slides]
         if len(slide_ids) != len(set(slide_ids)):
@@ -441,6 +441,13 @@ class PresentationPlanValidator:
                 from adaptive_document_agent.services.source_day_count import mask_day_count_conventions
                 conventions = set().union(*(qualitative_day_counts.get(iid, set()) for iid in insight_ids))
                 fields = tuple(mask_day_count_conventions(field, conventions) for field in fields)
+                from .presentation_numeric_evidence import mask_reported_currency_rates
+                typed_fields=[]
+                for field in fields:
+                    field,rate_errors=mask_reported_currency_rates(field,selected_observations)
+                    errors.extend(f'slide {slide.id} {error}' for error in rate_errors)
+                    typed_fields.append(field)
+                fields=tuple(typed_fields)
                 from .presentation_numeric_evidence import mask_declared_calculated_amounts
                 bound_calculations=[calculations[cid] for cid in slide.calculation_ids if cid in calculations]
                 fields=tuple(mask_declared_calculated_amounts(field,selected_observations,bound_calculations)

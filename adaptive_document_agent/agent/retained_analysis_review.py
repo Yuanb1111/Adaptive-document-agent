@@ -119,8 +119,8 @@ def review_context(result):
     from .retained_source_inventory import complete_source_observations
     observations = complete_source_observations(result,ids)
     context['observations'] = [o.model_dump(mode='json') for o in observations]
-    from adaptive_document_agent.services.presentation_evidence import calculation_catalog
-    catalog=calculation_catalog(result.observations)
+    from adaptive_document_agent.services.presentation_evidence import plan_calculation_catalog
+    catalog=plan_calculation_catalog(result,plan)
     displayed={cid for slide in slides for cid in slide.calculation_ids}
     context['bound_calculations']=[catalog[cid] for cid in sorted(displayed) if cid in catalog]
     from adaptive_document_agent.services.chart_review_evidence import chart_scale_evidence

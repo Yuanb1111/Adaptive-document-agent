@@ -1,5 +1,6 @@
 """Priority membership has one owner; page authors cannot alter that choice."""
 import json
+from copy import deepcopy
 from threading import Barrier,Lock
 
 import pytest
@@ -39,8 +40,9 @@ def test_priority_schema_rejects_ambiguous_ids_and_incomplete_decisions(failure)
 
 def test_source_choice_and_owned_page_keep_original_context_without_publication_approval():
     result,selection,context,packet,aliases,messages=ready()
+    before=deepcopy(packet)
     iid=selection.ordered_insight_ids[0]
-    llm=gateway([dict(ordered_insight_ids=[iid],reasons={iid:'Source comparison.'}),
+    llm=gateway([dict(ordered_insight_ids=['finding-1'],reasons={'finding-1':'Source comparison.'}),
                  selection.decisions[0].page.model_dump(mode='json')])
     draft=module.select_owned_source_pages(llm,result,context,packet,aliases,messages,'Read full source.')
     assert draft.ordered_insight_ids==[iid] and draft.decisions[0].decision=='include'
@@ -51,6 +53,12 @@ def test_source_choice_and_owned_page_keep_original_context_without_publication_
     assert request['owned_insight_id']==iid
     assert messages[1] in llm.client.calls[1]
     assert result.validation_warnings[-1].code=='retained_source_priorities'
+    audit=json.loads(result.validation_warnings[-1].message)
+    assert audit['finding_references']=={'finding-1':iid}
+    assert packet==before
+    choice=decode_records(json.loads(llm.client.calls[0][-1]['content'].split('\n',1)[1].rsplit('\n',1)[0]))
+    assert choice['findings'][0]['insight']['id']=='finding-1'
+    assert choice['source_pages']==packet['source_pages']
 
 
 @pytest.mark.parametrize('fails',[False,True])
@@ -64,8 +72,8 @@ def test_owned_authors_overlap_drain_failures_and_cannot_change_membership(monke
     order=[original.id,second.id];barrier=Barrier(2);finished=[];lock=Lock()
     def request(gateway,wire,schema,current,attempt,**kwargs):
         if schema.__name__=='SourcePrioritySelection':
-            return schema.model_validate(dict(ordered_insight_ids=order,
-                reasons={iid:'Synthetic owner protocol check.' for iid in order}))
+            return schema.model_validate(dict(ordered_insight_ids=['finding-1','finding-2'],
+                reasons={ref:'Synthetic owner protocol check.' for ref in ['finding-1','finding-2']}))
         payload=decode_records(json.loads(wire[-1]['content'].split('\n',1)[1].rsplit('\n',1)[0]))
         iid=payload['owned_insight_id']
         try:

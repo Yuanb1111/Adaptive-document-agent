@@ -3,6 +3,7 @@ import re
 from decimal import Decimal, InvalidOperation
 
 from adaptive_document_agent.services.financial_formatter import split_unit_basis
+from adaptive_document_agent.services.calendar_claims import period_identity
 
 
 def observation_numeric_fields(item, *, include_context=False):
@@ -33,10 +34,10 @@ _CURRENCY_TOKEN = r"US\$|HK\$|S\$|RMB|CNY|CNH|USD|HKD|SGD|GBP|EUR|JPY|AUD|CAD|CH
 _MONEY = re.compile(
     rf"(?<![\w.])(?P<accounting>\()?\s*(?:(?P<currency>{_CURRENCY_TOKEN})\s*)?"
     r"(?P<number>[+−-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)"
-    r"(?:\s*(?P<scale>thousand|million|billion|trillion|bn|mn|[kmb]))?"
-    r"(?(accounting)\s*\)(?:\s*(?P<outer_scale>thousand|million|billion|trillion|bn|mn|[kmb]))?)"
+    r"(?:\s*(?P<scale>units?|thousand|million|billion|trillion|bn|mn|[kmb]))?"
+    r"(?(accounting)\s*\)(?:\s*(?P<outer_scale>units?|thousand|million|billion|trillion|bn|mn|[kmb]))?)"
     r"(?!\w|[.,]\d)", re.I)
-_MONEY_SCALES = {"": 1, "k": 1_000, "thousand": 1_000, "m": 1_000_000,
+_MONEY_SCALES = {"": 1, "unit":1,"units":1, "k": 1_000, "thousand": 1_000, "m": 1_000_000,
                  "mn": 1_000_000, "million": 1_000_000, "b": 1_000_000_000,
                  "bn": 1_000_000_000, "billion": 1_000_000_000, "trillion": 10**12}
 _MONEY_UNIT_DECLARATION = re.compile(
@@ -47,15 +48,25 @@ _ALIASES = {"RMB": "CNY", "CNH": "CNY", "US$": "USD", "$": "USD", "HK$": "HKD",
 _DECREASE = re.compile(r"\b(?:(?:decrease|decline|reduction|drop) of|(?:decreased|declined|fell|dropped) by)\s*$", re.I)
 _CASH_USE = re.compile(r"\s+used in (?:operations|(?:operating|investing|financing) activities)\b", re.I)
 _CALCULATED_AMOUNT=re.compile(r'\b(?:calculated|computed|recalculated|recomputed)\s+'
-    r'(?:signed\s+)?(?P<kind>increase|decrease|change)\s+(?:of|was|is)\s*$',re.I)
+    r'(?:signed\s+)?(?P<kind>increase|decrease|change)'
+    r'(?:\s+(?:in|of)\s+(?P<metric>[^;.!?]+?))?\s+(?:of|was|is)\s*$',re.I)
 _CALCULATED_INTERVAL=re.compile(r'^\s+from\s+(?P<start>(?:FY\s*|[1369]M\s*)?(?:19|20)\d{2}'
     r'(?:-\d{2}-\d{2})?)\s+to\s+(?P<end>(?:FY\s*|[1369]M\s*)?(?:19|20)\d{2}'
     r'(?:-\d{2}-\d{2})?)\b',re.I)
+_CALCULATED_RANGE=re.compile(_CALCULATED_INTERVAL.pattern.removeprefix('^'),re.I)
+_CALCULATED_PERIOD=re.compile(r'\b(?:FY\s*|[1369]M\s*)?(?:19|20)\d{2}(?:-\d{2}-\d{2})?\b',re.I)
 
 
 def _currency(value):
     code = (value or "").upper()
     return _ALIASES.get(code, code)
+
+
+def _label_owns_calculation(label,calculation):
+    if not label['metric']:return True
+    from .presentation_metric_binding import source_label_forms
+    normalize=lambda value:' '.join(value.casefold().split())
+    return normalize(label['metric']) in {normalize(form) for form in source_label_forms(calculation['metric'])}
 
 
 def _money_scale(text, match):
@@ -69,6 +80,20 @@ def _money_scale(text, match):
         name = declarations[-1]["scale"].lower()
         return _MONEY_SCALES.get(name, 1)  # "in units" explicitly resets the scale.
     return 1
+
+
+def _rate_basis_match(after,basis):
+    return re.match(r'\s*(?:/\s*|\bper\s+)'+re.escape(basis)+r'(?![\w²³^-]|\s*/|\s+per\b)',after,re.I)
+
+
+def money_claim_span(text,match,observations):
+    """Include an explicitly source-owned denominator in a validated rate span."""
+    ends=[match.end()]
+    for observation in observations:
+        _,basis=split_unit_basis(observation.raw_unit)
+        if basis and (suffix:=_rate_basis_match(text[match.end():],basis)):
+            ends.append(match.end()+suffix.end())
+    return match.start(),max(ends)
 
 
 def checked_money_amounts(text, observations, calculations=()):
@@ -85,6 +110,38 @@ def checked_money_amounts(text, observations, calculations=()):
     currencies = {code for _, code, _ in amounts + changes}
     for match in _MONEY.finditer(text):
         if match.span('number') in count_spans:continue
+        after=text[match.end():]
+        if re.match(r'\s*(?:/|\bper\s+)',after,re.I):
+            # A source price/rate cannot borrow a total amount or a different
+            # denominator. Only explicit currency, source scale and basis bind.
+            literal=Decimal(match['number'].replace(',','').replace('−','-'))
+            before=text[:match.start()].rstrip()
+            negative=re.search(r'(?:\bnegative|(?<!\w)[−-])$',before,re.I)
+            positive=re.search(r'(?:\bpositive|(?<!\w)\+)$',before,re.I)
+            conflict=(positive or match['number'].startswith('+')) and (match['accounting'] or negative or literal<0)
+            if match['accounting'] or negative:literal=-abs(literal)
+            places=-literal.as_tuple().exponent
+            supported=False
+            for observation in observations:
+                _,basis=split_unit_basis(observation.raw_unit)
+                if (conflict or not basis or not match['currency'] or observation.value is None
+                        or observation.unit_family not in {'generic','currency'}
+                        or observation.unit not in {None,'currency',observation.currency}
+                        or _currency(observation.currency)!=_currency(match['currency'])
+                        or not _rate_basis_match(after,basis)):
+                    continue
+                try:
+                    scale=_money_scale(text,match)
+                    if (not (match['scale'] and match['outer_scale'])
+                            and (observation.value==0 or literal!=0)
+                            and round(Decimal(str(observation.value))/scale,places)==literal):
+                        supported=True;break
+                except (InvalidOperation,ZeroDivisionError):
+                    continue
+            yield match,supported,set()
+            continue
+        if (match['scale'] or match['outer_scale'] or '').casefold() in {'unit','units'} and not match['currency']:
+            continue  # A counted unit without a currency is not a monetary amount.
         bare=not (match['currency'] or match['scale'] or match['outer_scale'])
         declared=None;eligible_calculations=None
         if bare:
@@ -100,14 +157,15 @@ def checked_money_amounts(text, observations, calculations=()):
                 yield match,False,set()
                 continue
             declared=declarations[-1]
-            normalize=lambda s:re.sub(r'\s+','',s).casefold()
+            normalize=period_identity
             ends=[normalize(interval['start']),normalize(interval['end'])]
             sentence=re.split(r'(?<=[.!?])\s+',text[:label.start()])[-1].casefold()
             eligible_calculations=[c for c in calculations
                 if c['kind'] in {'absolute_change','yoy_absolute_change'}
                 and c.get('currency') and set(c['observation_ids'])<=monetary.keys()
                 and [normalize(c['periods'][0]),normalize(c['periods'][-1])]==ends
-                and re.search(r'(?<!\w)'+re.escape(c['metric'])+r'(?!\w)',sentence,re.I)
+                and (_label_owns_calculation(label,c) if label['metric'] else
+                     re.search(r'(?<!\w)'+re.escape(c['metric'])+r'(?!\w)',sentence,re.I))
                 and (label['kind'].casefold()=='change' or
                      (label['kind'].casefold()=='increase' and c['value']>0) or
                      (label['kind'].casefold()=='decrease' and c['value']<0))]
@@ -159,6 +217,18 @@ def checked_money_amounts(text, observations, calculations=()):
             matches = set()
         # A directly observed amount needs no derived-value reference.
         yield match, bool(matches), set() if None in matches else matches
+
+
+def mask_reported_currency_rates(text,observations):
+    """Validate full reported rate units and mask their exact source-bound span."""
+    masked=list(text);errors=[]
+    for match,supported,_ in checked_money_amounts(text,observations):
+        if not re.match(r'\s*(?:/|\bper\s+)',text[match.end():],re.I):continue
+        if not supported:
+            errors.append('unsupported currency rate or denominator: '+match[0]);continue
+        start,end=money_claim_span(text,match,observations)
+        masked[start:end]=' '*(end-start)
+    return ''.join(masked),errors
 
 
 _TABLE_CONFIDENCE = re.compile(
@@ -258,8 +328,44 @@ def mask_finding_amounts(slide, insights, inputs, observations, calculations):
 
 def mask_declared_calculated_amounts(text,observations,calculations):
     """Mask only strict, explicitly labelled amounts with retained calculation IDs."""
+    calculations=list(calculations)
     masked=list(text)
     for match,supported,ids in checked_money_amounts(text,observations,calculations):
-        if supported and ids and not (match['currency'] or match['scale'] or match['outer_scale']):
-            masked[match.start():match.end()]=' '*len(match[0])
+        if not supported or not ids:
+            continue
+        if match['currency'] or match['scale'] or match['outer_scale']:
+            # Explicit currency/scale spellings represent the same Python delta
+            # as a declared display unit. Do not add their digits to a global
+            # allowlist: bind this occurrence to its label and exact interval.
+            before=text[:match.start()].rstrip()
+            if match['currency']:
+                before=re.sub(r'[+−-]$','',before).rstrip()
+            label=_CALCULATED_AMOUNT.search(before)
+            interval=_CALCULATED_INTERVAL.match(text[match.end():])
+            if not label:
+                continue
+            antecedent=None
+            if interval is None:
+                prefix=re.split(r'(?<=[.!?])\s+',before[:label.start()])[-1]
+                ranges=list(_CALCULATED_RANGE.finditer(prefix))
+                if len(ranges)!=1 or any(not (ranges[0].start()<=m.start() and m.end()<=ranges[0].end())
+                    for m in _CALCULATED_PERIOD.finditer(prefix)):
+                    continue
+                from .presentation_metric_binding import source_label_forms
+                antecedent={c['metric'] for c in calculations if any(re.search(
+                    r'(?<!\w)'+re.escape(form)+r'(?!\w)',prefix,re.I)
+                    for form in source_label_forms(c['metric']))}
+                interval=ranges[0]
+            normalize=period_identity
+            ends=[normalize(interval['start']),normalize(interval['end'])]
+            if not any(c['id'] in ids and c['kind'] in {'absolute_change','yoy_absolute_change'}
+                       and [normalize(c['periods'][0]),normalize(c['periods'][-1])]==ends
+                       and _label_owns_calculation(label,c)
+                       and (antecedent is None or antecedent=={c['metric']})
+                       and (label['kind'].casefold()=='change' or
+                            (label['kind'].casefold()=='increase' and c['value']>0) or
+                            (label['kind'].casefold()=='decrease' and c['value']<0))
+                       for c in calculations):
+                continue
+        masked[match.start():match.end()]=' '*len(match[0])
     return ''.join(masked)

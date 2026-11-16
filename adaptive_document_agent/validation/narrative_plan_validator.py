@@ -1,6 +1,6 @@
 """Validate thematic evidence boundaries without substituting Python for semantics."""
 
-from adaptive_document_agent.services.presentation_evidence import calculation_catalog
+from adaptive_document_agent.services.presentation_evidence import plan_calculation_catalog
 from .presentation_numeric_evidence import observation_numeric_fields
 
 
@@ -27,7 +27,7 @@ def validate_narrative_plan(plan, result, calculations=None, *, qualitative_page
     observations = {o.id: o for o in result.observations}
     charts = {c.id: c for c in result.charts}
     insights = {i.id: i for i in result.insights}
-    calculations = calculations if calculations is not None else calculation_catalog(result.observations)
+    calculations = calculations if calculations is not None else plan_calculation_catalog(result,plan)
     themes = {t.id: t for t in plan.themes}
     if len(themes) != len(plan.themes):
         errors.append("theme IDs must be unique")

@@ -15,12 +15,13 @@ _SEQUENCE = re.compile(r"\b(?:then|before|prior to|subsequently)\b", re.I)
 _YEAR = r"(?:19|20)\d{2}"
 _PERIOD = rf"(?:{_YEAR}-\d{{2}}-\d{{2}}|(?:FY\s*|[1369]M\s*|[12]H\s*|Q[1-4]\s*)?{_YEAR})"
 _DATE_PREPOSITION = r"(?:at|on|as\s+of)"
+_ASSURANCE_NOTE = r"(?:\s*\((?:un)?audited\))?"
 _RANGE = re.compile(
-    rf"\b(?:from\s+|between\s+)?(?P<start>{_PERIOD})\s*"
+    rf"\b(?:from\s+|between\s+)?(?P<start>{_PERIOD}){_ASSURANCE_NOTE}\s*"
     rf"(?:to|through|until|and|[–-])\s*(?P<end>{_PERIOD})\b", re.I,
 )
 _VALUE_AT_DATE_RANGE = re.compile(
-    rf"\bfrom\s+(?:(?!\bto\b)[^;\n]){{1,100}}?\b{_DATE_PREPOSITION}\s+(?P<start>{_PERIOD})\s+"
+    rf"\bfrom\s+(?:(?!\bto\b)[^;\n]){{1,100}}?\b{_DATE_PREPOSITION}\s+(?P<start>{_PERIOD}){_ASSURANCE_NOTE}\s+"
     rf"to\s+(?:(?!\bto\b)[^;\n]){{1,100}}?\b{_DATE_PREPOSITION}\s+(?P<end>{_PERIOD})\b",
     re.I,
 )
@@ -31,12 +32,12 @@ _DATED_BASELINE_RANGE = re.compile(
 )
 _VALUE_IN_PERIOD_START = re.compile(
     rf"\bfrom\s+(?P<value>(?:(?!\b(?:to|and)\b)[^;\n]){{1,100}}?)"
-    rf"\bin\s+(?P<period>{_PERIOD})\b", re.I,
+    rf"\bin\s+(?P<period>{_PERIOD})\b{_ASSURANCE_NOTE}", re.I,
 )
 _VALUE_IN_PERIOD_NEXT = re.compile(
     rf"\s+(?P<connector>to|and)\s+"
     rf"(?P<value>(?:(?!\b(?:from|to|and)\b)[^;\n]){{1,100}}?)"
-    rf"\bin\s+(?P<period>{_PERIOD})\b", re.I,
+    rf"\bin\s+(?P<period>{_PERIOD})\b{_ASSURANCE_NOTE}", re.I,
 )
 _REVERSED_VALUE_RANGE = re.compile(
     rf"\bto\s+(?:(?!\b(?:from|to|and)\b)[^;\n]){{1,100}}?"
@@ -208,10 +209,11 @@ def has_temporal_sequence(clause: str, associations: list[DirectionSpan], metric
 
 
 def _period_index(label: str, observations: list[Observation], *, year_end: bool = False) -> int | None:
-    normalized = re.sub(r"\s+", "", label).casefold()
+    from adaptive_document_agent.services.calendar_claims import period_identity
+    normalized = period_identity(label)
     matches = []
     for index, obs in enumerate(observations):
-        period = re.sub(r"\s+", "", obs.period or "").casefold()
+        period = period_identity(obs.period or '')
         # A bare year can identify an annual observation, never an interim one.
         if period == normalized or period.removeprefix("fy") == normalized.removeprefix("fy"):
             matches.append(index)

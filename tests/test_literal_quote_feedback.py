@@ -26,3 +26,27 @@ def test_no_candidate_is_invented_or_truncated_to_fit():
     assert source_passage_hint('A completely different source claim.','Only blank layout here.') is None
     long='Original source words. '*100
     assert source_passage_hint(long,long) is None
+
+
+def test_wrong_page_receives_only_supplied_original_passages_and_still_fails_binding():
+    from copy import deepcopy
+    from adaptive_document_agent.models import DocumentPage
+    from adaptive_document_agent.services.literal_quote_feedback import supplied_passage_hints
+    original='The programme used fifty resources during its first operational cycle.'
+    wrong='The programme used forty resources during its first operational cycle.'
+    pages={235:'An unrelated operational discussion.',236:original}
+    assert supplied_passage_hints(wrong,pages)==[dict(page=236,text=original)]
+    assert supplied_passage_hints(wrong,{235:pages[235]})==[]
+    result,selection=paraphrased()
+    result.document.pages[-1].text=pages[235]
+    result.document.pages.append(DocumentPage(page_number=236,text=original))
+    page=selection.decisions[0].page
+    page.source_context=[]
+    page.context_evidence=[BriefQuote(page=235,text=wrong)]
+    before=deepcopy(page)
+    context=retained.selection_context(result,source_authoring=True)
+    context['source_pages'].append(dict(page=236,text=original))
+    with pytest.raises(AuthoredPageErrors,match='not a relocated quote') as error:
+        validate_authored_pages(selection,context,result)
+    assert original in str(error.value) and "'page': 236" in str(error.value)
+    assert page==before

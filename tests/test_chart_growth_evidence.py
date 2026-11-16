@@ -71,6 +71,26 @@ def test_cagr_claims_cannot_borrow_the_other_rate_or_currency(source, text, acce
     assert _numeric_support(text, bound) is accepted
 
 
+@pytest.mark.parametrize('text,accepted',[
+    ('The chart reports CAGRs of 29.1% for 2019–2023 and 37.6% for 2023–2028E.',True),
+    ('The chart reports CAGRs of 37.6% for 2019–2023 and 29.1% for 2023–2028E.',False),
+    ('The chart reports CAGRs of 29.2% for 2019–2023 and 37.6% for 2023–2028E.',False),
+    ('The chart reports CAGRs of 29.1% for 2019–2023 and 37.6% for 2023–2027E.',False),
+    ('CAGRs were 29.1% for 2019–2023 and 37.6% for 2023–2028E.',False),
+    ('The chart reports CAGRs of 29.1% for 2019–2023 and 37.6% for 2023–2028E. '
+     'The calculated CAGR was 29.2% from 2019 to 2023.',True),
+    ('The chart reports CAGRs of 29.1% for 2019–2023 and 37.6% for 2023–2028E. '
+     'The calculated CAGR was 29.1% from 2019 to 2023.',False),
+])
+def test_plural_cagrs_keep_each_rate_bound_to_its_own_interval_and_attribution(source,text,accepted):
+    from copy import deepcopy
+    document,raw=source
+    bound=chart_growth_observations(document,raw)
+    before=deepcopy(bound)
+    assert _numeric_support(text,bound) is accepted
+    assert bound==before
+
+
 def test_saved_chart_currency_symbol_matches_the_original_axis_unit(source):
     document, raw = source
     bound = [o.model_copy(update={'currency': 'US$'}) for o in chart_growth_observations(document, raw)

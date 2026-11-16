@@ -1,7 +1,7 @@
 """Bind source-authored analysis pages to their calculation and companion rows."""
 import re
 
-from pydantic import BaseModel, ConfigDict, Field,model_serializer
+from pydantic import BaseModel, ConfigDict, Field,model_serializer,model_validator
 from adaptive_document_agent.models.executive_brief import BriefQuote
 
 from adaptive_document_agent.services.presentation_evidence import (
@@ -11,6 +11,31 @@ from .reported_source_context import QualifiedSourceCopy,qualified_source_statem
 
 
 PERIOD_AND_ASSURANCE_RULES = (
+    'Publish dated levels as "[amount] as of [period]" or "[period]: [amount]"; '
+    'do not enclose a positive monetary amount in parentheses, which denote an accounting '
+    'negative. Keep dates adjacent in a direction interval and put the supporting levels '
+    'in a separate sentence instead of inserting parenthetical amounts between endpoints. '
+    'For source_context.scope use the exact supplied FY/interim labels. Never expand an '
+    'interim label into a months-ended phrase unless that complete phrase occurs in its '
+    'own literal quote. If the scope is established by a paragraph opener, include that '
+    'opener in the complete contiguous proof; a driver-only excerpt loses its timing. '
+    'planned_source_citations.bound_periods are the actual row coordinates, not a prompt '
+    'to invent alternate labels. A dated snapshot is not a fiscal-year or interim flow. '
+    'Never demand or introduce FY/6M aliases for dated balances, or invent dates for FY '
+    'or interim rows. A related source-only discussion may retain its literal proved '
+    'timing in words. Reviewers must verify proposed scope corrections against these '
+    'bindings and the complete source; earlier feedback cannot authorize a new period. '
+    'If complete proof exceeds one quote, use continuation_quotes for the remaining literal '
+    'passages, each with its own physical page number. Never merge across page boundaries '
+    'or remove intervening words to fit. Every proof is checked independently. '
+    'For EVERY row-bound direction, put the exact metric and BOTH exact comparison periods '
+    'inside that same clause: "[metric] rose from [start] to [end]". A preceding dated-level '
+    'list does not supply an omitted endpoint to "then rose to [end]", "fell to [end]", '
+    '"rising through [end]" or "the earlier decline". For a multi-leg trajectory, give each '
+    'leg its own metric and start/end pair, or retain the full dated-level list without those '
+    'incomplete directional predicates. Do not infer a comparison start from the first row. '
+    'Source-only drivers belong in source_context with their literal discussion scope and '
+    'complete proof, not in message as an additional unbound direction. '
     'Source-attributed qualitative paraphrases may preserve a material effect with exact '
     'context_evidence, without publishing any unbound amounts, rates or measurements. '
     'Do not demand a verbatim visible quote instead of a faithful qualitative paraphrase. '
@@ -119,8 +144,12 @@ PERIOD_AND_ASSURANCE_RULES = (
     '"The calculated CAGR was [rate] from [exact start period] to [exact end period]" when the '
     'supplied calculation and its input rows support it. Do not remove such a calculated rate '
     'merely because the source does not report a CAGR cell. Do not relabel it as reported. '
-    'For a monetary calculated difference, prefer the exact signed Python change with '
-    'a calculated-change label, full source metric and both periods. Preserve its negative '
+    'For a monetary calculated difference, use the exact signed Python change with '
+    'a calculated-change label, full source metric and both periods. Prefer '
+    'bound_calculations.amount_literal as its explicit currency-and-scale spelling when supplied. '
+    'The calculation value is in base units; never put that base-unit numeral under a different '
+    'paragraph scale without its own explicit unit suffix. '
+    'Preserve its negative '
     'sign even when a loss widened in magnitude. A widening description need not add a '
     'second derived numeral. Never copy a positive loss magnitude as a signed delta. '
 )
@@ -169,13 +198,20 @@ class RetainedPage(BaseModel):
                     'scope. No new measurements or calculated conclusions. They remain visible '
                     'and require fresh independent original-source review.')
 
+    @model_validator(mode='after')
+    def bounded_proof_capacity(self):
+        # Existing capacity: eight standalone quotes plus eight context proofs.
+        if len(self.all_context_evidence)>16:
+            raise ValueError('Complete page proof exceeds the existing 16-quotation evidence capacity')
+        return self
+
     @model_serializer(mode='wrap')
     def _compatible_source_context(self,handler):
         values=handler(self)
         if not self.source_context:
             values.pop('source_context',None)
         elif 'context_evidence' in values:
-            proofs={(item.quote.page,item.quote.text) for item in self.source_context}
+            proofs={(q.page,q.text) for item in self.source_context for q in item.proof_quotes}
             values['context_evidence']=[q for q in values['context_evidence']
                 if (q['page'],q['text']) not in proofs]
         return values
@@ -185,9 +221,10 @@ class RetainedPage(BaseModel):
         from adaptive_document_agent.services.source_quotes import normalize_quote
         quotes=list(self.context_evidence)
         for item in self.source_context:
-            if not any(q.page==item.quote.page and normalize_quote(item.quote.text)
-                       in normalize_quote(q.text) for q in quotes):
-                quotes.append(item.quote)
+            for proof in item.proof_quotes:
+                if not any(q.page==proof.page and normalize_quote(proof.text)
+                           in normalize_quote(q.text) for q in quotes):
+                    quotes.append(proof)
         return quotes
 
 
@@ -219,13 +256,16 @@ def rebind_context_evidence(selection, context, result):
                                         original_page=quote.page, source_page=matches[0]))
                 decision.page.context_evidence[index] = quote.model_copy(update={'page': matches[0]})
         for item in decision.page.source_context:
-            text=normalize_quote(item.quote.text)
-            if text and text not in sources.get(item.quote.page,''):
-                matches=[page for page,source in sources.items() if text in source]
-                if len(matches)==1:
-                    corrections.append(dict(insight_id=decision.insight_id,source_context=True,
-                        original_page=item.quote.page,source_page=matches[0]))
-                    item.quote=item.quote.model_copy(update={'page':matches[0]})
+            for index,proof in enumerate(item.proof_quotes):
+                text=normalize_quote(proof.text)
+                if text and text not in sources.get(proof.page,''):
+                    matches=[page for page,source in sources.items() if text in source]
+                    if len(matches)==1:
+                        corrections.append(dict(insight_id=decision.insight_id,source_context=True,
+                            original_page=proof.page,source_page=matches[0]))
+                        corrected=proof.model_copy(update={'page':matches[0]})
+                        if index:item.continuation_quotes[index-1]=corrected
+                        else:item.quote=corrected
     return corrections
 
 
@@ -239,12 +279,19 @@ def context_evidence_pages(page, context, result):
     for index, quote in enumerate(page.all_context_evidence, 1):
         text = normalize_quote(quote.text)
         if not text or text not in sources.get(quote.page, ''):
-            from adaptive_document_agent.services.literal_quote_feedback import source_passage_hint
+            from adaptive_document_agent.services.literal_quote_feedback import source_passage_hint,supplied_passage_hints
             original=next((p.text for p in result.document.pages
                            if p.page_number==quote.page and p.page_number in sources),'')
             candidate=source_passage_hint(quote.text,original)
             hint=(' Complete original paragraph on the supplied page (untrusted reading aid, '
                   'not an accepted quote or semantic verdict): '+repr(candidate)) if candidate else ''
+            if not candidate:
+                alternatives=supplied_passage_hints(quote.text,{p.page_number:p.text
+                    for p in result.document.pages if p.page_number in sources and p.page_number!=quote.page})
+                if alternatives:
+                    hint=(' Original passages on other supplied pages (untrusted reading aids, '
+                          'not a relocated quote or semantic verdict; return a new literal citation '
+                          'with its physical page number): '+repr(alternatives))
             raise ContextEvidenceError('Context evidence must be a literal quote from a supplied source page. '
                 f'Quote {index} does not bind to page {quote.page}. Copy a contiguous passage and its '
                 'physical page number from the source_pages record, using its page field.'+hint)
@@ -407,12 +454,14 @@ def page_bindings(page, insight, primary, context, result, *, _copy_errors=None,
     for item in page.source_context:
         statement=bound_period_dates(qualified_source_statement(item),[*periods,*context_dates])
         if statement not in reported:
+            from .source_context_periods import scope_period_feedback
+            scope_hint=scope_period_feedback(item.scope,[*periods,*context_dates])
             raise ValueError(f'{insight.id}: source_context must be a non-quantitative source '
                 'explanation with its exact bound period labels, original proof and no numerical '
                 'claim or directional scope predicate. For an unbound source-only missing-value '
                 'disclosure, retain the literal named column or discussion scope in words; '
                 'do not introduce an unbound fiscal/interim label or invent a calendar date. '
-                f'Rejected declaration: {item.model_dump(mode="json")}')
+                f'Rejected declaration: {item.model_dump(mode="json")}. Scope binding feedback: {scope_hint}')
     for field, text in [('title', title), ('message', copy)]:
         diagnostics = []
         if not _numeric_support(text, obs, diagnostics=diagnostics, context_dates=context_dates,
@@ -426,6 +475,19 @@ def page_bindings(page, insight, primary, context, result, *, _copy_errors=None,
             if _copy_errors is None:
                 raise ValueError(error)
             _copy_errors.append(error)
+        from adaptive_document_agent.services.presentation_evidence import calculation_catalog
+        from adaptive_document_agent.validation.presentation_numeric_evidence import (
+            checked_money_amounts,mask_declared_calculated_amounts)
+        catalog=calculation_catalog(obs)
+        masked=mask_declared_calculated_amounts(text,obs,catalog.values())
+        for match,supported,calculation_ids in checked_money_amounts(text,obs,catalog.values()):
+            if supported and calculation_ids and masked[match.start():match.end()].strip():
+                error=(f'{insight.id}.{field}: derived monetary amount {match[0]!r} needs '
+                    'an explicit calculated-change label, exact source metric and one exact '
+                    'comparison interval in the same sentence. Prefer the amount followed by '
+                    '"from [start] to [end]". A matching numeral alone is not a calculation binding.')
+                if _copy_errors is None:raise ValueError(error)
+                _copy_errors.append(error)
         try:
             _check_explicit_period_assurance(full_copy if field=='message' else text, obs)
         except ValueError as exc:

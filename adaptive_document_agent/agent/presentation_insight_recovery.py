@@ -27,9 +27,9 @@ def _chart_cagr_values(clause, reported, calculations, *, rate_start=None, rate_
         # A list of reported rates may share attribution, but each rate must
         # have one directly adjacent interval. Never choose by numeric value.
         intervals = [m for m in intervals if (
-            rate_end <= m.start() and re.fullmatch(r'\s*(?:CAGR\s*)?(?:for|from|over)\s*',
+            rate_end <= m.start() and re.fullmatch(r'\s*(?:CAGRs?\s*)?(?:for|from|over)\s*',
                                                   clause[rate_end:m.start()], re.I)) or (
-            m.end() <= rate_start and re.fullmatch(r'\s*(?:CAGR\s*)?(?:(?:was|is|of)\s*)?',
+            m.end() <= rate_start and re.fullmatch(r'\s*(?:CAGRs?\s*)?(?:(?:was|is|of)\s*)?',
                                                    clause[m.end():rate_start], re.I))]
     if len(intervals) != 1:
         return []
@@ -74,11 +74,15 @@ def _numeric_support(text, observations, computed_percentages=(), *, diagnostics
                     if calculation['kind'] not in {'absolute_change','yoy_absolute_change'} or not calculation.get('currency'):
                         continue
                     owners=[o for o in observations if o.id in calculation['observation_ids']]
-                    if any(o.unit_scale and math.isclose(abs(calculation['value'])/o.unit_scale,
-                        abs(float(raw)),rel_tol=1e-12,abs_tol=1e-9) for o in owners):
+                    if (math.isclose(abs(calculation['value']),abs(float(raw)),rel_tol=1e-12,abs_tol=1e-9)
+                            or any(o.unit_scale and math.isclose(abs(calculation['value'])/o.unit_scale,
+                        abs(float(raw)),rel_tol=1e-12,abs_tol=1e-9) for o in owners)):
                         diagnostics.append('A magnitude resembles this exact signed Python change: '
                             +str({k:calculation[k] for k in ('metric','value','currency','periods','observation_ids')})
-                            +'. Keep the signed result, a calculated-change label, exact source metric, '
+                            +'. Its supported explicit display spelling is '
+                            +repr(calculation.get('amount_literal'))+'. A paragraph scale also applies '
+                            'to a typed currency amount unless it has its own explicit scale suffix. '
+                            'Keep the signed result, a calculated-change label, exact source metric, '
                             'explicit currency and scale, and both periods. A loss-widening description '
                             'does not turn a negative signed change into a positive amount. Alternatively '
                             'describe that direction without adding the derived amount.')
@@ -93,7 +97,8 @@ def _numeric_support(text, observations, computed_percentages=(), *, diagnostics
                             'Correct the visible unit/scale rather than deleting this bound amount. '
                             'This hint does not approve its metric, date or direction.')
             return False
-        spans.append(match.span())
+        from adaptive_document_agent.validation.presentation_numeric_evidence import money_claim_span
+        spans.append(money_claim_span(text,match,observations))
     chart_reported = [o for o in observations if o.value is not None and 'chart_reported_cagr' in o.dimensions]
     chart_units = any(e.extraction_method == 'digital_chart_axis' for o in observations for e in o.evidence)
     if chart_units:
@@ -126,9 +131,9 @@ def _numeric_support(text, observations, computed_percentages=(), *, diagnostics
         prefix = re.split(r";|\n|(?<=[.!?])\s+", text[:match.start()])[-1]
         suffix = re.split(r";|\n|(?<=[.!?])\s+", text[match.end():])[0]
         clause = prefix + match[0] + suffix
-        computed_cagr = (re.search(r'\bCAGR\b', clause, re.I)
+        computed_cagr = (re.search(r'\bCAGRs?\b', clause, re.I)
                          and re.search(r'\b(?:recalculated|recomputed|calculated|computed)\b', clause, re.I))
-        if re.search(r'\bCAGR\b', clause, re.I) and (chart_units or chart_reported or computed_cagr):
+        if re.search(r'\bCAGRs?\b', clause, re.I) and (chart_units or chart_reported or computed_cagr):
             rates = _chart_cagr_values(clause, chart_reported, calculations.values(),
                                        rate_start=len(prefix), rate_end=len(prefix) + len(match[0]))
             if unit == "pp" or "point" in unit or not rates or not any(
