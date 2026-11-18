@@ -24,8 +24,8 @@ def test_deepseek_is_the_application_default():
 
 def test_openai_recommendations_use_current_gpt6_model_ids():
     assert recommended_models(ProviderName.OPENAI)[:3] == [
-        "gpt-6.1-sol",
-        "gpt-6-astra",
+        "gpt-6.2-sol",
+        "gpt-6.2-astra",
         "gpt-6-luna",
     ]
 
@@ -128,12 +128,12 @@ def test_provider_selection_immediately_changes_model_options(monkeypatch):
     ]
 
     openai_ui = SidebarUI("OpenAI")
-    assert render_sidebar(openai_ui, public_deployment=False).model == "gpt-6.1-sol"
-    assert openai_ui.model_options[:3] == ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-luna"]
+    assert render_sidebar(openai_ui, public_deployment=True).model == "gpt-6.2-sol"
+    assert openai_ui.model_options[:3] == ["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6-luna"]
     assert openai_ui.stage_options["Planner model"][:4] == [
         "Use main model",
-        "gpt-6.1-sol",
-        "gpt-6-astra",
+        "gpt-6.2-sol",
+        "gpt-6.2-astra",
         "gpt-6-luna",
     ]
 
@@ -146,10 +146,11 @@ def test_openai_shortlist_keeps_latest_version_per_tier_and_hides_snapshots():
     models = [
         "gpt-4o", "gpt-6-sol", "gpt-6.1-sol-2026-09-30", "gpt-6-astra",
         "gpt-6.1-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.3-codex",
+        "gpt-6.2-sol", "gpt-6.2-astra",
         "gpt-6.1-sol-2026-09-29", "ft:gpt-4o:custom",
     ]
     assert shortlist_models(ProviderName.OPENAI, models) == [
-        "gpt-6.1-sol", "gpt-6-astra", "gpt-6-luna",
+        "gpt-6.2-sol", "gpt-6.2-astra", "gpt-6-luna",
     ]
     # A future version replaces only its own tier without a code update.
     assert shortlist_models(ProviderName.OPENAI, [*models, "gpt-6.10-sol"])[0] == "gpt-6.10-sol"
@@ -193,11 +194,11 @@ def test_refresh_shortlists_live_models_and_cache_survives_reruns(monkeypatch):
 
     def catalog(*args, **kwargs):
         calls.append(kwargs)
-        return ["gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-4o"]
+        return ["gpt-6.2-sol", "gpt-6.1-sol", "gpt-6.2-astra", "gpt-6-luna", "gpt-4o"]
 
     monkeypatch.setattr("adaptive_document_agent.ui.sidebar.list_provider_models", catalog)
     kwargs = dict(api_key="test-only", base_url=None, auto_discover=False)
-    expected = ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-luna"]
+    expected = ["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6-luna"]
     assert _available_models(ui, ProviderName.OPENAI, refresh=True, **kwargs) == (expected, None)
     assert _available_models(ui, ProviderName.OPENAI, refresh=False, **kwargs) == (expected, None)
     assert len(calls) == 1
@@ -215,7 +216,7 @@ def test_failed_refresh_uses_compact_recommendations(monkeypatch):
         api_key="test-only", base_url=None, auto_discover=False, refresh=True,
     )
     assert len(models) == 3
-    assert models[0] == "gpt-6.1-sol"
+    assert models[0] == "gpt-6.2-sol"
     assert error == "Unavailable"
 
 

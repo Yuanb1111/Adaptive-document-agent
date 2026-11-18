@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from .base import LLMClient, LLMResponse
 from .capabilities import ModelCapabilities
 from .config import LLMSettings, ProviderName
-from .credentials import provider_endpoint
+from .credentials import DEFAULT_ENDPOINTS, provider_endpoint
 from .exceptions import LLMConfigurationError, LLMTransportError, LLMStructuredOutputError
 from .structured import validate_structured_text
 from .usage import LLMUsage
@@ -111,6 +111,13 @@ class LiteLLMProvider(LLMClient):
             version = "v1alpha" if "gemini-3" in selected_model else "v1beta"
             base_url = f"{base_url}/{version}"
         request_kwargs = {name: value for name, value in kwargs.items() if value is not None}
+        # OpenAI GPT-6.2 does not accept a sampling temperature in Chat Completions.
+        if (
+            self.settings.provider == ProviderName.OPENAI
+            and base_url == DEFAULT_ENDPOINTS[ProviderName.OPENAI]
+            and selected_model.removeprefix("openai/") in {"gpt-6.2-sol", "gpt-6.2-astra"}
+        ):
+            request_kwargs.pop("temperature", None)
         transient_retries = 0
         compatibility_retry_used = False
         while True:

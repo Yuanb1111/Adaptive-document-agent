@@ -14,7 +14,7 @@ from .config import ProviderName
 
 RECOMMENDED_MODELS: dict[ProviderName, tuple[str, ...]] = {
     ProviderName.DEEPSEEK: ("deepseek-flash", "deepseek-v4-pro"),
-    ProviderName.OPENAI: ("gpt-6.1-sol", "gpt-6-astra", "gpt-6-luna"),
+    ProviderName.OPENAI: ("gpt-6.2-sol", "gpt-6.2-astra", "gpt-6-luna"),
     ProviderName.GEMINI: ("gemini-3.8-flash", "gemini-3.1-pro-preview", "gemini-3.7-flash"),
     ProviderName.OPENROUTER: (
         "openai/gpt-6-sol",

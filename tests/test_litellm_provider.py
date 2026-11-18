@@ -36,6 +36,34 @@ def test_completion_omits_none_request_values(monkeypatch: pytest.MonkeyPatch) -
     assert "max_tokens" not in calls[0]
 
 
+@pytest.mark.parametrize("model, override, base_url, sends_temperature", [
+    ("gpt-6.2-sol", None, None, False),
+    ("gpt-6-luna", "openai/gpt-6.2-astra", "https://api.openai.com/v1/", False),
+    ("gpt-6.2-sol", None, "https://proxy.example/v1", True),
+])
+def test_gpt62_omits_temperature_for_direct_openai(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    override: str | None,
+    base_url: str | None,
+    sends_temperature: bool,
+) -> None:
+    calls: list[dict[str, Any]] = []
+    litellm = ModuleType("litellm")
+    litellm.completion = lambda **kwargs: calls.append(kwargs)  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "litellm", litellm)
+    provider = LiteLLMProvider(LLMSettings(
+        provider=ProviderName.OPENAI, model=model, base_url=base_url, api_key=SecretStr("dummy-test-key"),
+    ))
+
+    provider._completion([], temperature=0, max_tokens=128, model=override)
+
+    assert len(calls) == 1
+    assert calls[0]["model"] == f"openai/{(override or model).removeprefix('openai/')}"
+    assert ("temperature" in calls[0]) is sends_temperature
+    assert calls[0]["max_tokens"] == 128
+
+
 def test_completion_retries_without_explicitly_rejected_param(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[dict[str, Any]] = []
     litellm = ModuleType("litellm")
