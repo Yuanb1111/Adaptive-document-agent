@@ -44,6 +44,8 @@ class SourceCoverage(BaseModel):
     max_calls: int = 7
     selection_attempts: list[dict] = Field(default_factory=list)
     max_supplementary_pages: int = 6
+    selection_output_token_limit: int | None = None
+    # Source reads and their format repairs retain the original per-call limit.
     max_output_tokens_per_call: int = 2048
     notes: list[str] = Field(default_factory=list)
     # Source checks search bounded excerpts; they never certify non-disclosure.

@@ -212,7 +212,9 @@ def select_retained_analysis(gateway, result):
 def _select_retained_analysis(gateway, result):
     source_authoring = _has_positioned_sources(result)
     context = selection_context(result, source_authoring=source_authoring)
-    from .retained_page_sources import PERIOD_AND_ASSURANCE_RULES, source_row_assurance, writer_context
+    from .retained_page_sources import (
+        PERIOD_AND_ASSURANCE_RULES, SOURCE_EXPLANATION_RULES, source_row_assurance, writer_context,
+    )
     packet, aliases = writer_context(context) if source_authoring else (context, {})
     if source_authoring:
         packet['source_row_assurance'] = source_row_assurance(result, aliases)
@@ -248,7 +250,8 @@ def _select_retained_analysis(gateway, result):
         'without introducing that extra number. Preserve the raw negative sign or parentheses for '
         'outflows even when using the words "cash used". Never merge explanations for different '
         'dated steps into one broader causal interval. Keep selection reasons '
-        'qualitative. Omitted findings have no page. ' + PERIOD_AND_ASSURANCE_RULES + LAYOUT_INSTRUCTIONS
+        'qualitative. Omitted findings have no page. ' + PERIOD_AND_ASSURANCE_RULES
+        + SOURCE_EXPLANATION_RULES + LAYOUT_INSTRUCTIONS
         if source_authoring else 'Leave the optional page field empty. ')
     from .report_requirements import instruction_messages
     from adaptive_document_agent.utils.record_encoding import encode_records, INSTRUCTIONS
@@ -390,11 +393,16 @@ def _select_retained_analysis(gateway, result):
                     # the separate bounded priority-revision path.
                     if not copy_revisions_left or not localizable or not page_issues:
                         raise ValueError('\n'.join(failures))
-                    copy_revisions_left -= 1
                     try:
-                        revised = revise_retained_pages(gateway, result, packet, aliases, draft, page_issues,
-                                                       earlier_issues=previous_issues)
+                        from .retained_page_revision_parallel import complete_owned_copy_revisions
+                        revised, copy_revisions_left = complete_owned_copy_revisions(
+                            page_issues, copy_revisions_left, lambda pending: revise_retained_pages(
+                                gateway, result, packet, aliases, draft, pending,
+                                earlier_issues=previous_issues))
                     except (ValueError, LLMResponseError) as exc:
+                        # A failed copy round must not unlock the whole-selection
+                        # retry, even when the failed worker cannot return a draft.
+                        copy_revisions_left = 0
                         raise ValueError('\n'.join([*failures, f'Page revision failed: {exc}'])) from exc
                     copy_review_ids = sorted(revised)
                     for decision in selection.decisions:

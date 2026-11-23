@@ -199,9 +199,11 @@ def _revise_page_batch(gateway, result, packet, aliases, draft, issues, *, earli
     if getattr(gateway, 'discovery_workers', 1) >= 8 and len(issues) == 1:
         from .compact_publication_copy import compact_publication_copy
         iid, = issues
+        eligible_companions = {ref: observations[aliases[ref]].model_dump(mode='json')
+                               for ref in findings[iid]['allowed_companion_rows']}
         return compact_publication_copy(gateway, iid, payload, local_limits[iid],
             lambda pages: copy_contract_errors(pages, packet, aliases, result),
-            preserve_inputs=preserve_numeric_inputs)
+            preserve_inputs=preserve_numeric_inputs, eligible_companions=eligible_companions)
     messages = [
         dict(role='system', content=
              'Revise only the flagged analysis pages. Return edits keyed by each supplied insight ID '

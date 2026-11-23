@@ -136,6 +136,35 @@ def test_review_packet_and_compiled_slide_use_same_literal_source_footer():
     assert not any(w.code == 'presentation_retained_analysis_review' for w in result.validation_warnings)
 
 
+@pytest.mark.parametrize('case',['adjacent','gap','ambiguous','different_claimed_page','already_bound'])
+def test_repeated_continuation_needs_unique_contiguous_proof_to_rebind(case):
+    from adaptive_document_agent.agent.retained_page_sources import rebind_context_evidence
+    from adaptive_document_agent.agent.reported_source_context import QualifiedSourceCopy
+    from adaptive_document_agent.models.executive_brief import BriefQuote
+
+    result,_,selection=fixture()
+    first='Management explained that adequate provision had been'
+    suffix='made at the end of each reporting period.'
+    original_page=236 if case=='already_bound' else 230
+    anchor_page=231 if case=='different_claimed_page' else original_page
+    gap='explicitly ' if case=='gap' else ''
+    other_prefix=first if case=='ambiguous' else 'A separate investment was'
+    result.document.pages.extend([
+        DocumentPage(page_number=235,text=f'{first} {gap}{suffix}'),
+        DocumentPage(page_number=236,text=f'{other_prefix} {suffix}'),
+        DocumentPage(page_number=237,text=f'{first} {suffix}'),  # Outside supplied scope.
+    ])
+    page=selection.decisions[0].page
+    page.source_context=[QualifiedSourceCopy(scope='the discussion',description='describes provisioning',
+        quote=BriefQuote(page=anchor_page,text=first),
+        continuation_quotes=[BriefQuote(page=original_page,text=suffix)])]
+    corrections=rebind_context_evidence(selection,{'source_pages':[{'page':235},{'page':236}]},result)
+    proof=page.source_context[0].proof_quotes
+    assert [quote.text for quote in proof]==[first,suffix]
+    assert proof[1].page==(235 if case=='adjacent' else original_page)
+    assert any(c.get('basis')=='contiguous_literal_proof' for c in corrections)==(case=='adjacent')
+
+
 def test_writer_and_reviewer_receive_only_explicit_row_assurance():
     from adaptive_document_agent.agent.retained_page_sources import writer_context
 

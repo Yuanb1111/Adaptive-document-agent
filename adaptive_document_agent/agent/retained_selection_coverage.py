@@ -16,7 +16,9 @@ SELECTION_COVERAGE_TOKEN_LIMITS = (12000, 20000)
 class RetainedPageIssue(BaseModel):
     model_config = ConfigDict(extra='forbid')
     insight_id: str
-    reason: str = Field(min_length=1, max_length=1800)
+    reason: str = Field(min_length=1, max_length=1800, description=
+        'All actionable material corrections for this page. State each missing or '
+        'incorrect fact, what it qualifies or explains, and its original source scope.')
     assurance_changes: list[AssuranceChange] | None = Field(default=None, max_length=40)
 
 
@@ -91,7 +93,7 @@ def _review_selection_coverage(gateway, context, selection, result,*,priority_on
     from adaptive_document_agent.utils.record_encoding import encode_records, INSTRUCTIONS
     from .audit_source_layout import LAYOUT_INSTRUCTIONS
     from .retained_analysis import fingerprint
-    from .retained_page_sources import PERIOD_AND_ASSURANCE_RULES, planned_source_citations, source_row_assurance
+    from .retained_page_sources import PERIOD_AND_ASSURANCE_RULES, SOURCE_EXPLANATION_RULES
     payload,cited_ids,bindings=_coverage_payload(context,selection,result)
     copy_review_ids = set(context.get('copy_review_ids', ()))
     from .retained_copy_review import copy_review_payload
@@ -103,8 +105,9 @@ def _review_selection_coverage(gateway, context, selection, result,*,priority_on
                 {k:v for k,v in d.items() if k!='page'} for d in proposed['decisions']]}}
     review_scope = (
         'Selection coverage has already been assessed for these exact findings. This pass only checks '
-        'the revised pages identified by copy_review_ids. Check all claims on those pages against their '
-        'sources and report remaining copy issues for those IDs. Do not reopen the selection or critique '
+        'the pages identified by copy_review_ids. Check their claims and omissions against their '
+        'sources. Start with source_reading_pages when supplied, including their full discussions, and '
+        'use the other supplied original pages for related context. Do not reopen the selection or critique '
         'unchanged pages in this pass. Leave both selection ID lists empty. The later publication '
         'review still checks all pages and omissions independently. '
         if copy_review_ids else ''
@@ -168,18 +171,18 @@ def _review_selection_coverage(gateway, context, selection, result,*,priority_on
              'Use copy_validation_errors to identify that binding issue. A footer does not establish a claim’s truth or replace attribution to a named '
              'external source, management explanation, definition, period or assurance qualifier. '
              'Reject incorrect or unsupported attribution even when a footer is supplied. '
-             'For EVERY included page, read the complete surrounding source discussion even '
-             'when its draft contains only correct levels. Check whether source-defined risks, '
-             'adverse composition, quality limits or qualifications materially change how '
-             'the trajectory should be understood. A correct numeric series and favorable '
-             'driver explanation do not substitute for that limiting context. Require its '
-             'source-attributed qualitative meaning on that same page without unbound amounts. '
-             'Report concrete omissions or misleading scope in page_issues using the '
-             'included insight_id. '
-             'Report the complete set of material corrections for each page together now; '
-             'do not stop after finding its first defect. Recheck adverse developments and '
-             'qualifying judgments against their exact populations and dated evidence. '
-             'A later corrected page must retain all those meanings. '
+             'For EVERY included page, first inventory the material interpretations in its complete '
+             'surrounding source discussion before evaluating the draft. Identify what the source '
+             'says happened, the separate reasons it gives for the general level and for each '
+             'change, and any adverse developments, measurement bases or qualified judgments that '
+             'change that interpretation. Check related supplied sections for structural reasons '
+             'and separate risk assessments of the same development, even if nearby prose '
+             'already gives period-specific explanations. Consider only distinctions the actual source makes and '
+             'that are material to the selected finding. Then compare each interpretation with '
+             'the draft, including ones it never mentions. Require source-attributed qualitative '
+             'meaning without unbound amounts. In page_issues, list all missing or misleading '
+             'interpretations for the same insight_id together, even when they share one paragraph. '
+             'On a recheck, confirm the full set of meanings survives in the revised page. '
              'Use copy_validation_errors to inspect the underlying source now: if an attribution '
              'has incomplete scope, specify the exact bound period labels or '
              'the original source-defined scope and driver. Measurement comparisons must use '
@@ -205,9 +208,13 @@ def _review_selection_coverage(gateway, context, selection, result,*,priority_on
              'copy and is not a material source defect by itself. Judge the published meaning. '
              'Accept with both issue lists empty only when the selection and copy are defensible. Do not add findings '
              'unavailable in this request, rewrite copy, calculate new values or approve the final PPT. '
-             'Return only the verdict. Keep the overall reason short and use one concise issue per '
-             'included page requiring correction. Specify the exact missing fact, qualifier or '
-             'source-supported interval in the issue without recopying the draft or source tables. '
+             'Return only the verdict. Keep the overall reason short. Give one issue per included '
+             'page requiring correction, with a distinct clause for each actionable defect. '
+             'Specify the exact missing fact, qualifier or source-supported interval without '
+             'recopying the draft or source tables. '
+             'For any page cited in an issue, copy the physical page number from the page field '
+             'of the relevant source_pages record. Printed page labels within source text belong '
+             'to the document content. '
              'Read earlier_review_questions for the same page. They are fallible questions, not '
              'source authority. Reconcile conflicting prior scope requests against the complete '
              'literal paragraph and table headers before demanding another edit; explain that '
@@ -216,7 +223,7 @@ def _review_selection_coverage(gateway, context, selection, result,*,priority_on
              'broader discussion window without claiming that every attributed effect has its '
              'own separately dated pair. Do not require removing that window and later reject '
              'its absence without resolving the same original source scope. '
-             + review_scope + PERIOD_AND_ASSURANCE_RULES + ASSURANCE_REVIEW_RULES
+             + review_scope + SOURCE_EXPLANATION_RULES + PERIOD_AND_ASSURANCE_RULES + ASSURANCE_REVIEW_RULES
              + LAYOUT_INSTRUCTIONS + INSTRUCTIONS),
         untrusted_document_message(json.dumps(encode_records(wire_payload), ensure_ascii=False,
                                              separators=(',', ':')))

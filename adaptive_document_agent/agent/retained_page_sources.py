@@ -10,15 +10,40 @@ from .audit_source_layout import audit_source_page
 from .reported_source_context import QualifiedSourceCopy,qualified_source_statement
 
 
+SOURCE_EXPLANATION_RULES = (
+    'Keep each material source explanation attached to what it explains. A reason for '
+    'a measure’s generally high or low level differs from a reason for a change in a '
+    'particular interval. Where the source gives both, preserve both with their own '
+    'factors, affected populations and stated timing. Read the full source passage '
+    'for each trajectory. Preserve its material stable phases and each subsequent '
+    'turning point in source order, with the cause and offset attached to the exact '
+    'period they explain. Check the last dated movement as well as the first. '
+    'A general industry or method description without an explicit date needs its own '
+    'source-defined scope. Keep it separate from dated company results and drivers. '
+    'Also keep separate explanations '
+    'for distinct changes, limitations and qualified judgments. Read related source '
+    'sections for a broader explanation, any risk inferred by the source, and its own '
+    'assessment or response. Preserve the indication, test basis and result separately '
+    'when the source distinguishes them. Treat all such context as attributed source '
+    'claims with complete literal proof. '
+)
+
+
 PERIOD_AND_ASSURANCE_RULES = (
-    'Publish dated levels as "[amount] as of [period]" or "[period]: [amount]"; '
+    'Use "[amount] as of [date]" for a point-in-time balance. For flows use '
+    '"[amount] for [period]" or "[period]: [amount]"; '
     'do not enclose a positive monetary amount in parentheses, which denote an accounting '
     'negative. Keep dates adjacent in a direction interval and put the supporting levels '
     'in a separate sentence instead of inserting parenthetical amounts between endpoints. '
-    'For source_context.scope use the exact supplied FY/interim labels. Never expand an '
-    'interim label into a months-ended phrase unless that complete phrase occurs in its '
-    'own literal quote. If the scope is established by a paragraph opener, include that '
-    'opener in the complete contiguous proof; a driver-only excerpt loses its timing. '
+    'Use exact supplied period labels for row-bound claims. In source_context.scope, '
+    'copy any source-only discussion window from the item’s own literal proof, including '
+    'both the duration and end date in a complete months-ended phrase. If the source '
+    'discusses a comparison of two such periods, preserve both complete phrases in '
+    'their source order. Prefer the literal year or reporting-window wording in that '
+    'item’s proof to shorthand drawn from a different table. When a scope '
+    'combines bound annual periods and a separately stated discussion window, keep the '
+    'bound annual labels and copy the discussion window in full. Include the paragraph '
+    'opener in the contiguous proof when it establishes that timing. '
     'planned_source_citations.bound_periods are the actual row coordinates, not a prompt '
     'to invent alternate labels. A dated snapshot is not a fiscal-year or interim flow. '
     'Never demand or introduce FY/6M aliases for dated balances, or invent dates for FY '
@@ -30,10 +55,15 @@ PERIOD_AND_ASSURANCE_RULES = (
     'or remove intervening words to fit. Every proof is checked independently. '
     'For EVERY row-bound direction, put the exact metric and BOTH exact comparison periods '
     'inside that same clause: "[metric] rose from [start] to [end]". A preceding dated-level '
-    'list does not supply an omitted endpoint to "then rose to [end]", "fell to [end]", '
+    'list may use "as of" for each level. In the separate direction clause, put each exact date '
+    'directly after "from" or "to". '
+    'A dated-level list does not supply an omitted endpoint to "then rose to [end]", "fell to [end]", '
     '"rising through [end]" or "the earlier decline". For a multi-leg trajectory, give each '
     'leg its own metric and start/end pair, or retain the full dated-level list without those '
     'incomplete directional predicates. Do not infer a comparison start from the first row. '
+    'When both source values are signed cash outflows, a more-negative value means more '
+    'cash used and a less-negative value means less cash used. State the direction of cash use '
+    'explicitly and retain the original signed amounts, units and exact periods. '
     'Source-only drivers belong in source_context with their literal discussion scope and '
     'complete proof, not in message as an additional unbound direction. '
     'Source-attributed qualitative paraphrases may preserve a material effect with exact '
@@ -42,7 +72,7 @@ PERIOD_AND_ASSURANCE_RULES = (
     'source_context provides explicitly declared source-only explanations with a full '
     'literal proof and scope; the compiler displays them separately from row calculations. '
     'Its quote already supplies the source proof; do not repeat that same passage in '
-    'context_evidence. Use compact exact bound period labels for its scope. '
+    'context_evidence. '
     'Verify every effect, population, condition, direction and attribution against the '
     'complete original source. Declaring source context is never semantic approval. '
     'A source_context explanation need not repeat its proof verbatim. Preserve its '
@@ -82,8 +112,9 @@ PERIOD_AND_ASSURANCE_RULES = (
     'source-only effects in source_context and verify them against its original proof. '
     'For source-defined nonnumeric category descriptions, retain the complete boundary '
     'in words with its exact quotation; never change it or turn it into a measured level. '
-    'Use the exact bound period labels, even in parentheses and source attributions. '
-    'Do not expand a fiscal-year or interim label into a calendar date. If the levels have '
+    'Keep a literal technical modifier with the product category that it defines in the proof. '
+    'For a row-bound amount or change, use the exact bound period labels even in parentheses '
+    'and source attributions. Do not expand a fiscal-year or interim label into a calendar date. If the levels have '
     'different reporting bases, list their exact dated values separately instead of asserting a '
     'direction across those bases. State a source-attributed driver separately and retain its '
     'literal source scope without turning it into a comparison between incompatible endpoints. '
@@ -239,7 +270,7 @@ def _context_sources(context, result):
 
 
 def rebind_context_evidence(selection, context, result):
-    """Correct a page number only when the unchanged quote has one supplied match."""
+    """Correct a page number only when unchanged literal proof has one supplied match."""
     from adaptive_document_agent.services.source_quotes import normalize_quote
     sources = _context_sources(context, result)
     corrections = []
@@ -256,13 +287,29 @@ def rebind_context_evidence(selection, context, result):
                                         original_page=quote.page, source_page=matches[0]))
                 decision.page.context_evidence[index] = quote.model_copy(update={'page': matches[0]})
         for item in decision.page.source_context:
-            for index,proof in enumerate(item.proof_quotes):
+            proofs=item.proof_quotes
+            for index,proof in enumerate(proofs):
                 text=normalize_quote(proof.text)
                 if text and text not in sources.get(proof.page,''):
                     matches=[page for page,source in sources.items() if text in source]
+                    adjacent=False
+                    if len(matches)>1:
+                        # A continuation may end with words repeated on another
+                        # page. Use only adjacent submitted proofs with the same
+                        # declared page whose entire union binds literally.
+                        neighbors = range(max(0, index - 1), min(index + 1, len(proofs) - 1))
+                        pairs = []
+                        for previous in neighbors:
+                            left, right = proofs[previous:previous + 2]
+                            if left.page == right.page == proof.page:
+                                pairs.append(normalize_quote(left.text + ' ' + right.text))
+                        matches=[page for page in matches if any(pair in sources[page] for pair in pairs)]
+                        adjacent=True
                     if len(matches)==1:
                         corrections.append(dict(insight_id=decision.insight_id,source_context=True,
                             original_page=proof.page,source_page=matches[0]))
+                        if adjacent:
+                            corrections[-1]['basis']='contiguous_literal_proof'
                         corrected=proof.model_copy(update={'page':matches[0]})
                         if index:item.continuation_quotes[index-1]=corrected
                         else:item.quote=corrected
@@ -419,6 +466,17 @@ def authored_message(page,periods):
     return copy
 
 
+def authored_visible_copy(page,periods):
+    """Measure the same scope grouping the audience sees."""
+    from adaptive_document_agent.services.calendar_claims import bound_period_dates
+    from .reported_source_context import source_context_paragraphs,source_context_scope_prefixes
+
+    message=bound_period_dates(page.message,periods)
+    scopes=source_context_scope_prefixes(page.source_context,periods)
+    statements=[statement for statement in scopes if statement not in message]
+    return ' '.join([message,*source_context_paragraphs(statements,scope_prefixes=scopes)])
+
+
 def page_bindings(page, insight, primary, context, result, *, _copy_errors=None,
                   with_source_context=False):
     """Bind provenance first; optionally collect copy failures for combined diagnostics."""
@@ -445,7 +503,7 @@ def page_bindings(page, insight, primary, context, result, *, _copy_errors=None,
     periods = [o.period for o in obs]
     title=bound_period_dates(page.title,[*periods,*context_dates])
     copy=authored_message(page,[*periods,*context_dates])
-    if len(copy)>2000:
+    if len(authored_visible_copy(page,[*periods,*context_dates]))>2000:
         raise ValueError(f'{insight.id}: complete authored copy exceeds the 2000-character page limit')
     full_copy=copy
     from .reported_source_context import reported_source_components,observation_context_labels
@@ -494,8 +552,12 @@ def page_bindings(page, insight, primary, context, result, *, _copy_errors=None,
             if _copy_errors is None:
                 raise ValueError(f'{insight.id}.{field}: {exc}') from exc
             _copy_errors.append(f'{insight.id}.{field}: {exc}')
-    from .reported_source_context import source_context_paragraphs
-    return (title,copy,ids,source_context_paragraphs(reported)) if with_source_context else (title,copy,ids)
+    from .reported_source_context import source_context_paragraphs,source_context_scope_prefixes
+    scopes=source_context_scope_prefixes(page.source_context,[*periods,*context_dates])
+    paragraphs=source_context_paragraphs(reported,scope_prefixes=scopes)
+    if len(' '.join([copy,*paragraphs]))>2000:
+        raise ValueError(f'{insight.id}: complete authored copy exceeds the 2000-character page limit')
+    return (title,copy,ids,paragraphs) if with_source_context else (title,copy,ids)
 
 
 class AuthoredPageErrors(ValueError):

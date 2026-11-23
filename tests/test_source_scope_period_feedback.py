@@ -8,9 +8,18 @@ from tests.test_compact_publication_copy import payload,gateway
 
 def test_unknown_period_diagnostics_keep_exact_bound_labels_without_converting_them():
     periods=['2020-09-30','2021-09-30'];before=deepcopy(periods)
-    hint=scope_period_feedback('FY2020 and 9M2021',periods)
-    assert hint['unbound_scope_period_labels']==['9M2021','FY2020']
+    hint=scope_period_feedback('FY2020 and 6M2024 and 9M2021',periods)
+    assert hint['unbound_scope_period_labels']==['6M2024','9M2021','FY2020']
     assert hint['exact_bound_period_labels']==periods and not hint['semantic_approval']
+    assert 'Keep every still-applicable exact_bound_period_label' in hint['correction_rule']
+    assert 'unbound interim shorthand' in hint['correction_rule']
+    assert 'same duration and end date for the same discussion' in hint['correction_rule']
+    assert 'months-ended phrase' in hint['source_only_timing_rule']
+    assert 'not a bound interim-period label' in hint['source_only_timing_rule']
+    assert 'abbreviate it to an unbound interim label' in hint['source_only_timing_rule']
+    assert 'comparison' in hint['source_only_timing_rule']
+    assert '6M2024' not in hint['source_only_timing_rule']
+    assert 'dated snapshot into a fiscal/interim label' in hint['source_only_timing_rule']
     assert periods==before
     assert scope_period_feedback('FY2020 and 9M2021',['FY2020','9M2021']) is None
     assert scope_period_feedback('2020-09-30',periods) is None

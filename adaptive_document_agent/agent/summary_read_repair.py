@@ -126,7 +126,7 @@ def repair_rejected_parts(gateway, result, blocks, parts, response, previous,
                 continue
             replacement = replacement.model_copy(update={'parts': scoped})
             additions, errors = bind_reading(replacement, blocks, result, current,
-                                            literal_fallback=True, recover_cross_part=True)
+                                            literal_fallback=True, repair_owned_ranges=True)
             combined = reconcile_layout(retained + additions, blocks, current)
             errors += reading_errors(probe(combined), result, complete_scope=False)
             current['errors'] = list(dict.fromkeys(errors))

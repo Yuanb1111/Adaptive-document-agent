@@ -5,7 +5,9 @@ import sys
 import pytest
 
 from adaptive_document_agent.services.llm.litellm_provider import LiteLLMProvider,_attempts
+from adaptive_document_agent.services.llm import LLMSettings,ProviderName
 from tests.test_litellm_provider import _provider,UnsupportedParamsError
+from pydantic import SecretStr
 
 
 class APIError(Exception):
@@ -46,3 +48,26 @@ def test_compatibility_then_transport_failure_has_only_one_network_retry(monkeyp
 def test_no_http_authentication_error_does_not_get_generic_api_error_retry():
     class AuthenticationError(Exception):pass
     assert not LiteLLMProvider._transient_failure(AuthenticationError())
+
+
+@pytest.mark.parametrize('model',['gpt-6-luna','openai/gpt-6-luna'])
+def test_official_luna_omits_rejected_temperature_before_first_request(monkeypatch,model):
+    calls=[];module=ModuleType('litellm')
+    def complete(**kwargs):
+        calls.append(kwargs)
+        if 'temperature' in kwargs:
+            raise UnsupportedParamsError('gpt-6-luna does not support temperature')
+        return object()
+    module.completion=complete
+    monkeypatch.setitem(sys.modules,'litellm',module)
+    client=LiteLLMProvider(LLMSettings(provider=ProviderName.OPENAI,model=model,
+        api_key=SecretStr('dummy-test-key')))
+    log=[];token=_attempts.set(log)
+    try:
+        client._completion([],temperature=0,max_tokens=123)
+    finally:
+        _attempts.reset(token)
+    assert len(calls)==1 and 'temperature' not in calls[0]
+    assert calls[0]['model']==model if model.startswith('openai/') else calls[0]['model']=='openai/'+model
+    assert [attempt['kind'] for attempt in log]==['initial']
+    assert not log[0].get('compatibility_downgrade')

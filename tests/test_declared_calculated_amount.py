@@ -133,6 +133,107 @@ def test_explicit_currency_change_needs_exact_calculation_interval(ending):
     assert mask_declared_calculated_amounts(text,observations,calculation_catalog(observations).values())==text
 
 
+def test_amount_first_calculated_change_binds_exact_metric_interval_and_python_delta():
+    from adaptive_document_agent.validation.presentation_numeric_evidence import mask_declared_calculated_amounts
+    observations=rows()
+    for row,value in zip(observations,[3600000,1200000]):row.value=value
+    catalog=calculation_catalog(observations)
+    text='(USD in thousands) Calculated change: USD -2,400 thousand for Balance from 2021-12-31 to 2024-10-31.'
+    checked=list(checked_money_amounts(text,observations,catalog.values()))
+    assert checked and all(supported for _,supported,_ in checked)
+    masked=mask_declared_calculated_amounts(text,observations,catalog.values())
+    assert '-2,400' not in masked
+
+
+def test_run5_requested_amount_first_copy_is_bound_without_relaxing_amount_checks():
+    from adaptive_document_agent.validation.presentation_numeric_evidence import mask_declared_calculated_amounts
+    observations=rows()
+    for row,period,value in zip(observations,['2021-12-31','2024-06-30'],[66230000,3936000]):
+        row.metric_original='payables for non-current assets'
+        row.period=period;row.value=value;row.currency='RMB';row.unit_scale=1000
+        row.raw_unit='RMB in thousands'
+    catalog=calculation_catalog(observations)
+    text=('Payables for non-current assets: RMB 66,230 thousand as of 2021-12-31; '
+        'RMB 3,936 thousand as of 2024-06-30. Calculated change: RMB -62,294 thousand '
+        'for payables for non-current assets from 2021-12-31 to 2024-06-30.')
+    assert '-62,294' not in mask_declared_calculated_amounts(text,observations,catalog.values())
+
+
+def test_calculated_metric_before_change_label_binds_exact_net_assets_delta():
+    from adaptive_document_agent.validation.presentation_numeric_evidence import mask_declared_calculated_amounts
+    observations=rows()
+    for row,period,value in zip(observations,['2021-12-31','2024-06-30'],[315651000,326932000]):
+        row.metric_original='Net assets';row.period=period;row.value=value
+        row.currency='RMB';row.unit_scale=1000;row.raw_unit='RMB in thousands'
+    catalog=calculation_catalog(observations)
+    text=('Net assets were RMB 315,651 thousand as of 2021-12-31 and RMB 326,932 thousand as of '
+        '2024-06-30. The calculated net assets change was RMB 11,281 thousand '
+        'from 2021-12-31 to 2024-06-30.')
+    checked=list(checked_money_amounts(text,observations,catalog.values()))
+    assert checked and all(supported for _,supported,_ in checked)
+    assert '11,281' not in mask_declared_calculated_amounts(text,observations,catalog.values())
+
+
+@pytest.mark.parametrize('subject,expected', [
+    ('Capital reserves: Equity attributable to owners',True),
+    ('Equity attributable to owners',True),
+    ('Other reserves: Equity attributable to owners',False),
+    ('Capital reserves',False),
+])
+@pytest.mark.parametrize('label_before_change',[False,True])
+def test_calculated_subject_can_include_the_shared_exact_source_row_label(subject,expected,label_before_change):
+    from adaptive_document_agent.models import SourceEvidence
+    from adaptive_document_agent.validation.presentation_numeric_evidence import mask_declared_calculated_amounts
+
+    observations=rows()
+    for row,value in zip(observations,[3600000,1200000]):
+        row.metric_original='Equity attributable to owners'
+        row.table_id='table-A'
+        row.row_id=4
+        row.evidence=[SourceEvidence(page=2,table_id='table-A',row_label='Capital reserves',
+                                    extraction_method='digital_table',confidence=1)]
+        row.value=value
+    label=f'calculated {subject} change' if label_before_change else f'calculated change in {subject}'
+    amount='USD -2,400 thousand'
+    text=f'The {label} was {amount} from 2021-12-31 to 2024-10-31.'
+    masked=mask_declared_calculated_amounts(text,observations,calculation_catalog(observations).values())
+    assert (amount not in masked) is expected
+
+
+@pytest.mark.parametrize('label,amount,interval',[
+    ('calculated total assets change','RMB 11,281 thousand','from 2021-12-31 to 2024-06-30'),
+    ('calculated total assets change in net assets','RMB 11,281 thousand','from 2021-12-31 to 2024-06-30'),
+    ('calculated net assets change in total assets','RMB 11,281 thousand','from 2021-12-31 to 2024-06-30'),
+    ('calculated net assets change','RMB -11,281 thousand','from 2021-12-31 to 2024-06-30'),
+    ('calculated net assets change','RMB 11,281 thousand','from 2021-12-31 to 2023-12-31'),
+    ('calculated net assets change','RMB 11,280 thousand','from 2021-12-31 to 2024-06-30'),
+])
+def test_metric_before_change_label_rejects_wrong_subject_sign_period_or_delta(label,amount,interval):
+    from adaptive_document_agent.validation.presentation_numeric_evidence import mask_declared_calculated_amounts
+    observations=rows()
+    for row,period,value in zip(observations,['2021-12-31','2024-06-30'],[315651000,326932000]):
+        row.metric_original='Net assets';row.period=period;row.value=value
+        row.currency='RMB';row.unit_scale=1000;row.raw_unit='RMB in thousands'
+    text=f'The {label} was {amount} {interval}.'
+    assert mask_declared_calculated_amounts(text,observations,calculation_catalog(observations).values())==text
+
+
+@pytest.mark.parametrize('text',[
+    '(USD in thousands) Calculated change: USD -2,399 thousand for Balance from 2021-12-31 to 2024-10-31.',
+    '(USD in thousands) Calculated change: USD -2,400 thousand for Other assets from 2021-12-31 to 2024-10-31.',
+    '(USD in thousands) Calculated change: USD -2,400 thousand for Balance from 2021-12-31 to 2023-10-31.',
+    '(USD in thousands) Calculated change: EUR -2,400 thousand for Balance from 2021-12-31 to 2024-10-31.',
+    '(USD in thousands) Calculated change: USD -2,400 thousand for Annual Balance from 2021-12-31 to 2024-10-31.',
+    '(USD in thousands) Calculated change: USD -2,400 thousand for Balance from 2021-12-31 to 2024-10-31 and from 2021-12-31 to 2024-10-31.',
+])
+def test_amount_first_calculated_change_rejects_wrong_amount_subject_interval_or_currency(text):
+    from adaptive_document_agent.validation.presentation_numeric_evidence import mask_declared_calculated_amounts
+    observations=rows()
+    for row,value in zip(observations,[3600000,1200000]):row.value=value
+    catalog=calculation_catalog(observations)
+    assert mask_declared_calculated_amounts(text,observations,catalog.values())==text
+
+
 @pytest.mark.parametrize('metric',['Research budget','Program funding','Operating balance'])
 @pytest.mark.parametrize('amount',['-RMB 1,360 thousand','RMB -1.36 million'])
 @pytest.mark.parametrize('name_in_label',[False,True])

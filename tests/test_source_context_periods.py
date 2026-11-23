@@ -35,6 +35,164 @@ def test_literal_annual_and_months_ended_scope_can_compile_without_numeric_rows(
     assert PresentationPlanValidator().validate(plan,result) is plan
 
 
+def test_bound_fy_can_stay_separate_from_its_proved_literal_months_ended_window():
+    from adaptive_document_agent.agent.reported_source_context import (
+        QualifiedSourceCopy,qualified_source_statement,reported_source_components)
+    from adaptive_document_agent.agent.source_context_periods import scope_period_feedback
+
+    proof=('The programme was affected for the six months ended June 30, 2024; '
+           'its FY2023 annual profile remained relevant.')
+    quote=BriefQuote(page=1,text=proof)
+    item=QualifiedSourceCopy(scope='FY2023 and six months ended June 30, 2024',
+        description='describes operating pressure',quote=quote)
+    statement=qualified_source_statement(item)
+    _,accepted=reported_source_components(statement+' Reported revenue was 100.',[quote],
+        periods=['FY2023'],declared=[item])
+    assert accepted==[statement]
+    assert scope_period_feedback(item.scope,['FY2023']) is None
+
+    shorthand=QualifiedSourceCopy(scope='FY2023 and 6M2024',
+        description='describes operating pressure',quote=quote)
+    rejected=qualified_source_statement(shorthand)
+    _,accepted=reported_source_components(rejected+' Reported revenue was 100.',[quote],
+        periods=['FY2023'],declared=[shorthand])
+    assert accepted==[]
+    hint=scope_period_feedback(shorthand.scope,['FY2023'])
+    assert hint['unbound_scope_period_labels']==['6M2024']
+
+    wrong_window=QualifiedSourceCopy(scope='FY2023 and nine months ended June 30, 2024',
+        description='describes operating pressure',quote=quote)
+    rejected=qualified_source_statement(wrong_window)
+    _,accepted=reported_source_components(rejected+' Reported revenue was 100.',[quote],
+        periods=['FY2023'],declared=[wrong_window])
+    assert accepted==[]
+
+    snapshot=QualifiedSourceCopy(scope='FY2023 and 2024-06-30',
+        description='describes operating pressure',quote=quote)
+    rejected=qualified_source_statement(snapshot)
+    _,accepted=reported_source_components(rejected+' Reported revenue was 100.',[quote],
+        periods=['FY2023'],declared=[snapshot])
+    assert accepted==[]
+
+
+@pytest.mark.parametrize('scope,accepted', [
+    ('2021 to 2022',True),
+    ('2020 to 2022',False),
+])
+def test_literal_leading_year_range_masks_both_existing_source_endpoints(scope,accepted):
+    proof='Training costs changed from 2021 to 2022 as staffing expanded.'
+    masked=mask_source_periods(scope,proof,scope=True)
+    assert (not any(char.isdigit() for char in masked)) is accepted
+
+
+@pytest.mark.parametrize('scope,proof,accepted', [
+    ('2023 compared with 2022',
+     'Inventory turnover days increased in 2023 compared with 2022.',True),
+    ('2022 compared with 2023',
+     'Inventory turnover days increased in 2023 compared with 2022.',False),
+    ('2023 and 2022',
+     'Inventory turnover days increased in 2023 compared with 2022.',False),
+    ('2023 compared to 2022',
+     'Inventory turnover days increased in 2023 compared with 2022.',False),
+    ('2023 compared with 2022',
+     'Inventory turnover days increased in 2022 compared with 2023.',False),
+    ('RMB 3 million compared with RMB 2 million',
+     'The amount was RMB 3 million compared with RMB 2 million.',False),
+    ('2023 compared with 2022',
+     'Receipts were 2023 compared with 2022 units.',False),
+    ('2023 compared with 2022 units',
+     'Inventory turnover days increased in 2023 compared with 2022.',False),
+])
+def test_literal_ordered_year_comparison_requires_exact_source_relation(scope,proof,accepted):
+    masked=mask_source_periods(scope,proof,scope=True)
+    assert (not any(char.isdigit() for char in masked)) is accepted
+
+
+def test_literal_ordered_year_comparison_can_be_repeated_in_its_description():
+    text='describes higher efficiency in 2023 compared with 2022, partly offset by sourcing costs.'
+    proof='Production reached higher cost efficiency in 2023 compared with 2022, partly offset by sourcing costs.'
+    assert '2022' not in mask_source_periods(text,proof)
+    finite='describes how higher efficiency in 2023 compared with 2022 was partly offset by sourcing costs.'
+    assert '2022' not in mask_source_periods(finite,proof)
+    assert '2022' in mask_source_periods(finite,'Annual performance in 2022 compared with 2023 was lower.')
+
+
+@pytest.mark.parametrize('text,proof,accepted', [
+    ('Moving production in-house since 2022 contributed to the shift.',
+     'Production moved in-house since 2022, and logistics changed.',True),
+    ('Moving production in-house since 2022 contributed to the shift.',
+     'Production expanded in 2022, and logistics changed.',False),
+    ('The shift followed since 2022 units were shipped.',
+     'Production moved in-house since 2022, and logistics changed.',False),
+])
+def test_since_year_followed_by_a_predicate_still_needs_literal_timing(text,proof,accepted):
+    assert ('2022' not in mask_source_periods(text,proof)) is accepted
+
+
+@pytest.mark.parametrize('text,accepted', [
+    ('It links 2023 lengthening to demand. Facilities opened in 2023 supported delivery.',True),
+    ('It links 2022 lengthening to demand. Facilities opened in 2023 supported delivery.',False),
+    ('It describes 2023 units for delivery.',False),
+    ('It links 2023 vehicles to demand.',False),
+])
+def test_owned_event_years_bind_without_masking_measured_counts(text,accepted):
+    proof='Turnover increased in 2023 as demand rose. Facilities opened in 2023 for local delivery.'
+    masked=mask_source_periods(text,proof)
+    assert (not any(char.isdigit() for char in masked)) is accepted
+
+
+@pytest.mark.parametrize('scope,phrase,accepted', [
+    ('six months ended June 30, 2023 to six months ended June 30, 2024','six-month comparison',True),
+    ('six months ended June 30, 2023 to six months ended June 30, 2024','nine-month comparison',False),
+    ('six months ended June 30, 2023 to June 30, 2024','six-month comparison',False),
+    ('six months ended June 30, 2023 to six months ended June 29, 2024','six-month comparison',False),
+    ('six months ended June 30, 2023 to six months ended June 30, 2024','six-month increase',False),
+])
+def test_reporting_comparison_duration_needs_both_complete_literal_scopes(scope,phrase,accepted):
+    from adaptive_document_agent.agent.source_context_periods import mask_reporting_period_references
+
+    proof=('Training costs changed from RMB 2 million in the six months ended June 30, 2023 '
+           'to RMB 3 million in the six months ended June 30, 2024 due to contract timing.')
+    description=f'describes contract timing as the reason for the expenditure change in this {phrase}'
+    masked=mask_reporting_period_references(description,proof,scope)
+    assert (phrase not in masked) is accepted
+
+
+@pytest.mark.parametrize('scope,proof,description,accepted', [
+    ('six months ended June 30, 2024',
+     'The source discussed changes during the six months ended June 30, 2023 and six months ended June 30, 2024.',
+     'describes pressure in the latest six-month period',True),
+    ('six months ended June 30, 2024',
+     'The source discussed changes during the six months ended June 30, 2024.',
+     'describes pressure in the latest six-month period',True),
+    ('2024-06-30',
+     'The source discussed changes during the six months ended June 30, 2024.',
+     'describes pressure in the latest six-month period',False),
+    ('six months ended June 30, 2023 and six months ended June 30, 2024',
+     'The source discussed changes during the six months ended June 30, 2023 and six months ended June 30, 2024.',
+     'describes pressure in the latest six-month period',False),
+    ('six months ended June 30, 2023',
+     'The source discussed changes during the six months ended June 30, 2023 and six months ended June 30, 2024.',
+     'describes pressure in the latest six-month period',False),
+    ('six months ended June 30, 2024',
+     'The source discussed changes during the six months ended June 30, 2024.',
+     'describes pressure in the latest nine-month period',False),
+])
+def test_latest_months_period_requires_one_exact_scope_window_and_latest_matching_proof(
+        scope,proof,description,accepted):
+    from adaptive_document_agent.agent.source_context_periods import mask_reporting_period_references
+    masked=mask_reporting_period_references(description,proof,scope)
+    assert ('latest' not in masked) is accepted
+
+
+def test_held_at_month_day_without_year_remains_unbound():
+    from adaptive_document_agent.agent.source_context_periods import mask_reporting_period_references
+    proof='The source discussed the six months ended June 30, 2024.'
+    description='describes a balance held at June 30'
+    assert any(char.isdigit() for char in mask_source_periods(description,proof))
+    assert mask_reporting_period_references(description,proof,'six months ended June 30, 2024')==description
+
+
 @pytest.mark.parametrize('scope,description',[
     ('2017, 2019 and the three months ended March 31, 2020','describes prolonged losses as indicating impairment'),
     ('2018 and 2019','describes prolonged losses during 2017 as indicating impairment'),
@@ -125,6 +283,25 @@ def test_year_modifies_a_source_owned_event_without_licensing_counted_units(desc
     proof='The program expanded as of December 31, 2022 and increased as of December 31, 2023.'
     item=QualifiedSourceCopy(scope='the program discussion',description=description,quote=BriefQuote(page=1,text=proof))
     _,parts=reported_source_components('The source reports levels. '+qualified_source_statement(item),
+                                     [item.quote],declared=[item])
+    assert bool(parts)==accepted
+
+
+@pytest.mark.parametrize('description,proof,accepted',[
+    ('describes the 2023 lengthening of inventory turnover as related to product expansion',
+     'Inventory turnover days increased in 2023 as product lines expanded.',True),
+    ('describes the 2022 lengthening of inventory turnover as related to product expansion',
+     'Inventory turnover days increased in 2023 as product lines expanded.',False),
+    ('describes the 2023 lengthening of inventory turnover by 395 days',
+     'Inventory turnover days increased in 2023 as product lines expanded.',False),
+    ('describes the 2023 shortening of inventory turnover as related to product expansion',
+     'Inventory turnover days shortened in 2023 as product lines contracted.',True),
+])
+def test_source_owned_nominal_trend_year_is_not_a_measure(description,proof,accepted):
+    from adaptive_document_agent.agent.reported_source_context import reported_source_components,qualified_source_statement
+    item=QualifiedSourceCopy(scope='the inventory discussion',description=description,
+                             quote=BriefQuote(page=1,text=proof))
+    _,parts=reported_source_components('The source reports inventory levels. '+qualified_source_statement(item),
                                      [item.quote],declared=[item])
     assert bool(parts)==accepted
 
@@ -253,6 +430,11 @@ def test_reporting_reference_cannot_authorize_other_durations_measurements_or_in
 @pytest.mark.parametrize('description,accepted',[
     ('describes the 2020 balance and the 2020 increases as linked to procurement',True),
     ('describes the 2020 reductions as linked to procurement',True),
+    ('attributes the 2020 prolongation to procurement',True),
+    ('attributes the 2019 prolongation to procurement',False),
+    ('attributes the 2020 units prolongation to procurement',False),
+    ('attributes the 2020 interim increase to procurement',False),
+    ('attributes the 2020 full-year increase to procurement',False),
     ('describes the 2019 balance as linked to procurement',False),
     ('describes the 2020 balances delivered to clients',False),
     ('describes the 2020 units delivered to clients',False),

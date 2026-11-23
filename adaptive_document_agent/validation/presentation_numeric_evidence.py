@@ -48,8 +48,9 @@ _ALIASES = {"RMB": "CNY", "CNH": "CNY", "US$": "USD", "$": "USD", "HK$": "HKD",
 _DECREASE = re.compile(r"\b(?:(?:decrease|decline|reduction|drop) of|(?:decreased|declined|fell|dropped) by)\s*$", re.I)
 _CASH_USE = re.compile(r"\s+used in (?:operations|(?:operating|investing|financing) activities)\b", re.I)
 _CALCULATED_AMOUNT=re.compile(r'\b(?:calculated|computed|recalculated|recomputed)\s+'
-    r'(?:signed\s+)?(?P<kind>increase|decrease|change)'
-    r'(?:\s+(?:in|of)\s+(?P<metric>[^;.!?]+?))?\s+(?:of|was|is)\s*$',re.I)
+    r'(?:(?P<metric_prefix>(?!signed\b)[^;.!?]+?)\s+)?(?:signed\s+)?(?P<kind>increase|decrease|change)'
+    r'(?:\s+(?:in|of)\s+(?P<metric>[^;.!?]+?))?'
+    r'(?:\s+(?:of|was|is)\s*|\s*:\s*)$',re.I)
 _CALCULATED_INTERVAL=re.compile(r'^\s+from\s+(?P<start>(?:FY\s*|[1369]M\s*)?(?:19|20)\d{2}'
     r'(?:-\d{2}-\d{2})?)\s+to\s+(?P<end>(?:FY\s*|[1369]M\s*)?(?:19|20)\d{2}'
     r'(?:-\d{2}-\d{2})?)\b',re.I)
@@ -62,11 +63,45 @@ def _currency(value):
     return _ALIASES.get(code, code)
 
 
-def _label_owns_calculation(label,calculation):
-    if not label['metric']:return True
+def _label_metric(label):
+    return label['metric'] or label['metric_prefix']
+
+
+def _calculation_source_row_subject(calculation,observations):
+    inputs=[observations.get(identifier) for identifier in calculation['observation_ids']]
+    metric=calculation['metric']
+    if not inputs or any(row is None or row.metric_original!=metric for row in inputs):
+        return None
+    locations={(row.effective_table_id,row.row_id) for row in inputs}
+    if len(locations)!=1:
+        return None
+    table_id,row_id=next(iter(locations))
+    if not table_id or row_id is None:
+        return None
+    labels=[{e.row_label.strip() for e in row.evidence
+             if e.table_id==table_id and e.row_label and e.row_label.strip()} for row in inputs]
+    if any(len(owned)!=1 for owned in labels):
+        return None
+    common=set.intersection(*labels)
+    if len(common)!=1:
+        return None
+    label,=common
+    return f'{label}: {metric}' if label.casefold()!=metric.casefold() else None
+
+
+def _label_owns_calculation(label,calculation,observations):
     from .presentation_metric_binding import source_label_forms
+
     normalize=lambda value:' '.join(value.casefold().split())
-    return normalize(label['metric']) in {normalize(form) for form in source_label_forms(calculation['metric'])}
+    source_row=_calculation_source_row_subject(calculation,observations)
+    qualified={source_row} if source_row else set()
+    prefix_forms={normalize(form) for form in {calculation['metric'],*qualified}}
+    if label['metric_prefix'] and normalize(label['metric_prefix']) not in prefix_forms:
+        return False
+    if not label['metric']:
+        return True
+    suffix_forms=source_label_forms(calculation['metric']) | qualified
+    return normalize(label['metric']) in {normalize(form) for form in suffix_forms}
 
 
 def _money_scale(text, match):
@@ -164,7 +199,7 @@ def checked_money_amounts(text, observations, calculations=()):
                 if c['kind'] in {'absolute_change','yoy_absolute_change'}
                 and c.get('currency') and set(c['observation_ids'])<=monetary.keys()
                 and [normalize(c['periods'][0]),normalize(c['periods'][-1])]==ends
-                and (_label_owns_calculation(label,c) if label['metric'] else
+                and (_label_owns_calculation(label,c,monetary) if _label_metric(label) else
                      re.search(r'(?<!\w)'+re.escape(c['metric'])+r'(?!\w)',sentence,re.I))
                 and (label['kind'].casefold()=='change' or
                      (label['kind'].casefold()=='increase' and c['value']>0) or
@@ -329,6 +364,8 @@ def mask_finding_amounts(slide, insights, inputs, observations, calculations):
 def mask_declared_calculated_amounts(text,observations,calculations):
     """Mask only strict, explicitly labelled amounts with retained calculation IDs."""
     calculations=list(calculations)
+    observations=list(observations)
+    observed={observation.id: observation for observation in observations}
     masked=list(text)
     for match,supported,ids in checked_money_amounts(text,observations,calculations):
         if not supported or not ids:
@@ -346,6 +383,32 @@ def mask_declared_calculated_amounts(text,observations,calculations):
                 continue
             antecedent=None
             if interval is None:
+                # Also accept "Calculated change: <amount> for <exact
+                # source metric> from <period> to <period>". The amount is
+                # still checked against its Python calculation above; this
+                # suffix only binds the exact subject and comparison range.
+                suffix_bindings=[]
+                after=text[match.end():]
+                for calculation in calculations:
+                    if calculation.get('id') not in ids:
+                        continue
+                    metric_pattern=r'\s+'.join(re.escape(part) for part in calculation['metric'].split())
+                    subject=re.match(r'\s+for\s+'+metric_pattern+r'(?=\s+from\b)',after,re.I)
+                    if not subject:
+                        continue
+                    found_interval=_CALCULATED_INTERVAL.match(after[subject.end():])
+                    if found_interval and re.fullmatch(
+                            r'\s*(?:[.!?;](?:\s.*)?|$)',after[subject.end()+found_interval.end():]):
+                        suffix_bindings.append((calculation['metric'],found_interval))
+                binding_keys={(metric,period_identity(found['start']),period_identity(found['end']))
+                    for metric,found in suffix_bindings}
+                if len(binding_keys)==1:
+                    metric,start,end=next(iter(binding_keys))
+                    antecedent={metric}
+                    interval=next(found for name,found in suffix_bindings
+                        if name==metric and period_identity(found['start'])==start
+                        and period_identity(found['end'])==end)
+            if interval is None:
                 prefix=re.split(r'(?<=[.!?])\s+',before[:label.start()])[-1]
                 ranges=list(_CALCULATED_RANGE.finditer(prefix))
                 if len(ranges)!=1 or any(not (ranges[0].start()<=m.start() and m.end()<=ranges[0].end())
@@ -360,7 +423,7 @@ def mask_declared_calculated_amounts(text,observations,calculations):
             ends=[normalize(interval['start']),normalize(interval['end'])]
             if not any(c['id'] in ids and c['kind'] in {'absolute_change','yoy_absolute_change'}
                        and [normalize(c['periods'][0]),normalize(c['periods'][-1])]==ends
-                       and _label_owns_calculation(label,c)
+                       and _label_owns_calculation(label,c,observed)
                        and (antecedent is None or antecedent=={c['metric']})
                        and (label['kind'].casefold()=='change' or
                             (label['kind'].casefold()=='increase' and c['value']>0) or

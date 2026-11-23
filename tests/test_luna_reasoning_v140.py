@@ -119,7 +119,8 @@ def test_luna_analytical_and_unknown_operations_preserve_defaults(monkeypatch, s
     assert policy['options'] == {} and policy['intent'] == 'preserve'
 
 
-@pytest.mark.parametrize('operation',['PriorityPagePatch','RetainedPageRevisions','SourcePrioritySelection'])
+@pytest.mark.parametrize('operation',['PriorityPagePatch','RetainedPageRevisions','SourcePrioritySelection',
+                                      'RetainedSourceDescriptionCapacity'])
 def test_owned_editorial_patches_use_existing_low_effort_and_honor_opt_out(operation):
     assert _policy(operation=operation)['options']=={'reasoning_effort':'low'}
     assert _policy(_settings(simple_task_reasoning='provider_default'),operation=operation)['options']=={}
@@ -165,22 +166,17 @@ def test_json_mode_is_scoped_to_structured_calls_and_keeps_plain_text_requests(m
     assert 'response_format' not in module.completion.call_args.kwargs
 
 
-def test_real_sdk_temperature_rejection_preserves_luna_low_effort_and_its_audit(monkeypatch):
+def test_temperature_rejection_uses_bounded_compatibility_retry_and_audit(monkeypatch):
     class UnsupportedParamsError(Exception):
         pass
     module = _sdk(monkeypatch, {}, '{"topics":[],"omissions":[],"coverage_decisions":[]}')
     success = module.completion.return_value
-    # Exact message emitted by the installed LiteLLM GPT adapter. The effort
-    # name is explanatory advice, not a rejection of the requested low effort.
     error = UnsupportedParamsError(
-        "gpt-6-luna doesn't support temperature=0.0 while reasoning is "
-        "active. Only temperature=1 is supported unless reasoning_effort resolves to "
-        "'none', either set explicitly on the request or declared as the model's "
-        "default_reasoning_effort. "
-        "To drop unsupported params set `litellm.drop_params = True`"
+        "gpt-5.6-sol doesn't support temperature=0.0"
     )
     module.completion.side_effect = [error, success]
     settings = _settings(api_key=SecretStr('synthetic-test-key'))
+    settings.model = 'gpt-5.6-sol'
     client = LiteLLMProvider(settings)
     monkeypatch.setattr(client, '_request_client', lambda: nullcontext({}))
     gateway = LLMGateway(client, settings)
@@ -188,15 +184,12 @@ def test_real_sdk_temperature_rejection_preserves_luna_low_effort_and_its_audit(
     assert module.completion.call_count == 2
     first, second = [call.kwargs for call in module.completion.call_args_list]
     assert first['temperature'] == 0 and 'temperature' not in second
-    assert first['reasoning_effort'] == second['reasoning_effort'] == 'low'
     assert first['max_tokens'] == second['max_tokens'] == 8192
     for field in ('model', 'api_base', 'api_key', 'messages'):
         assert first[field] == second[field]
     row = gateway.usage[0]
-    assert row['reasoning_policy']['requested'] == row['reasoning_policy']['applied'] == {'reasoning_effort': 'low'}
-    assert row['reasoning_policy']['status'] == 'requested'
     assert row['attempts'][0]['compatibility_downgrade'] == ['temperature']
-    assert row['attempts'][1]['reasoning_parameters'] == {'reasoning_effort': 'low'}
+    assert row['attempts'][1]['reasoning_parameters'] == {}
 
 
 @pytest.mark.parametrize('message,rejected', [

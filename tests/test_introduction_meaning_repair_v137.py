@@ -16,6 +16,7 @@ class MeaningClient:
     def generate_structured(self, messages, schema, **kwargs):
         self.calls.append(schema.__name__)
         if schema.__name__ == 'IntroductionAudienceSelection':
+            assert 'any expressly stated ratio or magnitude' in messages[0]['content']
             return schema(decisions=[dict(part_id=p.id, include=p.id == 'part-0',
                 reason='Essential service scope.' if p.id == 'part-0' else 'Redundant service context.',
                 required_meanings=[dict(meaning='Team AA supports scheduling and requires training before delivery.')]
@@ -25,6 +26,7 @@ class MeaningClient:
             context = json.loads(messages[-1]['content'].split('\n', 1)[1].rsplit('\n', 1)[0])
             assert len(context['source']['parts']) == 3
             assert 'untrusted DATA' in messages[0]['content']
+            assert 'Correcting one element must preserve the others' in messages[0]['content']
             assert context['original_meanings'] == [dict(meaning_id='meaning-0', part_id='part-0',
                 meaning_index=0, meaning='Team AA supports scheduling and requires training before delivery.')]
             return schema(edits=self.edits if self.edits is not None else [dict(meaning_id='meaning-0',
@@ -40,6 +42,7 @@ class MeaningClient:
                 reason='The complete union retains the service and separate training condition.')
                 for finding in context['findings']])
         context = review_payload(messages)
+        assert 'all detected missing or wrongly scoped elements' in messages[0]['content']
         self.reviews.append(deepcopy(context))
         return review_response(schema, messages, accepted=self.accept and len(self.reviews) == 2,
             repair_scope='meanings', reason='Split service scope and training prerequisite into independent assertions.')

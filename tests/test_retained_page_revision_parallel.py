@@ -3,7 +3,9 @@ from threading import Barrier, Lock
 
 import pytest
 
-from adaptive_document_agent.agent.retained_page_revision_parallel import revise_owned_pages
+from adaptive_document_agent.agent.retained_page_revision_parallel import (
+    OwnedPageRevisionErrors, complete_owned_copy_revisions, revise_owned_pages,
+)
 from adaptive_document_agent.agent.retained_page_sources import AuthoredPageErrors
 
 
@@ -38,6 +40,38 @@ def test_one_failure_drains_every_worker_and_returns_no_partial_replacements(fai
     with pytest.raises(expected):
         revise_owned_pages({'good':[], 'bad':[], 'other':[]},revise)
     assert set(finished)=={'good','bad','other'}
+
+
+def test_owned_copy_repair_uses_remaining_round_only_for_the_unresolved_page():
+    calls = []
+    issues = {'good': ['Fix attribution'], 'bad': ['Fix dates']}
+
+    def revise(pending):
+        calls.append(pending)
+        if len(calls) == 1:
+            raise OwnedPageRevisionErrors({'bad': ['Still missing an exact period']},
+                                          {'good': 'Locally validated draft'})
+        return {'bad': 'Corrected draft'}
+
+    drafts, remaining = complete_owned_copy_revisions(issues, 3, revise)
+
+    assert calls == [issues, {'bad': ['Fix dates', 'Still missing an exact period']}]
+    assert drafts == {'good': 'Locally validated draft', 'bad': 'Corrected draft'}
+    assert remaining == 1
+
+
+def test_owned_copy_repair_cannot_return_unapproved_siblings_without_a_complete_batch():
+    calls = []
+
+    def revise(pending):
+        calls.append(set(pending))
+        if len(calls) == 1:
+            raise OwnedPageRevisionErrors({'bad': ['Unbound amount']}, {'good': 'Candidate'})
+        raise AuthoredPageErrors({'bad': ['The amount is still unbound']})
+
+    with pytest.raises(AuthoredPageErrors, match='still unbound'):
+        complete_owned_copy_revisions({'good': [], 'bad': []}, 2, revise)
+    assert calls == [{'good', 'bad'}, {'bad'}]
 
 
 @pytest.mark.parametrize('workers',[1,4,8])

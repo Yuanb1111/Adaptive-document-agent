@@ -277,3 +277,21 @@ including typed prices, calculation provenance, source-proof transport, semantic
 scope, gateway policy and provider credential isolation. Streamlit's local UI
 checks required running outside the sandbox's loopback restriction. The complete
 suite was not rerun after the final changes.
+
+## 2026-11-23 fresh acceptance checkpoint
+
+The final authorized run used the original 524-page public HKEX prospectus and
+OpenAI GPT-6 Luna. It started from PDF ingestion with `checkpoint: null`,
+`resume_supplied: false`, and `request_cache_enabled: false`. The 900-second
+limit included native PowerPoint export and rendered QA.
+
+The run stopped at presentation selection after 397.051 seconds and 90 recorded
+model calls. One final replacement explanation contained 814 characters against
+the 700-character field limit. The report did not reach PowerPoint export, so
+completion within 15 minutes remains unverified. The two description-only
+requests used low reasoning effort and returned complete responses. The field
+limit remained enforced.
+
+The pre-run regression group passed 508 tests, with three skips. This checkpoint
+records one fresh acceptance attempt. The source PDF, run receipts, and model
+responses remain in ignored local output.

@@ -19,6 +19,12 @@ _ISO_PERIOD = re.compile(r'(?<![\w.-])(?:19|20)\d{2}-\d{2}-\d{2}(?![\w-]|\.\w)')
 _ISO_RANGE = re.compile(r'(?<![\w.-])(?P<start>(?:19|20)\d{2}-\d{2}-\d{2})-to-'
                         r'(?P<end>(?:19|20)\d{2}-\d{2}-\d{2})(?![\w-]|\.\w)', re.I)
 _MONTH_YEAR=re.compile(rf'\b(?P<month>{_MONTH})\.?\s+(?P<year>(?:19|20)\d{{2}})\b',re.I)
+_SCOPED_MONTH_DAY=re.compile(
+    rf'\b(?P<prefix>(?:as of|at|on|by|since|from|to)\s+)'
+    rf'(?P<month>{_MONTH})\.?\s+(?P<day>\d{{1,2}})\b'
+    r'(?=\s*(?:[.;)]|,(?!\s*\d)|$|\b(?:had|has|have|was|were|is|are|as|and|or|to|until)\b))',re.I)
+_SCOPED_YEAR_RANGE=re.compile(r'\bthe\s+(?P<first>(?:19|20)\d{2})[–-](?P<last>(?:19|20)?\d{2})'
+    r'(?=\s+(?:build|build-up|increase|decrease|decline|growth|rise|reduction)\b)',re.I)
 _DATES = re.compile(
     rf'(?i)(?<![\w.])(?P<iso_year>(?:19|20)\d{{2}})-(?P<iso_month>\d{{2}})-(?P<iso_day>\d{{2}})(?![\w-]|\.\w)'
     rf'|\b(?P<month>{_MONTH})\.?\s+(?P<day>\d{{1,2}})(?:st|nd|rd|th)?\b'
@@ -59,6 +65,44 @@ def mask_bound_month_years(text,periods,source_text=''):
                   for m in _MONTH_YEAR.finditer(source_text))
     return _MONTH_YEAR.sub(lambda m:' ' if
         f"{m['year']}-{_MONTH_NUMBER[m['month'].casefold()]:02d}" in owners else m[0],text)
+
+
+def mask_scoped_month_days(text,scope,proof):
+    """Recognize a qualitative date reference to one complete scoped source date."""
+    scoped_dates=literal_calendar_dates(scope)
+    dates_by_month_day={}
+    for coordinate in literal_calendar_dates(proof):
+        dates_by_month_day.setdefault(coordinate[5:],set()).add(coordinate)
+
+    def replace(match):
+        month=_MONTH_NUMBER[match['month'].casefold()]
+        dates=dates_by_month_day.get(f"{month:02d}-{int(match['day']):02d}",set())
+        if len(dates)==1 and dates<=scoped_dates:
+            return match['prefix']+' '
+        return match[0]
+
+    return _SCOPED_MONTH_DAY.sub(replace,text)
+
+
+def mask_scoped_year_ranges(text,scope,proof):
+    """Recognize event year ranges from exact same-day dates in a single proof sentence."""
+    if not _SCOPED_YEAR_RANGE.search(text):
+        return text
+    coordinates=literal_calendar_dates(scope)
+    proof_sentences=[literal_calendar_dates(sentence) for sentence in re.split(r'(?<=[.!?])\s+',proof)]
+
+    def replace(match):
+        start=[coordinate for coordinate in coordinates if coordinate[:4]==match['first']]
+        last=match['last']
+        end=[coordinate for coordinate in coordinates if coordinate[:4].endswith(last)]
+        if len(last)==2 and len(coordinates)!=2:
+            return match[0]
+        if len(start)==len(end)==1 and start[0]<end[0] and start[0][5:]==end[0][5:] and any(
+                {start[0],end[0]}<=dates for dates in proof_sentences):
+            return 'the '
+        return match[0]
+
+    return _SCOPED_YEAR_RANGE.sub(replace,text)
 
 
 def bound_period_dates(text, periods, *, mask=False):

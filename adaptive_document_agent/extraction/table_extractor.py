@@ -2,6 +2,9 @@
 
 import io
 import re
+from concurrent.futures import CancelledError
+from threading import Event
+from typing import Callable
 
 from adaptive_document_agent.models.table import ExtractedTable, TableRow
 from adaptive_document_agent.utils.ids import stable_id
@@ -12,10 +15,22 @@ from .column_roles import percentage_column
 
 
 class TableExtractor:
+    def __init__(self, *, cancelled: Event | None = None,
+                 check_deadline: Callable[[], None] | None = None) -> None:
+        self.cancelled = cancelled
+        self.check_deadline = check_deadline
+
+    def _check_active(self) -> None:
+        if self.cancelled is not None and self.cancelled.is_set():
+            raise CancelledError('Table extraction was cancelled')
+        if self.check_deadline is not None:
+            self.check_deadline()
+
     def extract(self, pdf_bytes: bytes, *, page_numbers: set[int] | None = None) -> dict[int, list[ExtractedTable]]:
         self.page_errors = {}
         self.raw_tables_by_page = {}
         self.source_inventory_by_page = {}
+        self._check_active()
         try:
             import pdfplumber
         except ImportError:
@@ -23,6 +38,7 @@ class TableExtractor:
 
         result: dict[int, list[ExtractedTable]] = {}
         geometry=None
+        self._check_active()
         try:
             import pymupdf
             import pypdfium2
@@ -30,10 +46,14 @@ class TableExtractor:
         except (ImportError,ValueError,RuntimeError):
             pass
         try:
+            self._check_active()
             with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
                 for page_number, page in enumerate(pdf.pages, start=1):
                     if page_numbers is not None and page_number not in page_numbers:
                         continue
+                    # Check outside the page-local recovery block so cancellation
+                    # and the run deadline cannot be mislabeled as page failures.
+                    self._check_active()
                     try:
                         literal=[]
                         crop=getattr(page,'cropbox',None) or getattr(page,'bbox',(0,0,0,0))
@@ -119,6 +139,8 @@ class TableExtractor:
                         result[page_number] = page_tables
                         # Parsed tables own their raw cells and evidence. Keeping
                         # pdfplumber's layout cache for all prior pages is unnecessary.
+                    except CancelledError:
+                        raise
                     except Exception as exc:
                         # A broken page cannot suppress later source pages.
                         self.page_errors[page_number] = type(exc).__name__
@@ -133,6 +155,8 @@ class TableExtractor:
                             self.source_inventory_by_page[page_number] = {
                                 'status': 'failed', 'error_type': type(exc).__name__}
                             result.pop(page_number, None)
+        except CancelledError:
+            raise
         except Exception as exc:
             self.page_errors[0] = type(exc).__name__
             return result
@@ -140,6 +164,7 @@ class TableExtractor:
             if geometry is not None:
                 geometry[0].close()
                 geometry[1].close()
+        self._check_active()
         return result
 
     @staticmethod

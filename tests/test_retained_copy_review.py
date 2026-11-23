@@ -16,7 +16,8 @@ def packet():
         for iid, task, oid in [('edited', 'task-1', 'primary'), ('other', 'task-2', 'unrelated')]],
         proposed_selection=dict(decisions=[dict(insight_id=iid, decision='include')
             for iid in ['edited', 'other']], ordered_insight_ids=['edited', 'other']),
-        planned_source_citations=[dict(insight_id='edited', observation_ids=['primary', 'companion'])],
+        planned_source_citations=[dict(insight_id='edited', observation_ids=['primary', 'companion'],
+                                       source_pages=[6])],
         source_rows=[dict(id=oid, table_id=table) for oid, table in [
             ('primary', 'table-1'), ('companion', 'table-1'), ('extra-period', 'table-1'),
             ('unrelated', 'table-2'), ('unbound', None)]],
@@ -28,8 +29,9 @@ def packet():
         unavailable_findings=[dict(insight=dict(id='unavailable'))],
         source_row_assurance={'primary': 'unaudited', 'unrelated': 'audited'},
         verified_column_assurance={'primary': dict(status='unaudited'), 'unrelated': dict(status='audited')},
-        source_pages=[dict(page=2, text='Complete source', layout_lines=[['Header', 10, 20, 30]]),
-            dict(page=3, text='A related measure supplies a material qualification.')],
+        source_pages=[dict(page=n, text=f'Complete source page {n}',
+                           layout_lines=[['Header', 10, 20, 30]] if n == 2 else [])
+            for n in range(1, 10)],
         profile=dict(analysis_focus='User priority'), report_outline=dict(title='Entire outline'),
         reviewed_priorities=['edited', 'other'])
 
@@ -47,6 +49,7 @@ def test_copy_packet_keeps_all_eligible_companions_and_original_pages_without_mu
     assert scoped['calculations'] == original['calculations'][:1]
     assert scoped['analysis_plan'] == original['analysis_plan'][:1]
     assert scoped['source_pages'] == original['source_pages']
+    assert scoped['source_reading_pages'] == list(range(1, 9))
     assert scoped['profile'] == original['profile'] and scoped['report_outline'] == original['report_outline']
     assert scoped['source_row_assurance'] == {'primary': 'unaudited'}
     assert scoped['verified_column_assurance'] == {'primary': dict(status='unaudited')}

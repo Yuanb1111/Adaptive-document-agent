@@ -119,6 +119,46 @@ def test_table_format_retry_freezes_structurally_valid_sibling_copy():
     assert len(llm.usage) == 2
 
 
+def test_reopened_same_section_copy_receives_claim_inventory_and_full_slot_budget():
+    from adaptive_document_agent.agent.source_integration_copy import revise_reopened_additions
+    draft, _ = _outputs('Tenderers must not collude or exclude competitors.')
+    tender = ('Tenderers must not collude, exclude competitors, bid below cost or use fraud. '
+        'Tendering may be void only for legally required projects where violations materially affect award '
+        'and cannot be remedied. Procurement cancellation requires an Article 71 act that results or may '
+        'result in a supplier winning and an unperformed contract.')
+    other = ('Manufacturers are liable for product quality, and sellers must take measures to ensure '
+        'the quality of products they sell. Defect-caused injury or property-damage compensation is subject '
+        'to the manufacturer exceptions; those exceptions do not qualify the separate product-quality duty.')
+    draft.additions[0].text = other
+    draft.additions.append(draft.additions[0].model_copy(update={'text': tender}, deep=True))
+    draft.decisions[0].brief_item_indexes = [5, 6]
+    values = {f'item_{i}': draft.additions[i - 5].model_dump(mode='json') for i in [5, 6]}
+    llm, client = gateway([response(json.dumps(values))])
+    revised = revise_reopened_additions(llm, [], draft, ['contracts'], 5, {})
+    assert [item.text for item in revised.additions] == [other, tender]
+
+    messages = client.requests[0][0]
+    payload = next(json.loads(m['content'].split('\n', 1)[1].rsplit('\n', 1)[0])
+        for m in messages if m.get('content', '').startswith('<UNTRUSTED_DOCUMENT_CONTENT>\n')
+        and '"items_to_revise"' in m['content'])
+    assert payload['items_to_revise']['item_5']['carry_forward_inventory']['text_propositions'] == [
+        'Manufacturers are liable for product quality, and sellers must take measures to ensure '
+        'the quality of products they sell.',
+        'Defect-caused injury or property-damage compensation is subject '
+        'to the manufacturer exceptions; those exceptions do not qualify the separate product-quality duty.']
+    assert payload['items_to_revise']['item_6']['carry_forward_inventory']['text_propositions'] == [
+        'Tenderers must not collude, exclude competitors, bid below cost or use fraud.',
+        'Tendering may be void only for legally required projects where violations materially affect award '
+        'and cannot be remedied.',
+        'Procurement cancellation requires an Article 71 act that results or may '
+        'result in a supplier winning and an unperformed contract.']
+    prompt = messages[-1]['content']
+    assert 'Preserve every still-supported point across the revised same-section items' in prompt
+    assert 'attached only to that exact duty or remedy' in prompt
+    assert 'use their available 550-character text limits as needed; there is no lower target' in prompt
+    assert 'under 450 characters' not in prompt
+
+
 @pytest.mark.parametrize('invalid', [False, True])
 def test_dense_body_format_uses_bounded_sentences_and_freezes_the_table(invalid):
     from adaptive_document_agent.agent.source_integration_copy import revise_reopened_additions
@@ -179,7 +219,7 @@ def test_mixed_schema_correction_only_gets_copy_slot_after_strict_length_progres
     corrected['additions'][0]['text'] = constraint * (12 if progress else 20)
     outputs = [wire_response(invalid), wire_response(corrected)]
     if progress:
-        outputs.extend([response(json.dumps({'addition_0_text': constraint})), response(review)])
+        outputs.extend([response(json.dumps({'addition_0_text': [constraint]})), response(review)])
     llm, _ = gateway(outputs)
     merged = review_supplementary_sources(llm, result, original)
     assert bool(resolved_source_check_ids(result, merged)) is progress
@@ -206,6 +246,51 @@ def test_truncated_copy_retries_identical_input_without_accepting_partial_json()
     assert client.requests[0][0] == client.requests[1][0]
     assert [a['requested_max_tokens'] for a in entry['shortened_output_attempts']] == [16384, 24000]
     assert [a['status'] for a in entry['shortened_output_attempts']] == ['truncated', 'response_received']
+
+
+def test_existing_length_progress_retry_uses_bounded_sentence_array_for_only_overlong_text():
+    from adaptive_document_agent.agent.source_integration_copy import shorten_additions
+    from adaptive_document_agent.agent.source_integration_review import SourceIntegrationDraft
+    _, constraint = fixture()
+    draft, _ = _outputs(constraint)
+    draft.additions.append(draft.additions[0].model_copy(update=dict(label='Frozen sibling'), deep=True))
+    draft.additions[1].text = constraint * 30
+    original = draft.model_copy(deep=True)
+    clauses = [
+        'Interested directors abstain and are not counted toward quorum for relevant transactions.',
+        'Controllers or close associates with a material interest also abstain at shareholder meetings.',
+        'Independent Supervisors oversee potentially detrimental conduct.',
+    ]
+    llm, client = gateway([response(json.dumps({'addition_1_text': clauses}))])
+    entry = {}
+    shortened = shorten_additions(llm, [], SourceIntegrationDraft,
+        (draft.model_dump(mode='json'), [dict(loc=['additions', 1, 'text'], ctx=dict(max_length=550))]),
+        entry, 5, sentence_compress=True)
+    assert shortened.additions[0] == original.additions[0]
+    assert shortened.additions[1].text == ' '.join(clauses)
+    assert len(shortened.additions[1].text) <= 542
+    assert shortened.additions[1].label == original.additions[1].label
+    assert shortened.additions[1].evidence == original.additions[1].evidence
+    assert shortened.decisions == original.decisions
+    assert len(llm.usage) == 1
+    assert any('bounded sentence arrays' in message['content']
+               for message in client.requests[0][0])
+    assert any('requested label remains a scalar string' in message['content']
+               for message in client.requests[0][0])
+
+
+def test_length_progress_sentence_array_cannot_exceed_its_joined_text_bound():
+    from adaptive_document_agent.agent.source_integration_copy import shorten_additions
+    from adaptive_document_agent.agent.source_integration_review import SourceIntegrationDraft
+    from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
+    _, constraint = fixture()
+    draft, _ = _outputs(constraint)
+    too_many = ['Complete clause.'] * 4
+    llm, _ = gateway([response(json.dumps({'addition_0_text': too_many}))])
+    with pytest.raises(LLMStructuredOutputError):
+        shorten_additions(llm, [], SourceIntegrationDraft,
+            (draft.model_dump(mode='json'), [dict(loc=['additions', 0, 'text'], ctx=dict(max_length=550))]),
+            {}, 5, sentence_compress=True)
 
 
 @pytest.mark.parametrize('setting', ['reduced', 'provider_default'])
@@ -285,7 +370,7 @@ def test_shorter_complete_copy_stays_bounded_and_preserves_semantic_correction(a
     review.verdicts[0].accepted = accepted
     outputs = [wire_response(invalid),
         response(json.dumps({'addition_0_text': shorter})),
-        response(json.dumps({'addition_0_text': constraint})), response(review)]
+        response(json.dumps({'addition_0_text': [constraint]})), response(review)]
     if not accepted:
         outputs.extend([wire_response(draft), response(review)])
     llm, _ = gateway(outputs)

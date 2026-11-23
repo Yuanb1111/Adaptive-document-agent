@@ -38,8 +38,14 @@ def test_completion_omits_none_request_values(monkeypatch: pytest.MonkeyPatch) -
 
 @pytest.mark.parametrize("model, override, base_url, sends_temperature", [
     ("gpt-6.2-sol", None, None, False),
+    ("gpt-6.2-astra", None, "https://api.openai.com/v1/", False),
+    ("gpt-6-luna", None, None, False),
+    ("gpt-6-luna", "openai/gpt-6-luna", None, False),
+    ("gpt-6-luna", "openai/openai/gpt-6-luna", None, True),
+    ("gpt-6-luna-pro", None, None, True),
     ("gpt-6-luna", "openai/gpt-6.2-astra", "https://api.openai.com/v1/", False),
     ("gpt-6.2-sol", None, "https://proxy.example/v1", True),
+    ("gpt-6-luna", None, "https://proxy.example/v1", True),
 ])
 def test_gpt62_omits_temperature_for_direct_openai(
     monkeypatch: pytest.MonkeyPatch,

@@ -12,6 +12,16 @@ from pydantic import BaseModel, ValidationError
 T = TypeVar("T", bound=BaseModel)
 
 
+def unique_json_object(pairs):
+    """Reject ambiguous duplicate keys when preserving an invalid draft."""
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError('Duplicate JSON key')
+        value[key] = item
+    return value
+
+
 def repair_extra_null_fields(text: str, response_model: type[T]) -> tuple[T, list[list[str | int]]] | None:
     """Remove only schema-forbidden null placeholders, preserving every declared value."""
     try:
@@ -25,16 +35,7 @@ def repair_extra_null_fields(text: str, response_model: type[T]) -> tuple[T, lis
     if not errors or any(e['type'] != 'extra_forbidden' or e.get('input') is not None for e in errors):
         return None
     try:
-        # Ambiguous duplicate keys cannot be repaired by silently choosing one.
-        def unique_object(pairs):
-            value = {}
-            for key, item in pairs:
-                if key in value:
-                    raise ValueError('Duplicate JSON key')
-                value[key] = item
-            return value
-
-        value = json.loads(_json_candidates(text)[0], object_pairs_hook=unique_object)
+        value = json.loads(_json_candidates(text)[0], object_pairs_hook=unique_json_object)
         paths = [list(e['loc']) for e in errors]
         for path in paths:
             parent = value

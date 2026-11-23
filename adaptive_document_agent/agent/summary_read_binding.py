@@ -4,10 +4,12 @@ from collections import Counter
 from adaptive_document_agent.models.summary import SummaryFact, SummaryPart
 from adaptive_document_agent.services.summary_validation import fact_errors
 from adaptive_document_agent.utils.ids import stable_id
-from .summary_literal_evidence import literal_facts, quarantine_annotation, terminal_layout_endpoint
+from .summary_literal_evidence import (
+    literal_facts, preserve_terminal_page_marker, quarantine_annotation, terminal_layout_endpoint,
+)
 
 
-def bind_reading(response, blocks, result, record, *, literal_fallback=False, recover_cross_part=False):
+def bind_reading(response, blocks, result, record, *, literal_fallback=False, repair_owned_ranges=False):
     if literal_fallback:
         from .summary_span_ownership import reconcile_contained_spans, quarantine_empty_terminal_layout
         response = reconcile_contained_spans(response, blocks, record)
@@ -24,13 +26,15 @@ def bind_reading(response, blocks, result, record, *, literal_fallback=False, re
             part = quarantine_annotation(part, block, record)
         lines = block.text.splitlines(keepends=True)
         source = ''.join(lines[part.start_line-1:part.end_line])
+        if repair_owned_ranges:
+            part = preserve_terminal_page_marker(part, block, lines, source, result, record)
         facts = []
         retain_full_passage = False
         # After semantic repartitioning has been attempted, a still-crossing
         # quote cannot substantiate a claim. Keep the entire assigned passage
         # for the editor instead; never borrow the neighbouring part's evidence.
         crossing = [f for f in part.facts if not part.start_line <= f.quote_start_line <= f.quote_end_line <= part.end_line]
-        if (recover_cross_part and part.role == 'content' and crossing
+        if (repair_owned_ranges and part.role == 'content' and crossing
                 and 1 <= part.start_line <= part.end_line <= len(lines)
                 and all(1 <= f.quote_start_line <= f.quote_end_line <= len(lines) for f in part.facts)
                 and len(source.strip()) >= 8):

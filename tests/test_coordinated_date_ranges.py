@@ -15,8 +15,10 @@ def observations(values):
             for i, (date, value) in enumerate(zip(DATES, values, strict=True))]
 
 
-def issues(copy, values):
+def issues(copy, values, metric='Balance'):
     obs = observations(values)
+    for item in obs:
+        item.metric_original = metric
     slide = PresentationSlide(id='page', slide_type='analysis', title='Balance', message=copy,
                               observation_ids=[o.id for o in obs])
     return ClaimValidator().validate_slide(slide, obs)
@@ -83,3 +85,56 @@ def test_all_written_ranges_remain_separate():
     assert not result.error
     assert [[o.period for o in scope.observations] for scope in result.individual_scopes()] == [
         DATES[:2], DATES[1:3], DATES[2:]]
+
+
+@pytest.mark.parametrize('text', [
+    'Net assets declined from the 2022-12-31 balance to the 2024-06-30 balance.',
+    'Net assets declined from as of 2022-12-31 to as of 2024-06-30.',
+])
+def test_dated_balance_wording_binds_exact_point_in_time_endpoints(text):
+    direction = ('net assets', 'declined', text.index('declined'), text.index('declined') + len('declined'))
+    result = resolve_direction_scope(text, [direction], direction, observations([100, 120, 140, 80]),
+                                     lambda a, b: b.value - a.value)
+    assert not result.error
+    assert [o.period for o in result.observations] == DATES[1:]
+    assert not issues(text, [100, 120, 140, 80], metric='Net assets')
+
+
+def test_dated_balance_wording_accepts_typed_snapshot_with_generic_legacy_basis():
+    text = ('Net assets declined from the 2022-12-31 balance to the '
+            '2024-06-30 balance.')
+    direction = ('net assets', 'declined', text.index('declined'), text.index('declined') + len('declined'))
+    obs = observations([100, 120, 140, 80])
+    for item in obs:
+        item.period_basis = 'generic'
+    result = resolve_direction_scope(text, [direction], direction, obs,
+                                     lambda a, b: b.value - a.value)
+    assert not result.error and [o.period for o in result.observations] == DATES[1:]
+
+
+@pytest.mark.parametrize('text', [
+    'Net assets declined from the 2022-12-31 balance to 2024-06-30.',
+    'Net assets declined from FY2022 balance to 2024-06-30 snapshot.',
+    'Net assets declined from the 2022 balance to the 2024-06-30 balance.',
+    'Net assets declined from as of 2022-12-31 to as of 2024-06-29.',
+    'Net assets declined from as of 2024-06-30 to as of 2022-12-31.',
+])
+def test_dated_balance_range_requires_two_exact_dates_and_two_qualifiers(text):
+    direction = ('net assets', 'declined', text.index('declined'), text.index('declined') + len('declined'))
+    result = resolve_direction_scope(text, [direction], direction, observations([100, 120, 140, 80]),
+                                     lambda a, b: b.value - a.value)
+    assert result.error and result.observations is None
+
+
+@pytest.mark.parametrize('text', [
+    'Net assets declined from the 2022-12-31 balance to the 2024-06-30 balance.',
+    'Net assets declined from as of 2022-12-31 to as of 2024-06-30.',
+])
+def test_dated_balance_wording_rejects_a_non_snapshot_endpoint_basis(text):
+    direction = ('net assets', 'declined', text.index('declined'), text.index('declined') + len('declined'))
+    obs = observations([100, 120, 140, 80])
+    obs[-1].period_type = 'interim_flow'
+    obs[-1].period_basis = '6M'
+    result = resolve_direction_scope(text, [direction], direction, obs,
+                                     lambda a, b: b.value - a.value)
+    assert 'point-in-time endpoints' in result.error

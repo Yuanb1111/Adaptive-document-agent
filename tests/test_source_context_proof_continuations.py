@@ -88,3 +88,40 @@ def test_misnested_continuations_move_losslessly_but_unknown_or_conflicting_fiel
                     {**original,'quote':{**original['quote'],'unknown':'Unrecognized content.'}},
                     {**original,'quote':{**original['quote'],'continuation_quotes':[dict(page=2,text='Short')]}}]:
         with pytest.raises(ValidationError):QualifiedSourceCopy.model_validate(invalid)
+
+
+def test_nested_continuation_list_flattens_in_order_without_changing_quote_content():
+    first='The company considered the following inventory factors.'
+    second='Raw materials generally have no expiration date.'
+    third='Management assessed net realizable value at each period end.'
+    raw=dict(scope='the inventory discussion',description='describes inventory assessment factors',
+        quote=dict(page=332,text=first),continuation_quotes=[
+            dict(page=332,text=second,continuation_quotes=[dict(page=333,text=third)])])
+
+    item=QualifiedSourceCopy.model_validate(raw)
+
+    assert [(quote.page,quote.text) for quote in item.proof_quotes]==[
+        (332,first),(332,second),(333,third)]
+    assert raw['continuation_quotes'][0]['continuation_quotes']==[dict(page=333,text=third)]
+
+
+def test_nested_continuations_still_enforce_capacity_and_strict_payload_shape():
+    first=dict(page=2,text='Continuation passage number one.')
+    second=dict(page=3,text='Continuation passage number two.')
+    third=dict(page=4,text='Continuation passage number three.')
+    fourth=dict(page=5,text='Continuation passage number four.')
+    base=dict(scope='the programme discussion',description='describes delivery risks',
+        quote=dict(page=1,text='Original first source passage.'))
+    over_capacity={**base,'continuation_quotes':[
+        {**first,'continuation_quotes':[second,third,fourth]}]}
+    unknown={**base,'continuation_quotes':[
+        {**first,'unexpected':'must remain invalid','continuation_quotes':[second]}]}
+    malformed={**base,'continuation_quotes':[
+        {**first,'continuation_quotes':'not a quote list'}]}
+    overnested={**base,'continuation_quotes':[
+        {**first,'continuation_quotes':[
+            {**second,'continuation_quotes':[third]}]}]}
+
+    for invalid in (over_capacity,unknown,malformed,overnested):
+        with pytest.raises(ValidationError):
+            QualifiedSourceCopy.model_validate(invalid)

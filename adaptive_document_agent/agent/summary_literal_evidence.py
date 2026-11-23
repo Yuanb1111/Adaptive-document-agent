@@ -32,3 +32,26 @@ def terminal_layout_endpoint(part, block, record):
     record.setdefault('layout_endpoints', []).append({'block_id': block.id,
         'start_line': part.start_line, 'original_end_line': part.end_line, 'end_line': length})
     return part.model_copy(update={'end_line': length})
+
+
+def preserve_terminal_page_marker(part, block, lines, source, result, record):
+    """Keep a fact-free, mechanically proved footer at its exact source coordinates."""
+    if (part.role != 'content' or part.facts or not source.strip()
+            or not 1 <= part.start_line <= part.end_line <= len(lines)):
+        return part
+    page = next((p for p in result.document.pages if p.page_number == block.page), None)
+    span_end = block.char_start + sum(len(line) for line in lines[:part.end_line])
+    span_start = span_end - len(source)
+    if page is None or page.text[span_start:span_end] != source or page.text[span_end:].strip():
+        return part
+
+    from adaptive_document_agent.services.summary_layout_evidence import layout_line_evidence
+    nonblank = [line for line in layout_line_evidence(source, block.page, result) if line['text'].strip()]
+    if len(nonblank) != 1 or nonblank[0]['basis'] != 'literal_terminal_page_marker':
+        return part
+    record.setdefault('terminal_page_markers', []).append({
+        'block_id': block.id, 'start_line': part.start_line, 'end_line': part.end_line,
+        'original_part': part.model_dump(mode='json'), 'proof': nonblank[0],
+    })
+    return part.model_copy(update={'role': 'layout', 'title': 'Page marker',
+                                  'reading_note': 'This literal source range contains the printed page marker.'})

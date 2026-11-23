@@ -178,7 +178,11 @@ def _supports_deepseek_thinking(settings: LLMSettings, model: str) -> bool:
 def request_reasoning_policy(settings: LLMSettings, *, stage: str | None,
                              operation: str, model: str) -> dict[str, Any]:
     """Return a serializable identity plus options for this exact request route."""
-    simple = operation == "format_repair" or (stage, operation) in _SIMPLE_OPERATIONS
+    luna_description_rewrite = (stage == "presentation" and operation == "RetainedSourceDescriptionCapacity"
+                                and settings.provider == ProviderName.OPENAI
+                                and model.removeprefix("openai/") in _DOCUMENTED_OPENAI_LOW_EFFORT_MODELS
+                                and _supports_low_effort(settings, model))
+    simple = operation == "format_repair" or (stage, operation) in _SIMPLE_OPERATIONS or luna_description_rewrite
     intent = "reduce" if simple and settings.simple_task_reasoning == "reduced" else "preserve"
     options: dict[str, Any] = {}
     status = "provider_default"

@@ -22,6 +22,107 @@ _LABEL_COMPOUND=re.compile(rf'\b(?:{_CARDINAL_WORDS})(?:-(?:{_CARDINAL_WORDS}))*
 _IDENTIFIER=re.compile(r'(?<!\w)(?=[A-Za-z0-9-]*\d)[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*(?!\w)')
 _CURRENCY_IDENTIFIER=re.compile(r'^(?:USD|RMB|CNY|HKD|EUR|GBP|JPY|AUD|CAD|CHF)-?\d',re.I)
 _PERIOD_IDENTIFIER=re.compile(r'^(?:FY|Q[1-4]-?|H[12]-?)(?:19|20)\d{2}E?$',re.I)
+_SOURCE_SENTENCE_START=re.compile(r'^(?:attributes?|describes?|notes?|states?|reports?|explains?|'
+    r'indicates?|shows?|identifies?|records?|discloses?|clarifies?|confirms?|'
+    r'emphasizes?|emphasises?|highlights?|mentions?|observes?|provides?|'
+    r'specifies?|summarizes?|summarises?|sets\s+out)\b',re.I)
+_REPORTING_VERB=(r'(?:attributes?|describes?|notes?|states?|reports?|explains?|indicates?|shows?|'
+    r'identifies?|records?|discloses?|clarifies?|confirms?|emphasizes?|emphasises?|'
+    r'highlights?|mentions?|observes?|provides?|specifies?|summarizes?|summarises?|sets\s+out)')
+_COMPANY_ATTRIBUTED_SENTENCE=re.compile(rf'^(?P<speaker>the company|it)\s+'
+    rf'(?P<verb>{_REPORTING_VERB})\s+(?P<predicate>.+[.!?])$',re.I)
+_SOURCE_SENTENCE_BOUNDARY=re.compile(r'(?<=[.!?])\s+')
+_AMBIGUOUS_QUOTING=re.compile(r'["“”‘]|(?<!\w)[\'’]')
+_AMBIGUOUS_ABBREVIATION=re.compile(r'\b(?:e\.g|i\.e|etc|vs|approx|no|fig|dr|mr|mrs|ms|inc|ltd|co)\.',re.I)
+_DECLARATIVE_PREDICATE=re.compile(r'\b(?:is|are|was|were|has|have|had|reported|stated|'
+    r'indicated|covered|found|identified|observed|confirmed|assessed|monitored|cited|believed)\b',re.I)
+_AMBIGUOUS_SUBJECT=re.compile(r'^(?:it|they|this|that|these|those|he|she|which|the former|the latter)\b',re.I)
+_SOURCE_CONTEXT_FIELDS={'scope','description','quote','continuation_quotes'}
+_SOURCE_AXIS_CATEGORY=re.compile(rf'\b(?P<count>{_CARDINAL_WORDS})-axis\s+'
+    r'(?P<noun>[A-Za-z]+(?:-[A-Za-z]+)*)\b',re.I)
+_COORDINATED_AXIS_CATEGORIES=re.compile(rf'\b(?P<count>{_CARDINAL_WORDS})-axis'
+    r'(?P<shared>\s+and\s+(?P<other>[A-Za-z]+(?:-[A-Za-z]+)*)\s+'
+    r'(?P<noun>[A-Za-z]+(?:-[A-Za-z]+)*))\b',re.I)
+_STANDARD_IDENTIFIER=re.compile(r'\b(?:IAS|IFRS|HKAS|HKFRS)\s+(?P<number>\d{1,2})\b',re.I)
+_STANDARD_REFERENCE=re.compile(r'\b(?P<prefix>(?:under|in\s+accordance\s+with|pursuant\s+to|according\s+to|'
+    r'as\s+required\s+by|complies\s+with)\s+)?(?P<code>(?:IAS|IFRS|HKAS|HKFRS)\s+\d{1,2})\b',re.I)
+_STANDARD_VALUATION_TAIL=re.compile(r'^(?:\s+|\s*:\s*)(?:lower[- ]of[- ]cost|'
+    r'lower\s+cost(?=\s*/\s*NRV\b)|net\s+realizable\s+value)\b',re.I)
+_STANDARD_MEASURE_TAIL=re.compile(r'^\s*(?:years?|months?|weeks?|days?|hours?|units?|'
+    r'thousands?|millions?|billions?|percent(?:age)?|basis\s+points?)\b',re.I)
+_PROOF_PAGE_PREFIX=re.compile(r'^(?:p\.|page)\s*(?P<page>[1-9]\d*)\s*:\s*',re.I)
+
+
+def _split_reported_sentence_groups(sentences):
+    """Keep complete direct statements in their original order and scope."""
+    if (not _SOURCE_SENTENCE_START.match(sentences[0])
+            or any(not re.match(r'[A-Z]',sentence) or sentence[-1] not in '.!?'
+                   or _AMBIGUOUS_SUBJECT.match(sentence)
+                   or not (_SOURCE_SENTENCE_START.match(sentence) or _DECLARATIVE_PREDICATE.search(sentence))
+                   for sentence in sentences)):
+        return None
+    groups=[sentences[0]]
+    for sentence in sentences[1:]:
+        extended=groups[-1]+' '+sentence
+        if len(extended)<=700:
+            groups[-1]=extended
+        else:
+            groups.append(sentence if _SOURCE_SENTENCE_START.match(sentence)
+                          else 'Reports the following. '+sentence)
+    return groups if all(len(group)<=700 for group in groups) else None
+
+
+def split_overlong_source_descriptions(items):
+    """Split complete source sentences before schema validation.
+
+    The input is model-owned data. This helper changes no scope or proof and
+    does not perform any of their semantic/binding checks; callers must still
+    validate the resulting copies normally. Ambiguous grammar is left intact
+    for the existing schema error to report.
+    """
+    if not isinstance(items,list):
+        return items
+    expanded=[]
+    changed=False
+    for item in items:
+        if not isinstance(item,dict) or set(item)-_SOURCE_CONTEXT_FIELDS:
+            return items
+        description=item.get('description')
+        if not isinstance(description,str) or len(description)<=700:
+            expanded.append(item)
+            continue
+        # Quotation boundaries and punctuation inside quoted text are not safe
+        # sentence delimiters for this transport-only normalization.
+        if _AMBIGUOUS_QUOTING.search(description):
+            return items
+        if _AMBIGUOUS_ABBREVIATION.search(description):
+            return items
+        sentences=[part.strip() for part in _SOURCE_SENTENCE_BOUNDARY.split(description.strip())]
+        if len(sentences)<2 or any(not sentence or len(sentence)>700 for sentence in sentences):
+            return items
+        if all(_SOURCE_SENTENCE_START.match(sentence) for sentence in sentences):
+            split_sentences=sentences
+        elif split_sentences:=_split_reported_sentence_groups(sentences):
+            pass
+        else:
+            # Narrow pronoun resolution for a continuous company-attributed
+            # source passage. The first subject must explicitly be "the company";
+            # every later sentence must repeat it or use "It" with an allowed
+            # reporting verb. Render each as an explicit company attribution.
+            matched=[_COMPANY_ATTRIBUTED_SENTENCE.fullmatch(sentence) for sentence in sentences]
+            if (not all(matched) or matched[0]['speaker'].casefold()!='the company'
+                    or any(re.search(r'\bit\b',match['predicate'],re.I) for match in matched)):
+                return items
+            split_sentences=[f"Reports that the company {match['verb']} {match['predicate']}"
+                             for match in matched]
+            if any(len(sentence)>700 for sentence in split_sentences):
+                return items
+        for sentence in split_sentences:
+            expanded.append({**item,'description':sentence})
+        changed=True
+    if not changed or len(expanded)>8:
+        return items
+    return expanded
 
 
 class QualifiedSourceCopy(BaseModel):
@@ -50,24 +151,68 @@ class QualifiedSourceCopy(BaseModel):
     @classmethod
     def split_long_literal_proof(cls,values):
         if not isinstance(values,dict):return values
+        original=values
         quote=values.get('quote')
         if isinstance(quote,dict) and 'continuation_quotes' in quote:
             nested=quote['continuation_quotes'];existing=values.get('continuation_quotes',[])
             if (not isinstance(nested,list) or not isinstance(existing,list)
                     or (existing and existing!=nested)):
                 return values
-            # Move only this exact typed field; unknown quote fields still fail.
-            nested=[BriefQuote.model_validate(q).model_dump(mode='json') for q in nested]
+            # Move only this exact typed field; defer validation until after
+            # bounded literal splitting. Unknown fields still fail on the
+            # ordinary BriefQuote validation below.
             quote={k:v for k,v in quote.items() if k!='continuation_quotes'}
             values={**values,'quote':quote,'continuation_quotes':nested}
-        if not isinstance(quote,dict) or not isinstance(quote.get('text'),str) or len(quote['text'])<=1800:
-            return values
         continuations=values.get('continuation_quotes',[])
         if not isinstance(continuations,list):return values
+
+        def flatten_typed_continuation(raw):
+            """Move only the typed nested continuation field, preserving list order."""
+            if not isinstance(raw,dict) or 'continuation_quotes' not in raw:
+                return [raw]
+            nested=raw['continuation_quotes']
+            # One typed nesting level is enough for transport repair. Deeper
+            # structures remain invalid input instead of triggering an
+            # unbounded recursive walk over model-owned JSON.
+            if (not isinstance(nested,list) or len(nested)>2 or any(
+                    isinstance(child,dict) and 'continuation_quotes' in child for child in nested)):
+                return None
+            parent={key:value for key,value in raw.items() if key!='continuation_quotes'}
+            return [parent,*nested]
+
+        flattened_continuations=[]
+        for continuation in continuations:
+            parts=flatten_typed_continuation(continuation)
+            if parts is None:
+                # Leave the malformed payload untouched for Pydantic's
+                # ordinary strict validation; never discard malformed proof.
+                return original
+            flattened_continuations.extend(parts)
+            if len(flattened_continuations)>3:
+                return original
+        flattening_changed=flattened_continuations!=continuations
+        continuations=flattened_continuations
         from adaptive_document_agent.services.source_quotes import split_literal_quote
-        parts=split_literal_quote(quote['text'])
-        return {**values,'quote':{**quote,'text':parts[0]},'continuation_quotes':[
-            *({**quote,'text':part} for part in parts[1:]),*continuations]}
+
+        def split_quote(raw):
+            if isinstance(raw,BriefQuote):
+                raw=raw.model_dump(mode='json')
+            if (not isinstance(raw,dict) or not isinstance(raw.get('text'),str)
+                    or len(raw['text'])<=1800):
+                return [raw]
+            return [{**raw,'text':part} for part in split_literal_quote(raw['text'])]
+
+        primary=split_quote(quote)
+        continuation_parts=[]
+        for continuation in continuations:
+            continuation_parts.extend(split_quote(continuation))
+        if (len(primary)==1 and len(continuation_parts)==len(continuations)
+                and not flattening_changed):
+            return values
+        if len(continuation_parts)+len(primary)-1>3:
+            return original
+        return {**values,'quote':primary[0], 'continuation_quotes':[
+            *primary[1:],*continuation_parts]}
 
     @model_serializer(mode='wrap')
     def omit_empty_continuations(self,handler):
@@ -85,23 +230,114 @@ class QualifiedSourceCopy(BaseModel):
         return '\n\n[Separate literal source passage]\n\n'.join(q.text for q in self.proof_quotes)
 
 
+def _description_without_owned_page_prefix(item):
+    description=item.description.strip()
+    match=_PROOF_PAGE_PREFIX.match(description)
+    if match and any(str(quote.page)==match['page'] for quote in item.proof_quotes):
+        body=description[match.end():]
+        if len(body)>=10:
+            return body
+    return description
+
+
+def qualified_source_scope(item):
+    return re.sub(r'^(?:(?:For|In|During|Within)\s+)+','',item.scope.strip(),flags=re.I)
+
+
 def qualified_source_statement(item):
     """Normalize grammar only; never rewrite the source quotation or its meaning."""
-    scope=re.sub(r'^(?:(?:For|In|During|Within)\s+)+','',item.scope.strip(),flags=re.I)
-    description=item.description.strip()
+    scope=qualified_source_scope(item)
+    description=_description_without_owned_page_prefix(item)
+    prefix_removed=description!=item.description.strip()
     description=description[:1].lower()+description[1:]
+    if prefix_removed and not _SOURCE_SENTENCE_START.match(description):
+        description='reports that '+description
     return f'For {scope}, the source {description}'+('' if description.endswith(('.','!','?')) else '.')
 
 
-def source_context_paragraphs(parts):
-    """Pack unchanged adjacent statements into at most four audience paragraphs.
+def source_context_scope_prefixes(items,periods):
+    """Share only exactly rendered scopes across already separate source items."""
+    return {bound_period_dates(qualified_source_statement(item),periods):
+        (item.scope,bound_period_dates(f'For {qualified_source_scope(item)}, ',periods)) for item in items}
 
-    The main comparison owns the fifth bullet. This is lossless layout grouping,
-    not a limit on qualifications, proof or the independently reviewed meaning.
-    """
-    count=min(len(parts),4)
-    return [' '.join(parts[i*len(parts)//count:(i+1)*len(parts)//count])
-            for i in range(count)] if count else []
+
+def source_context_paragraphs(parts, *, scope_prefixes=None):
+    """Pack adjacent statements into at most four audience paragraphs."""
+    scoped=scope_prefixes or {}
+    groups=[[part] for part in parts]
+    while len(groups)>4:
+        pairs=[(sum(map(len,left+right)),index) for index,(left,right) in enumerate(zip(groups,groups[1:]))
+               if scoped.get(left[-1]) and scoped.get(left[-1])==scoped.get(right[0])]
+        if not pairs:
+            break
+        _,index=min(pairs)
+        groups[index:index+2]=[groups[index]+groups[index+1]]
+
+    count=min(len(groups),4)
+    paragraphs=[]
+    for index in range(count):
+        previous=None
+        statements=[]
+        for group in groups[index*len(groups)//count:(index+1)*len(groups)//count]:
+            for statement in group:
+                scope=scoped.get(statement)
+                if scope and scope==previous and statement.startswith(scope[1]+'the source '):
+                    statement='The source also '+statement[len(scope[1]+'the source '):]
+                statements.append(statement)
+                previous=scope
+        paragraphs.append(' '.join(statements))
+    return paragraphs
+
+
+def _mask_source_axis_categories(text,proof):
+    """Mask a worded axis count only when its adjacent product noun is literal."""
+    if not proof:
+        return text
+    owned={}
+    for match in _SOURCE_AXIS_CATEGORY.finditer(proof):
+        count=match['count'].casefold()
+        noun=match['noun'].casefold()
+        owned.setdefault(count,set()).add(noun)
+
+    def category_owned(count,noun):
+        return any(noun==source or noun+'s'==source or source+'s'==noun
+                   for source in owned.get(count,set()))
+
+    def coordinated(match):
+        noun=match['noun'].casefold()
+        if not category_owned(match['count'].casefold(),noun):
+            return match[0]
+        other=match['other'].casefold()
+        if other.endswith('-axis'):
+            second_owned=category_owned(other.removesuffix('-axis'),noun)
+        else:
+            variants={noun,noun+'s',noun.removesuffix('s')}
+            second_owned=any(re.search(r'(?<!\w)'+re.escape(other)+r'\s+'+re.escape(label)+r'(?![\w-])',
+                                       proof,re.I) for label in variants)
+        return ' '+match['shared'] if second_owned else match[0]
+
+    def replace(match):
+        return ' ' if category_owned(match['count'].casefold(),match['noun'].casefold()) else match[0]
+
+    return _SOURCE_AXIS_CATEGORY.sub(replace,_COORDINATED_AXIS_CATEGORIES.sub(coordinated,text))
+
+
+def _mask_source_standard_identifiers(text,proof):
+    """Mask only an exact source-owned accounting-standard number in citation grammar."""
+    if not proof:
+        return text
+    owned={' '.join(match[0].split()).casefold()
+           for match in _STANDARD_IDENTIFIER.finditer(proof)}
+
+    def replace(match):
+        code=' '.join(match['code'].split()).casefold()
+        tail=text[match.end():]
+        if (code not in owned or _STANDARD_MEASURE_TAIL.match(tail)
+                or not (match['prefix'] or _STANDARD_VALUATION_TAIL.match(tail))):
+            return match[0]
+        return match[0][:match.start('code')-match.start()]+' '*len(match['code'])
+
+    return _STANDARD_REFERENCE.sub(replace,text)
 
 
 def observation_context_labels(rows):
@@ -135,8 +371,13 @@ def reported_source_components(text,quotes,*,periods=(),labels=(),declared=()):
         from .source_context_periods import mask_source_horizons
         words=mask_source_horizons(words,source)
         if proof is not None:
+            from adaptive_document_agent.services.calendar_claims import mask_scoped_month_days
+            from adaptive_document_agent.services.calendar_claims import mask_scoped_year_ranges
             from .source_context_periods import mask_reporting_period_references
             words=mask_reporting_period_references(words,proof,scope)
+            words=mask_scoped_month_days(words,scope,proof)
+            words=mask_scoped_year_ranges(words,scope,proof)
+            words=_mask_source_standard_identifiers(words,proof)
         if _QUANTITY.search(words):
             return False
         from adaptive_document_agent.services.source_duration_conditions import mask_worded_duration_conditions
@@ -144,7 +385,16 @@ def reported_source_components(text,quotes,*,periods=(),labels=(),declared=()):
         labels_text=' '.join(labels).casefold()
         words=_LABEL_COMPOUND.sub(lambda m: ' ' if re.search(
             r'(?<!\w)'+re.escape(m[0])+r'(?!\w)',labels_text,re.I) else m[0],words)
-        return not _QUANTITY.search(cardinal_claim_text(words))
+        # A spelled axis count can be a literal product-category modifier.
+        # Bind only the exact hyphenated count and adjacent noun to this item's
+        # own proof; this does not authorize a measured count or model number.
+        if proof is not None:
+            words=_mask_source_axis_categories(words,proof)
+        # “One of the/these/those …” is a qualitative partitive idiom, not a
+        # count claim. Keep explicit following counts (e.g. “one of two”) intact.
+        cardinal_text=re.sub(r'\bone\s+of(?=\s+(?:the|these|those)\b)',
+                             'a member of',words,flags=re.I)
+        return not _QUANTITY.search(cardinal_claim_text(cardinal_text))
     from adaptive_document_agent.validation.claim_validator import _ALL_DIRECTIONAL_WORDS
     def scope_is_literal(scope_text,proof=None):
         if proof is not None:
@@ -172,7 +422,8 @@ def reported_source_components(text,quotes,*,periods=(),labels=(),declared=()):
     for item in declared:
         statement=bound_period_dates(qualified_source_statement(item),periods)
         from .source_context_periods import mask_source_periods
-        description=bound_period_dates(mask_source_periods(item.description,item.proof_text,periods=periods),periods,mask=True)
+        description=bound_period_dates(mask_source_periods(_description_without_owned_page_prefix(item),
+            item.proof_text,periods=periods),periods,mask=True)
         if description is not None:
             for period in sorted(set(periods),key=len,reverse=True):
                 description=re.sub(r'(?<!\w)'+re.escape(period)+r'(?!\w)',' ',description,flags=re.I)

@@ -189,7 +189,36 @@ class DocumentOrchestrator:
                 from adaptive_document_agent.services.presentation_requirements import apply_presentation_budget
                 requirements = apply_presentation_budget(requirements, original_instructions, presentation_budget)
 
+            from adaptive_document_agent.utils.pipeline_version import EXTRACTION_VERSION
+            prepared_tables = None
+
+            def table_scope(ranges, report_requirements):
+                pages = ({p for start, end in ranges for p in range(start, end + 1)}
+                         | appendix_pages(report_requirements)) if ranges else None
+                scope_hash = sha256_bytes(str(sorted(pages) if pages is not None else 'all').encode('utf-8'))[:16]
+                return pages, f"tables-{EXTRACTION_VERSION}-{digest}-{scope_hash}"
+
+            def cached_table_document(key, pages):
+                cached = self.cache.get_model(key, ParsedDocument) if self.cache else None
+                if cached is not None and any(page.table_extraction_status != 'processed'
+                        for page in cached.pages if pages is None or page.page_number in pages):
+                    return None
+                return cached
+
+            def start_table_extraction(ranges):
+                nonlocal prepared_tables
+                pages, key = table_scope([(r.start_page, r.end_page) for r in ranges], requirements)
+                cached = cached_table_document(key, pages)
+                task = None
+                if cached is None:
+                    from .table_extraction_task import prepare_table_extraction
+                    deadline = getattr(self.gateway, 'run_deadline', None)
+                    task = prepare_table_extraction(raw, pages, resources=resources,
+                        check_deadline=deadline.check if deadline is not None else None)
+                prepared_tables = pages, cached, task
+
             notify("Understanding document")
+            parallel = self.gateway is not None and self.gateway.discovery_workers > 1
             with record_timing(timings, "document_discovery"):
                 profile = DocumentDiscovery(self.gateway, cache=self.cache).discover(
                     document,
@@ -198,6 +227,7 @@ class DocumentOrchestrator:
                     routed_ranges=scope.page_ranges if scope else None,
                     enable_source_checks=True,
                     confirmed_scope=scope is not None,
+                    on_scope_selected=start_table_extraction if parallel else None,
                 )
 
             run_state['result'].profile = profile
@@ -208,7 +238,7 @@ class DocumentOrchestrator:
                 for requirement in requirements.items:
                     notify('Report requirement: ' + requirement.description)
             attach_introduction = None
-            if self.gateway and self.gateway.discovery_workers > 1:
+            if parallel:
                 # Discovery is the earliest stable source/profile boundary. Copy it
                 # before table extraction/recovery can mutate or replace document.
                 attach_introduction = resources.enter_context(prepare_company_introduction(
@@ -217,24 +247,22 @@ class DocumentOrchestrator:
 
             notify("Extracting tables from selected sections")
             with record_timing(timings, "table_extraction"):
-                page_numbers = (
-                    {page for start, end in profile.analysis_page_ranges for page in range(start, end + 1)}
-                    if profile.analysis_page_ranges
-                    else None
-                )
-                if page_numbers is not None:
-                    page_numbers |= appendix_pages(profile.report_requirements)
-                scope = sha256_bytes(str(sorted(page_numbers) if page_numbers is not None else 'all').encode('utf-8'))[:16]
-                from adaptive_document_agent.utils.pipeline_version import EXTRACTION_VERSION
-                cached_tables = self.cache.get_model(f"tables-{EXTRACTION_VERSION}-{digest}-{scope}", ParsedDocument) if self.cache else None
-                if cached_tables is not None and any(page.table_extraction_status != 'processed'
-                        for page in cached_tables.pages if page_numbers is None or page.page_number in page_numbers):
-                    cached_tables = None
+                page_numbers, cache_key = table_scope(profile.analysis_page_ranges, profile.report_requirements)
+                task = None
+                if prepared_tables is not None and prepared_tables[0] == page_numbers:
+                    _, cached_tables, task = prepared_tables
+                else:
+                    if prepared_tables is not None and prepared_tables[2] is not None:
+                        prepared_tables[2].close()
+                    cached_tables = cached_table_document(cache_key, page_numbers)
                 if cached_tables is not None:
                     document = cached_tables
                 else:
-                    table_extractor = TableExtractor()
-                    tables_by_page = table_extractor.extract(raw, page_numbers=page_numbers)
+                    if task is None:
+                        table_extractor = TableExtractor()
+                        tables_by_page = table_extractor.extract(raw, page_numbers=page_numbers)
+                    else:
+                        table_extractor, tables_by_page = task.result()
                     raw_tables_by_page = getattr(table_extractor, 'raw_tables_by_page', tables_by_page)
                     for page in document.pages:
                         page.tables = tables_by_page.get(page.page_number, [])
@@ -251,7 +279,7 @@ class DocumentOrchestrator:
                     self._reconstruct_tables(document)
                     if self.cache and all(page.table_extraction_status == 'processed' for page in document.pages
                                           if page_numbers is None or page.page_number in page_numbers):
-                        self.cache.set_model(f"tables-{EXTRACTION_VERSION}-{digest}-{scope}", document)
+                        self.cache.set_model(cache_key, document)
 
             run_state['result'].document = document
             notify("Extracting structured observations")

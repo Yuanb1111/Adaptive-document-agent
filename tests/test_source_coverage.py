@@ -63,12 +63,23 @@ def test_not_found_means_only_checked_pages_not_source_undisclosed():
     assert len(revised)==2 and not ledger.full_source_review_complete
 
 
-def test_two_checks_and_selection_are_hard_call_bound():
+def test_two_checks_and_selection_are_hard_call_bound(monkeypatch):
     doc,ranges=sample();gw=gateway([dict(targets=[target(5,5),target(7,8)],rationale='Check'),
         dict(found=False,finding='Not found on5',quotes=[]),dict(found=False,finding='Not found on7/8',quotes=[])])
+    original = gw.generate_structured
+    limits = []
+
+    def capture_limit(messages, schema, **options):
+        limits.append(options['max_tokens'])
+        return original(messages, schema, **options)
+
+    monkeypatch.setattr(gw, 'generate_structured', capture_limit)
     _,ledger=check_source_scope(doc,ranges,gw)
     assert ledger.calls_used==len(gw.client.calls)==3 and ledger.max_calls==7
     assert len({p for c in ledger.checks for p in c.pages})<=6
+    assert limits == [4096, 2048, 2048]
+    assert ledger.selection_output_token_limit == 4096
+    assert ledger.max_output_tokens_per_call == 2048
 
 
 def test_confirmed_user_scope_never_expanded_or_sent():

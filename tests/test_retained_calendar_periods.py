@@ -6,6 +6,39 @@ from adaptive_document_agent.validation.presentation_numeric_evidence import che
 from tests.test_topic_coverage_review import _observation
 
 
+@pytest.mark.parametrize('text,scope,proof,accepted', [
+    ('The 2021–22 build reflected procurement.', 'December 31, 2021 and December 31, 2022',
+     'Balances at December 31, 2021 and December 31, 2022 reflected procurement.',True),
+    ('The 2021–23 build reflected procurement.', 'December 31, 2021 and December 31, 2022',
+     'Balances at December 31, 2021 and December 31, 2022 reflected procurement.',False),
+    ('The 2021–22 build reflected procurement.', 'December 31, 2021 and December 31, 2022',
+     'Balances at December 31, 2021 and June 30, 2022 reflected procurement.',False),
+    ('The 2021–22 build reflected procurement.', 'December 31, 2021 and June 30, 2022',
+     'Balances at December 31, 2021 and June 30, 2022 reflected procurement.',False),
+    ('The 2021–22 devices were delivered.', 'December 31, 2021 and December 31, 2022',
+     'Balances at December 31, 2021 and December 31, 2022 reflected procurement.',False),
+    ('The 2021–22 build reflected procurement.', 'December 31, 2022',
+     'Balances at December 31, 2021 and December 31, 2022 reflected procurement.',False),
+])
+def test_source_only_short_year_range_needs_two_exact_dates_and_event_grammar(text,scope,proof,accepted):
+    from adaptive_document_agent.services.calendar_claims import mask_scoped_year_ranges
+
+    assert (mask_scoped_year_ranges(text,scope,proof)!=text) is accepted
+
+
+@pytest.mark.parametrize('proof,accepted', [
+    ('Balances rose from 10 on December 31, 2021 to 25 on December 31, 2022. Other levels followed.',True),
+    ('Balances rose from December 31, 2021 to June 30, 2022.',False),
+    ('The first report was filed on December 31, 2021. Supplies arrived on December 31, 2022.',False),
+])
+def test_full_year_range_requires_both_exact_coordinates_in_one_source_sentence(proof,accepted):
+    from adaptive_document_agent.services.calendar_claims import mask_scoped_year_ranges
+
+    text='The 2021–2022 increase reflected procurement.'
+    scope='December 31, 2021; December 31, 2022; December 31, 2023; June 30, 2024'
+    assert (mask_scoped_year_ranges(text,scope,proof)!=text) is accepted
+
+
 @pytest.mark.parametrize('last, accepted', [
     ('October 31, 2024', True), ('31 Oct 2024', True),
     ('December 31, 2024', False), ('February 31, 2024', False),

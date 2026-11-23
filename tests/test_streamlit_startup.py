@@ -37,7 +37,9 @@ def test_production_config_and_secrets_ignore_contract():
     for path, ignored in ((".streamlit/secrets.toml", True), (".streamlit/config.toml", False)):
         result = subprocess.run(
             ["git", "check-ignore", "--no-index", "-q", path], cwd=ROOT,
-            capture_output=True, text=True,
+            # After an environment reset, Windows can drop empty Git config
+            # values from implicit inheritance even when os.environ has them.
+            env=os.environ.copy(), capture_output=True, text=True,
         )
         assert result.returncode == (0 if ignored else 1), result.stderr
 

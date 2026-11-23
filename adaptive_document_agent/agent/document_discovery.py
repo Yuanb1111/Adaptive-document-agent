@@ -80,6 +80,7 @@ class DocumentDiscovery:
         routed_ranges: list[AnalysisPageRange] | None = None,
         enable_source_checks: bool = False,
         confirmed_scope: bool = False,
+        on_scope_selected: Callable[[list[AnalysisPageRange]], None] | None = None,
     ) -> DocumentProfile:
         notify = progress or (lambda _: None)
         # Replace on every document, including reused discovery instances.
@@ -106,6 +107,8 @@ class DocumentDiscovery:
             notify('Checking unselected source sections within the supplementary budget')
             routed_ranges, source_coverage = check_source_scope(document, scope_ranges, self.gateway,
                 analysis_focus, confirmed=confirmed_scope)
+        if on_scope_selected is not None:
+            on_scope_selected(routed_ranges)
         if routed_ranges:
             # Build heavy chunk text only for deep-analysis pages. The full
             # page-preserving document remains available for background facts.

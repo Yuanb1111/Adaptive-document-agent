@@ -25,6 +25,16 @@ _VALUE_AT_DATE_RANGE = re.compile(
     rf"to\s+(?:(?!\bto\b)[^;\n]){{1,100}}?\b{_DATE_PREPOSITION}\s+(?P<end>{_PERIOD})\b",
     re.I,
 )
+_DATED_SNAPSHOT_RANGE = re.compile(
+    rf"\bfrom\s+(?:the\s+)?(?P<start>{_YEAR}-\d{{2}}-\d{{2}})\s+"
+    rf"(?:balance(?:\s+sheet)?|snapshot)\s+to\s+(?:the\s+)?"
+    rf"(?P<end>{_YEAR}-\d{{2}}-\d{{2}})\s+(?:balance(?:\s+sheet)?|snapshot)\b",
+    re.I,
+)
+_AS_OF_DATE_RANGE = re.compile(
+    rf"\bfrom\s+as\s+of\s+(?P<start>{_YEAR}-\d{{2}}-\d{{2}}){_ASSURANCE_NOTE}\s+"
+    rf"to\s+as\s+of\s+(?P<end>{_YEAR}-\d{{2}}-\d{{2}})\b", re.I,
+)
 _DATED_BASELINE_RANGE = re.compile(
     rf"\b(?:was|were)\s+(?P<initial>[\d,(−+\-][^;\n]{{0,60}}?)\s+{_DATE_PREPOSITION}\s+"
     rf"(?P<start>{_PERIOD})\s+and\s+(?:rose|fell|increased|decreased|grew|declined)\s+"
@@ -363,10 +373,12 @@ def resolve_direction_scope(
     # "from 100 units at 2021-12-31 to 120 units at 2024-10-31" or
     # "from 100 units in FY2021 to 120 in FY2022 and 130 in FY2023".
     # Every stated period must resolve to this metric's linked observations.
-    ranges = [([match["start"], match["end"]], match.start())
+    snapshot_ranges = [*_DATED_SNAPSHOT_RANGE.finditer(local_text), *_AS_OF_DATE_RANGE.finditer(local_text)]
+    ranges = [([match["start"], match["end"]], match.start()) for match in snapshot_ranges]
+    ranges.extend(([match["start"], match["end"]], match.start())
               for match in [*_RANGE.finditer(local_text), *_VALUE_AT_DATE_RANGE.finditer(local_text),
                             *_REVERSED_VALUE_RANGE.finditer(local_text),
-                            *_DATED_BASELINE_RANGE.finditer(local_text)]]
+                            *_DATED_BASELINE_RANGE.finditer(local_text)])
     ranges.extend(_value_in_period_ranges(local_text))
     if len(ranges) > 1 and allow_other_period_bases:
         basis = extract_period_basis(observations[0].period)
@@ -397,6 +409,12 @@ def resolve_direction_scope(
                 if index is None:
                     return DirectionScope(error="The stated period range is missing or not chronological")
                 indices.append(index)
+            if range_start in {match.start() for match in snapshot_ranges}:
+                bounded = observations[indices[0]:indices[-1] + 1]
+                if any(point.period_type not in {"balance_sheet_date", "point_in_time"}
+                       or point.period_basis not in {"", "generic", "point_in_time"}
+                       for point in bounded):
+                    return DirectionScope(error="The stated balance/snapshot range does not bind to point-in-time endpoints")
             if any(first >= last for first, last in zip(indices, indices[1:])):
                 return DirectionScope(error="The stated period range is missing or not chronological")
             segments.append(observations[indices[0]:indices[-1] + 1])

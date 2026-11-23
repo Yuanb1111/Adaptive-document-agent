@@ -289,6 +289,12 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
             'When capacity permits, give distinct source findings separate concise additions instead '
             'of packing unrelated checks into one paragraph. Several material findings from one '
             'check can also use separate additions within the same total capacity. '
+            'Allocate same-check additions by distinct subject or consequence before drafting. '
+            'Keep requirements and prohibitions together with the triggers, consequences and '
+            'exceptions that apply to them. When a qualification is limited to one consequence, '
+            'state it alongside that consequence and keep any broader duty separate. '
+            'Use space in another addition owned by the same check before dropping a material '
+            'part of a list or substituting a generic description. '
             'Compare each check.finding with the exact audience text bound to that check. Recheck its '
             'material qualifications against the pages, including timing, dependencies and limits of '
             'coverage. Carry the supported qualifications into the bound brief items themselves. '
@@ -370,7 +376,8 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
                     draft = revise_reopened_additions(gateway, messages, prior_review[0], edit_sections,
                                                       len(brief.items), entry)
                 elif pending_copy is not None:
-                    draft = shorten_additions(gateway, messages, SourceIntegrationDraft, pending_copy, entry, len(brief.items))
+                    draft = shorten_additions(gateway, messages, SourceIntegrationDraft, pending_copy,
+                        entry, len(brief.items), sentence_compress=length_progress_used)
                     pending_copy = None
                 elif attempt and scoped_retry is not None and prior_review is not None:
                     # The retry is already scoped to existing additions. Its
@@ -410,6 +417,10 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
                      'do not carry the meaning. Page citation alone is not coverage. Return exactly one verdict per '
                      'section_id, with a source-specific reason; assess all additions bound to that section. Do not '
                      'accept on the writer\'s assurance or infer comprehensive document review. '
+                     'For each rejected section, say which specific source-supported claims and qualifications '
+                     'in its current additions must survive alongside the corrections. Describe the exact '
+                     'predicate governed by an omitted trigger, limit or exception. An editor needs both the '
+                     'missing material and the material to retain when rewriting within the same item capacity. '
                      + MERGED_BRIEF_INSTRUCTIONS},
                     untrusted_document_message(json.dumps(review_context, ensure_ascii=False)),
                     untrusted_document_message(json.dumps({'draft': entry['draft']}, ensure_ascii=False))],
@@ -495,6 +506,9 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
                 correction = {key: entry[key] for key in ('draft', 'review', 'error') if key in entry}
                 messages += [untrusted_document_message(json.dumps(correction, ensure_ascii=False)),
                              {'role': 'user', 'content': 'Correct the specific rejected source bindings or semantic findings. '
+                              'Check each current rejected verdict for every named omission and every '
+                              'source-backed statement to preserve. Keep each condition or exception attached '
+                              'to its precise source predicate when splitting or shortening the copy. '
                               'For a locator error, repair the references for the existing conclusions. For an '
                               'unsupported date, cite the date header in that same addition or remove the date. '
                               'For an amount without a provable unit/column, retain the material qualitative '

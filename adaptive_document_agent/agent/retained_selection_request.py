@@ -7,7 +7,7 @@ from .presentation_budget_output import complete_budget_output, SELECTION_TOKEN_
 
 
 def selection_request(gateway, messages, schema, result, attempt, *, max_tokens=8000,
-                      capacity_tokens=None):
+                      capacity_tokens=None, repair_missing=None):
     output = {}
     try:
         return complete_budget_output(gateway, messages, schema, output,
@@ -20,8 +20,12 @@ def selection_request(gateway, messages, schema, result, attempt, *, max_tokens=
             if exc.response.usage and exc.response.usage.finish_reason == 'length':
                 diagnostic['status'] = 'truncated'
                 raise
-            value = gateway.repair_structured_output(exc, schema, stage='presentation',
-                                                      diagnostics=diagnostic, max_tokens=max_tokens)
+            value = repair_missing(exc) if repair_missing is not None else None
+            if value is None:
+                value = gateway.repair_structured_output(exc, schema, stage='presentation',
+                                                          diagnostics=diagnostic, max_tokens=max_tokens)
+            else:
+                diagnostic['repair_kind'] = 'owned_missing_fields'
             diagnostic['status'] = 'repaired'
             return value
         except Exception as failure:

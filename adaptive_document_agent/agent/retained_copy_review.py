@@ -28,6 +28,14 @@ def copy_review_payload(payload: dict) -> dict:
               if r['id'] in ids and r['table_id'] is not None}
     rows = [r for r in payload.get('source_rows', []) if r['id'] in ids or r['table_id'] in tables]
     row_ids = ids | {r['id'] for r in rows}
+    available_pages = {p['page'] for p in payload.get('source_pages', [])}
+    anchors = {page for citation in citations for page in citation.get('source_pages', [])}
+    anchors.update(evidence.get('page') for observation in payload.get('observations', [])
+                   if observation.get('id') in row_ids
+                   for evidence in observation.get('evidence', [])
+                   if isinstance(evidence.get('page'), int))
+    source_reading_pages = sorted({page + offset for page in anchors for offset in range(-2, 3)
+                                   if page + offset in available_pages})
     return {
         **payload,
         'findings': findings,
@@ -41,6 +49,9 @@ def copy_review_payload(payload: dict) -> dict:
         'source_row_assurance': {k: v for k, v in payload['source_row_assurance'].items() if k in row_ids},
         'verified_column_assurance': {k: v for k, v in payload['verified_column_assurance'].items() if k in row_ids},
         'planned_source_citations': citations,
+        # Help a focused reviewer re-read the owning evidence and adjacent
+        # discussion without removing any other original source page.
+        'source_reading_pages': source_reading_pages,
         'proposed_selection': {**selection, 'decisions': decisions,
             'ordered_insight_ids': [iid for iid in selection['ordered_insight_ids'] if iid in targets]},
         'settled_selection_ids': selection['ordered_insight_ids'],

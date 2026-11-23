@@ -15,6 +15,249 @@ from tests.test_retained_analysis_v216 import gateway,verdict
 QUOTE='The decrease in deposits partially offset the increase in net current assets.'
 
 
+@pytest.mark.parametrize('description,scope,extra_proof,accepted', [
+    ('describes inventory held at June 30 as subsequently sold.',
+     '2024-06-30 and 2024-10-31','',True),
+    ('describes inventory held at June 30 as subsequently sold.',
+     '2024-10-31','',False),
+    ('describes inventory held at June 30 as subsequently sold.',
+     '2024-06-30 and 2024-10-31',' The company also held inventory on June 30, 2023.',False),
+    ('describes inventory held at June 29 as subsequently sold.',
+     '2024-06-30 and 2024-10-31','',False),
+    ('reports inventory at June 30 units.',
+     '2024-06-30 and 2024-10-31','',False),
+])
+def test_partial_calendar_reference_needs_one_exact_proved_date_in_same_scope(
+        description,scope,extra_proof,accepted):
+    from adaptive_document_agent.agent.reported_source_context import QualifiedSourceCopy,qualified_source_statement
+
+    quote=BriefQuote(page=1,text='Inventory held at June 30, 2024 was subsequently sold by October 31, 2024.'
+                               +extra_proof)
+    item=QualifiedSourceCopy(scope=scope,description=description,quote=quote)
+    statement=qualified_source_statement(item)
+    _,accepted_parts=reported_source_components('The source reports balances. '+statement,[quote],
+        periods=['2024-06-30','2024-10-31'],declared=[item])
+    assert bool(accepted_parts) is accepted
+
+
+def test_overlong_source_description_splits_only_complete_verb_led_sentences_losslessly():
+    from adaptive_document_agent.agent.reported_source_context import split_overlong_source_descriptions
+    scope='FY2023 to FY2025'
+    quote={'page':235,'text':QUOTE}
+    sentences=[
+        'Describes '+('the effect of customer demand on the reported business operations, while preserving the stated conditions and management context '*2)+'.',
+        'Attributes '+('the change to product mix and distribution arrangements, without stating a measured amount or calculated comparison '*2)+'.',
+        'Notes '+('that the discussion concerns the same reporting scope and retains the source qualification in full '*2)+'.',
+    ]
+    description=' '.join(sentences)
+    assert len(description)>700 and all(len(sentence)<=700 for sentence in sentences)
+    original=[{'scope':scope,'description':description,'quote':quote}]
+    split=split_overlong_source_descriptions(original)
+    assert [item['description'] for item in split]==sentences
+    assert all(item['scope']==scope and item['quote']==quote for item in split)
+    assert ' '.join(item['description'] for item in split)==description
+
+
+def test_overlong_company_attributed_description_splits_with_explicit_company_subject():
+    from adaptive_document_agent.agent.reported_source_context import split_overlong_source_descriptions
+    scope='2021 to 2024'
+    quote={'page':311,'text':'The company describes the market and attributes the change to product demand.'}
+    clauses=[
+        'The company describes '+('the market conditions and the source-defined effect on its operating results '*3)+'.',
+        'It attributes '+('the movement to the stated product mix and customer demand conditions '*3)+'.',
+        'It attributes '+('the related development to the source-described overseas supply-chain change '*3)+'.',
+    ]
+    description=' '.join(clauses)
+    assert len(description)>700 and all(len(clause)<=700 for clause in clauses)
+    original=[{'scope':scope,'description':description,'quote':quote}]
+    split=split_overlong_source_descriptions(original)
+    assert [item['description'] for item in split]==[
+        'Reports that the company describes '+clauses[0].removeprefix('The company describes '),
+        'Reports that the company attributes '+clauses[1].removeprefix('It attributes '),
+        'Reports that the company attributes '+clauses[2].removeprefix('It attributes '),
+    ]
+    assert all(len(item['description'])<=700 for item in split)
+    assert all(item['scope']==scope and item['quote']==quote for item in split)
+
+
+def test_long_attributed_description_keeps_complete_statement_groups_and_possessives():
+    from adaptive_document_agent.agent.reported_source_context import split_overlong_source_descriptions
+
+    sentences=[
+        'Describes the company’s loss and continuing investment, '+('including the source’s original conditions, '*8)+'during the period.',
+        'Prolonged losses indicated impairment. Testing covered '+('assets with the stated conditions, '*8)+'using the approved basis.',
+        'The test found the assets’ recoverable amount exceeded the stated carrying amount.',
+    ]
+    original=' '.join(sentences)
+    quote={'page':4,'text':'Literal source explains the test and its conclusion.'}
+    continuation={'page':5,'text':'Literal continuation describes the stated conditions.'}
+    items=[dict(scope='the reporting period',description=original,quote=quote,continuation_quotes=[continuation])]
+    assert len(original)>700
+    result=split_overlong_source_descriptions(items)
+    assert len(result)==2 and all(len(item['description'])<=700 for item in result)
+    assert ' '.join(item['description'].removeprefix('Reports the following. ') for item in result)==original
+    assert all(item['scope']==items[0]['scope'] and item['quote']==quote
+               and item['continuation_quotes']==[continuation] for item in result)
+
+
+@pytest.mark.parametrize('description', [
+    'It describes '+('the same source discussion in detail '*24)+'. The company reports a related effect.',
+    'The company describes '+('the same source discussion in detail '*24)+'. They attribute another effect.',
+    'The company describes '+('the same source discussion in detail '*24)+'. It caused another effect.',
+    'The company describes '+('the same source discussion in detail '*24)+'. It attributes that it changed.',
+])
+def test_overlong_company_attribution_requires_unambiguous_speaker_and_reporting_verbs(description):
+    from adaptive_document_agent.agent.reported_source_context import split_overlong_source_descriptions
+    items=[{'scope':'the reported discussion','description':description,
+            'quote':{'page':1,'text':QUOTE}}]
+    assert len(description)>700
+    assert split_overlong_source_descriptions(items) is items
+
+
+@pytest.mark.parametrize('description,extra,count',[
+    ('Describes '+('a supported discussion. '*36)+'A separate sentence without an allowed verb.',{},1),
+    ('Describes the phrase "a quoted sentence. Still quoted" and its meaning. '+('Notes '+('another supported subject. '*27)),{},1),
+    ('Describes '+('a complete supported point. '*36),{'unexpected':'preserve'},1),
+])
+def test_overlong_source_description_leaves_ambiguous_or_extended_items_unchanged(description,extra,count):
+    from adaptive_document_agent.agent.reported_source_context import split_overlong_source_descriptions
+    item={'scope':'FY2023','description':description,'quote':{'page':1,'text':QUOTE},**extra}
+    values=[item]
+    result=split_overlong_source_descriptions(values)
+    assert result is values and len(result)==count
+
+
+def test_overlong_source_description_respects_existing_item_capacity():
+    from adaptive_document_agent.agent.reported_source_context import split_overlong_source_descriptions
+    items=[{'scope':f'FY202{i}','description':'Notes a source qualification.',
+            'quote':{'page':1,'text':QUOTE}} for i in range(7)]
+    items[0]['description']='Describes '+('a fully supported source point. '*18)+'. Attributes '+('a separate supported point. '*18)
+    assert len(items[0]['description'])>700
+    assert split_overlong_source_descriptions(items) is items
+
+
+def test_overlong_source_description_does_not_split_abbreviation_punctuation():
+    from adaptive_document_agent.agent.reported_source_context import split_overlong_source_descriptions
+    item={'scope':'FY2023','description':('Describes U.S. market conditions. '*24)+
+          'Attributes a separate source qualification.','quote':{'page':1,'text':QUOTE}}
+    values=[item]
+    assert len(item['description'])>700
+    assert split_overlong_source_descriptions(values) is values
+
+
+def test_each_overlong_continuation_splits_losslessly_without_reordering_pages():
+    from adaptive_document_agent.agent.reported_source_context import QualifiedSourceCopy
+    from adaptive_document_agent.services.source_quotes import normalize_quote
+    long='The source explains a complete condition and its related qualification. '*48
+    short='The source adds a separate continuation on this page.'
+    item=QualifiedSourceCopy.model_validate(dict(scope='the reported discussion',
+        description='describes a source condition and qualification',
+        quote={'page':1,'text':'The source introduces the discussion.'},
+        continuation_quotes=[{'page':2,'text':long},{'page':3,'text':short}]))
+    assert [proof.page for proof in item.proof_quotes]==[1,2,2,3]
+    assert all(len(proof.text)<=1800 for proof in item.proof_quotes)
+    assert normalize_quote(' '.join(proof.text for proof in item.continuation_quotes[:2]))==normalize_quote(long)
+    assert item.continuation_quotes[-1].text==short
+
+
+def test_overlong_nested_continuation_is_split_after_conflict_check():
+    from pydantic import ValidationError
+    from adaptive_document_agent.agent.reported_source_context import QualifiedSourceCopy
+    from adaptive_document_agent.services.source_quotes import normalize_quote
+    long='The source explains a complete condition and its related qualification. '*48
+    raw=dict(scope='the reported discussion',description='describes a source condition',quote={
+        'page':1,'text':'The source introduces the discussion.',
+        'continuation_quotes':[{'page':2,'text':long}]})
+    item=QualifiedSourceCopy.model_validate(raw)
+    assert [proof.page for proof in item.proof_quotes]==[1,2,2]
+    assert normalize_quote(' '.join(proof.text for proof in item.continuation_quotes))==normalize_quote(long)
+    conflict={**raw,'continuation_quotes':[{'page':3,'text':'A conflicting continuation.'}]}
+    with pytest.raises(ValidationError):
+        QualifiedSourceCopy.model_validate(conflict)
+
+
+def test_overlong_continuations_do_not_expand_existing_three_item_capacity():
+    from pydantic import ValidationError
+    from adaptive_document_agent.agent.reported_source_context import QualifiedSourceCopy
+    long='The source explains a complete condition and its related qualification. '*48
+    raw=dict(scope='the reported discussion',description='describes a source condition',
+        quote={'page':1,'text':'The source introduces the discussion.'},
+        continuation_quotes=[{'page':2,'text':long},{'page':3,'text':long}])
+    with pytest.raises(ValidationError):
+        QualifiedSourceCopy.model_validate(raw)
+
+
+@pytest.mark.parametrize('description,proof,accepted', [
+    ('describes six-axis cobot revenue as part of the product offering',
+     'The source discusses revenue from six-axis cobot products.',True),
+    ('describes six-axis cobots revenue as part of the product offering',
+     'The source discusses revenue from six-axis cobot products.',True),
+    ('describes six-axis and integrated cobots as drivers',
+     'The source discusses six-axis cobots and integrated cobots.',True),
+    ('describes lower six-axis and four-axis cobot margins',
+     'The source discusses lower margins for six-axis cobots and four-axis cobots.',True),
+    ('describes six-axis and integrated cobots as drivers',
+     'The source discusses six-axis cobots and integrated robots.',False),
+    ('describes lower six-axis and four-axis cobot margins',
+     'The source discusses lower margins for six-axis cobots and four-axis robots.',False),
+    ('describes six-axis and integrated cobots valued at RMB 9 million',
+     'The source discusses six-axis cobots and integrated cobots.',False),
+    ('describes seven-axis cobot revenue as part of the product offering',
+     'The source discusses revenue from six-axis cobot products.',False),
+    ('describes six-axis robot revenue as part of the product offering',
+     'The source discusses revenue from six-axis cobot products.',False),
+    ('describes six axis cobot revenue as part of the product offering',
+     'The source discusses revenue from six-axis cobot products.',False),
+    ('describes six-axis Model-X revenue as part of the product offering',
+     'The source discusses revenue from six-axis cobot products.',False),
+    ('describes six-axis cobot revenue of RMB 30 million',
+     'The source discusses revenue from six-axis cobot products.',False),
+    ('describes six-month cobot revenue as part of the product offering',
+     'The source discusses revenue from six-axis cobot products.',False),
+])
+def test_worded_axis_category_needs_exact_modifier_and_source_product_noun(
+        description,proof,accepted):
+    from adaptive_document_agent.agent.reported_source_context import QualifiedSourceCopy,qualified_source_statement
+    quote=BriefQuote(page=1,text=proof)
+    item=QualifiedSourceCopy(scope='the product discussion',description=description,quote=quote)
+    statement=qualified_source_statement(item)
+    _,parts=reported_source_components('The source reports product revenue. '+statement,
+        [quote],declared=[item])
+    assert bool(parts) is accepted
+
+
+@pytest.mark.parametrize('description,proof,accepted', [
+    ('describes the inventory measurement basis under IAS 2',
+     'Inventories are stated at the lower of cost and net realizable value in accordance with IAS 2.',True),
+    ('describes IAS 2 lower-of-cost/NRV tests',
+     'Inventories are stated at the lower of cost and net realizable value in accordance with IAS 2.',True),
+    ('describes IAS 2: lower cost/NRV; tests assess recoverability',
+     'Inventories are stated at the lower of cost and net realizable value in accordance with IAS 2.',True),
+    ('describes IAS 2: lower cost/NRV; inventories aged 30 days',
+     'Inventories are stated at the lower of cost and net realizable value in accordance with IAS 2.',False),
+    ('describes IAS 2 lower-of-cost/NRV tests',
+     'The source states its measurement method in accordance with IAS 3.',False),
+    ('describes IAS 2 reporting sites',
+     'Inventories are stated at the lower of cost and net realizable value in accordance with IAS 2.',False),
+    ('describes the inventory measurement basis under IAS 3',
+     'Inventories are stated at the lower of cost and net realizable value in accordance with IAS 2.',False),
+    ('describes inventory aged under IAS 2 years',
+     'Inventories are stated at the lower of cost and net realizable value in accordance with IAS 2.',False),
+    ('describes the inventory measurement basis under IAS 2 with RMB 30 million',
+     'Inventories are stated at the lower of cost and net realizable value in accordance with IAS 2.',False),
+])
+def test_literal_accounting_standard_identifier_is_not_a_quantity(
+        description,proof,accepted):
+    from adaptive_document_agent.agent.reported_source_context import QualifiedSourceCopy,qualified_source_statement
+    quote=BriefQuote(page=332,text=proof)
+    item=QualifiedSourceCopy(scope='the inventory accounting discussion',
+        description=description,quote=quote)
+    statement=qualified_source_statement(item)
+    _,parts=reported_source_components('The source reports inventory. '+statement,
+        [quote],declared=[item])
+    assert bool(parts) is accepted
+
+
 def reported():
     result,_,selection=fixture()
     result.document.pages.append(DocumentPage(page_number=235,text=QUOTE))
@@ -183,6 +426,32 @@ def test_literal_causal_speech_is_not_a_calculation_and_still_requires_publicati
     assert not review_complete(result)
 
 
+def test_source_context_partitive_one_of_is_qualitative_but_explicit_count_is_not():
+    from adaptive_document_agent.agent.reported_source_context import (
+        QualifiedSourceCopy,qualified_source_statement)
+    quote=BriefQuote(page=340,text=(
+        'In the six months ended June 30, 2024, changes in working capital that negatively '
+        'affected operating cash flow primarily included an increase in inventories of '
+        'RMB23.1 million, partially offset by changes that positively affected operating '
+        'cash flow, primarily a decrease in trade and bill receivables of RMB9.7 million.'))
+    description=('describes inventory growth as one of the working-capital changes that '
+        'negatively affected operating cash flow')
+    item=QualifiedSourceCopy(scope='2024-06-30',description=description,quote=quote)
+    statement=qualified_source_statement(item)
+    _,parts=reported_source_components('The source reports cash flow. '+statement,
+        [quote],periods=['2024-06-30'],declared=[item])
+    assert parts==[statement]
+
+    for count_phrase in ('one of two','one of the two','one of those 3'):
+        quantified=item.model_copy(update={'description':(
+            f'describes inventory growth as {count_phrase} working-capital changes that '
+            'negatively affected operating cash flow')})
+        quantified_statement=qualified_source_statement(quantified)
+        _,parts=reported_source_components('The source reports cash flow. '+quantified_statement,
+            [quote],periods=['2024-06-30'],declared=[quantified])
+        assert parts==[]
+
+
 @pytest.mark.parametrize('text',[
     'The source states: "'+QUOTE.replace('decrease','increase',1)+'"',
     'For Revenue decreased from FY2023 to FY2025, the source states: "'+QUOTE+'"',
@@ -286,3 +555,21 @@ def test_local_copy_repair_replaces_owned_context_and_preserves_appended_assuran
     assert len(slide.bullets)==3 and QUOTE in slide.bullets[1]
     assert slide.bullets[-1]=='Additional source assurance remains unmarked.'
     assert slide.bullet_observation_ids[1]==[]
+
+
+@pytest.mark.parametrize('prefix,accepted',[('p. 3: ',True),('Page 3: ',True),
+    ('p. 4: ',False),('p. 3 and p. 4: ',False)])
+def test_only_a_redundant_exact_proof_page_can_leave_visible_source_copy(prefix,accepted):
+    from adaptive_document_agent.agent.reported_source_context import (
+        QualifiedSourceCopy, qualified_source_statement, reported_source_components)
+    from adaptive_document_agent.models.executive_brief import BriefQuote
+
+    proof=BriefQuote(page=3,text='Management considered the provision adequate.')
+    item=QualifiedSourceCopy(scope='the source discussion',
+        description=prefix+'Management considered the provision adequate.',quote=proof)
+    statement=qualified_source_statement(item)
+    _,parts=reported_source_components('Reported levels. '+statement,[proof],declared=[item])
+    assert bool(parts)==accepted
+    assert item.description.startswith(prefix) and item.quote==proof
+    if accepted:
+        assert statement=='For the source discussion, the source reports that management considered the provision adequate.'

@@ -112,6 +112,30 @@ def test_missing_range_read_cannot_change_accepted_parts_or_invent_support(inval
     assert outcome.audit['missing_range_read']['error']
 
 
+@pytest.mark.parametrize('terminal',[True,False])
+def test_only_a_mechanically_proven_terminal_marker_can_correct_empty_content_role(terminal):
+    from adaptive_document_agent.agent.summary_read_binding import bind_reading
+
+    result, _, _, _ = fixture()
+    marker='– 10 –'
+    suffix='' if terminal else '\nService excludes hardware.'
+    result.document.pages[0].text=f'SUMMARY\nCedar builds software.\n{marker}{suffix}'
+    blocks=source_blocks(result,[1])
+    response=SummaryReadBatch(parts=[dict(block_id=blocks[0].id,start_line=3,end_line=3,
+        role='content',title='Page marker',reading_note='The model marked it as content.',facts=[])])
+    record={}
+    parts,errors=bind_reading(response,blocks,result,record,literal_fallback=True,repair_owned_ranges=True)
+
+    assert not errors
+    assert parts[0].source_text.strip()==marker and not parts[0].facts
+    assert parts[0].role==('layout' if terminal else 'content')
+    assert response.parts[0].role=='content'
+    if terminal:
+        assert record['terminal_page_markers'][0]['proof']['basis']=='literal_terminal_page_marker'
+    else:
+        assert 'terminal_page_markers' not in record
+
+
 def test_substantive_overlap_still_fails_after_bounded_targeted_read():
     result, blocks, rows, _ = fixture()
     rows.append(deepcopy(rows[1]))
