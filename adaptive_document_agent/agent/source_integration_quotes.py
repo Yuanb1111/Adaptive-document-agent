@@ -32,7 +32,12 @@ def numbered_source_pages(pages):
             # An individually overlong source line remains in full below;
             # only a literal substring, not an invalid whole-line option, fits.
             start = end
-        output.append(dict(**{k: v for k, v in page.items() if k != 'text'}, lines=[
+        # Numbered display lines omit line endings. Preserve the only
+        # two-character separator so a writer-selected subrange can be
+        # measured to the same length as the original physical page.
+        crlf = [i for i, line in enumerate(lines[:-1], 1) if line.endswith('\r\n')]
+        output.append(dict(**{k: v for k, v in page.items() if k != 'text'}, **(
+            {'crlf_line_endings': crlf} if crlf else {}), lines=[
             f'{n} | {line}' for n, line in enumerate(page['text'].splitlines(), 1)],
             evidence_reference_options=options,
             table_cell_reference_options=[dict(ref=o['ref'], chars=o['characters'], preview=o['text'][:48])

@@ -31,6 +31,31 @@ def test_whole_paragraph_keeps_original_fields_and_requires_caller_validation():
     assert checked and len(llm.usage)==1 and source==before
 
 
+def test_local_copy_failure_retains_typed_candidates_and_exact_reasons_as_feedback_only():
+    source=payload()
+    proof='The method accounts for differences in the reporting window.'
+    source['source_pages'].append(dict(page=3,text=proof))
+    original=deepcopy(source)
+    addition=dict(scope='measurement basis',description='Describes the reporting window.',
+                  quote=dict(page=3,text=proof))
+    first=dict(message='First unapproved wording.',source_context=None,source_context_additions=[addition])
+    second=dict(message='Second unapproved wording.',source_context=None)
+    llm=base_gateway([first,second])
+    def reject(pages):
+        return {'owned':['Rejected wording: '+pages['owned'].message]}
+
+    with pytest.raises(AuthoredPageErrors) as failed:
+        compact_publication_copy(llm,'owned',source,1250,reject)
+
+    attempts=failed.value.rejected_attempts['owned']
+    assert len(attempts)==len(llm.usage)==2
+    assert attempts[0].page.source_context[0].model_dump()==addition
+    assert attempts[0].errors==['Rejected wording: First unapproved wording.']
+    assert attempts[1].page.source_context==[]
+    assert attempts[1].errors==['Rejected wording: Second unapproved wording.']
+    assert source==original
+
+
 def test_unbound_amount_feedback_points_to_the_exact_eligible_signed_row():
     source=payload()
     row=dict(id='loss-row',metric='Operating loss',period='6M2023',value='(22,108)',unit='RMB in thousands')
@@ -308,6 +333,35 @@ def test_capacity_wire_keeps_usable_alternative_to_an_overlong_source_paragraph(
     assert actual==page
 
 
+@pytest.mark.parametrize('usable_version',['primary','condensed','neither'])
+def test_full_page_chooses_only_a_source_version_that_fits_its_last_slot(usable_version):
+    from pydantic import ValidationError
+    from adaptive_document_agent.agent.compact_publication_copy import (
+        _source_capacity_values, _source_description_capacity_request, visible_copy_budget)
+
+    scopes=('assembly','delivery','sales','orders','staff','returns','products','support')
+    page=RetainedPage(title='Source profile',message='Reported levels.',source_context=[
+        dict(scope=scope,description='Describes the local operating condition.',
+             quote=dict(page=index,text=f'The reported condition concerns {scope}.'))
+        for index,scope in enumerate(scopes,1)])
+    limit=1600
+    schema,messages=_source_description_capacity_request(page,visible_copy_budget(page,[],limit),limit,[])
+    compact={f'context_{index}':[item.description] for index,item in enumerate(page.source_context,1)}
+    split={**compact,'context_3':['Describes the local operating condition.',
+                                  'Reports that operating procedures changed.']}
+    response=schema.model_validate({
+        **(compact if usable_version=='primary' else split),
+        'condensed':compact if usable_version=='condensed' else split})
+    assert 'exactly ONE paragraph for each scope' in messages[0]['content']
+
+    values=_source_capacity_values(page,response,[],limit)
+    if usable_version=='neither':
+        with pytest.raises(ValidationError,match='at most 8'):
+            RetainedPage.model_validate(values)
+    else:
+        assert RetainedPage.model_validate(values)==page
+
+
 def test_size_only_compression_keeps_exact_source_day_count_parameters():
     from adaptive_document_agent.agent.compact_publication_copy import (
         _source_capacity_values, _source_description_capacity_request, visible_copy_budget)
@@ -476,6 +530,40 @@ def test_addressed_source_description_edit_keeps_other_copy_and_exact_proof():
     assert len(llm.client.calls)==1
 
 
+@pytest.mark.parametrize('rewrite_description',[False,True])
+def test_existing_source_scope_can_be_corrected_without_adding_another_entry(rewrite_description):
+    source=payload()
+    draft=source['pages_to_correct']['owned']['draft']
+    proof=dict(page=2,text='From December 31, 2021 to June 30, 2024, the product mix changed.')
+    source['source_pages'][0]['text']=proof['text']
+    original=dict(scope='the reported discussion',description='Describes a change in product mix.',quote=proof)
+    sibling=dict(scope='the product categories',description='Describes the reported categories.',quote=proof)
+    draft['source_context']=[original,sibling]
+    edit=dict(scope='December 31, 2021 to June 30, 2024')
+    if rewrite_description:
+        edit['description']='Describes the change in the mix of reported products.'
+    llm=gateway([dict(message=None,source_context=None,source_context_edits={'context-0':edit})])
+    reviewed=[]
+
+    page=compact_publication_copy(llm,'owned',source,1250,
+        lambda pages: reviewed.append(pages['owned']) or {})['owned']
+
+    assert reviewed==[page] and len(llm.client.calls)==1
+    assert [item.model_dump() for item in page.source_context]==[{**original,**edit},sibling]
+
+
+def test_revised_scope_still_requires_a_bound_period():
+    source=payload()
+    proof=dict(page=2,text=source['source_pages'][0]['text'])
+    source['pages_to_correct']['owned']['draft']['source_context']=[dict(
+        scope='reported discussion',description='Describes the source qualification.',quote=proof)]
+    invalid=dict(message=None,source_context=None,source_context_edits={'context-0':{'scope':'FY2099'}})
+    llm=gateway([invalid,invalid])
+
+    with pytest.raises(AuthoredPageErrors,match='Scope binding feedback'):
+        compact_publication_copy(llm,'owned',source,1250,lambda _: {})
+
+
 def test_addressed_source_addition_retains_existing_scope_and_proof():
     source=payload()
     draft=source['pages_to_correct']['owned']['draft']
@@ -489,6 +577,120 @@ def test_addressed_source_addition_retains_existing_scope_and_proof():
     assert page.message==draft['message']
     assert [item.model_dump() for item in page.source_context]==[*draft['source_context'],addition]
     assert len(llm.client.calls)==1
+
+
+@pytest.mark.parametrize('preserve', [False, True])
+def test_full_addressed_proof_edit_uses_the_same_literal_catalog_and_keeps_other_slots(preserve):
+    from adaptive_document_agent.agent.retained_literal_proof_references import literal_proof_catalog
+    source=payload()
+    original=dict(page=2,text='The service is monitored.')
+    earlier=dict(page=2,text='The original review covered initial service conditions.')
+    later=dict(page=3,text='A subsequent review covered service delivery conditions.')
+    source['source_pages']=[dict(page=2,text=original['text']+'\n\n'+earlier['text']),later]
+    catalog,_=literal_proof_catalog(source['source_pages'])
+    first_ref,early_ref,later_ref=catalog
+    first=dict(scope='the review',description='Describes the service review.',quote=original,
+               continuation_quotes=[earlier])
+    sibling=dict(scope='the service',description='Describes service monitoring.',quote=original)
+    draft=source['pages_to_correct']['owned']['draft']
+    draft['context_evidence']=[]
+    draft['source_context']=[first,sibling]
+    edit=dict(scope='the review',description='Describes the review of service delivery.',
+              quote=dict(passage_id=first_ref if preserve else later_ref))
+    if preserve:
+        edit['continuation_quotes']=[dict(passage_id=early_ref),dict(passage_id=later_ref)]
+    response=dict(message=None,source_context=None,source_context_edits={'context-0':edit},
+                  companion_ids=draft['companion_ids'],context_evidence=draft['context_evidence'])
+    checked=[]
+    page=compact_publication_copy(base_gateway([response]),'owned',source,1500,
+        lambda pages: checked.append(pages['owned']) or {},preserve_inputs=preserve)['owned']
+    assert checked==[page] and page.source_context[1].model_dump()==sibling
+    assert [q.model_dump() for q in page.source_context[0].proof_quotes]==(
+        [original,earlier,later] if preserve else [later])
+
+
+@pytest.mark.parametrize('defect', ['unknown_ref','wrong_page','extra_ref_field','wrong_slot',
+                                    'frozen_proof_removed','missing_description','orphan_continuation'])
+def test_full_addressed_proof_edit_rejects_unbound_or_incomplete_proofs(defect):
+    from adaptive_document_agent.agent.retained_literal_proof_references import literal_proof_catalog
+    source=payload()
+    source['source_pages'].append(dict(page=3,text='Additional evidence from the adjoining page.'))
+    catalog,_=literal_proof_catalog(source['source_pages'])
+    old_ref,new_ref=catalog
+    old=catalog[old_ref].model_dump()
+    original=dict(scope='the review',description='Describes the service review.',quote=old)
+    source['pages_to_correct']['owned']['draft']['source_context']=[original,{**original,'scope':'the service'}]
+    edit=dict(scope='the review',description='Describes the service assessment.',quote=dict(passage_id=old_ref),
+              continuation_quotes=[dict(passage_id=new_ref)])
+    slot='context-0'
+    if defect=='unknown_ref':
+        edit['continuation_quotes']=[dict(passage_id='missing')]
+    elif defect=='wrong_page':
+        edit['quote']={**old,'page':3}
+    elif defect=='extra_ref_field':
+        edit['quote']['page']=2
+    elif defect=='wrong_slot':
+        slot='context-2'
+    elif defect=='frozen_proof_removed':
+        # Even though the sibling keeps the old passage, this frozen slot cannot discard it.
+        edit.update(quote=dict(passage_id=new_ref),continuation_quotes=[])
+    elif defect=='missing_description':
+        edit.pop('description')
+    else:
+        edit.pop('quote')
+    response=dict(message=None,source_context=None,source_context_edits={slot:edit})
+    with pytest.raises(LLMStructuredOutputError):
+        compact_publication_copy(base_gateway([response,response]),'owned',source,1500,
+                                 lambda _: pytest.fail('Invalid proof reached page validation'))
+
+
+@pytest.mark.parametrize('outcome', ['qualitative', 'unbound_rate', 'over_wire_limit'])
+def test_long_full_edit_reflows_with_its_proof_and_keeps_the_scoped_content_checks(outcome):
+    from adaptive_document_agent.agent.retained_literal_proof_references import literal_proof_catalog
+
+    source=payload()
+    quote=source['source_pages'][0]
+    continuation=dict(page=3,text='Management monitored conditions and reported a share of 40%.')
+    source['source_pages'].append(continuation)
+    first_ref,second_ref=literal_proof_catalog(source['source_pages'])[0]
+    original=dict(scope='the service discussion',description='Describes service conditions.',quote=quote)
+    sibling={**original,'description':'Describes an independent source condition.'}
+    source['pages_to_correct']['owned']['draft']['source_context']=[original,sibling]
+    statements=['Describes conditions for '+('service delivery during the reported period, '*8)+'as reported.',
+                'Reports the source assessment of '+('quality under the stated operating conditions, '*8)+'as disclosed.']
+    if outcome=='unbound_rate':
+        statements[1]+=' The share was 40%.'
+    description=' '.join(statements)
+    assert 700<len(description)<2100
+    if outcome=='over_wire_limit':
+        description+='x'*(2101-len(description))
+    edit={**original,'description':description,'quote':dict(passage_id=first_ref),
+          'continuation_quotes':[dict(passage_id=second_ref)]}
+    reply=dict(message=None,source_context=None,source_context_edits={'context-0':edit})
+    gateway=base_gateway([reply,reply])
+    validated=[]
+    def check(pages):
+        validated.append(pages['owned'])
+        return {}
+    if outcome=='unbound_rate':
+        with pytest.raises(AuthoredPageErrors,match='without unbound numbers'):
+            compact_publication_copy(gateway,'owned',source,2000,check)
+    elif outcome=='over_wire_limit':
+        with pytest.raises(LLMStructuredOutputError):
+            compact_publication_copy(gateway,'owned',source,2000,check)
+        assert not validated
+        return
+    else:
+        page=compact_publication_copy(gateway,'owned',source,2000,check)['owned']
+        assert validated==[page]
+    for page in validated:
+        assert page.source_context[-1].model_dump()==sibling
+        assert all(item.scope==original['scope'] and len(item.description)<=700
+                   for item in page.source_context[:-1])
+        assert ' '.join(item.description.removeprefix('Reports the following. ')
+                        for item in page.source_context[:-1])==description
+        assert all([q.model_dump() for q in item.proof_quotes]==[quote,continuation]
+                   for item in page.source_context[:-1])
 
 
 def test_overlong_addressed_description_preserves_complete_explanations_and_their_proof():
@@ -525,6 +727,37 @@ def test_overlong_merged_edit_compresses_only_that_description_when_page_fits():
     assert [call['operation'] for call in llm.usage]==['RetainedPageRevisions','RetainedSourceDescriptionCapacity']
 
 
+@pytest.mark.parametrize('shared_overflow',[0,23])
+def test_full_source_list_repairs_only_the_overlong_slot_when_siblings_fit(monkeypatch,shared_overflow):
+    from adaptive_document_agent.agent.compact_publication_copy import visible_copy_budget
+
+    source=payload()
+    proof=dict(page=2,text=source['source_pages'][0]['text'])
+    scopes=('assembly','delivery','sales','orders','staff','returns','products','support')
+    contexts=[dict(scope=scope,description='Describes local conditions.',quote=proof) for scope in scopes]
+    overlong='Describes '+('the reported operating conditions '*22).strip()+'.'
+    candidate=[*contexts[:6],{**contexts[6],'description':overlong},contexts[7]]
+    page=RetainedPage.model_validate({**source['pages_to_correct']['owned']['draft'],'source_context':contexts})
+    draft=page.model_copy(update={'source_context':[
+        item.model_copy(update={'description':record['description']})
+        for item,record in zip(page.source_context,candidate,strict=True)]})
+    limit=visible_copy_budget(draft,[],3000)['total_characters']-shared_overflow
+    llm=base_gateway([dict(message=None,source_context=candidate),dict(context_7='Describes local conditions.')])
+    generate=llm.client.generate_text
+    def complete(*args,**kwargs):
+        value=generate(*args,**kwargs)
+        value.usage.finish_reason='stop'
+        return value
+    monkeypatch.setattr(llm.client,'generate_text',complete)
+
+    result=compact_publication_copy(llm,'owned',source,limit,lambda _: {})['owned']
+
+    assert result.model_dump()==page.model_dump()
+    assert [row['operation'] for row in llm.usage]==['RetainedPageRevisions','RetainedSourceDescriptionCapacity']
+    assert 'context_7' in str(llm.client.calls[1])
+    assert 'context_1' not in str(llm.client.calls[1])
+
+
 @pytest.mark.parametrize('analysis_pages,expected_target', [([5],600),([5,6],None)])
 def test_final_copy_draft_target_keeps_the_actual_analysis_page_cost(
         monkeypatch,analysis_pages,expected_target):
@@ -543,13 +776,20 @@ def test_final_copy_draft_target_keeps_the_actual_analysis_page_cost(
     packet,aliases=writer_context(selection_context(result,source_authoring=True))
     packet['source_row_assurance']=source_row_assurance(result,aliases)
     draft=selected_record(result)['selection']
+    from adaptive_document_agent.agent.retained_page_sources import RejectedPageAttempt
+    original=deepcopy(next(decision['page'] for decision in draft['decisions'] if decision['insight_id']==iid))
+    prior=RejectedPageAttempt(page=RetainedPage(title='Rejected candidate',message='Rejected wording.'),
+                              errors=['Missing exact dated comparison'])
     captured=[]
     def compact(gateway,owned,payload,limit,validate,**kwargs):
+        packet=payload['pages_to_correct'][owned]
+        assert packet['draft']==original
+        assert packet['rejected_page_attempts']==[prior.model_dump(mode='json')]
         captured.append((limit,payload['local_message_character_targets'].get(owned)))
         return {owned:RetainedPage.model_validate(payload['pages_to_correct'][owned]['draft'])}
     monkeypatch.setattr(module,'compact_publication_copy',compact)
     revise_retained_pages(SimpleNamespace(discovery_workers=8),result,packet,aliases,draft,
-        {iid:['Preserve source context.']},preserve_numeric_inputs=True)
+        {iid:['Preserve source context.']},preserve_numeric_inputs=True,rejected_attempts={iid:[prior]})
     assert captured==[(2000,expected_target)]
 
 
@@ -628,3 +868,60 @@ def test_complete_overcapacity_json_gets_one_contract_repair_without_parsing_it_
         with pytest.raises(LLMStructuredOutputError):
             compact_publication_copy(llm,'owned',payload(),1200,lambda _: {})
     assert len(llm.client.calls)==2
+
+
+def test_overlong_explicitly_attributed_edit_leaves_the_repair_for_invalid_sibling_copy():
+    source=payload()
+    proof=dict(page=2,text='Literal source quotation.')
+    items=[dict(scope='the reporting period',description='Describes reported conditions.',quote=proof),
+           dict(scope='the assessment period',description='Describes assessment of the service.',quote=proof)]
+    source['pages_to_correct']['owned']['draft']['source_context']=items
+    first='For the service during the assessment period, the source links delays to staffing. '
+    conditions='Management assessed the reported conditions and considered the impact on the service. '
+    closing='Management confirmed that its review considered the available evidence.'
+    description=first+conditions*8+closing
+    assert len(description)>700
+    candidate=dict(message=None,source_context=None,source_context_edits={
+        'context-0':'Reports a decline of 45%.','context-1':description})
+    corrected={**candidate,'source_context_edits':{
+        'context-0':'Reports a decline in service levels.','context-1':description}}
+    llm=base_gateway([candidate,corrected])
+    page=compact_publication_copy(llm,'owned',source,2500,lambda _: {})['owned']
+    assert [call['operation'] for call in llm.usage]==['RetainedPageRevisions','RetainedPageRevisions']
+    assert '45%' in str(llm.client.calls[1])
+    assert page.source_context[0].description==corrected['source_context_edits']['context-0']
+    parts=page.source_context[1:]
+    assert len(parts)>1 and all(len(item.description)<=700 for item in parts)
+    assert ' '.join(item.description.removeprefix('Reports the following. ') for item in parts)==description
+    assert all(item.scope=='the assessment period' and item.quote.model_dump()==proof for item in parts)
+
+
+def test_local_length_request_cannot_reassign_sibling_issues_or_license_proof_only_amounts():
+    from adaptive_document_agent.agent.compact_publication_copy import (
+        _source_capacity_values, _source_description_capacity_request, visible_copy_budget)
+    from adaptive_document_agent.agent.reported_source_context import (
+        qualified_source_statement, reported_source_components)
+
+    proof=dict(page=3,text='During the review period, the affected share increased to 20%.')
+    page=RetainedPage(title='Service',message='Reported levels.',source_context=[
+        dict(scope='the reporting period',description='Reports a change in service demand.',
+             quote=dict(page=2,text='The service experienced demand growth.')),
+        dict(scope='the review period',description='Describes how the affected share increased.',quote=proof)])
+    limit=2500
+    schema,messages=_source_description_capacity_request(page,visible_copy_budget(page,[],limit),
+        limit,['Correct a different item about service demand.'],editable_indexes=[1])
+    assert set(schema.model_fields)=={'context_2'}
+    assert 'Correct a different item about service demand.' not in messages[1]['content']
+    statement='Explains the assessment process. '+(
+        'The observed movement reflected a change in conditions during the review period. '*8
+    )+'Management said the affected share increased to 20%.'
+    assert len(statement)>700
+    response=schema.model_validate({'context_2':[statement]})
+    actual=RetainedPage.model_validate(_source_capacity_values(page,response,[],limit))
+    assert actual.source_context[0]==page.source_context[0]
+    assert len(actual.source_context)>2 and all(len(item.description)<=700 for item in actual.source_context)
+    item=next(i for i in actual.source_context if '20%' in i.description)
+    assert item.quote.model_dump()==proof
+    text=qualified_source_statement(item)
+    assert text not in reported_source_components('Reported levels. '+text,actual.all_context_evidence,
+                                                  declared=[item])[1]

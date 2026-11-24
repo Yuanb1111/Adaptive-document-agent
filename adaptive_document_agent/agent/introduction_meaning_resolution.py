@@ -230,6 +230,28 @@ def apply_meaning_resolution(selection, response, findings, source, *, transport
     for merge in response.merges:
         for keeper in merge.retained_meaning_ids:
             keeper_origins.setdefault(keeper, []).append(merge.meaning_id)
+    # A split can repeat an intact assertion already present in its source part.
+    # Keep that assertion at its original position with both origins. A split
+    # must still contribute a real correction to the finding's exact target.
+    unchanged = {(item['part_id'], item['meaning']):identifier for identifier,item in meanings.items()
+                 if identifier not in edits and identifier not in merged_targets}
+    split_echoes = []
+    for identifier, replacements in edits.items():
+        if len(replacements) < 2 or len({item.meaning for item in replacements}) != len(replacements):
+            continue
+        part_id = meanings[identifier]['part_id']
+        retained, echoed = [], []
+        for item in replacements:
+            keeper = unchanged.get((part_id, item.meaning))
+            if keeper and item.source_quote in ('', parts[part_id]['source_text']):
+                echoed.append(keeper)
+            else:
+                retained.append(item)
+        if echoed and any(item.meaning != meanings[identifier]['meaning'] for item in retained):
+            edits[identifier] = retained
+            for keeper in echoed:
+                keeper_origins.setdefault(keeper, []).append(identifier)
+                split_echoes.append(dict(edited_meaning_id=identifier, retained_meaning_id=keeper))
     for decision in draft.decisions:
         inclusion = inclusions.get(decision.part_id)
         if inclusion is not None:
@@ -255,6 +277,8 @@ def apply_meaning_resolution(selection, response, findings, source, *, transport
         decision.required_meanings = revised
     if transport_audit is not None:
         transport_audit['meaning_lineage'] = lineage
+        if split_echoes:
+            transport_audit['coalesced_split_echoes'] = split_echoes
     if append_transports and transport_audit is not None:
         transport_audit['append_only_edits'] = append_transports
     return draft
@@ -346,6 +370,7 @@ def resolve_meaning_findings(gateway, source, selection, values, verdict, review
                   changed=draft != selection, decisions_after=draft.model_dump(mode='json')['decisions'])
     return draft, dict(findings=findings, finding_dispositions=record['bound_finding_dispositions'],
         append_only_edits=record.get('append_only_edits', []),
+        coalesced_split_echoes=record.get('coalesced_split_echoes', []),
         coalesced_unchanged_meaning_ids=record['coalesced_unchanged_meaning_ids'],
         inclusions=record['response']['inclusions'],
         merges=record['response']['merges'],

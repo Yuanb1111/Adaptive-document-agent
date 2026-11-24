@@ -45,7 +45,8 @@ class SourceCoverage(BaseModel):
     selection_attempts: list[dict] = Field(default_factory=list)
     max_supplementary_pages: int = 6
     selection_output_token_limit: int | None = None
-    # Source reads and their format repairs retain the original per-call limit.
+    # Largest source-read allowance used in this ledger, including a bounded
+    # capacity reread. Source selection records its separate bound above.
     max_output_tokens_per_call: int = 2048
     notes: list[str] = Field(default_factory=list)
     # Source checks search bounded excerpts; they never certify non-disclosure.

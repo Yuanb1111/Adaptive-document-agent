@@ -201,6 +201,34 @@ def test_revising_existing_source_table_cannot_drop_it_into_overlong_prose():
     assert len(llm.usage) == 2
 
 
+@pytest.mark.parametrize('size,backup', [(550, None), (551, None), (598, 'The agreement requires approval.')])
+def test_mixed_quote_and_prose_repair_keeps_full_body_capacity_without_a_table(size, backup):
+    from adaptive_document_agent.agent.source_integration_copy import revise_reopened_additions
+    from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
+    draft, _ = _outputs('The contract can be renewed subject to prior approval.')
+    draft.decisions[0].brief_item_indexes = [6]
+    item = draft.additions[0].model_dump(mode='json')
+    bad = {**item, 'text': 'A' * 620, 'evidence': [dict(page=12, text='B' * 1801)]}
+    authored = 'A' * size
+    repaired = dict(text={'complete': authored, 'concise': backup} if backup else authored,
+                    evidence=item['evidence'])
+    llm, client = gateway([response(json.dumps({'item_6': bad})),
+                           response(json.dumps({'item_6': repaired}))])
+    if size == 550 or backup:
+        entry = {}
+        revised = revise_reopened_additions(llm, [], draft, ['contracts'], 6, entry)
+        assert revised.additions[0].text == (backup or authored)
+        if backup:
+            assert entry['targeted_body_lengths']['item_6'] == {'complete': size, 'concise': len(backup)}
+        assert revised.additions[0].evidence == draft.additions[0].evidence
+        assert revised.additions[0].comparison_table is None
+    else:
+        with pytest.raises(LLMStructuredOutputError):
+            revise_reopened_additions(llm, [], draft, ['contracts'], 6, {})
+    assert 'no table carries the qualifications' in client.requests[-1][0][-1]['content']
+    assert len(llm.usage) == 2
+
+
 @pytest.mark.parametrize('progress', [True, False])
 def test_mixed_schema_correction_only_gets_copy_slot_after_strict_length_progress(progress):
     result, constraint = fixture()

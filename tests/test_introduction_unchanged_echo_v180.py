@@ -12,6 +12,61 @@ from tests.test_introduction_disposition_evidence_v153 import ResolutionGateway
 from tests.test_introduction_meaning_resolution_v147 import resolution_fixture
 
 
+@pytest.mark.parametrize('keeper_index', [0, 2])
+def test_exact_split_echo_keeps_the_existing_same_part_assertion_and_both_origins(keeper_index):
+    reading, source, selection, findings, response = echo_fixture()
+    decision = selection.decisions[0]
+    target_index = 1
+    findings[0].update(meaning_id='part-0:meaning-2',
+                       current_meaning=decision.required_meanings[target_index].meaning)
+    response.finding_dispositions[0].referenced_meaning_ids = ['part-0:meaning-2']
+    keeper = decision.required_meanings[keeper_index]
+    replacement = RequiredMeaning(meaning='Staff must complete training before appointments are delivered.')
+    response.edits = [MeaningResolutionEdit(meaning_id='part-0:meaning-2',
+        required_meanings=[replacement, RequiredMeaning(meaning=keeper.meaning)])]
+    audit = {}
+    result = apply_meaning_resolution(selection, response, findings, source, transport_audit=audit)
+    expected = list(decision.required_meanings)
+    expected[target_index] = replacement
+    assert result.decisions[0].required_meanings == expected
+    assert result.decisions[1] == selection.decisions[1]
+    keeper_id = f'part-0:meaning-{keeper_index + 1}'
+    assert audit['meaning_lineage'][keeper_id] == [keeper_id, 'part-0:meaning-2']
+    assert audit['meaning_lineage']['part-0:meaning-2'] == ['part-0:meaning-2']
+    assert audit['coalesced_split_echoes'] == [dict(edited_meaning_id='part-0:meaning-2',
+                                                     retained_meaning_id=keeper_id)]
+    from adaptive_document_agent.services.introduction_audience import validate_required_meanings
+    values = result.model_dump(mode='json')['decisions']
+    for entry in values[0]['required_meanings']:
+        entry['source_quote'] = reading.parts[0].source_text
+    validate_required_meanings(reading, values)
+
+
+@pytest.mark.parametrize('fault', ['foreign_proof', 'unchanged_target', 'repeated_echo'])
+def test_split_echo_cannot_hide_conflicting_evidence_or_substitute_for_a_real_correction(fault):
+    reading, source, selection, findings, response = echo_fixture()
+    response.edits = response.edits[:1]
+    edit = response.edits[0]
+    original, sibling, _ = selection.decisions[0].required_meanings
+    if fault == 'unchanged_target':
+        edit.required_meanings = [original]
+    echo = RequiredMeaning(meaning=sibling.meaning,
+                           source_quote='Different source.' if fault == 'foreign_proof' else '')
+    edit.required_meanings.append(echo)
+    if fault == 'repeated_echo':
+        edit.required_meanings.append(echo)
+    audit = {}
+    revised = apply_meaning_resolution(selection, response, findings, source, transport_audit=audit)
+    assert 'coalesced_split_echoes' not in audit
+    assert [m.meaning for m in revised.decisions[0].required_meanings].count(sibling.meaning) > 1
+    from adaptive_document_agent.services.introduction_audience import validate_required_meanings
+    values = revised.model_dump(mode='json')['decisions']
+    for entry in values[0]['required_meanings']:
+        entry['source_quote'] = source['parts'][0]['source_text']
+    with pytest.raises(ValueError, match='Duplicate introduction required meaning'):
+        validate_required_meanings(reading, values)
+
+
 def echo_fixture():
     _, reading, source, selection, findings, response = resolution_fixture()
     response.edits = [MeaningResolutionEdit(meaning_id='part-0:meaning-1', required_meanings=[

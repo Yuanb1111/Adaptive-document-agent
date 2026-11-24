@@ -127,7 +127,8 @@ def test_large_inventory_keeps_literal_owned_evidence_and_duplicate_checks(defec
         values[-1]['meaning'] = values[0]['meaning']
     else:
         values[-1]['meaning'] = ' '
-    with pytest.raises(ValueError, match='exact owned source quotation'):
+    expected = 'Duplicate introduction required meaning' if defect == 'duplicate_meaning' else 'exact owned source quotation'
+    with pytest.raises(ValueError, match=expected):
         validate_required_meanings(reading, [dict(part_id='part-0', include=True, required_meanings=values)])
 
 

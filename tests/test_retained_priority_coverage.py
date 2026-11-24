@@ -45,7 +45,7 @@ def test_fast_initial_review_requires_priority_verdict_then_every_owned_source_v
     pages=[dict(page=1,text='Complete source'),dict(page=2,text='Continued qualification')]
     context=dict(source_pages=pages,copy_review_ids=[])
     calls=[];barrier=Barrier(2)
-    def review(gateway,own,selection,current,*,priority_only=False):
+    def review(gateway,own,selection,current,*,priority_only=False,prepared=None):
         assert own['source_pages'] is pages
         if priority_only:
             calls.append('priorities')
@@ -72,3 +72,47 @@ def test_fast_initial_review_requires_priority_verdict_then_every_owned_source_v
         assert calls[0]=='priorities' and set(calls[1:])=={'a','b'}
         audit=json.loads(result.validation_warnings[-1].message)
         assert audit['copy_review_ids']==['a','b'] and not audit['final_presentation_approval']
+
+
+def test_owned_coverage_builds_evidence_once_per_round_and_preserves_every_reviewer_packet(monkeypatch):
+    from adaptive_document_agent.agent import coverage_verdict_format
+    from adaptive_document_agent.agent.retained_analysis import fingerprint,selection_context
+    from adaptive_document_agent.agent.retained_copy_review import copy_review_payload,source_first_wire_payload
+
+    result,_,selection=fixture()
+    sibling='other-selected-finding'
+    result.insights.append(result.insights[0].model_copy(update={'id':sibling}))
+    selection.decisions.append(selection.decisions[0].model_copy(deep=True,update={'insight_id':sibling}))
+    selection.ordered_insight_ids.append(sibling)
+    context={**selection_context(result,source_authoring=True),'copy_review_ids':list(selection.ordered_insight_ids)}
+    original=module._coverage_payload
+    builds=[]
+    def counted(current,*args):
+        builds.append(list(current['copy_review_ids']))
+        return original(current,*args)
+    monkeypatch.setattr(module,'_coverage_payload',counted)
+
+    requests={}
+    def verdict(gateway,messages,schema,audit,*args,**kwargs):
+        wire=decode_records(json.loads(messages[-1]['content'].split('\n',1)[1].rsplit('\n',1)[0]))
+        iid,=wire['copy_review_ids']
+        requests[iid]=wire
+        audit['output_attempts']=[]
+        return schema(accepted=True,reason='Exact source review.')
+    monkeypatch.setattr(coverage_verdict_format,'complete_coverage_verdict',verdict)
+
+    for round_number in (1,2):
+        selection.decisions[0].page.message=f'Reporting round {round_number}.'
+        expected={iid:original({**context,'copy_review_ids':[iid]},selection,result)[0]
+                  for iid in selection.ordered_insight_ids}
+        module.review_selection_coverage(SimpleNamespace(discovery_workers=8),context,selection,result)
+        audits=[json.loads(issue.message) for issue in result.validation_warnings[-3:]]
+        assert len(builds)==round_number
+        assert audits[-1]['copy_review_ids']==context['copy_review_ids']
+        assert audits[-1]['input_fingerprint']==fingerprint(original(context,selection,result)[0])
+        for audit in audits[:-1]:
+            iid,=audit['copy_review_ids']
+            assert audit['input_fingerprint']==fingerprint(expected[iid])
+            assert requests[iid]==source_first_wire_payload(copy_review_payload(expected[iid]))
+            assert requests[iid]['source_pages']==context['source_pages']
+            assert audit['copy_review_packet']['wire_fingerprint']==fingerprint(requests[iid])

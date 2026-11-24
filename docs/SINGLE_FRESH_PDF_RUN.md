@@ -295,3 +295,21 @@ limit remained enforced.
 The pre-run regression group passed 508 tests, with three skips. This checkpoint
 records one fresh acceptance attempt. The source PDF, run receipts, and model
 responses remain in ignored local output.
+
+## 2026-11-24 fresh acceptance checkpoint
+
+Round 53 ran OpenAI GPT-6 Luna from the original 524-page public HKEX
+prospectus with no supplied checkpoint and the application request cache
+disabled. The run took 604.882 seconds and recorded 111 model calls and
+4,620,762 total tokens. It retained 1,621 observations and 20 deterministic
+analysis results, completed the five-page company introduction, and
+completed both supplementary source reads.
+
+The independent analytical-page review required two corrections to the
+inventory discussion. The page needed to distinguish the increase in the
+share of gross inventory aged more than one year from a rise in its absolute
+amount, and to disclose qualitatively that a substantial portion of the
+June 30 inventory was used or sold by October 31, 2024. The run halted at
+presentation selection without a PPTX. The 900-second end-to-end criterion
+remains unmet. Local receipts are under the ignored
+`output/fresh-luna-20261124-53/` directory.

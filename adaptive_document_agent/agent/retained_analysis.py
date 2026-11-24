@@ -308,8 +308,8 @@ def _select_retained_analysis(gateway, result):
         offered = copy_revisions_left + local_copy_retries_left
         try:
             revised, remaining = complete_owned_copy_revisions(issues, offered,
-                lambda pending: revise_retained_pages(gateway, result, packet, aliases, draft, pending,
-                                                       earlier_issues=prior_issues))
+                lambda pending, attempts: revise_retained_pages(gateway, result, packet, aliases, draft, pending,
+                    earlier_issues=prior_issues, rejected_attempts=attempts))
         except (ValueError, LLMResponseError):
             # Failing the local contract does not authorize a full rewrite.
             copy_revisions_left = 0

@@ -26,6 +26,28 @@ def ready():
     return result,selection,context,packet,aliases,messages
 
 
+def test_owned_page_author_can_cite_the_exact_original_list_without_retyping_it():
+    from adaptive_document_agent.agent.retained_literal_proof_references import literal_proof_catalog
+    source = 'Adjusted for (1) non-cash charges and (2) movements in working capital.'
+    continuation = 'The two adjustments are discussed separately below.'
+    passages, rows = literal_proof_catalog([dict(page=34, text=source+'\n\n'+continuation)])
+    refs = [dict(passage_id=row['passage_id']) for row in rows]
+    schema = module.owned_page_schema(passages)
+    raw = dict(title='Cash flow', message='The source explains the cash outflows.',
+               context_evidence=[refs[1]], source_context=[dict(scope='the cash flow discussion',
+               description='Attributes the adjustment to non-cash charges and movements in working capital.',
+               quote=refs[0], continuation_quotes=[refs[1]])])
+    page = schema.model_validate(raw)
+    assert page.source_context[0].quote.text == source
+    assert page.source_context[0].quote.page == 34
+    assert page.source_context[0].continuation_quotes[0].text == continuation
+    assert page.context_evidence[0].text == continuation
+    assert 'passage_id' not in page.model_dump_json()
+    for bad in [{'passage_id': 'absent'}, {**refs[0], 'page': 999}]:
+        with pytest.raises(ValidationError):
+            schema.model_validate({**raw, 'context_evidence': [bad]})
+
+
 @pytest.mark.parametrize('failure',['unknown','duplicate','missing_reason','foreign_reason'])
 def test_priority_schema_rejects_ambiguous_ids_and_incomplete_decisions(failure):
     _,_,_,packet,_,_=ready()
@@ -52,6 +74,7 @@ def test_source_choice_and_owned_page_keep_original_context_without_publication_
     request=decode_records(json.loads(llm.client.calls[1][-1]['content'].split('\n',1)[1].rsplit('\n',1)[0]))
     assert request['source_pages']==packet['source_pages']
     assert request['owned_insight_id']==iid
+    assert request['selection_reading_guide']=='Source comparison.'
     assert messages[1] in llm.client.calls[1]
     assert result.validation_warnings[-1].code=='retained_source_priorities'
     audit=json.loads(result.validation_warnings[-1].message)
@@ -60,6 +83,31 @@ def test_source_choice_and_owned_page_keep_original_context_without_publication_
     choice=decode_records(json.loads(llm.client.calls[0][-1]['content'].split('\n',1)[1].rsplit('\n',1)[0]))
     assert choice['findings'][0]['insight']['id']=='finding-1'
     assert choice['source_pages']==packet['source_pages']
+
+
+def test_related_discussion_outside_the_table_window_reaches_only_its_page_writer():
+    result,selection,context,packet,aliases,messages=ready()
+    table_page=packet['source_pages'][0]['page']
+    related_page=table_page+12
+    packet['source_pages'].append({**packet['source_pages'][0],'page':related_page})
+    iid=selection.ordered_insight_ids[0]
+    priority=dict(ordered_insight_ids=['finding-1'],reasons={'finding-1':'Distinct source-backed finding.'},
+                  related_reading_pages={'finding-1':[related_page,related_page+1],'other-finding':[table_page]})
+    llm=gateway([priority,selection.decisions[0].page.model_dump(mode='json')])
+    module.select_owned_source_pages(llm,result,context,packet,aliases,messages,'Read full source.')
+    request=decode_records(json.loads(llm.client.calls[1][-1]['content'].split('\n',1)[1].rsplit('\n',1)[0]))
+    assert {table_page,related_page}<=set(request['source_reading_pages'])
+    assert related_page+1 not in request['source_reading_pages']
+    assert request['source_pages']==packet['source_pages']
+    audit=json.loads(result.validation_warnings[-1].message)
+    assert audit['related_reading_pages']=={iid:[related_page]}
+    assert audit['unavailable_reading_pages']=={iid:[related_page+1]}
+    assert audit['unassigned_reading_hints']=={'other-finding':[table_page]}
+    assert audit['final_presentation_approval'] is False
+    schema=module.source_priority_schema(packet)
+    with pytest.raises(ValidationError):
+        schema.model_validate(dict(ordered_insight_ids=[iid],reasons={iid:'Included.'},
+                                   related_reading_pages={iid:[-1]}))
 
 
 @pytest.mark.parametrize('case',['missing','changes_order','missing_again','foreign_id','duplicate_key'])

@@ -14,7 +14,9 @@ def validate_required_meanings(review, decisions):
         for value in meanings:
             meaning = value.get('meaning', '').strip()
             quote = normalize_quote(value.get('source_quote', ''))
-            if (not meaning or meaning in seen or not quote
+            if meaning in seen:
+                raise ValueError(f"Duplicate introduction required meaning in source part {decision['part_id']}")
+            if (not meaning or not quote
                     or quote != normalize_quote(parts[decision['part_id']].source_text)):
                 raise ValueError('Introduction required meaning lacks its exact owned source quotation')
             seen.add(meaning)

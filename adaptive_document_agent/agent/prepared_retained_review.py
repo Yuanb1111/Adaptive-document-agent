@@ -1,9 +1,60 @@
 """Overlap independent original-page review with supplementary brief work."""
+import json
 from concurrent.futures import CancelledError, ThreadPoolExecutor
 from contextlib import contextmanager
 from time import perf_counter
 
 from adaptive_document_agent.services.llm.exceptions import PrivacyViolationError
+
+
+class SavedRetainedReview:
+    def __init__(self, issue, identity, failure):
+        self.issue = issue
+        self.identity = identity
+        self.failure = failure
+
+    def attach(self, result):
+        from .retained_analysis import fingerprint
+        from .retained_analysis_review import REVIEW_CODE, review_context
+        if fingerprint(review_context(result)) != self.identity:
+            return None
+        latest = next((w for w in reversed(result.validation_warnings) if w.code == REVIEW_CODE), None)
+        if latest is not None and latest != self.issue:
+            return None
+        if latest is None:
+            result.validation_warnings.append(self.issue.model_copy(deep=True))
+        return self.failure
+
+
+def _saved_review(previous, result):
+    from .retained_analysis import fingerprint
+    from .retained_analysis_review import RetainedAnalysisReview, REVIEW_CODE, review_context
+    if (previous is None or previous.pipeline_state != 'partial' or previous.failed_stage != 'source_integration'
+            or previous.failure_details.get('component') != 'SourceIntegration'):
+        return None
+    issue = next((w for w in reversed(previous.validation_warnings) if w.code == REVIEW_CODE), None)
+    if issue is None:
+        return None
+    try:
+        audit = json.loads(issue.message)
+        context = review_context(result)
+        identity = fingerprint(context)
+        if audit['contract'] != 1 or audit['fingerprint'] != identity:
+            return None
+        expected = {slide['id'] for slide in context['slides']}
+        raw = RetainedAnalysisReview.model_validate(audit['review'])
+        review = RetainedAnalysisReview.model_validate(audit['effective_review']) if 'effective_review' in audit else raw
+        for outcome in (raw, review):
+            if len(outcome.verdicts) != len(expected) or {v.slide_id for v in outcome.verdicts} != expected:
+                return None
+        reasons = [v.reason for v in review.verdicts if not v.accepted]
+        if not review.omissions_accepted:
+            reasons.insert(0, review.omission_reason)
+        if any(v.accepted and v.assurance_changes for v in review.verdicts):
+            return None
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return None
+    return SavedRetainedReview(issue, identity, ValueError(' '.join(reasons)) if reasons else None)
 
 
 class PreparedRetainedReview:
@@ -51,17 +102,30 @@ class PreparedRetainedReview:
 
 
 @contextmanager
-def prepare_retained_review(gateway, result):
+def prepare_retained_review(gateway, result, *, previous=None):
     from .retained_analysis import selected_record
     record = selected_record(result)
     # A physical selection can depend on audience briefing coverage. Keep that
     # route serial until source integration and its whole-deck budget settle.
-    if (getattr(gateway, 'discovery_workers', 1) <= 1 or not record
-            or record.get('physical_budget')):
+    if not record or record.get('physical_budget'):
         yield None
         return
-    prepared = PreparedRetainedReview(gateway, result)
+    saved = _saved_review(previous, result)
+    if saved is None and getattr(gateway, 'discovery_workers', 1) <= 1:
+        yield None
+        return
+    prepared = saved or PreparedRetainedReview(gateway, result)
     try:
         yield prepared
     finally:
-        prepared.close()
+        completed = saved is not None
+        if saved is None:
+            prepared.close()
+            completed = (not prepared.future.cancelled()
+                         and isinstance(prepared.future.exception(), (type(None), ValueError)))
+        if completed and result.failed_stage == 'source_integration' and result.pipeline_state == 'partial':
+            try:
+                prepared.attach(result)
+            except (ValueError, TypeError, KeyError, AttributeError):
+                # An unusable snapshot cannot replace the independent source failure.
+                pass

@@ -31,7 +31,7 @@ _YEAR_EVENT=re.compile(rf'\b(?:the|links?|attributes?|describes?|explains?)\s+(?
     r'(?:increases?|decreases?|growth|rises?|falls?|declines?|expansions?|reductions?|recover(?:y|ies)|'
     r'slowdowns?|lengthening|prolongation|shortening)\b)',re.I)
 _YEAR_REPORT=re.compile(rf'\bthe\s+(?P<years>{_YEAR})\s+'
-    r'(?=(?:balance|level|result|figure|position|reporting\s+period)\b)',re.I)
+    r'(?=(?:balance|level|result|figure|position|reporting\s+period)\b|discussion\s*(?:[.,;:]|$))',re.I)
 _REPORTING_ENDED=re.compile(r'\b(?P<count>\d+)\s+(?P<unit>months?|weeks?|days?|years?)\s+'
     r'ended\s+(?P<date>(?:19|20)\d{2}-\d{2}-\d{2})\b',re.I)
 _REPORTING_REFERENCE=re.compile(r'\b(?:during|within|over|for)\s+(?:the\s+)?'

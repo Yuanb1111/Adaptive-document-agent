@@ -37,6 +37,7 @@ from .presentation_topic_selector import PresentationTopicSelector, series_direc
 from .report_generator import ReportGenerator
 from .report_planner import DynamicReportPlanner
 from .semantic_resolver import SemanticResolver
+from .source_reading_checkpoint import incomplete_source_reads, retain_source_reading_failure
 from .value_scorer import AnalysisValueScorer
 
 ProgressCallback = Callable[[str], None]
@@ -161,12 +162,14 @@ class DocumentOrchestrator:
             extractor = ObservationExtractor()
             index = DocumentModelBuilder().build(observations)
             from .company_introduction import prepare_company_introduction
-            attach_introduction = resources.enter_context(prepare_company_introduction(
-                self.gateway, PipelineResult(document=document, profile=profile,
-                    presentation_plan=(resume.presentation_plan.model_copy(deep=True)
-                        if resume.retry_from == 'reporting' and resume.presentation_plan else None)),
-                timings=details))
-            notify('Retrying introduction with retained extraction and calculations')
+            attach_introduction = None
+            if not incomplete_source_reads(profile):
+                attach_introduction = resources.enter_context(prepare_company_introduction(
+                    self.gateway, PipelineResult(document=document, profile=profile,
+                        presentation_plan=(resume.presentation_plan.model_copy(deep=True)
+                            if resume.retry_from == 'reporting' and resume.presentation_plan else None)),
+                    timings=details))
+                notify('Retrying introduction with retained extraction and calculations')
         else:
             notify("Reading PDF")
             with record_timing(timings, "pdf_ingestion"):
@@ -238,7 +241,7 @@ class DocumentOrchestrator:
                 for requirement in requirements.items:
                     notify('Report requirement: ' + requirement.description)
             attach_introduction = None
-            if parallel:
+            if parallel and not incomplete_source_reads(profile):
                 # Discovery is the earliest stable source/profile boundary. Copy it
                 # before table extraction/recovery can mutate or replace document.
                 attach_introduction = resources.enter_context(prepare_company_introduction(
@@ -396,16 +399,17 @@ class DocumentOrchestrator:
         if resume is None or resume.failed_stage != 'analysis_time_limit' or resume.retry_from != 'reporting':
             run_state['result'] = checkpoint
         run_state.update(reporting_ready=True, issues=issues)
-        from .source_reading_checkpoint import incomplete_source_reads, retain_source_reading_failure
         if incomplete_source_reads(profile):
             return retain_source_reading_failure(checkpoint, self.gateway, resources,
-                attach_introduction, timings, details, pipeline_started, notify)
+                attach_introduction, timings, details, pipeline_started, notify, previous=resume)
         editorial_gateway = (IntroductionGuardedGateway(self.gateway, attach_introduction)
                              if attach_introduction is not None else self.gateway)
 
         def finish_partial_report(result, message):
             from adaptive_document_agent.utils.pipeline_version import PIPELINE_VERSION
             with record_timing(timings, 'background_drain'):
+                if attach_introduction is not None:
+                    attach_introduction.retain_completed(result)
                 resources.close()
                 if attach_introduction is not None:
                     attach_introduction.close()
@@ -890,7 +894,7 @@ class DocumentOrchestrator:
                     raise ValueError(reason)
                 final_stage = 'source_integration'
                 from .prepared_retained_review import prepare_retained_review
-                early_review = resources.enter_context(prepare_retained_review(self.gateway, final_result))
+                early_review = resources.enter_context(prepare_retained_review(self.gateway, final_result, previous=resume))
                 original_brief = final_result.executive_brief
                 if original_brief is not None:
                     from .source_integration_review import review_supplementary_sources

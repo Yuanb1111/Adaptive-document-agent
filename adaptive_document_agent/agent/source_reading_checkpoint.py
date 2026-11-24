@@ -1,7 +1,7 @@
 """Retain completed analysis before a known failed source read wastes reporting."""
 from time import perf_counter
 
-from adaptive_document_agent.models import ValidationIssue
+from adaptive_document_agent.models import PresentationPlan, ValidationIssue
 from adaptive_document_agent.utils.pipeline_version import PIPELINE_VERSION
 from adaptive_document_agent.utils.timing import record_timing
 
@@ -13,7 +13,7 @@ def incomplete_source_reads(profile) -> list:
 
 
 def retain_source_reading_failure(result, gateway, resources, prepared, timings,
-                                  details, started, notify):
+                                  details, started, notify, *, previous=None):
     pending = incomplete_source_reads(result.profile)
     if not pending:
         raise ValueError('A source-reading failure checkpoint requires unfinished source reads.')
@@ -24,6 +24,14 @@ def retain_source_reading_failure(result, gateway, resources, prepared, timings,
     # Close invocation-owned background work; its original diagnostics survive.
     with record_timing(timings, 'background_drain'):
         resources.close()
+    if previous is not None:
+        from .company_introduction import _has_valid_introduction
+        for issue in previous.validation_warnings:
+            if issue.code.startswith('company_introduction_') and issue not in result.validation_warnings:
+                result.validation_warnings.append(issue.model_copy(deep=True))
+        plan = previous.presentation_plan
+        if plan is not None and _has_valid_introduction(plan, result):
+            result.presentation_plan = PresentationPlan(title=plan.title, company=plan.company.model_copy(deep=True))
     if prepared is not None:
         prepared.copy_audit(result)
     result.pipeline_state, result.retry_from = 'partial', 'reporting'

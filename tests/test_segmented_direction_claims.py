@@ -596,3 +596,38 @@ def test_unqualified_temporal_group_cannot_borrow_another_metrics_annual_periods
     repaired, repairs = repair_presentation_plan(plan, observations)
     assert repaired.slides[0].message == text
     assert not repairs
+
+
+@pytest.mark.parametrize(("values", "incorrect_segment"), [
+    ([-41756, -52477, -103281], None),
+    ([-41756, -30477, -103281], 0),
+    ([-41756, -52477, -43281], 1),
+])
+def test_repeated_predicate_checks_each_explicit_loss_interval(values, incorrect_segment):
+    label = "Loss for the year/period"
+    observations = _series(label, values, years=(2021, 2022, 2023))
+    text = f"{label} widened from FY2021 to FY2022 and widened again from FY2022 to FY2023."
+    issues = ClaimValidator().validate_slide(_slide(text, observations), observations)
+    if incorrect_segment is None:
+        assert issues == []
+    else:
+        issue, = issues
+        start, end = observations[incorrect_segment:incorrect_segment + 2]
+        assert issue.code == "directional_contradiction"
+        assert issue.related_ids == [start.id, end.id]
+        assert (issue.start_value, issue.end_value) == (start.value, end.value)
+        assert issue.claim_start == (text.index("widened") if incorrect_segment == 0 else text.rindex("widened"))
+
+
+@pytest.mark.parametrize("continuation", [
+    "widened again in FY2023",
+    "widened again from FY2022",
+    "widened again from FY2023 to FY2022",
+    "widened again from FY2022 to FY2024",
+    "a different exposure widened again from FY2022 to FY2023",
+])
+def test_repeated_predicate_requires_observed_dates_and_a_bound_subject(continuation):
+    observations = _series("Net loss", [-10, -20, -30], years=(2021, 2022, 2023))
+    text = f"Net loss widened from FY2021 to FY2022 and {continuation}."
+    issues = ClaimValidator().validate_slide(_slide(text, observations), observations)
+    assert any(issue.code == "direction_scope_ambiguous" for issue in issues)

@@ -75,27 +75,34 @@ def _coverage_payload(context,selection,result):
 
 
 def review_selection_coverage(gateway,context,selection,result):
+    if getattr(gateway,'discovery_workers',1)<8:
+        return _review_selection_coverage(gateway,context,selection,result)
+    # All verdicts in this call use the same selection, raw pages and observations.
+    # Only the requested review IDs and the worker's audit destination vary.
+    prepared=_coverage_payload(context,selection,result)
     targets=context.get('copy_review_ids',())
-    if getattr(gateway,'discovery_workers',1)>=8 and not targets:
-        _review_selection_coverage(gateway,context,selection,result,priority_only=True)
+    if not targets:
+        _review_selection_coverage(gateway,context,selection,result,priority_only=True,prepared=prepared)
         context={**context,'copy_review_ids':list(selection.ordered_insight_ids)}
         targets=context['copy_review_ids']
-    if getattr(gateway,'discovery_workers',1)>=8 and len(targets)>1:
+    if len(targets)>1:
         from .retained_copy_review_parallel import review_owned_copy
-        payload,_,_=_coverage_payload(context,selection,result)
         from .retained_copy_review import copy_review_payload
+        payload={**prepared[0],'copy_review_ids':targets}
         copy_review_payload(payload)  # Validate every owner before any request.
         return review_owned_copy(context,selection,result,payload,
-            lambda own,current:_review_selection_coverage(gateway,own,selection,current))
-    return _review_selection_coverage(gateway,context,selection,result)
+            lambda own,current:_review_selection_coverage(gateway,own,selection,current,prepared=prepared))
+    return _review_selection_coverage(gateway,context,selection,result,prepared=prepared)
 
 
-def _review_selection_coverage(gateway, context, selection, result,*,priority_only=False):
+def _review_selection_coverage(gateway, context, selection, result,*,priority_only=False,prepared=None):
     from adaptive_document_agent.utils.record_encoding import encode_records, INSTRUCTIONS
     from .audit_source_layout import LAYOUT_INSTRUCTIONS
     from .retained_analysis import fingerprint
     from .retained_page_sources import PERIOD_AND_ASSURANCE_RULES, SOURCE_EXPLANATION_RULES
-    payload,cited_ids,bindings=_coverage_payload(context,selection,result)
+    payload,cited_ids,bindings=prepared if prepared is not None else _coverage_payload(context,selection,result)
+    if prepared is not None and 'copy_review_ids' in context:
+        payload={**payload,'copy_review_ids':context['copy_review_ids']}
     copy_review_ids = set(context.get('copy_review_ids', ()))
     from .retained_copy_review import copy_review_payload
     wire_payload = copy_review_payload(payload)
@@ -110,6 +117,13 @@ def _review_selection_coverage(gateway, context, selection, result,*,priority_on
     review_scope = (
         'Selection coverage has already been assessed for these exact findings. This pass only checks '
         'the pages identified by copy_review_ids. Check their claims and omissions against their '
+        'own source evidence. related_audience_copy shows what another selected page using the '
+        'same physical source actually says. Distinguish the selected component from the overall '
+        'measure, and the primary finding from broader context. Keep every qualification needed to '
+        'interpret this page correctly on this page. Before asking for a broader disclosure again, '
+        'check the other page and explain its distinct relevance to this finding. Related pages '
+        'supply no source proof or approval, and their copy cannot excuse a misleading assertion. '
+        'Review only the addressed pages against their '
         'sources. The audience receives the page title, message, and scope and description of each '
         'source_context item. Under retained_proofs, the same insight ID and source_context order '
         'locate the exact separate verification quotations. A number found only in those quotations '
@@ -150,9 +164,6 @@ def _review_selection_coverage(gateway, context, selection, result,*,priority_on
              'and composition facts about a related measure. Frame '
              'such a correction as the source-supported qualitative context that this page can '
              'actually publish, without requiring unbound rates or thresholds in the replacement. '
-             'Treat majority, minority and most as implied share thresholds when inferring them '
-             'from source amounts. Without bound share evidence, require the affected subset and '
-             'its exact timing and attribution without demanding the inferred threshold. '
              'Distinguish the primary series from related gross/net measures and other populations. '
              'For source-only qualifications, assess whether the supported effect and scope survive '
              'in words, rather than demanding the unbound numeric category boundary. A '

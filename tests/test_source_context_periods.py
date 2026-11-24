@@ -282,6 +282,9 @@ def test_source_owned_annual_range_and_forward_scope(scope,accepted):
     ('describes the 2022 program expansion and the 2023 increase as demand-related',True),
     ('describes the 2021 program expansion as demand-related',False),
     ('reports the 2022 units as delivered',False),
+    ('attributes the increase to demand in the 2023 discussion.',True),
+    ('attributes the increase to demand in the 2021 discussion.',False),
+    ('reports the 2023 discussion participants as customers.',False),
 ])
 def test_year_modifies_a_source_owned_event_without_licensing_counted_units(description,accepted):
     from adaptive_document_agent.agent.reported_source_context import reported_source_components,qualified_source_statement

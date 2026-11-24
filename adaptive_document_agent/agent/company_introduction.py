@@ -117,6 +117,24 @@ class PreparedCompanyIntroduction:
         return bool(self._future is not None and self._future.done()
                     and (self._future.cancelled() or self._future.exception() is not None))
 
+    def retain_completed(self, current: PipelineResult) -> None:
+        """Save a finished introduction on a partial report without starting or awaiting work."""
+        if get_ident() != self._caller:
+            raise RuntimeError("Only the pipeline caller may retain the company introduction")
+        if (self._future is None or not self._future.done() or self.failed()
+                or self._cancelled.is_set()):
+            return
+        if (current.document.document_id, current.document.sha256) != (
+                self._source.document.document_id, self._source.document.sha256):
+            return
+        if not _has_valid_introduction(self._draft, current):
+            return
+        if current.presentation_plan is None:
+            current.presentation_plan = PresentationPlan(title="Verified introduction checkpoint",
+                company=self._draft.company.model_copy(deep=True))
+        elif not _has_valid_introduction(current.presentation_plan, current):
+            current.presentation_plan.company = self._draft.company.model_copy(deep=True)
+
     def background_running(self) -> bool:
         """Reserve request capacity only while this invocation's worker is active."""
         return self._pool is not None and self._future is not None and not self._future.done()

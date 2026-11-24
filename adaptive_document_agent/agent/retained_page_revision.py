@@ -161,19 +161,21 @@ def copy_contract_errors(replacements, packet, aliases, result):
 
 
 def revise_retained_pages(gateway, result, packet, aliases, draft, issues, *, earlier_issues=None,
-                          preserve_numeric_inputs=False):
+                          preserve_numeric_inputs=False, rejected_attempts=None):
     """Isolate flagged pages in fast cloud mode; no worker merges or approves copy."""
     if getattr(gateway, 'discovery_workers', 1) >= 8 and len(issues) > 1:
         from .retained_page_revision_parallel import revise_owned_pages
         return revise_owned_pages(issues, lambda own_issues: _revise_page_batch(
             gateway, result, packet, aliases, draft, own_issues,
-            earlier_issues=earlier_issues, preserve_numeric_inputs=preserve_numeric_inputs))
+            earlier_issues=earlier_issues, preserve_numeric_inputs=preserve_numeric_inputs,
+            rejected_attempts={iid: rejected_attempts[iid] for iid in own_issues if iid in (rejected_attempts or {})}))
     return _revise_page_batch(gateway, result, packet, aliases, draft, issues,
-        earlier_issues=earlier_issues, preserve_numeric_inputs=preserve_numeric_inputs)
+        earlier_issues=earlier_issues, preserve_numeric_inputs=preserve_numeric_inputs,
+        rejected_attempts=rejected_attempts)
 
 
 def _revise_page_batch(gateway, result, packet, aliases, draft, issues, *, earlier_issues=None,
-                       preserve_numeric_inputs=False):
+                       preserve_numeric_inputs=False, rejected_attempts=None):
     from adaptive_document_agent.services.source_citations import evidence_pages
     from adaptive_document_agent.services.presentation_evidence import calculation_catalog
     findings = {f['insight']['id']: f for f in packet['findings']}
@@ -235,6 +237,8 @@ def _revise_page_batch(gateway, result, packet, aliases, draft, issues, *, earli
                                              if iid in issues})
     if use_owned_writer:
         from .compact_publication_copy import compact_publication_copy
+        if attempts := (rejected_attempts or {}).get(iid):
+            by_page[iid]['rejected_page_attempts'] = [attempt.model_dump(mode='json') for attempt in attempts]
         eligible_companions = {ref: observations[aliases[ref]].model_dump(mode='json')
                                for ref in findings[iid]['allowed_companion_rows']}
         return compact_publication_copy(gateway, iid, payload, local_limits[iid],

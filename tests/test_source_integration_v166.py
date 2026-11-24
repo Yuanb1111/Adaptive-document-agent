@@ -59,6 +59,31 @@ def test_material_source_finding_is_added_only_after_independent_review():
     assert len(gateway.calls) == 2
 
 
+def test_writer_and_reviewer_get_the_decision_question_and_complete_surrounding_evidence():
+    from adaptive_document_agent.agent.source_integration_bindings import SOURCE_MATERIALITY_RULES
+
+    result,constraint=fixture()
+    question='Could termination clauses affect the reliability of contracted demand?'
+    result.profile.source_coverage.checks[0].decision_impact=question
+    unrelated='The office registered a new trading name during the period.'
+    page=next(p for p in result.document.pages if p.page_number==12)
+    page.text+='\n\n'+unrelated
+    gateway=Gateway(constraint)
+
+    brief=review_supplementary_sources(gateway,result,result.executive_brief)
+
+    assert brief.items[-1].text==constraint and len(gateway.calls)==2
+    for messages,_ in gateway.calls:
+        assert SOURCE_MATERIALITY_RULES in messages[0]['content']
+        source=next(json.loads(m['content'].split('\n',1)[1].rsplit('\n',1)[0]) for m in messages
+                    if m['role']=='user' and '"source_pages":' in m['content'])
+        assert source['checks'][0]['decision_impact']==question
+        evidence=source['source_pages'][0]
+        text=(evidence['text'] if 'text' in evidence else
+              '\n'.join(line.split(' | ',1)[1] for line in evidence['lines']))
+        assert text==page.text
+
+
 @pytest.mark.parametrize('mixed_pages', [False, True])
 def test_checks_in_the_same_outline_section_still_require_independent_verdicts(mixed_pages):
     from adaptive_document_agent.services.pipeline_completion import source_review_complete
@@ -156,6 +181,41 @@ def test_rejected_source_proposal_carries_objections_into_revision_before_fresh_
     merged = review_supplementary_sources(gateway, current, current.executive_brief, previous=saved)
     assert issubclass(gateway.calls[0][1], SourceIntegrationDraft)
     assert 'The source limitation is not sufficiently represented.' in gateway.calls[0][0][-2]['content']
+    assert resolved_source_check_ids(current, merged) == {'contracts'}
+
+
+def test_second_continuation_keeps_a_full_length_reviewer_objection():
+    from adaptive_document_agent.agent.source_integration_copy import copy_review_questions
+    from adaptive_document_agent.agent.source_integration_review import SourceIntegrationVerdict
+
+    saved, constraint = fixture()
+    reason_limit = SourceIntegrationVerdict.model_json_schema()['properties']['reason']['maxLength']
+    reason = ('Retain the cancellation conditions attached to this contract. ' * 60)[:reason_limit]
+
+    class DetailedReviewer(Gateway):
+        def generate_structured(self, messages, schema, **kwargs):
+            response = super().generate_structured(messages, schema, **kwargs)
+            if not issubclass(schema, SourceIntegrationDraft):
+                return schema(verdicts=[dict(section_id='contracts', accepted=False, reason=reason)])
+            return response
+
+    review_supplementary_sources(DetailedReviewer(constraint), saved, saved.executive_brief)
+    saved.failed_stage = 'source_integration'
+    checkpoint = saved.model_copy(deep=True)
+    review_supplementary_sources(Gateway(constraint, accept=False), checkpoint,
+                                 checkpoint.executive_brief, previous=saved)
+    audit = json.loads(checkpoint.validation_warnings[-1].message)
+    assert audit['prior_objections'] == [reason]
+    assert all(v['reason'] != reason for entry in audit['attempts']
+               for v in entry.get('review', {}).get('verdicts', []))
+    oversized = reason + 'x'
+    audit['prior_objections'].append(oversized)
+    checkpoint.validation_warnings[-1].message = json.dumps(audit)
+
+    current = checkpoint.model_copy(deep=True)
+    gateway = Gateway(constraint)
+    merged = review_supplementary_sources(gateway, current, current.executive_brief, previous=checkpoint)
+    assert copy_review_questions(gateway.calls[0][0]) == [reason, 'The source limitation is not sufficiently represented.']
     assert resolved_source_check_ids(current, merged) == {'contracts'}
 
 

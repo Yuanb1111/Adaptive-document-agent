@@ -285,6 +285,26 @@ def reported():
     return result,selection
 
 
+@pytest.mark.parametrize('wording,proof_page,accepted',[
+    ('a majority of',334,True),('60.8% of',334,False),('a majority of',333,False)])
+def test_reported_settlement_extent_keeps_the_literal_population_dates_and_owning_proof(
+        wording,proof_page,accepted):
+    from adaptive_document_agent.agent.reported_source_context import QualifiedSourceCopy,qualified_source_statement
+    from adaptive_document_agent.services.calendar_claims import bound_period_dates,literal_calendar_dates
+
+    quote=BriefQuote(page=334,text='As of October 31, 2024, RMB22.1 million or approximately 60.8% '
+        'of our trade receivables as of June 30, 2024 had been settled.')
+    item=QualifiedSourceCopy(scope='subsequent settlement',description=f'Describes {wording} the company’s '
+        'trade receivables as of June 30, 2024 as settled by October 31, 2024.',quote=quote)
+    periods=tuple(literal_calendar_dates(quote.text))
+    statement=bound_period_dates(qualified_source_statement(item),periods)
+    main,parts=reported_source_components('Reported levels. '+statement,
+        [quote.model_copy(update={'page':proof_page})],periods=periods,declared=[item])
+    assert (statement in parts) is accepted
+    if accepted:
+        assert main=='Reported levels.' and '60.8%' not in parts[0]
+
+
 def paraphrased():
     from adaptive_document_agent.agent.reported_source_context import QualifiedSourceCopy
     result,selection=reported()

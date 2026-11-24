@@ -53,3 +53,43 @@ def test_two_failed_reads_with_both_repairs_stay_under_total_bound():
     revised, ledger = check_source_scope(doc, ranges, gw)
     assert revised == ranges and all(c.status == 'failed' for c in ledger.checks)
     assert ledger.calls_used == ledger.max_calls == len(gw.client.calls) == 7
+
+
+@pytest.mark.parametrize(('second_finish', 'reference', 'expected_status'), [
+    ('stop', 'p5_q1', 'checked_found'),
+    ('length', 'p5_q1', 'failed'),
+    ('stop', 'p9_q1', 'failed'),
+])
+def test_truncated_source_read_uses_remaining_semantic_attempt_with_complete_source(
+        monkeypatch, second_finish, reference, expected_status):
+    doc, ranges = sample()
+    finding = dict(found=True, finding='Condition applies.', quotes=[dict(ref=reference)])
+    gw = gateway([dict(targets=[target()], rationale='Check the original condition'), '', finding])
+    generate = gw.client.generate_text
+    reads = []
+
+    def generate_with_usage(messages, **options):
+        response = generate(messages, **options)
+        if 'SourceCoverageFinding' in messages[0]['content']:
+            reads.append((messages, options['max_tokens']))
+            response.usage.finish_reason = 'length' if len(reads) == 1 else second_finish
+            if len(reads) == 1:
+                response.usage.output_tokens = response.usage.reasoning_tokens = 2048
+        return response
+
+    monkeypatch.setattr(gw.client, 'generate_text', generate_with_usage)
+    revised, ledger = check_source_scope(doc, ranges, gw)
+    check, = ledger.checks
+    assert check.status == expected_status
+    assert ledger.calls_used == len(gw.client.calls) == 3
+    assert ledger.max_calls == 7 and ledger.max_supplementary_pages == 6
+    assert [limit for _, limit in reads] == [2048, 8192]
+    assert reads[0][0] == reads[1][0]
+    assert ledger.max_output_tokens_per_call == 8192
+    assert check.attempts[0]['raw_response'] == ''
+    assert check.attempts[0]['status'] == 'truncated'
+    assert all('format_repair' not in entry for entry in check.attempts)
+    if expected_status == 'checked_found':
+        assert check.evidence_quotes == {5: [doc.pages[4].text]} and len(revised) == 2
+    else:
+        assert not check.evidence_quotes and revised == ranges

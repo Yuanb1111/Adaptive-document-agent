@@ -1,6 +1,8 @@
 """Bounded source checks before extraction; no document-type workflows."""
 from __future__ import annotations
 import json
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from pydantic import BaseModel, Field, ConfigDict
 from adaptive_document_agent.models import AnalysisPageRange, ParsedDocument
 from adaptive_document_agent.models.coverage import SourceSection, SectionCoverage, SourceCoverage, SourceCheck
@@ -97,6 +99,25 @@ def read_source_check(document, gateway, check, ledger):
         return False
 
 
+def _read_targets(document, gateway, checks, ledger):
+    """Read disjoint targets in selection order, sharing gateway admission and deadline."""
+    workers = min(len(checks), getattr(gateway, 'discovery_workers', 1))
+    if workers < 2:
+        return [read_source_check(document, gateway, check, ledger) for check in checks]
+    # Each target owns its recovery attempts. Merge only the counters after
+    # all admitted workers have stopped, including on timeout.
+    counters = [SourceCoverage() for _ in checks]
+    try:
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix='source-check') as pool:
+            reads = [pool.submit(copy_context().run, read_source_check, document, gateway, check, counter)
+                     for check, counter in zip(checks, counters)]
+        return [read.result() for read in reads]
+    finally:
+        ledger.calls_used += sum(counter.calls_used for counter in counters)
+        ledger.max_output_tokens_per_call = max(
+            ledger.max_output_tokens_per_call, *(counter.max_output_tokens_per_call for counter in counters))
+
+
 def retry_failed_source_checks(document, profile, gateway, *, progress=None):
     """Report retries reread saved targets only; extraction scope is unchanged."""
     ledger = profile.source_coverage
@@ -110,6 +131,7 @@ def retry_failed_source_checks(document, profile, gateway, *, progress=None):
         allowance = len(pending[:MAX_CHECKS]) * 3
         ledger.max_calls += allowance
         ledger.notes.append(f'Report retry allocated at most {allowance} source-read calls for saved unfinished targets; prior attempts remain recorded.')
+    eligible = []
     for check in pending[:MAX_CHECKS]:
         section = sections.get(check.section_id)
         pages = sorted(set(check.pages))
@@ -120,7 +142,8 @@ def retry_failed_source_checks(document, profile, gateway, *, progress=None):
             continue
         if progress:
             progress('Retrying incomplete supplementary source reading')
-        read_source_check(document, gateway, check, ledger)
+        eligible.append(check)
+    _read_targets(document, gateway, eligible, ledger)
 
 
 def check_source_scope(document, ranges, gateway, focus=None, *, confirmed=False):
@@ -166,7 +189,7 @@ def check_source_scope(document, ranges, gateway, focus=None, *, confirmed=False
         ledger.selection_attempts.append(failure_record(exc))
         ledger.notes.append('Source scope check failed: '+type(exc).__name__+'; unselected source remains unchecked.')
         return ranges, ledger
-    additions=[];checked=set()
+    checked=set()
     for target in plan.targets:
         section=sections.get(target.section_id)
         if not section or not (section.start_page <= target.start_page <= target.end_page <= section.end_page) or target.end_page-target.start_page+1>MAX_PAGES_PER_CHECK:
@@ -179,9 +202,11 @@ def check_source_scope(document, ranges, gateway, focus=None, *, confirmed=False
         checked |= pages
         check=SourceCheck(section_id=section.id,pages=sorted(pages),reason=target.reason,decision_impact=target.decision_impact)
         ledger.checks.append(check)
-        if read_source_check(document, gateway, check, ledger):
-            additions.append(AnalysisPageRange(title=section.title,start_page=target.start_page,end_page=target.end_page,
-                reason='Bounded source check: '+target.reason+'; '+target.decision_impact))
+    outcomes = _read_targets(document, gateway, ledger.checks, ledger)
+    additions = [AnalysisPageRange(title=sections[check.section_id].title,
+        start_page=check.pages[0], end_page=check.pages[-1],
+        reason='Bounded source check: '+check.reason+'; '+check.decision_impact)
+        for check, completed in zip(ledger.checks, outcomes) if completed]
     all_ranges=[*ranges,*additions]
     ledger.sections=section_ledger(document,all_ranges).sections
     ledger.notes.append('Unselected/partially selected sections remain incompletely inspected. Checked_not_found is limited to its listed pages; no source non-disclosure is certified.')

@@ -14,6 +14,11 @@ DirectionSpan = tuple[str, str, int, int]
 _SEQUENCE = re.compile(r"\b(?:then|before|prior to|subsequently)\b", re.I)
 _YEAR = r"(?:19|20)\d{2}"
 _PERIOD = rf"(?:{_YEAR}-\d{{2}}-\d{{2}}|(?:FY\s*|[1369]M\s*|[12]H\s*|Q[1-4]\s*)?{_YEAR})"
+# A repeated predicate may name only an endpoint. Bind its subject so the
+# normal scope check can report the missing start of a multi-period comparison.
+COORDINATED_DATE_QUALIFIER = re.compile(
+    rf"\s+(?:(?:again\s+)?(?:from|between)\b|again\s+(?:in|by|at|to|through|until)\s+{_PERIOD}\b)", re.I,
+)
 _DATE_PREPOSITION = r"(?:at|on|as\s+of)"
 _ASSURANCE_NOTE = r"(?:\s*\((?:un)?audited\))?"
 _RANGE = re.compile(

@@ -82,6 +82,36 @@ def test_two_checks_and_selection_are_hard_call_bound(monkeypatch):
     assert ledger.max_output_tokens_per_call == 2048
 
 
+def test_parallel_targets_preserve_selected_order_and_separate_recovery():
+    from threading import Barrier
+    from adaptive_document_agent.agent.source_coverage import SourceCoverageSelection
+
+    document, ranges = sample()
+    both_reading = Barrier(2)
+
+    class IndependentReaders:
+        discovery_workers = 2
+
+        def generate_structured(self, messages, schema, **options):
+            if schema is SourceCoverageSelection:
+                return schema(targets=[target(7, 8), target(5, 5)], rationale='Two conditions')
+            page = options['request_metadata']['source_page_start']
+            retrying = len(messages) > 3
+            if not retrying:
+                both_reading.wait(timeout=5)
+            text = f'Literal source condition at {page}.'
+            if page == 7 and not retrying:
+                text = 'Unsupported quote'
+            return schema(found=True, finding=f'Condition on {page}', quotes=[dict(page=page, text=text)])
+
+    updated, ledger = check_source_scope(document, ranges, IndependentReaders())
+    assert [(r.start_page, r.end_page) for r in updated] == [(1, 3), (7, 8), (5, 5)]
+    assert ledger.calls_used == 4
+    assert [[a['status'] for a in c.attempts] for c in ledger.checks] == [
+        ['invalid_evidence', 'accepted'], ['accepted']]
+    assert [set(c.evidence_quotes) for c in ledger.checks] == [{7}, {5}]
+
+
 def test_confirmed_user_scope_never_expanded_or_sent():
     doc,ranges=sample();gw=gateway([])
     revised,ledger=check_source_scope(doc,ranges,gw,confirmed=True)

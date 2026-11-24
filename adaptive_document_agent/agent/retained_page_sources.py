@@ -28,6 +28,20 @@ def authored_copy_limit(requirements):
     return STANDARD_AUTHORED_COPY_CHARACTERS
 
 
+SOURCE_SHARE_RULES = (
+    'For a material share of a population, check this item’s own literal passage. If it states '
+    'that a majority was affected, or explicitly gives a share clearly above half for that same '
+    'population and event, preserve the source-reported majority in words. Keep the exact '
+    'population, balance date, event date, and any uncertainty that matters to that distinction. '
+    'When the source gives a material portion below half, convey its supported qualitative '
+    'extent and attribute the disclosure to the source. For a substantial portion, saying '
+    'only "some" loses that information. Assess the size in context and retain the named '
+    'population, including when it is broader than the selected component. '
+    'An unrelated percentage, a growth rate, an ambiguous range or two amounts without a '
+    'reported share cannot establish that extent. Keep unbound percentages out of visible copy. '
+)
+
+
 SOURCE_EXPLANATION_RULES = (
     'Keep each material source explanation attached to what it explains. A reason for '
     'a measure’s generally high or low level differs from a reason for a change in a '
@@ -41,8 +55,8 @@ SOURCE_EXPLANATION_RULES = (
     'Also keep separate explanations '
     'for distinct changes, limitations and qualified judgments. Read related source '
     'sections for a broader explanation, any risk inferred by the source, and its own '
-    'assessment or response. Preserve the supported qualitative extent of a material effect, '
-    'including a substantial or majority portion when the evidence supports that distinction. '
+    'assessment or response. Preserve the supported qualitative extent of a material effect. '
+    + SOURCE_SHARE_RULES +
     'Preserve the indication, test basis and result separately '
     'when the source distinguishes them. Treat all such context as attributed source '
     'claims with complete literal proof. A calculation-method explanation may repeat exact '
@@ -583,9 +597,16 @@ def page_bindings(page, insight, primary, context, result, *, _copy_errors=None,
     return (title,copy,ids,paragraphs) if with_source_context else (title,copy,ids)
 
 
+class RejectedPageAttempt(BaseModel):
+    page: RetainedPage
+    errors: list[str]
+
+
 class AuthoredPageErrors(ValueError):
-    def __init__(self, by_insight: dict[str, list[str]]):
+    def __init__(self, by_insight: dict[str, list[str]], *,
+                 rejected_attempts: dict[str, list[RejectedPageAttempt]] | None = None):
         self.by_insight = by_insight
+        self.rejected_attempts = rejected_attempts or {}
         super().__init__('\n'.join(f'{iid}: {issue}' for iid, issues in by_insight.items() for issue in issues))
 
 

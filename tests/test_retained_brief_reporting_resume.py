@@ -157,10 +157,17 @@ def approve_preintegration_input(source):
 
 def test_failed_local_source_edit_returns_complete_previous_checkpoint(monkeypatch):
     from adaptive_document_agent.agent import retained_selection_feedback, retained_source_retry
+    from adaptive_document_agent.agent.retained_analysis_review import review_retained_analysis
+    from tests.test_retained_analysis_v216 import gateway as review_gateway
     source, current, reuse_gateway = checkpoint()
     approve_preintegration_input(source)
     source.failed_stage = 'presentation_coverage'
     source.failure_details = dict(component='PresentationCoverage', message='Source copy requires repair.')
+    rejected = [dict(slide_id=s.id, accepted=False, reason='Correct the source attribution.')
+                for s in source.presentation_plan.slides if s.slide_type == 'analysis']
+    with pytest.raises(ValueError, match='evidence review rejected'):
+        review_retained_analysis(review_gateway([dict(verdicts=rejected, omissions_accepted=True,
+            omission_reason='The selection covers the available evidence.')]), source)
     monkeypatch.setattr(retained_selection_feedback, 'can_retry_source_review', lambda _: True)
     original = source.model_copy(deep=True)
     def fail(_gateway, candidate, _previous):

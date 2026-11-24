@@ -36,6 +36,25 @@ def packet():
         reviewed_priorities=['edited', 'other'])
 
 
+def test_sibling_context_requires_a_shared_source_page_and_stays_out_of_owned_proof():
+    original = packet()
+    sibling = original['proposed_selection']['decisions'][1]
+    source_item = dict(scope='the reported period', description='Describes the related outcome.',
+                       quote=dict(page=6, text='Exact sibling quotation.'))
+    sibling['page'] = dict(title='Related measure', message='Separate comparison.',
+                           source_context=[source_item])
+    citation = dict(insight_id='other', observation_ids=['unrelated'], source_pages=[6])
+    original['planned_source_citations'].append(citation)
+    scoped = copy_review_payload(original)
+    assert scoped['related_audience_copy'] == [dict(insight_id='other', title='Related measure',
+        message='Separate comparison.', source_context=[dict(scope=source_item['scope'],
+                                                            description=source_item['description'])])]
+    assert 'other' not in scoped['retained_proofs']
+    assert [d['insight_id'] for d in scoped['proposed_selection']['decisions']] == ['edited']
+    citation['source_pages'] = [9]
+    assert copy_review_payload(original)['related_audience_copy'] == []
+
+
 def test_copy_packet_keeps_all_eligible_companions_and_original_pages_without_mutation():
     original = packet()
     before = deepcopy(original)

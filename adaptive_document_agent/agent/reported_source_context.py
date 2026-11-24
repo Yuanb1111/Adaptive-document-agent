@@ -29,6 +29,8 @@ _SOURCE_SENTENCE_START=re.compile(r'^(?:attributes?|describes?|notes?|states?|re
 _REPORTING_VERB=(r'(?:attributes?|describes?|notes?|states?|reports?|explains?|indicates?|shows?|'
     r'identifies?|records?|discloses?|clarifies?|confirms?|emphasizes?|emphasises?|'
     r'highlights?|mentions?|observes?|provides?|specifies?|summarizes?|summarises?|sets\s+out)')
+_SCOPED_SOURCE_ATTRIBUTION=re.compile(
+    rf'^(?:For|Within|During)\s+[^.!?\n]{{1,220}},\s+the source\s+(?:{_REPORTING_VERB}|links?)\b',re.I)
 _COMPANY_ATTRIBUTED_SENTENCE=re.compile(rf'^(?P<speaker>the company|it)\s+'
     rf'(?P<verb>{_REPORTING_VERB})\s+(?P<predicate>.+[.!?])$',re.I)
 _SOURCE_SENTENCE_BOUNDARY=re.compile(r'(?<=[.!?])\s+')
@@ -36,7 +38,7 @@ _AMBIGUOUS_QUOTING=re.compile(r'["“”‘]|(?<!\w)[\'’]')
 _AMBIGUOUS_ABBREVIATION=re.compile(r'\b(?:e\.g|i\.e|etc|vs|approx|no|fig|dr|mr|mrs|ms|inc|ltd|co)\.',re.I)
 _DECLARATIVE_PREDICATE=re.compile(r'\b(?:is|are|was|were|has|have|had|reported|stated|'
     r'indicated|covered|found|identified|observed|confirmed|assessed|monitored|cited|believed|'
-    r'rose|fell|increased|decreased|used|said|says|considered|reviewed|concerns?)\b',re.I)
+    r'rose|fell|increased|decreased|reflected|used|said|says|considered|reviewed|concerns?)\b',re.I)
 _AMBIGUOUS_SUBJECT=re.compile(r'^(?:it|they|this|that|these|those|he|she|which|the former|the latter)\b',re.I)
 _SOURCE_CONTEXT_FIELDS={'scope','description','quote','continuation_quotes'}
 _SOURCE_AXIS_CATEGORY=re.compile(rf'\b(?P<count>{_CARDINAL_WORDS})-axis\s+'
@@ -54,11 +56,12 @@ _STANDARD_MEASURE_TAIL=re.compile(r'^\s*(?:years?|months?|weeks?|days?|hours?|un
 _PROOF_PAGE_PREFIX=re.compile(r'^(?:p\.|page)\s*(?P<page>[1-9]\d*)\s*:\s*',re.I)
 
 
-def _split_reported_sentence_groups(sentences):
+def _split_reported_sentence_groups(sentences, *, assessment_prose=False):
     """Keep complete direct statements in their original order and scope."""
     if (not _SOURCE_SENTENCE_START.match(sentences[0])
             or any(not re.match(r'[A-Z]',sentence) or sentence[-1] not in '.!?'
-                   or not (_SOURCE_SENTENCE_START.match(sentence) or _DECLARATIVE_PREDICATE.search(sentence))
+                   or not (_SOURCE_SENTENCE_START.match(sentence) or _DECLARATIVE_PREDICATE.search(sentence)
+                           or assessment_prose and re.search(r'\b(?:tested|judged)\b', sentence, re.I))
                    for sentence in sentences)):
         return None
     units=[sentences[0]]
@@ -78,7 +81,7 @@ def _split_reported_sentence_groups(sentences):
     return groups if all(len(group)<=700 for group in groups) else None
 
 
-def split_source_description(description):
+def split_source_description(description, *, assessment_prose=False):
     """Split an overlong description at safe, complete sentence boundaries."""
     if _AMBIGUOUS_QUOTING.search(description) or _AMBIGUOUS_ABBREVIATION.search(description):
         return None
@@ -87,7 +90,10 @@ def split_source_description(description):
         return None
     if all(_SOURCE_SENTENCE_START.match(sentence) for sentence in sentences):
         return sentences
-    if groups:=_split_reported_sentence_groups(sentences):
+    if _SCOPED_SOURCE_ATTRIBUTION.match(sentences[0]):
+        # Preserve the complete scoped statement under the rendered attribution.
+        sentences[0]='Reports the following. '+sentences[0]
+    if groups:=_split_reported_sentence_groups(sentences, assessment_prose=assessment_prose):
         return groups
     # Repeat an explicitly established company subject at the split boundary.
     matched=[_COMPANY_ATTRIBUTED_SENTENCE.fullmatch(sentence) for sentence in sentences]
@@ -119,6 +125,43 @@ def split_overlong_source_descriptions(items):
     if not changed or len(expanded)>8:
         return items
     return expanded
+
+
+def group_adjacent_source_context(items, *, max_items=8):
+    """Free only the required slots by joining adjacent descriptions with identical evidence."""
+    import json
+
+    if not isinstance(items,list) or len(items)<=max_items:
+        return items
+    def owner(item):
+        if (not isinstance(item,dict) or item.keys()-_SOURCE_CONTEXT_FIELDS
+                or not isinstance(item.get('scope'),str) or not isinstance(item.get('quote'),dict)
+                or not isinstance(item.get('description'),str) or len(item['description'])<10
+                or not isinstance(item.get('continuation_quotes',[]),list)):
+            return None
+        return json.dumps([item['scope'],item['quote'],item.get('continuation_quotes',[])],
+                          ensure_ascii=False,sort_keys=True)
+
+    entries=[(item,owner(item)) for item in items]
+    needed=len(entries)-max_items
+    # First use joins that already fit a single description. If a longer
+    # join is necessary, preserve it intact for the existing capacity request.
+    for bounded in (True,False):
+        joined=[]
+        for item,key in entries:
+            if needed and key is not None and joined and key==joined[-1][1]:
+                prior=joined[-1][0]
+                separator=' ' if prior['description'].rstrip().endswith(('.','!','?','。','！','？')) else '\n\n'
+                description=prior['description']+separator+item['description']
+                if not bounded or len(description)<=700:
+                    joined[-1]=({**prior,'description':description},key)
+                    needed-=1
+                    continue
+            joined.append((item,key))
+        if not needed:
+            return [item for item,_ in joined]
+        entries=joined
+    return items
 
 
 class QualifiedSourceCopy(BaseModel):

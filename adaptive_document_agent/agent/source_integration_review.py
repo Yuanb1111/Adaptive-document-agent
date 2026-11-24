@@ -17,7 +17,7 @@ from .prompting import untrusted_document_message
 from .presentation_budget_output import complete_budget_output
 from .structured_output_correction import schema_feedback, format_correction_messages
 from .source_integration_output import review_output, SourceReviewContractError
-from .source_integration_bindings import (MERGED_BRIEF_INSTRUCTIONS, bind_unique_inclusions,
+from .source_integration_bindings import (MERGED_BRIEF_INSTRUCTIONS, SOURCE_MATERIALITY_RULES, bind_unique_inclusions,
     keep_accepted_dispositions, merged_review_context)
 from .source_integration_quotes import SourceQuoteCapacityError, SourceQuoteBindingError, bind_source_quotes, numbered_source_pages
 from .audit_source_layout import audit_source_page, LAYOUT_INSTRUCTIONS
@@ -26,6 +26,7 @@ from adaptive_document_agent.services.brief_column_quantities import column_quan
 # Reserve room for both reasoning and the complete evidence-bound answer on the
 # first request; the independent reviewer and all rejection gates stay intact.
 SOURCE_OUTPUT_TOKEN_LIMITS = (16384, 24000)
+SOURCE_VERDICT_REASON_LIMIT = 3000
 
 
 class SourceDisposition(BaseModel):
@@ -47,7 +48,7 @@ class SourceIntegrationVerdict(BaseModel):
     model_config = ConfigDict(extra='forbid')
     section_id: str
     accepted: bool
-    reason: str = Field(min_length=1, max_length=3000)
+    reason: str = Field(min_length=1, max_length=SOURCE_VERDICT_REASON_LIMIT)
 
 
 class SourceIntegrationReview(BaseModel):
@@ -194,7 +195,7 @@ def _revision_notes(previous, context):
     try:
         audit = json.loads(issue.message)
         notes.extend(n for n in audit.get('prior_objections', [])
-                     if isinstance(n, str) and 0 < len(n) <= 1000)
+                     if isinstance(n, str) and 0 < len(n) <= SOURCE_VERDICT_REASON_LIMIT)
         for entry in audit['attempts'][-3:]:
             if 'review' in entry:
                 for verdict in SourceIntegrationReview.model_validate(entry['review']).verdicts:
@@ -306,7 +307,9 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
             'subject, counterpart and effective time. Keep numbers, units, audit scope, conditions and uncertainty exact. No calculations, invented facts, '
             'whole-document absence claims or boilerplate review-status text. Return at most seven merged brief items. '
             f'With {len(brief.items)} original items, use at most {maximum_additions} additions. '
-            'Each added item text must be at most 550 characters including spaces; aim under 450. '
+            'Each added item text can use up to 550 characters including spaces. Before writing a dense '
+            'finding, allocate its distinct claims and their attached conditions to available same-check '
+            'additions, and list every such merged index in that check’s decision. '
             'If material reasons, conditions or supporting qualifications cannot fit concise prose, '
             'use the existing comparison_table in that addition. It appears beside the body and '
             'undergoes the same source and meaning review. Keep the central finding and attribution '
@@ -327,8 +330,8 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
             'their own complete evidence. Cite the entire supporting sentence: if a selected line '
             'ends before a numeric target or condition, include its continuation in that SAME item. '
             'Keep four-digit years at both endpoints of ranges; never abbreviate the second year. '
-            'Preserve material qualifications concisely.'
-            + LAYOUT_INSTRUCTIONS},
+            'Preserve material qualifications concisely. '
+            + SOURCE_MATERIALITY_RULES + LAYOUT_INSTRUCTIONS},
             *instruction_messages(result.profile, purpose='supplementary source integration'),
             untrusted_document_message(encoded)]
         from .source_reference_schema import source_draft_schema
@@ -421,7 +424,10 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
                      'in its current additions must survive alongside the corrections. Describe the exact '
                      'predicate governed by an omitted trigger, limit or exception. An editor needs both the '
                      'missing material and the material to retain when rewriting within the same item capacity. '
-                     + MERGED_BRIEF_INSTRUCTIONS},
+                     'When a draft includes a manual page locator, check the physical page of each '
+                     'claim from its own evidence. Keep textual source references in the evidence '
+                     'fields, where the renderer can cite all applicable pages. '
+                     + SOURCE_MATERIALITY_RULES + MERGED_BRIEF_INSTRUCTIONS},
                     untrusted_document_message(json.dumps(review_context, ensure_ascii=False)),
                     untrusted_document_message(json.dumps({'draft': entry['draft']}, ensure_ascii=False))],
                     SourceIntegrationReview, entry, checks, budget, token_limits=SOURCE_OUTPUT_TOKEN_LIMITS)

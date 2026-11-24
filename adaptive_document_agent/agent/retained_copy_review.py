@@ -64,6 +64,17 @@ def copy_review_payload(payload: dict) -> dict:
                    if isinstance(evidence.get('page'), int))
     source_reading_pages = sorted({page + offset for page in anchors for offset in range(-2, 3)
                                    if page + offset in available_pages})
+    related_ids = {citation['insight_id'] for citation in payload['planned_source_citations']
+                   if anchors.intersection(citation.get('source_pages', ()))}
+    related_copy = []
+    for decision in selection['decisions']:
+        iid = decision['insight_id']
+        if iid in targets or iid not in related_ids or decision['decision'] != 'include':
+            continue
+        if page := decision.get('page'):
+            related_copy.append(dict(insight_id=iid, title=page['title'], message=page['message'],
+                source_context=[{k: item[k] for k in ('scope', 'description')}
+                                for item in page.get('source_context', ())]))
     return {
         **payload,
         'findings': findings,
@@ -83,6 +94,7 @@ def copy_review_payload(payload: dict) -> dict:
         'proposed_selection': {**selection, 'decisions': audience_decisions,
             'ordered_insight_ids': [iid for iid in selection['ordered_insight_ids'] if iid in targets]},
         'retained_proofs': retained_proofs,
+        'related_audience_copy': related_copy,
         'settled_selection_ids': selection['ordered_insight_ids'],
         # Qualitative qualifications can belong to a related measure. Never
         # trim these original pages to just the target's numeric row locations.

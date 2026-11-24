@@ -15,6 +15,70 @@ from tests.test_early_company_introduction import configure_pipeline
 from tests.test_total_file_budget_v130 import choose
 
 
+@pytest.mark.parametrize("from_checkpoint", [False, True])
+def test_selection_failure_checkpoints_only_the_completed_introduction(monkeypatch, from_checkpoint):
+    from adaptive_document_agent.models import PipelineResult, ValidationIssue
+    from adaptive_document_agent.services.pipeline_completion import is_complete
+
+    previous = checkpoint() if from_checkpoint else None
+    harness = configure_pipeline(monkeypatch, source=previous, local=from_checkpoint)
+    rejection = ValidationIssue(code="retained_page_draft_rejected", stage="presentation",
+                                severity="warning", message="Source evidence requires correction")
+    details = {"component": "RetainedAnalysisSelection", "message": "Copy is incomplete"}
+
+    def rejected_report(self, *args, **options):
+        # Arrange the same ordering as a real selection failure after the parallel
+        # introduction has already finished. No provider request is made by capture.
+        options["gateway"].prepared._future.result(timeout=10)
+        partial = options["output"]
+        partial.pipeline_state, partial.retry_from, partial.failed_stage = (
+            "partial", "reporting", "presentation_selection")
+        partial.failure_details = details
+        partial.validation_warnings.append(rejection)
+        return partial
+
+    monkeypatch.setattr(orchestrator.DocumentOrchestrator, "_generate_report", rejected_report)
+    result = orchestrator.DocumentOrchestrator(harness.gateway).analyse_pdf(b"synthetic", resume=previous)
+    restored = PipelineResult.model_validate_json(result.model_dump_json())
+    assert (restored.pipeline_state, restored.retry_from, restored.failed_stage) == (
+        "partial", "reporting", "presentation_selection")
+    assert restored.failure_details == details and rejection in restored.validation_warnings
+    assert restored.presentation_plan and not restored.presentation_plan.slides and not is_complete(restored)
+    assert introduction._has_valid_introduction(restored.presentation_plan, restored)
+    assert harness.client.operations == ([] if from_checkpoint else ["IntroductionPages", "IntroductionDraft"])
+
+    with introduction.prepare_company_introduction(harness.gateway, restored) as next_run:
+        plan = PresentationPlan(title="Subsequent reporting retry")
+        next_run(plan, restored)
+        assert plan.company == restored.presentation_plan.company
+    assert harness.client.operations == ([] if from_checkpoint else ["IntroductionPages", "IntroductionDraft"])
+
+
+def test_partial_checkpoint_never_starts_or_awaits_an_incomplete_introduction(monkeypatch):
+    from concurrent.futures import Future
+
+    saved = checkpoint()
+    saved.presentation_plan = None
+    harness = configure_pipeline(monkeypatch, source=saved, local=True)
+    with introduction.prepare_company_introduction(harness.gateway, saved) as prepared:
+        prepared.retain_completed(saved)
+        pending = Future()
+        monkeypatch.setattr(pending, "result", lambda *args: pytest.fail("Waited on unfinished work"))
+        prepared._future = pending
+        prepared.retain_completed(saved)
+        assert saved.presentation_plan is None and not harness.client.operations
+
+
+def test_partial_checkpoint_revalidates_completed_introduction_against_current_source(monkeypatch):
+    saved = checkpoint()
+    harness = configure_pipeline(monkeypatch, source=saved, local=True)
+    with introduction.prepare_company_introduction(harness.gateway, saved) as prepared:
+        current = saved.model_copy(deep=True)
+        current.presentation_plan = None
+        current.document.pages[0].text = "Different text on the same physical page."
+        prepared.retain_completed(current)
+        assert current.presentation_plan is None and not harness.client.operations
+
 def checkpoint():
     result, review, draft = fixture(1)
     result.document.sha256 = review.document_sha256 = sha256_bytes(b"synthetic")

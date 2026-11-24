@@ -9,6 +9,18 @@ if TYPE_CHECKING:
     from .source_integration_review import SourceIntegrationDraft
 
 
+SOURCE_MATERIALITY_RULES = (
+    'For each check, use its decision_impact and user_focus to identify the decision this '
+    'briefing must inform. Verify check.finding against the complete original pages. Its '
+    'wording is fallible and may miss contrary evidence. Preserve the exact actor, affected '
+    'population, trigger, consequence and exception of each conclusion the audience receives. '
+    'For another topic on a supplied page, identify which conclusion would become misleading '
+    'or how the answer to the decision question would materially change if it were omitted. '
+    'If neither applies, the topic can stay in the source. A new heading or an additional '
+    'clause on its own does not establish an omission. '
+)
+
+
 MERGED_BRIEF_INSTRUCTIONS = (
     'brief_item_indexes address the zero-based merged_brief_items ledger, not original_brief. '
     'The ledger lists every original and proposed added item with its exact index and origin. '
@@ -27,10 +39,10 @@ MERGED_BRIEF_INSTRUCTIONS = (
     'material source issue; explain that effect. Do not require every contextual number or '
     'routine detail merely because it appears nearby. Material assumptions, counterevidence '
     'and the stated basis of a qualified judgment still need faithful audience coverage. '
-    'Require every material qualification on those pages. When judging an omission, identify the '
+    'Apply the decision question of the exact section_id under review. When judging an omission, identify the '
     'section page that supplies it. Other pages quoted by the original brief can explain existing '
     'claims but do not enlarge the chosen section range or require new conclusions from those pages. '
-    'check whether those exact items carry the source meaning and whether additions are material '
+    'Check whether those exact items carry the source meaning and whether additions are material '
     'and supported. Do not reinterpret include as covered or look up addition indices in the '
     'shorter original brief. Apply the same evidence rules as the writer. When a PDF table '
     'is flattened, require a numerical estimate only if its measure, amount and unit are '
