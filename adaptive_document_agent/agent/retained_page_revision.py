@@ -8,8 +8,33 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from adaptive_document_agent.utils.record_encoding import INSTRUCTIONS, encode_records
 from .audit_source_layout import LAYOUT_INSTRUCTIONS, audit_source_page
 from .prompting import untrusted_document_message
-from .retained_page_sources import PERIOD_AND_ASSURANCE_RULES, RetainedPage
+from .retained_page_sources import PERIOD_AND_ASSURANCE_RULES, RetainedPage, authored_copy_limit
 from adaptive_document_agent.models.executive_brief import BriefQuote
+
+
+_REVIEW_PAGE_REFERENCE = re.compile(
+    r'\b(?:physical\s+)?(?:pages?|pp?\.)\s*(\d{1,5})(?:\s*(?:[-–]|to\b|through\b)\s*(\d{1,5}))?\b', re.I)
+
+
+def _owned_correction_source_pages(reasons, anchors, available_pages):
+    """Use complete located pages and their neighbors for an addressed writer."""
+    available = set(available_pages)
+    located = set()
+    for reason in reasons:
+        references = list(_REVIEW_PAGE_REFERENCE.finditer(reason))
+        if not references:
+            return sorted(available)
+        for first, last in (reference.groups() for reference in references):
+            start, end = int(first), int(last or first)
+            if start > end or end - start >= len(available):
+                return sorted(available)
+            interval = set(range(start, end + 1))
+            if not interval <= available:
+                return sorted(available)
+            located.update(interval)
+    if not located:
+        return sorted(available)
+    return sorted({page + offset for page in located | set(anchors) for offset in range(-2, 3)} & available)
 
 
 class RetainedCopyEdit(BaseModel):
@@ -173,32 +198,43 @@ def _revise_page_batch(gateway, result, packet, aliases, draft, issues, *, earli
                             source_row_assurance={ref: packet['source_row_assurance'][ref] for ref in row_refs
                                                   if ref in packet['source_row_assurance']},
                             source_page_numbers=sorted(page_numbers & pages.keys()))
-    # The publication reviewer sees related findings' source context too. A
-    # local writer needs that same supplied evidence to address cross-measure
-    # qualifications, even when no driver was attached to its primary series.
-    source_pages = sorted({n for page in by_page.values() for n in page['source_page_numbers']}
-                          | {p['page'] for p in packet.get('source_pages', [])})
+    source_pages = {n for page in by_page.values() for n in page['source_page_numbers']} | {
+        p['page'] for p in packet.get('source_pages', [])}
+    use_owned_writer = getattr(gateway, 'discovery_workers', 1) >= 8 and len(issues) == 1
+    if use_owned_writer:
+        iid, = issues
+        original = RetainedPage.model_validate(by_page[iid]['draft'])
+        anchors = set(by_page[iid]['source_page_numbers']) | {q.page for q in original.all_context_evidence}
+        # A located correction still sees complete related original pages.
+        # The subsequent independent review keeps its full original scope.
+        source_pages = _owned_correction_source_pages(
+            [*issues[iid], *(earlier_issues or {}).get(iid, ())], anchors, source_pages)
     properties = RetainedPage.model_json_schema()['properties']
     trace = {row['planned_slide_id']:len(row['slide_numbers'])
              for row in result.presentation_export_trace if row.get('planned_slide_id')}
     costs = {iid:trace.get(slide.id,1) for slide in (result.presentation_plan.slides
              if result.presentation_plan else []) if slide.slide_type=='analysis'
              for iid in slide.insight_ids}
-    local_limits = ({iid: (properties['message']['maxLength'] if costs.get(iid,1)>1
-                          else max(600,len(page['draft']['message'])))
-                     for iid,page in by_page.items()} if preserve_numeric_inputs else {
-                         iid:properties['message']['maxLength'] for iid in by_page})
-    payload = dict(pages_to_correct=by_page, source_pages=[audit_source_page(pages[n]) for n in source_pages],
+    copy_limit = authored_copy_limit(result.profile.report_requirements)
+    local_limits = dict.fromkeys(by_page, copy_limit)
+    # Preserve the current page count as a drafting target. New material that
+    # fits the authored-copy contract still needs native page measurement.
+    local_targets = {iid: max(600, len(page['draft']['message']))
+                     for iid, page in by_page.items()
+                     if preserve_numeric_inputs and costs.get(iid, 1) == 1}
+    if not use_owned_writer:
+        local_limits.update(local_targets)
+    payload = dict(pages_to_correct=by_page, source_pages=[audit_source_page(pages[n]) for n in sorted(source_pages)],
                    preserve_numeric_inputs=preserve_numeric_inputs,
                    local_message_character_limits=local_limits,
+                   local_message_character_targets=local_targets,
                    page_copy_limits={field: properties[field]['maxLength'] for field in ('title', 'message')},
                    current_copy_characters={iid: {field: len(page['draft'][field])
                        for field in ('title', 'message')} for iid, page in by_page.items()},
                    earlier_review_questions={iid: reasons for iid, reasons in (earlier_issues or {}).items()
                                              if iid in issues})
-    if getattr(gateway, 'discovery_workers', 1) >= 8 and len(issues) == 1:
+    if use_owned_writer:
         from .compact_publication_copy import compact_publication_copy
-        iid, = issues
         eligible_companions = {ref: observations[aliases[ref]].model_dump(mode='json')
                                for ref in findings[iid]['allowed_companion_rows']}
         return compact_publication_copy(gateway, iid, payload, local_limits[iid],

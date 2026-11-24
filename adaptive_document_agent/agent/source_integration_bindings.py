@@ -62,7 +62,7 @@ def merged_review_context(context: dict, draft: SourceIntegrationDraft, merged: 
 
 
 def bind_unique_inclusions(draft, checks, original_count):
-    """Recover an omitted address only for a one-to-one, exclusively cited section.
+    """Recover omitted addresses for authored additions exclusively citing one section.
 
     The writer already chose include and wrote the addition. The independent
     reviewer still decides whether the proposed conclusion covers that section.
@@ -78,14 +78,18 @@ def bind_unique_inclusions(draft, checks, original_count):
         other = {p for key, check in checks.items() if key != sid for p in check.pages}
         candidates = [(original_count + i, {q.page for q in item.evidence})
                       for i, item in enumerate(draft.additions) if any(q.page in owned for q in item.evidence)]
-        if len(candidates) == 1:
-            index, pages = candidates[0]
-            if pages <= owned - other:
-                exclusive[sid] = index
-            if sid in exclusive and not decision.brief_item_indexes and index not in claimed:
-                decision.brief_item_indexes = [index]
-                addresses[sid] = index
-                claimed.add(index)
+        if not candidates or any(not pages <= owned - other for _, pages in candidates):
+            continue
+        indexes = [index for index, _ in candidates]
+        additions = [draft.additions[index - original_count] for index in indexes]
+        if any(item in additions[:position] for position, item in enumerate(additions)):
+            continue
+        if len(indexes) == 1:
+            exclusive[sid] = indexes[0]
+        if not decision.brief_item_indexes and claimed.isdisjoint(indexes):
+            decision.brief_item_indexes = indexes
+            addresses[sid] = indexes[0] if len(indexes) == 1 else indexes
+            claimed.update(indexes)
     # Only a whole, bijective one-based ledger ending beyond the valid range
     # establishes an alternate numbering convention. Never shift a mixed list.
     expected = set(range(original_count, original_count + len(draft.additions)))

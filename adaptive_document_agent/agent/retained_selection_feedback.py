@@ -34,11 +34,14 @@ def can_retry_source_review(previous, *, live_review=False):
                for w in previous.validation_warnings[latest_index + 1:]):
             return False
         from .retained_analysis_review import review_context
-        if json.loads(latest.message).get('fingerprint') != fingerprint(review_context(previous)):
+        audit = json.loads(latest.message)
+        if audit.get('fingerprint') != fingerprint(review_context(previous)):
             return False
         record = selected_record(previous)
-        return bool(record and record.get('source_authoring')
-                    and selection_input_matches(record, selection_context(previous), previous))
+        context = selection_context(previous)
+        if not (record and record.get('source_authoring') and selection_input_matches(record, context, previous)):
+            return False
+        return True
     except (ValueError, KeyError, TypeError):
         return False
 
@@ -99,8 +102,10 @@ def retain_selection_feedback(previous, *, live_review=False):
             missing = set(review.get('missing_insight_ids', []))
             if priorities and missing and set(priorities) - included == missing:
                 draft['reviewed_priorities'] = priorities
-        included = set(draft['rejected_draft']['ordered_insight_ids'])
+        order = draft['rejected_draft']['ordered_insight_ids']
+        included = set(order)
         earlier_page_issues = {}
+        pending_copy_issues = {}
         for warning in previous.validation_warnings:
             if warning.code != 'retained_selection_coverage':
                 continue
@@ -111,13 +116,17 @@ def retain_selection_feedback(previous, *, live_review=False):
             if not isinstance(audit, dict):
                 continue
             review = audit.get('effective_review', audit.get('review', {}))
+            if audit.get('copy_review_ids') and audit.get('selected_ids') == order:
+                pending_copy_issues = {item['insight_id']: [item['reason']]
+                                       for item in review.get('page_issues', [])
+                                       if item['insight_id'] in included}
             for issue in review.get('page_issues', []):
                 if issue['insight_id'] in included:
                     reasons = earlier_page_issues.setdefault(issue['insight_id'], [])
                     if issue['reason'] not in reasons:
                         reasons.append(issue['reason'])
         record = dict(context_fingerprint=feedback_fingerprint(context), rejected=draft,
-                      earlier_page_issues=earlier_page_issues)
+                      earlier_page_issues=earlier_page_issues, pending_copy_issues=pending_copy_issues)
     except (ValueError, KeyError, TypeError):
         return None
     return ValidationIssue(code=CODE, stage='presentation', severity='info',
@@ -164,6 +173,7 @@ def selection_retry_feedback(result, context):
                 selection_unchanged=not priorities or set(selection.ordered_insight_ids) == set(priorities),
                 reviewed_priorities=priorities,
                 earlier_page_issues=record.get('earlier_page_issues', {}),
+                pending_copy_issues=record.get('pending_copy_issues', {}),
                 preserved_pages=record.get('preserved_pages', {}),
                 copy_review_ids=record.get('copy_review_ids', []),
                 final_approval=False)

@@ -25,10 +25,10 @@ _HORIZON=re.compile(r'\b(?:next|following)\s+(?P<number>\d+)\s+'
 _HORIZON_COPY=re.compile(r'\b(?:next|following)\s+'
     r'(?P<number>\d+|[A-Za-z]+(?:[\s-]+[A-Za-z]+){0,6}?)\s+'
     r'(?P<unit>years?|months?|weeks?|days?|hours?)\b',re.I)
-_YEAR_EVENT=re.compile(rf'\b(?:the|links?|attributes?|describes?)\s+(?P<years>{_YEAR})\s+'
+_YEAR_EVENT=re.compile(rf'\b(?:the|links?|attributes?|describes?|explains?)\s+(?P<years>{_YEAR})\s+'
     r'(?=(?:(?!(?:interim|annual|fiscal|quarterly|semiannual|half-year|full-year|[A-Za-z]*s)\b)'
     r'[A-Za-z]+[\s-]+){0,5}'
-    r'(?:increases?|decreases?|growth|declines?|expansions?|reductions?|recover(?:y|ies)|'
+    r'(?:increases?|decreases?|growth|rises?|falls?|declines?|expansions?|reductions?|recover(?:y|ies)|'
     r'slowdowns?|lengthening|prolongation|shortening)\b)',re.I)
 _YEAR_REPORT=re.compile(rf'\bthe\s+(?P<years>{_YEAR})\s+'
     r'(?=(?:balance|level|result|figure|position|reporting\s+period)\b)',re.I)

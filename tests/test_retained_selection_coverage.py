@@ -2,7 +2,7 @@ import json
 import pytest
 
 from adaptive_document_agent.agent.retained_analysis import RetainedAnalysisSelection
-from adaptive_document_agent.agent.retained_selection_coverage import review_selection_coverage
+from adaptive_document_agent.agent.retained_selection_coverage import SelectionCoverageError, review_selection_coverage
 from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
 from tests.test_retained_analysis_v216 import _linked_result, gateway
 
@@ -28,6 +28,46 @@ def test_early_coverage_verdict_is_bound_and_never_approves_final_presentation(a
     records = [json.loads(w.message) for w in result.validation_warnings if w.code=='retained_selection_coverage']
     assert all(not r['final_presentation_approval'] for r in records)
     assert not any(w.code=='presentation_retained_analysis_review' for w in result.validation_warnings)
+
+
+def test_scoped_coverage_wire_starts_with_exact_complete_source_pages():
+    from adaptive_document_agent.agent import retained_analysis as retained
+    from adaptive_document_agent.utils.record_encoding import encode_records,decode_records
+    from tests.test_retained_source_citations import fixture
+
+    result,context,selection=fixture()
+    iid=selection.ordered_insight_ids[0]
+    scoped={**context,'copy_review_ids':[iid]}
+    mock=gateway([dict(accepted=True,reason='Synthetic source protocol check.')])
+
+    review_selection_coverage(mock,scoped,selection,result)
+
+    serialized=mock.client.calls[0][-1]['content'].split('\n',1)[1].rsplit('\n',1)[0]
+    payload=decode_records(json.loads(serialized))
+    expected_source=json.dumps(encode_records(context['source_pages']),
+        ensure_ascii=False,separators=(',',':'))
+    assert serialized.startswith('{"source_pages":'+expected_source+',')
+    assert payload['source_pages']==context['source_pages']
+    audit=json.loads(next(w.message for w in reversed(result.validation_warnings)
+        if w.code=='retained_selection_coverage'))
+    assert audit['copy_review_ids']==[iid]
+    assert audit['copy_review_packet']['wire_fingerprint']==retained.fingerprint(payload)
+
+
+def test_complete_long_owned_review_preserves_every_requested_correction():
+    from tests.test_retained_source_citations import fixture
+
+    result,context,selection=fixture()
+    iid=selection.ordered_insight_ids[0]
+    reason=' '.join(f'Correction {index}: preserve the distinct source scope, affected population '
+        'and management qualification for this finding.' for index in range(20))
+    assert 1800<len(reason)<4000
+    mock=gateway([dict(accepted=False,reason='Corrections required.',
+        page_issues=[dict(insight_id=iid,reason=reason)])])
+    with pytest.raises(SelectionCoverageError) as rejected:
+        review_selection_coverage(mock,{**context,'copy_review_ids':[iid]},selection,result)
+    assert [issue.reason for issue in rejected.value.page_issues]==[reason]
+    assert len(mock.client.calls)==1
 
 
 @pytest.mark.parametrize('accepted,page_ids,valid', [

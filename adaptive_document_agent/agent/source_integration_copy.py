@@ -1,12 +1,23 @@
 """Rephrase only the overlong fields in a complete source-integration proposal."""
 import json
 import re
+from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from .brief_patch_capacity import complete_patch
 from .prompting import untrusted_document_message
 from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
+
+
+_SourceCopySentences = Annotated[list[Annotated[str, Field(min_length=1, max_length=1800)]],
+    Field(min_length=1, max_length=3)]
+
+
+class SourceCopyVersions(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    complete: _SourceCopySentences
+    concise: _SourceCopySentences
 
 
 def copy_review_questions(messages):
@@ -66,7 +77,7 @@ def _reopening_inventory(item):
     return dict(text_propositions=propositions, comparison_table_rows=table_rows)
 
 
-def shorter_copy_retry(error, pending, original_count):
+def shorter_copy_retry(error, pending):
     """Reuse the final existing attempt only for strict length progress.
 
     No truncated output, new fields, source edits or split-item recovery is
@@ -74,8 +85,6 @@ def shorter_copy_retry(error, pending, original_count):
     """
     from copy import deepcopy
     draft, errors = pending
-    if min(4, 7 - original_count) > len(draft['additions']):
-        return None  # The available split transport is not a text-only patch.
     keys = {f'addition_{e["loc"][1]}_{e["loc"][2]}' for e in errors}
     try:
         values = complete_patch(error, keys)
@@ -304,7 +313,10 @@ def revise_reopened_additions(gateway, messages, previous, sections, original_co
             raw['additions'][i - original_count] = values[f'item_{i}']
         mapped = [{**e, 'loc': ['additions', int(e['loc'][0][5:]) - original_count, e['loc'][1]]}
                   for e in errors]
-        revised = shorten_additions(gateway, messages, SourceIntegrationDraft, (raw, mapped), entry, original_count)
+        use_sentence_versions = len(previous.additions) >= min(4, 7 - original_count)
+        revised = shorten_additions(gateway, messages, SourceIntegrationDraft, (raw, mapped), entry,
+                                    original_count, sentence_compress=use_sentence_versions,
+                                    split_overlong_labels=True)
         entry['edited_addition_indexes'] = sorted(targets)
         return revised
     revised = previous.model_copy(deep=True)
@@ -315,7 +327,8 @@ def revise_reopened_additions(gateway, messages, previous, sections, original_co
     return revised
 
 
-def shorten_additions(gateway, messages, schema, pending, entry, original_count, *, sentence_compress=False):
+def shorten_additions(gateway, messages, schema, pending, entry, original_count, *,
+                      sentence_compress=False, split_overlong_labels=False):
     draft, errors = pending
     fields = {}
     targets = {}
@@ -328,9 +341,8 @@ def shorten_additions(gateway, messages, schema, pending, entry, original_count,
         limit = error['ctx']['max_length']
         fields[key] = (str, Field(min_length=1, max_length=limit))
         if sentence_compress and field == 'text':
-            from typing import Annotated
-            fields[key] = (list[Annotated[str, Field(min_length=1, max_length=180)]],
-                           Field(min_length=1, max_length=3))
+            fields[key] = (SourceCopyVersions | _SourceCopySentences |
+                           Annotated[str, Field(min_length=1, max_length=limit)], ...)
         targets[key] = dict(original=draft['additions'][index][field],
                             prior_review_questions=review_questions,
                             locked_evidence=draft['additions'][index]['evidence'],
@@ -342,19 +354,26 @@ def shorten_additions(gateway, messages, schema, pending, entry, original_count,
                 and all(owner['disposition'] == 'include' for owner in owners)
                 and not draft['additions'][index].get('quantity_representations')
                 and not draft['additions'][index].get('comparison_table')
-                and not any(e['loc'] == ['additions', index, 'label'] for e in errors)):
+                and (split_overlong_labels or not any(e['loc'] == ['additions', index, 'label'] for e in errors))):
             fields[key] = (list[SourceCopyPart], Field(min_length=1, max_length=2))
             targets[key]['instruction'] = ('Divide the material into two short findings when needed. '
                 'Each needs a distinct label and a body of about 35 words. Both cite the same source evidence.')
             split[key] = owners
             remaining -= 1
         if sentence_compress and field == 'text':
-            targets[key]['target_characters'] = 542
+            targets[key]['target_characters'] = limit * 4 // 5
             targets[key]['instruction'] = (
-                'Return one to three complete sentences or clauses as separate array entries. '
-                'Each entry is at most 180 characters; Python joins them with spaces, so the joined '
-                'text is guaranteed to stay within the 550-character field limit. Keep this in the '
-                'same item; do not split it into additional brief items.')
+                'Return complete and concise versions, each as one to three complete sentences or '
+                'clauses. Both must preserve the same material claims, exact quantities and '
+                'qualifications. Aim for at most 70 English words in complete and 60 in concise. '
+                f'Python joins each version with spaces and checks the shared {limit}-character '
+                'limit. Keep this in the same item. Do not split it into additional brief items.')
+    # A split response owns both validated labels, including replacement of an
+    # overlong original label. Do not request a conflicting scalar label.
+    split_labels = {key.removesuffix('_text') + '_label' for key in split}
+    for key in split_labels:
+        fields.pop(key, None)
+        targets.pop(key, None)
     patch = create_model('SourceAdditionCopy', __config__=ConfigDict(extra='forbid'), **fields)
     content = ('Return only the requested replacement fields for the supplied proposal. '
         'For scalar string replacements, aim for at most 80 percent of each character limit including spaces. '
@@ -402,12 +421,19 @@ def shorten_additions(gateway, messages, schema, pending, entry, original_count,
         for error in errors:
             _, index, field = error['loc']
             key = f'addition_{index}_{field}'
-            if field == 'text' and isinstance(values.get(key), list):
-                values[key] = ' '.join(values[key])
+            if field == 'text':
+                reply = values[key]
+                if isinstance(reply, list):
+                    values[key] = ' '.join(reply)
+                elif isinstance(reply, dict):
+                    complete, concise = (' '.join(reply[name]) for name in ('complete', 'concise'))
+                    values[key] = complete if len(complete) <= error['ctx']['max_length'] else concise
     entry['shortened_fields'] = values
     for error in errors:
         _, index, field = error['loc']
         key = f'addition_{index}_{field}'
+        if key in split_labels:
+            continue
         if key in split:
             original = draft['additions'][index]
             parts = values[key]

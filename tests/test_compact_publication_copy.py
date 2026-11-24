@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from adaptive_document_agent.agent.compact_publication_copy import compact_publication_copy
-from adaptive_document_agent.agent.retained_page_sources import AuthoredPageErrors
+from adaptive_document_agent.agent.retained_page_sources import AuthoredPageErrors, RetainedPage
 from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
 from tests.test_retained_analysis_v216 import gateway as base_gateway
 
@@ -29,6 +29,27 @@ def test_whole_paragraph_keeps_original_fields_and_requires_caller_validation():
     assert replacement.companion_ids==['bound-row']
     assert replacement.context_evidence[0].text=='Literal source quotation.'
     assert checked and len(llm.usage)==1 and source==before
+
+
+def test_unbound_amount_feedback_points_to_the_exact_eligible_signed_row():
+    source=payload()
+    row=dict(id='loss-row',metric='Operating loss',period='6M2023',value='(22,108)',unit='RMB in thousands')
+    source['pages_to_correct']['owned']['source_rows']=[row,{**row,'id':'unrelated-row'}]
+    draft=dict(message='The source reports operating loss.',source_context=None)
+    llm=gateway([draft,{**draft,'companion_ids':['bound-row','loss-row']}])
+    checks=[]
+
+    def validate(pages):
+        checks.append(pages['owned'])
+        return {'owned':['No source row bound to numeric value: 22108']} if len(checks)==1 else {}
+
+    page=compact_publication_copy(llm,'owned',source,750,validate,
+        eligible_companions={'loss-row':dict(metric_original='Operating loss',period='6M2023')})['owned']
+
+    assert page.companion_ids==['bound-row','loss-row']
+    hint=llm.client.calls[1][-2]['content'].split('Exact eligible source rows matching unbound displayed amounts: ')[-1]
+    assert 'loss-row' in hint and '(22,108)' in hint and 'RMB in thousands' in hint
+    assert 'unrelated-row' not in hint
 
 
 @pytest.mark.parametrize('nested',[False,True])
@@ -209,10 +230,105 @@ def test_capacity_prompt_has_per_field_drafting_bounds_and_preserves_shared_vali
         quote=dict(page=index+1,text='Complete literal source proof.'))
         for index,scope in enumerate(('the initial discussion','the later discussion'))])
     schema,messages=_source_description_capacity_request(page,visible_copy_budget(page,[],400),400,[])
-    limits=[field['maxLength'] for field in schema.model_json_schema()['properties'].values()]
-    assert len(limits)==2 and sum(limits)<400 and all(limit<250 for limit in limits)
-    assert 'field maxLength' in messages[0]['content']
-    assert schema.model_validate({'context_1':'a'*(limits[0]+1),'context_2':'A short explanation.'})
+    fields=schema.model_json_schema()['properties']
+    assert len(fields)==2 and all(field['items']['maxLength']==700 for field in fields.values())
+    assert 'Target ' in fields['context_1']['description']
+    assert 'ordered list of short paragraphs' in messages[0]['content']
+    assert schema.model_validate({'context_1':'a'*300,'context_2':['A short explanation.']})
+
+
+@pytest.mark.parametrize('response_style',['paragraphs','overlong_paragraph','legacy_string'])
+def test_capacity_repair_preserves_each_complete_paragraph_and_its_literal_proof(monkeypatch,response_style):
+    source=payload()
+    quote=dict(page=2,text=source['source_pages'][0]['text'])
+    scope='the reported discussion'
+    candidate=dict(message='Reported levels.',source_context=[dict(scope=scope,
+        description='Describes '+('a related source fact '*40),quote=quote)])
+    paragraphs=[f'Describes the source qualification {word}.' + ' Related obligations increased.'*13
+                for word in ('before the transition','after the transition')]
+    combined=' '.join(paragraphs)
+    assert len(combined)>700 and all(len(paragraph)<700 for paragraph in paragraphs)
+    response={'paragraphs':paragraphs,'overlong_paragraph':[combined],'legacy_string':combined}[response_style]
+    llm=base_gateway([candidate,dict(context_1=response)])
+    base=llm.client.generate_text
+
+    def complete(*args,**kwargs):
+        response=base(*args,**kwargs)
+        response.usage.finish_reason='stop'
+        return response
+
+    monkeypatch.setattr(llm.client,'generate_text',complete)
+    checked=[]
+    page=compact_publication_copy(llm,'owned',source,1250,
+        lambda pages: checked.append(pages['owned']) or {})['owned']
+    assert checked==[page] and page.message==candidate['message']
+    assert all(item.scope==scope and item.quote.model_dump()==quote for item in page.source_context)
+    assert ' '.join(item.description.removeprefix('Reports the following. ') for item in page.source_context)==combined
+    assert [call['operation'] for call in llm.usage]==['RetainedPageRevisions','RetainedSourceDescriptionCapacity']
+
+
+def test_dense_capacity_uses_complete_condensed_option_when_full_version_overflows():
+    from adaptive_document_agent.agent.compact_publication_copy import (
+        _source_capacity_values, _source_description_capacity_request, visible_copy_budget)
+    page=RetainedPage(title='Source profile',message='Reported levels.',source_context=[dict(
+        scope=f'the {scope} discussion',description='Describes the reported operating condition. '*6,
+        quote=dict(page=index,text='Full literal proof for the given condition.'))
+        for index,scope in enumerate(('initial','local','market','balance','closing'),1)])
+    limit=900
+    schema,_=_source_description_capacity_request(page,visible_copy_budget(page,[],limit),limit,[])
+    condensed={f'context_{index}':['Describes the reported operating condition.']
+        for index in range(1,6)}
+    condensed['context_1']=['Describes 30 facilities.']
+    response=schema.model_validate({**{f'context_{index}':[item.description]
+        for index,item in enumerate(page.source_context,1)},'condensed':condensed})
+    actual=RetainedPage.model_validate(_source_capacity_values(page,response,[],limit))
+    assert visible_copy_budget(page,[],limit)['total_characters']>limit
+    assert visible_copy_budget(actual,[],limit)['total_characters']<=limit
+    assert actual.message==page.message and actual.all_context_evidence==page.all_context_evidence
+    assert actual.source_context[0].description==page.source_context[0].description
+    assert [item.scope for item in actual.source_context]==[item.scope for item in page.source_context]
+
+
+def test_capacity_wire_keeps_usable_alternative_to_an_overlong_source_paragraph():
+    from adaptive_document_agent.agent.compact_publication_copy import (
+        _source_capacity_values, _source_description_capacity_request, visible_copy_budget)
+
+    page=RetainedPage(title='Source profile',message='Reported levels.',source_context=[dict(
+        scope=f'the {scope} discussion',description='Describes the reported operating condition.',
+        quote=dict(page=index,text='Full literal proof for the given condition.'))
+        for index,scope in enumerate(('initial','local','market','balance','closing'),1)])
+    limit=1600
+    schema,_=_source_description_capacity_request(page,visible_copy_budget(page,[],limit),limit,[])
+    short={f'context_{index}':[item.description] for index,item in enumerate(page.source_context,1)}
+    overlong='Describes operating conditions as '+('reported in the accompanying original evidence ' * 16)+'.'
+    response=schema.model_validate({**short,'context_3':[overlong],'condensed':short})
+
+    actual=RetainedPage.model_validate(_source_capacity_values(page,response,[],limit))
+
+    assert actual==page
+
+
+def test_size_only_compression_keeps_exact_source_day_count_parameters():
+    from adaptive_document_agent.agent.compact_publication_copy import (
+        _source_capacity_values, _source_description_capacity_request, visible_copy_budget)
+
+    methodology='Describes the calculation as using 360 days for a given year and 180 days for a six-month period.'
+    page=RetainedPage(title='Turnover',message='Reported levels.',source_context=[
+        dict(scope='turnover days calculation',description=methodology,quote=dict(page=2,text=
+            'The calculation multiplies by the number of days (360 days for a given year and '
+            '180 days for a six-month period).')),
+        dict(scope='trade receivable movements',description='Describes changes in receivables. '*12,
+            quote=dict(page=3,text='The receivable balance changed with customer collections.')),
+    ])
+    limit=430
+    schema,_=_source_description_capacity_request(page,visible_copy_budget(page,[],limit),limit,[])
+    assert set(schema.model_fields)=={'context_2'}
+    response=schema.model_validate({'context_2':['Describes changes with customer collections.']})
+    actual=RetainedPage.model_validate(_source_capacity_values(page,response,[],limit))
+    assert actual.source_context[0]==page.source_context[0]
+    assert actual.all_context_evidence==page.all_context_evidence
+    assert visible_copy_budget(page,[],limit)['total_characters']>limit
+    assert visible_copy_budget(actual,[],limit)['total_characters']<=limit
 
 
 @pytest.mark.parametrize('scope,repair_description_only',[('the reported discussion',True),('FY2099',False)])
@@ -333,7 +449,85 @@ def test_initial_repair_cannot_silently_keep_a_rejected_draft_quote_via_null():
     assert page.context_evidence==[] and len(llm.client.calls)==2
 
 
-def test_summary_references_cannot_overwrite_analysis_continuation_capacity(monkeypatch):
+def test_source_only_revision_can_retain_exact_main_numeric_text():
+    source=payload()
+    original=source['pages_to_correct']['owned']['draft']['message']
+    proof=source['source_pages'][0]['text']
+    llm=gateway([dict(message=None,source_context=[dict(scope='the reported discussion',
+        description='Describes the source qualification.',quote=dict(page=2,text=proof))])])
+    page=compact_publication_copy(llm,'owned',source,1250,lambda _: {})['owned']
+    assert page.message==original
+    assert page.source_context[0].quote.text==proof
+    assert len(llm.client.calls)==1
+
+
+def test_addressed_source_description_edit_keeps_other_copy_and_exact_proof():
+    source=payload()
+    draft=source['pages_to_correct']['owned']['draft']
+    proof=dict(page=2,text=source['source_pages'][0]['text'])
+    draft['source_context']=[dict(scope=f'the {name} discussion',
+        description=f'Describes the {name} source explanation.',quote=proof) for name in ('first','second')]
+    replacement='Describes the source qualification and its stated cause.'
+    llm=gateway([dict(message=None,source_context=None,source_context_edits={'context-1':replacement})])
+    page=compact_publication_copy(llm,'owned',source,1250,lambda _: {})['owned']
+    assert page.message==draft['message']
+    assert page.source_context[0].model_dump()==draft['source_context'][0]
+    assert page.source_context[1].model_dump()=={**draft['source_context'][1],'description':replacement}
+    assert len(llm.client.calls)==1
+
+
+def test_addressed_source_addition_retains_existing_scope_and_proof():
+    source=payload()
+    draft=source['pages_to_correct']['owned']['draft']
+    proof=dict(page=2,text=source['source_pages'][0]['text'])
+    draft['source_context']=[dict(scope='main discussion',description='Describes the main finding.',quote=proof)]
+    addition=dict(scope='measurement basis',description='Describes the source measurement approach.',quote=proof)
+    llm=gateway([dict(message=None,source_context=None,source_context_additions=[addition])])
+
+    page=compact_publication_copy(llm,'owned',source,1250,lambda _: {})['owned']
+
+    assert page.message==draft['message']
+    assert [item.model_dump() for item in page.source_context]==[*draft['source_context'],addition]
+    assert len(llm.client.calls)==1
+
+
+def test_overlong_addressed_description_preserves_complete_explanations_and_their_proof():
+    source=payload()
+    draft=source['pages_to_correct']['owned']['draft']
+    proof=dict(page=2,text=source['source_pages'][0]['text'])
+    draft['source_context']=[dict(scope='measurement basis',description='Describes the original finding.',quote=proof)]
+    statements=['Describes the assessment as '+('detailed and source-supported ' * 15)+'.',
+                'Reports management’s assessment as '+('qualified by original evidence ' * 14)+'.']
+    llm=gateway([dict(message=None,source_context=None,source_context_edits={'context-0':' '.join(statements)})])
+
+    page=compact_publication_copy(llm,'owned',source,1600,lambda _: {})['owned']
+
+    assert [item.description for item in page.source_context]==statements
+    assert all(item.scope=='measurement basis' and item.quote.model_dump()==proof for item in page.source_context)
+    assert len(llm.client.calls)==1
+
+
+def test_overlong_merged_edit_compresses_only_that_description_when_page_fits():
+    source=payload()
+    draft=source['pages_to_correct']['owned']['draft']
+    proof=dict(page=2,text=source['source_pages'][0]['text'])
+    fixed=dict(scope='reported context',description='Describes the confirmed condition.',quote=proof)
+    draft['source_context']=[dict(scope='measurement basis',description='Describes the original finding.',quote=proof),fixed]
+    overlong='Describes the assessment as '+('detailed and source-supported ' * 25)+'.'
+    shorter='Describes the assessment as supported by the original evidence.'
+    llm=base_gateway([dict(message=None,source_context=None,source_context_edits={'context-0':overlong}),
+                     dict(context_1=[shorter])])
+
+    page=compact_publication_copy(llm,'owned',source,1600,lambda _: {})['owned']
+
+    assert page.source_context[0].description==shorter
+    assert page.source_context[1].model_dump()==fixed
+    assert [call['operation'] for call in llm.usage]==['RetainedPageRevisions','RetainedSourceDescriptionCapacity']
+
+
+@pytest.mark.parametrize('analysis_pages,expected_target', [([5],600),([5,6],None)])
+def test_final_copy_draft_target_keeps_the_actual_analysis_page_cost(
+        monkeypatch,analysis_pages,expected_target):
     from adaptive_document_agent.agent import compact_publication_copy as module
     from adaptive_document_agent.agent.retained_page_revision import revise_retained_pages
     from adaptive_document_agent.agent.retained_page_sources import writer_context,source_row_assurance
@@ -344,19 +538,19 @@ def test_summary_references_cannot_overwrite_analysis_continuation_capacity(monk
     analysis=next(s for s in result.presentation_plan.slides if s.slide_type=='analysis')
     result.presentation_plan.slides.append(analysis.model_copy(update=dict(
         id='summary',slide_type='executive_summary')))
-    result.presentation_export_trace=[dict(planned_slide_id=analysis.id,slide_numbers=[5,6]),
+    result.presentation_export_trace=[dict(planned_slide_id=analysis.id,slide_numbers=analysis_pages),
         dict(planned_slide_id='summary',slide_numbers=[2])]
     packet,aliases=writer_context(selection_context(result,source_authoring=True))
     packet['source_row_assurance']=source_row_assurance(result,aliases)
     draft=selected_record(result)['selection']
     captured=[]
     def compact(gateway,owned,payload,limit,validate,**kwargs):
-        captured.append(limit)
+        captured.append((limit,payload['local_message_character_targets'].get(owned)))
         return {owned:RetainedPage.model_validate(payload['pages_to_correct'][owned]['draft'])}
     monkeypatch.setattr(module,'compact_publication_copy',compact)
     revise_retained_pages(SimpleNamespace(discovery_workers=8),result,packet,aliases,draft,
         {iid:['Preserve source context.']},preserve_numeric_inputs=True)
-    assert captured==[2000]
+    assert captured==[(2000,expected_target)]
 
 
 def test_structured_source_context_preserves_its_proof_and_visible_qualitative_meaning():

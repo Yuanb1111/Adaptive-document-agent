@@ -35,7 +35,8 @@ _SOURCE_SENTENCE_BOUNDARY=re.compile(r'(?<=[.!?])\s+')
 _AMBIGUOUS_QUOTING=re.compile(r'["“”‘]|(?<!\w)[\'’]')
 _AMBIGUOUS_ABBREVIATION=re.compile(r'\b(?:e\.g|i\.e|etc|vs|approx|no|fig|dr|mr|mrs|ms|inc|ltd|co)\.',re.I)
 _DECLARATIVE_PREDICATE=re.compile(r'\b(?:is|are|was|were|has|have|had|reported|stated|'
-    r'indicated|covered|found|identified|observed|confirmed|assessed|monitored|cited|believed)\b',re.I)
+    r'indicated|covered|found|identified|observed|confirmed|assessed|monitored|cited|believed|'
+    r'rose|fell|increased|decreased|used|said|says|considered|reviewed|concerns?)\b',re.I)
 _AMBIGUOUS_SUBJECT=re.compile(r'^(?:it|they|this|that|these|those|he|she|which|the former|the latter)\b',re.I)
 _SOURCE_CONTEXT_FIELDS={'scope','description','quote','continuation_quotes'}
 _SOURCE_AXIS_CATEGORY=re.compile(rf'\b(?P<count>{_CARDINAL_WORDS})-axis\s+'
@@ -47,7 +48,7 @@ _STANDARD_IDENTIFIER=re.compile(r'\b(?:IAS|IFRS|HKAS|HKFRS)\s+(?P<number>\d{1,2}
 _STANDARD_REFERENCE=re.compile(r'\b(?P<prefix>(?:under|in\s+accordance\s+with|pursuant\s+to|according\s+to|'
     r'as\s+required\s+by|complies\s+with)\s+)?(?P<code>(?:IAS|IFRS|HKAS|HKFRS)\s+\d{1,2})\b',re.I)
 _STANDARD_VALUATION_TAIL=re.compile(r'^(?:\s+|\s*:\s*)(?:lower[- ]of[- ]cost|'
-    r'lower\s+cost(?=\s*/\s*NRV\b)|net\s+realizable\s+value)\b',re.I)
+    r'lower\s+cost(?=\s*/\s*NRV\b)|net\s+realizable\s+value|(?:impairment\s+)?test(?:s|ing)?)\b',re.I)
 _STANDARD_MEASURE_TAIL=re.compile(r'^\s*(?:years?|months?|weeks?|days?|hours?|units?|'
     r'thousands?|millions?|billions?|percent(?:age)?|basis\s+points?)\b',re.I)
 _PROOF_PAGE_PREFIX=re.compile(r'^(?:p\.|page)\s*(?P<page>[1-9]\d*)\s*:\s*',re.I)
@@ -57,12 +58,17 @@ def _split_reported_sentence_groups(sentences):
     """Keep complete direct statements in their original order and scope."""
     if (not _SOURCE_SENTENCE_START.match(sentences[0])
             or any(not re.match(r'[A-Z]',sentence) or sentence[-1] not in '.!?'
-                   or _AMBIGUOUS_SUBJECT.match(sentence)
                    or not (_SOURCE_SENTENCE_START.match(sentence) or _DECLARATIVE_PREDICATE.search(sentence))
                    for sentence in sentences)):
         return None
-    groups=[sentences[0]]
+    units=[sentences[0]]
     for sentence in sentences[1:]:
+        if _AMBIGUOUS_SUBJECT.match(sentence):
+            units[-1]+=' '+sentence
+        else:
+            units.append(sentence)
+    groups=[units[0]]
+    for sentence in units[1:]:
         extended=groups[-1]+' '+sentence
         if len(extended)<=700:
             groups[-1]=extended
@@ -72,14 +78,28 @@ def _split_reported_sentence_groups(sentences):
     return groups if all(len(group)<=700 for group in groups) else None
 
 
-def split_overlong_source_descriptions(items):
-    """Split complete source sentences before schema validation.
+def split_source_description(description):
+    """Split an overlong description at safe, complete sentence boundaries."""
+    if _AMBIGUOUS_QUOTING.search(description) or _AMBIGUOUS_ABBREVIATION.search(description):
+        return None
+    sentences=[part.strip() for part in _SOURCE_SENTENCE_BOUNDARY.split(description.strip())]
+    if len(sentences)<2 or any(not sentence or len(sentence)>700 for sentence in sentences):
+        return None
+    if all(_SOURCE_SENTENCE_START.match(sentence) for sentence in sentences):
+        return sentences
+    if groups:=_split_reported_sentence_groups(sentences):
+        return groups
+    # Repeat an explicitly established company subject at the split boundary.
+    matched=[_COMPANY_ATTRIBUTED_SENTENCE.fullmatch(sentence) for sentence in sentences]
+    if (not all(matched) or matched[0]['speaker'].casefold()!='the company'
+            or any(re.search(r'\bit\b',match['predicate'],re.I) for match in matched)):
+        return None
+    groups=[f"Reports that the company {match['verb']} {match['predicate']}" for match in matched]
+    return groups if all(len(group)<=700 for group in groups) else None
 
-    The input is model-owned data. This helper changes no scope or proof and
-    does not perform any of their semantic/binding checks; callers must still
-    validate the resulting copies normally. Ambiguous grammar is left intact
-    for the existing schema error to report.
-    """
+
+def split_overlong_source_descriptions(items):
+    """Keep each source scope and proof on every resulting description."""
     if not isinstance(items,list):
         return items
     expanded=[]
@@ -91,32 +111,8 @@ def split_overlong_source_descriptions(items):
         if not isinstance(description,str) or len(description)<=700:
             expanded.append(item)
             continue
-        # Quotation boundaries and punctuation inside quoted text are not safe
-        # sentence delimiters for this transport-only normalization.
-        if _AMBIGUOUS_QUOTING.search(description):
+        if not (split_sentences:=split_source_description(description)):
             return items
-        if _AMBIGUOUS_ABBREVIATION.search(description):
-            return items
-        sentences=[part.strip() for part in _SOURCE_SENTENCE_BOUNDARY.split(description.strip())]
-        if len(sentences)<2 or any(not sentence or len(sentence)>700 for sentence in sentences):
-            return items
-        if all(_SOURCE_SENTENCE_START.match(sentence) for sentence in sentences):
-            split_sentences=sentences
-        elif split_sentences:=_split_reported_sentence_groups(sentences):
-            pass
-        else:
-            # Narrow pronoun resolution for a continuous company-attributed
-            # source passage. The first subject must explicitly be "the company";
-            # every later sentence must repeat it or use "It" with an allowed
-            # reporting verb. Render each as an explicit company attribution.
-            matched=[_COMPANY_ATTRIBUTED_SENTENCE.fullmatch(sentence) for sentence in sentences]
-            if (not all(matched) or matched[0]['speaker'].casefold()!='the company'
-                    or any(re.search(r'\bit\b',match['predicate'],re.I) for match in matched)):
-                return items
-            split_sentences=[f"Reports that the company {match['verb']} {match['predicate']}"
-                             for match in matched]
-            if any(len(sentence)>700 for sentence in split_sentences):
-                return items
         for sentence in split_sentences:
             expanded.append({**item,'description':sentence})
         changed=True
@@ -352,7 +348,7 @@ def observation_context_labels(rows):
 
 
 def reported_source_components(text,quotes,*,periods=(),labels=(),declared=()):
-    """Move only explicit, numeric-free literal quotations into source context.
+    """Separate source-owned qualitative context and exact method parameters.
 
     The caller must first bind every quote to its supplied original page. This
     function supplies neither a semantic verdict nor numeric evidence. The
@@ -373,11 +369,14 @@ def reported_source_components(text,quotes,*,periods=(),labels=(),declared=()):
         if proof is not None:
             from adaptive_document_agent.services.calendar_claims import mask_scoped_month_days
             from adaptive_document_agent.services.calendar_claims import mask_scoped_year_ranges
+            from adaptive_document_agent.services.source_day_count import (
+                literal_day_count_conventions, mask_day_count_conventions)
             from .source_context_periods import mask_reporting_period_references
             words=mask_reporting_period_references(words,proof,scope)
             words=mask_scoped_month_days(words,scope,proof)
             words=mask_scoped_year_ranges(words,scope,proof)
             words=_mask_source_standard_identifiers(words,proof)
+            words=mask_day_count_conventions(words,literal_day_count_conventions(proof))
         if _QUANTITY.search(words):
             return False
         from adaptive_document_agent.services.source_duration_conditions import mask_worded_duration_conditions

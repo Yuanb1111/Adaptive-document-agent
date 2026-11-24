@@ -293,6 +293,23 @@ def test_length_progress_sentence_array_cannot_exceed_its_joined_text_bound():
             {}, 5, sentence_compress=True)
 
 
+def test_length_progress_chooses_complete_concise_copy_when_joined_full_version_overflows():
+    from adaptive_document_agent.agent.source_integration_copy import shorten_additions
+    from adaptive_document_agent.agent.source_integration_review import SourceIntegrationDraft
+
+    _, constraint=fixture()
+    draft,_=_outputs(constraint)
+    full=['A complete source qualification. '*20]
+    llm,_=gateway([response(json.dumps({'addition_0_text':dict(complete=full,concise=[constraint])}))])
+    result=shorten_additions(llm,[],SourceIntegrationDraft,
+        (draft.model_dump(mode='json'),[dict(loc=['additions',0,'text'],ctx=dict(max_length=550))]),
+        {},5,sentence_compress=True)
+    assert result.additions[0].text==constraint
+    assert result.additions[0].evidence==draft.additions[0].evidence
+    assert result.decisions==draft.decisions
+    assert len(llm.usage)==1
+
+
 @pytest.mark.parametrize('setting', ['reduced', 'provider_default'])
 def test_semantic_source_compression_and_review_keep_provider_reasoning(setting):
     from adaptive_document_agent.services.llm import LLMSettings

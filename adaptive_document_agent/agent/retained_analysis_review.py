@@ -7,6 +7,7 @@ from adaptive_document_agent.models import ValidationIssue
 from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
 from .prompting import untrusted_document_message
 from .retained_analysis import selected_record, selection_context, fingerprint, RetainedAnalysisSelection
+from .retained_copy_review import MAX_COPY_REVIEW_REASON_CHARACTERS
 from .retained_audit_scope import (
     ASSURANCE_REVIEW_RULES, AssuranceChange, contradicted_assurance, verified_column_assurance,
 )
@@ -46,7 +47,7 @@ class RetainedSlideVerdict(BaseModel):
     model_config = ConfigDict(extra='forbid')
     slide_id: str
     accepted: bool
-    reason: str = Field(min_length=1, max_length=1200)
+    reason: str = Field(min_length=1, max_length=MAX_COPY_REVIEW_REASON_CHARACTERS)
     assurance_changes: list[AssuranceChange] | None = Field(default=None, max_length=40)
 
 
@@ -199,12 +200,19 @@ def review_retained_analysis(gateway, result, *, progress=None, repair_copy=Fals
                 latest = next(w for w in reversed(result.validation_warnings) if w.code == REVIEW_CODE)
                 audit = json.loads(latest.message)
                 review = RetainedAnalysisReview.model_validate(audit.get('effective_review', audit['review']))
-                if not review.omissions_accepted or not any(not v.accepted for v in review.verdicts):
-                    raise  # Copy correction has no authority to settle missing findings.
-                if progress:
-                    progress(f'Correcting rejected final page copy ({attempt + 1}/2) within this run')
-                from .retained_source_retry import repair_retained_source_copy
-                repair_retained_source_copy(gateway, result)
+                if not review.omissions_accepted:
+                    from .retained_omission_repair import repair_retained_omission
+                    if not repair_retained_omission(gateway, result, review):
+                        raise
+                    if progress:
+                        progress(f'Replaced a retained finding after omission review ({attempt + 1}/2)')
+                elif any(not v.accepted for v in review.verdicts):
+                    if progress:
+                        progress(f'Correcting rejected final page copy ({attempt + 1}/2) within this run')
+                    from .retained_source_retry import repair_retained_source_copy
+                    repair_retained_source_copy(gateway, result)
+                else:
+                    raise
                 # A copy edit grants no publication approval and cannot silently
                 # exceed the actual physical budget or stale the source gates.
                 from .presentation_budget_refinement import measure

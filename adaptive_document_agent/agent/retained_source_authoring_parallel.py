@@ -10,7 +10,7 @@ from adaptive_document_agent.models.executive_brief import BriefQuote
 from adaptive_document_agent.services.llm.structured import unique_json_object
 from adaptive_document_agent.utils.record_encoding import encode_records,INSTRUCTIONS
 from .prompting import untrusted_document_message
-from .retained_page_sources import RetainedPage
+from .retained_page_sources import RetainedPage, authored_copy_limit
 from .retained_selection_request import selection_request
 
 
@@ -24,17 +24,20 @@ class OwnedSourcePage(RetainedPage):
 
     @model_validator(mode='before')
     @classmethod
-    def preserve_root_evidence_quote(cls,value):
-        # Relocate an exact typed root proof instead of allowing format repair
-        # to erase non-null evidence. This grants no source or semantic approval.
-        if not isinstance(value,dict) or 'quote' not in value:return value
-        proof=BriefQuote.model_validate(value['quote'])
+    def preserve_root_evidence_quotes(cls,value):
+        # Keep misplaced standalone proofs without assigning them to a scope.
+        proof_fields={'quote','continuation_quotes'}
+        if not isinstance(value,dict) or not proof_fields.intersection(value):return value
         evidence=value.get('context_evidence',[])
-        if not isinstance(evidence,list):return value
-        evidence=list(evidence)
-        if not any(BriefQuote.model_validate(q)==proof for q in evidence):
-            evidence.append(proof.model_dump(mode='json'))
-        return {**{k:v for k,v in value.items() if k!='quote'},'context_evidence':evidence}
+        continuations=value.get('continuation_quotes',[])
+        if not isinstance(evidence,list) or not isinstance(continuations,list):return value
+        evidence=[BriefQuote.model_validate(q) for q in evidence]
+        misplaced=[value['quote'],*continuations] if 'quote' in value else continuations
+        for raw in misplaced:
+            proof=BriefQuote.model_validate(raw)
+            if proof not in evidence:
+                evidence.append(proof)
+        return {**{k:v for k,v in value.items() if k not in proof_fields},'context_evidence':evidence}
 
 
 def source_priority_schema(packet):
@@ -156,9 +159,13 @@ def select_owned_source_pages(gateway,result,context,packet,aliases,messages,aut
             input_fingerprint=fingerprint(packet),selection=draft.model_dump(mode='json'),
             finding_references=references,
             final_presentation_approval=False),ensure_ascii=False)))
+    copy_limit=authored_copy_limit(result.profile.report_requirements)
+
     def author(iid):
         current=result.model_copy(update={'validation_warnings':[]})
         payload=owned_source_packet(packet,result,aliases,iid,order)
+        from .retained_copy_review import source_first_wire_payload
+        wire_payload=source_first_wire_payload(payload)
         own_messages=[dict(role='system',content=
             'Write ONE complete OwnedSourcePage for owned_insight_id. The model has '
             'already chosen its membership and narrative order; do not change those '
@@ -166,13 +173,19 @@ def select_owned_source_pages(gateway,result,context,packet,aliases,messages,aut
             'at source_reading_pages, including every material driver, adverse development, '
             'condition and management judgment; all other original source pages remain '
             'available for related context. A short reviewer checklist is not a substitute '
-            'for that complete reading. Preserve the exact population and dated scope of '
+            'for that complete reading. Before drafting, identify the source’s main result, '
+            'separate interval drivers and offsets, material measurement or assessment basis, '
+            'and qualified judgments. If the source explains both the basis and result of a test, '
+            'preserve both with their own scope and attribution. Preserve the exact population and dated scope of '
             'each qualitative effect. Put standalone literal proof in context_evidence, '
             'never a root quote field. The whole page, including source_context paragraphs, '
-            'must fit 2000 characters without truncating evidence. Its semantic meaning '
-            'will be independently reviewed; this draft is not approval. '+authoring+INSTRUCTIONS),
+            f'must fit {copy_limit} characters without truncating evidence. Prefer one physical page. '
+            'Additional copy may flow to a continuation under the measured slide budgets. Its semantic meaning '
+            'will be independently reviewed; this draft is not approval. Put standalone '
+            'quotations in context_evidence. Use quote and continuation_quotes only inside '
+            'an individual source_context item. '+authoring+INSTRUCTIONS),
             *messages[1:-1],
-            untrusted_document_message(json.dumps(encode_records(payload),ensure_ascii=False,separators=(',',':')))]
+            untrusted_document_message(json.dumps(encode_records(wire_payload),ensure_ascii=False,separators=(',',':')))]
         page=None;error=None
         try:
             page=selection_request(gateway,own_messages,OwnedSourcePage,current,0,

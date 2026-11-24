@@ -10,6 +10,24 @@ from .audit_source_layout import audit_source_page
 from .reported_source_context import QualifiedSourceCopy,qualified_source_statement
 
 
+STANDARD_AUTHORED_COPY_CHARACTERS = 2000
+CONTINUED_AUTHORED_COPY_CHARACTERS = 3000
+MAX_RETAINED_FINDINGS = 8
+
+
+def authored_copy_limit(requirements):
+    """Reserve a possible continuation only under an explicit larger analysis budget."""
+    from adaptive_document_agent.services.slide_budgets import resolved_limits
+
+    analysis = resolved_limits(requirements, section='analysis')
+    report = resolved_limits(requirements)
+    # This permits drafting. The export measures and enforces actual counts
+    # including introduction, other report sections and every continuation.
+    if analysis and min([*analysis, *report]) > MAX_RETAINED_FINDINGS:
+        return CONTINUED_AUTHORED_COPY_CHARACTERS
+    return STANDARD_AUTHORED_COPY_CHARACTERS
+
+
 SOURCE_EXPLANATION_RULES = (
     'Keep each material source explanation attached to what it explains. A reason for '
     'a measure’s generally high or low level differs from a reason for a change in a '
@@ -23,9 +41,13 @@ SOURCE_EXPLANATION_RULES = (
     'Also keep separate explanations '
     'for distinct changes, limitations and qualified judgments. Read related source '
     'sections for a broader explanation, any risk inferred by the source, and its own '
-    'assessment or response. Preserve the indication, test basis and result separately '
+    'assessment or response. Preserve the supported qualitative extent of a material effect, '
+    'including a substantial or majority portion when the evidence supports that distinction. '
+    'Preserve the indication, test basis and result separately '
     'when the source distinguishes them. Treat all such context as attributed source '
-    'claims with complete literal proof. '
+    'claims with complete literal proof. A calculation-method explanation may repeat exact '
+    'day-count parameter phrases from its own complete quoted definition. Those parameters '
+    'describe the formula and must never be presented as observed durations or amounts. '
 )
 
 
@@ -209,7 +231,7 @@ class RetainedPage(BaseModel):
     title: str = Field(min_length=1, max_length=180,
         description='Concise metric and scope label. Put dated direction and trajectory in the message. '
                     'If the title itself asserts a change, it must state both complete comparison dates.')
-    message: str = Field(min_length=1, max_length=2000,
+    message: str = Field(min_length=1, max_length=STANDARD_AUTHORED_COPY_CHARACTERS,
         description='Aim for under 900 characters using exact source period labels and shared explicit units. '
                     'Keep material source qualifications and dated components intact. Final physical '
                     'page budgets and rendered text fit are checked separately; never truncate evidence.')
@@ -503,8 +525,9 @@ def page_bindings(page, insight, primary, context, result, *, _copy_errors=None,
     periods = [o.period for o in obs]
     title=bound_period_dates(page.title,[*periods,*context_dates])
     copy=authored_message(page,[*periods,*context_dates])
-    if len(authored_visible_copy(page,[*periods,*context_dates]))>2000:
-        raise ValueError(f'{insight.id}: complete authored copy exceeds the 2000-character page limit')
+    limit=authored_copy_limit(result.profile.report_requirements)
+    if len(authored_visible_copy(page,[*periods,*context_dates]))>limit:
+        raise ValueError(f'{insight.id}: complete authored copy exceeds the {limit}-character page limit')
     full_copy=copy
     from .reported_source_context import reported_source_components,observation_context_labels
     copy,reported=reported_source_components(copy,page.all_context_evidence,periods=[*periods,*context_dates],
@@ -555,8 +578,8 @@ def page_bindings(page, insight, primary, context, result, *, _copy_errors=None,
     from .reported_source_context import source_context_paragraphs,source_context_scope_prefixes
     scopes=source_context_scope_prefixes(page.source_context,[*periods,*context_dates])
     paragraphs=source_context_paragraphs(reported,scope_prefixes=scopes)
-    if len(' '.join([copy,*paragraphs]))>2000:
-        raise ValueError(f'{insight.id}: complete authored copy exceeds the 2000-character page limit')
+    if len(' '.join([copy,*paragraphs]))>limit:
+        raise ValueError(f'{insight.id}: complete authored copy exceeds the {limit}-character page limit')
     return (title,copy,ids,paragraphs) if with_source_context else (title,copy,ids)
 
 

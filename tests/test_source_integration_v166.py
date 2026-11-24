@@ -188,6 +188,20 @@ def test_only_unambiguous_whole_one_based_inclusion_ledger_is_normalized():
     assert [d.brief_item_indexes for d in decisions] == [[4], [5]]
 
 
+def test_missing_inclusion_addresses_bind_distinct_exclusive_additions_together():
+    from types import SimpleNamespace as Row
+    from adaptive_document_agent.agent.source_integration_bindings import bind_unique_inclusions
+
+    alpha = Row(section_id='alpha', disposition='include', brief_item_indexes=[])
+    beta = Row(section_id='beta', disposition='include', brief_item_indexes=[4])
+    checks = {'alpha': Row(pages=[2, 3]), 'beta': Row(pages=[4])}
+    draft = Row(decisions=[alpha, beta], additions=[Row(evidence=[Row(page=p)]) for p in (2, 3, 4)])
+
+    assert bind_unique_inclusions(draft, checks, 2) == {'alpha': [2, 3]}
+    assert alpha.brief_item_indexes == [2, 3]
+    assert beta.brief_item_indexes == [4]
+
+
 def test_independent_rejection_cannot_clear_scope_or_add_unapproved_copy():
     result, constraint = fixture()
     original = result.executive_brief.model_copy(deep=True)

@@ -100,6 +100,17 @@ def test_long_attributed_description_keeps_complete_statement_groups_and_possess
                and item['continuation_quotes']==[continuation] for item in result)
 
 
+def test_overlong_description_keeps_dependent_sentence_with_its_antecedent():
+    from adaptive_document_agent.agent.reported_source_context import split_source_description
+
+    first='Describes the reporting context, '+('including the stated conditions, '*13)+'during the period.'
+    assessment='Management says it reviewed the source evidence, '+('including its stated factors, '*11)+'before responding.'
+    dependent='These judgments concern the assessment of the original balance.'
+    original=' '.join((first,assessment,dependent))
+    assert len(original)>700
+    assert split_source_description(original)==[first,'Reports the following. '+assessment+' '+dependent]
+
+
 @pytest.mark.parametrize('description', [
     'It describes '+('the same source discussion in detail '*24)+'. The company reports a related effect.',
     'The company describes '+('the same source discussion in detail '*24)+'. They attribute another effect.',
@@ -237,6 +248,12 @@ def test_worded_axis_category_needs_exact_modifier_and_source_product_noun(
      'Inventories are stated at the lower of cost and net realizable value in accordance with IAS 2.',False),
     ('describes IAS 2 lower-of-cost/NRV tests',
      'The source states its measurement method in accordance with IAS 3.',False),
+    ('reports that IAS 36 testing found no impairment',
+     'In accordance with IAS 36, we performed impairment tests at each period-end.',True),
+    ('reports that IAS 36 testing found no impairment in 12 assets',
+     'In accordance with IAS 36, we performed impairment tests at each period-end.',False),
+    ('reports that IAS 2 testing found no impairment',
+     'In accordance with IAS 36, we performed impairment tests at each period-end.',False),
     ('describes IAS 2 reporting sites',
      'Inventories are stated at the lower of cost and net realizable value in accordance with IAS 2.',False),
     ('describes the inventory measurement basis under IAS 3',

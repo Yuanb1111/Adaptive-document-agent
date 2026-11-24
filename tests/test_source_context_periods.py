@@ -132,6 +132,11 @@ def test_since_year_followed_by_a_predicate_still_needs_literal_timing(text,proo
 @pytest.mark.parametrize('text,accepted', [
     ('It links 2023 lengthening to demand. Facilities opened in 2023 supported delivery.',True),
     ('It links 2022 lengthening to demand. Facilities opened in 2023 supported delivery.',False),
+    ('Explains 2023 growth from demand.',True),
+    ('Explains 2022 growth from demand.',False),
+    ('Explains 2023 additional facilities.',False),
+    ('Notes demand drove the 2023 rise.',True),
+    ('Notes demand drove the 2022 rise.',False),
     ('It describes 2023 units for delivery.',False),
     ('It links 2023 vehicles to demand.',False),
 ])

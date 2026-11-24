@@ -49,6 +49,14 @@ def retained_brief_reporting(previous, current, gateway, requested_focus=None, s
                     and previous.failure_details.get('component') == 'PresentationBudget')
     from .retained_selection_feedback import can_retry_source_review
     source_copy_retry = previous is not None and can_retry_source_review(previous)
+    if source_copy_retry:
+        from .retained_analysis_review import RetainedAnalysisReview, REVIEW_CODE
+        review = json.loads(next(w.message for w in reversed(previous.validation_warnings)
+                                 if w.code == REVIEW_CODE))
+        verdict = RetainedAnalysisReview.model_validate(review.get('effective_review', review['review']))
+        if not verdict.omissions_accepted:
+            from .retained_omission_repair import reserve_drafts
+            source_copy_retry = bool(reserve_drafts(previous, selection_context(previous)))
     if (previous is None or previous.pipeline_state != 'partial' or previous.retry_from != 'reporting'
             or ((previous.failed_stage, previous.failure_details.get('component')) not in
                 {('executive_brief', 'ExecutiveBrief'), ('source_integration', 'SourceIntegration')}
@@ -65,7 +73,6 @@ def retained_brief_reporting(previous, current, gateway, requested_focus=None, s
     if any(getattr(current, key) != getattr(previous, key) for key in
            ('document', 'profile', 'observations', 'analysis_plan', 'analysis_results')):
         return None
-    selection_issue = next(w for w in reversed(previous.validation_warnings) if w.code == SELECTION_CODE)
     candidate = current.model_copy(update={
         'insights': [i.model_copy(deep=True) for i in previous.insights],
         'report_plan': previous.report_plan.model_copy(deep=True),
@@ -73,8 +80,7 @@ def retained_brief_reporting(previous, current, gateway, requested_focus=None, s
         'presentation_plan': previous.presentation_plan.model_copy(deep=True),
         'validation_warnings': [*current.validation_warnings,
                                 *(w.model_copy(deep=True) for w in previous.validation_warnings
-                                  if w.code == 'retained_selection_coverage'),
-                                selection_issue.model_copy(deep=True)],
+                                  if w.code in {'retained_selection_coverage', SELECTION_CODE})],
     })
     if budget_retry or source_copy_retry:
         candidate.validation_warnings.extend(w.model_copy(deep=True) for w in previous.validation_warnings
@@ -132,7 +138,12 @@ def retained_brief_reporting(previous, current, gateway, requested_focus=None, s
             from .retained_source_retry import repair_retained_source_copy
             from adaptive_document_agent.services.llm.exceptions import LLMResponseError
             try:
-                repair_retained_source_copy(gateway, candidate, previous)
+                if verdict.omissions_accepted:
+                    repair_retained_source_copy(gateway, candidate, previous)
+                else:
+                    from .retained_omission_repair import repair_retained_omission
+                    if not repair_retained_omission(gateway, candidate, verdict):
+                        raise ValueError('The rejected omission has no reusable source-authored draft.')
             except (LLMResponseError, ValueError) as exc:
                 # Keep the last complete source-bound shell when the bounded
                 # local edit fails. A partially merged selection is not a new
@@ -166,8 +177,15 @@ def checked_published_brief(previous, current):
         return None
     try:
         record = selected_record(current)
+        old_order = selected_record(previous)['selection']['ordered_insight_ids']
+        new_order = record['selection']['ordered_insight_ids'] if record else []
+        replacement = (record or {}).get('physical_budget', {}).get('omission_replacement')
+        same_audience = old_order == new_order
+        if replacement and replacement['omit_id'] in old_order and replacement['include_id'] not in old_order:
+            same_audience |= new_order == [replacement['include_id'] if iid == replacement['omit_id'] else iid
+                                           for iid in old_order]
         if (not record or not selection_input_matches(record, selection_context(current), current)
-                or record['selection']['ordered_insight_ids'] != selected_record(previous)['selection']['ordered_insight_ids']
+                or not same_audience
                 or _fingerprint(previous, brief) != _fingerprint(current, brief)
                 or validate_executive_brief(brief, current)):
             return None

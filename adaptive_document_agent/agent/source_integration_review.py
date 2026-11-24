@@ -47,7 +47,7 @@ class SourceIntegrationVerdict(BaseModel):
     model_config = ConfigDict(extra='forbid')
     section_id: str
     accepted: bool
-    reason: str = Field(min_length=1, max_length=1000)
+    reason: str = Field(min_length=1, max_length=3000)
 
 
 class SourceIntegrationReview(BaseModel):
@@ -459,7 +459,7 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
                 if isinstance(exc, LLMStructuredOutputError):
                     if pending_copy is not None and not length_progress_used:
                         from .source_integration_copy import shorter_copy_retry
-                        shorter = shorter_copy_retry(exc, pending_copy, len(brief.items))
+                        shorter = shorter_copy_retry(exc, pending_copy)
                         if shorter is not None:
                             pending_copy = shorter
                             length_progress_used = True

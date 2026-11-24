@@ -1,6 +1,17 @@
 """Limit a settled selection's copy recheck to the pages actually revised."""
 
 
+MAX_COPY_REVIEW_REASON_CHARACTERS = 4000
+
+
+def source_first_wire_payload(payload: dict) -> dict:
+    """Put shared complete source pages before owner-specific fields for prefix reuse."""
+    if 'source_pages' not in payload:
+        return payload
+    return {'source_pages': payload['source_pages'],
+            **{key: value for key, value in payload.items() if key != 'source_pages'}}
+
+
 def copy_review_payload(payload: dict) -> dict:
     """Scope structured inputs, keeping all supplied original source context.
 
@@ -18,6 +29,23 @@ def copy_review_payload(payload: dict) -> dict:
                  and d['decision'] == 'include']
     if {d['insight_id'] for d in decisions} != targets:
         raise ValueError('Copy review can only check included pages')
+    audience_decisions, retained_proofs = [], {}
+    for decision in decisions:
+        if not (page := decision.get('page')):
+            audience_decisions.append(decision)
+            continue
+        visible_context, context_proofs = [], []
+        for item in page.get('source_context', []):
+            visible_context.append({key: item[key] for key in ('scope', 'description')})
+            context_proofs.append({key: value for key, value in item.items()
+                                   if key not in ('scope', 'description')})
+        retained_proofs[decision['insight_id']] = dict(
+            context_evidence=page.get('context_evidence', []), source_context=context_proofs)
+        audience_page = {key: value for key, value in page.items()
+                         if key not in ('source_context', 'context_evidence')}
+        if visible_context:
+            audience_page['source_context'] = visible_context
+        audience_decisions.append({**decision, 'page': audience_page})
     citations = [c for c in payload['planned_source_citations'] if c['insight_id'] in targets]
     ids = {oid for f in findings for oid in f['observation_ids']}
     ids.update(oid for c in citations for oid in c['observation_ids'])
@@ -52,8 +80,9 @@ def copy_review_payload(payload: dict) -> dict:
         # Help a focused reviewer re-read the owning evidence and adjacent
         # discussion without removing any other original source page.
         'source_reading_pages': source_reading_pages,
-        'proposed_selection': {**selection, 'decisions': decisions,
+        'proposed_selection': {**selection, 'decisions': audience_decisions,
             'ordered_insight_ids': [iid for iid in selection['ordered_insight_ids'] if iid in targets]},
+        'retained_proofs': retained_proofs,
         'settled_selection_ids': selection['ordered_insight_ids'],
         # Qualitative qualifications can belong to a related measure. Never
         # trim these original pages to just the target's numeric row locations.

@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field,create_model
 
 from adaptive_document_agent.models import ValidationIssue
 from .prompting import untrusted_document_message
+from .retained_copy_review import MAX_COPY_REVIEW_REASON_CHARACTERS
 from .retained_audit_scope import (
     ASSURANCE_REVIEW_RULES, AssuranceChange, contradicted_assurance, verified_column_assurance,
 )
@@ -16,7 +17,7 @@ SELECTION_COVERAGE_TOKEN_LIMITS = (12000, 20000)
 class RetainedPageIssue(BaseModel):
     model_config = ConfigDict(extra='forbid')
     insight_id: str
-    reason: str = Field(min_length=1, max_length=1800, description=
+    reason: str = Field(min_length=1, max_length=MAX_COPY_REVIEW_REASON_CHARACTERS, description=
         'All actionable material corrections for this page. State each missing or '
         'incorrect fact, what it qualifies or explains, and its original source scope.')
     assurance_changes: list[AssuranceChange] | None = Field(default=None, max_length=40)
@@ -98,6 +99,9 @@ def _review_selection_coverage(gateway, context, selection, result,*,priority_on
     copy_review_ids = set(context.get('copy_review_ids', ()))
     from .retained_copy_review import copy_review_payload
     wire_payload = copy_review_payload(payload)
+    if copy_review_ids:
+        from .retained_copy_review import source_first_wire_payload
+        wire_payload = source_first_wire_payload(wire_payload)
     if priority_only:
         proposed=payload['proposed_selection']
         wire_payload={**payload,'copy_validation_errors':[],
@@ -106,7 +110,12 @@ def _review_selection_coverage(gateway, context, selection, result,*,priority_on
     review_scope = (
         'Selection coverage has already been assessed for these exact findings. This pass only checks '
         'the pages identified by copy_review_ids. Check their claims and omissions against their '
-        'sources. Start with source_reading_pages when supplied, including their full discussions, and '
+        'sources. The audience receives the page title, message, and scope and description of each '
+        'source_context item. Under retained_proofs, the same insight ID and source_context order '
+        'locate the exact separate verification quotations. A number found only in those quotations '
+        'is not displayed. When finding a displayed amount or timing defect, quote its exact words '
+        'from the visible fields. '
+        'Start with source_reading_pages when supplied, including their full discussions, and '
         'use the other supplied original pages for related context. Do not reopen the selection or critique '
         'unchanged pages in this pass. Leave both selection ID lists empty. The later publication '
         'review still checks all pages and omissions independently. '
@@ -141,6 +150,9 @@ def _review_selection_coverage(gateway, context, selection, result,*,priority_on
              'and composition facts about a related measure. Frame '
              'such a correction as the source-supported qualitative context that this page can '
              'actually publish, without requiring unbound rates or thresholds in the replacement. '
+             'Treat majority, minority and most as implied share thresholds when inferring them '
+             'from source amounts. Without bound share evidence, require the affected subset and '
+             'its exact timing and attribution without demanding the inferred threshold. '
              'Distinguish the primary series from related gross/net measures and other populations. '
              'For source-only qualifications, assess whether the supported effect and scope survive '
              'in words, rather than demanding the unbound numeric category boundary. A '

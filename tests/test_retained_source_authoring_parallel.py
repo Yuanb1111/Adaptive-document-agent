@@ -112,12 +112,14 @@ def test_owned_authors_overlap_drain_failures_and_cannot_change_membership(monke
     result.insights.append(second)
     context['findings'].append({**context['findings'][0],'insight':second.model_dump(mode='json')})
     packet['findings'].append({**packet['findings'][0],'insight':second.model_dump(mode='json')})
-    order=[original.id,second.id];barrier=Barrier(2);finished=[];lock=Lock()
+    order=[original.id,second.id];barrier=Barrier(2);finished=[];wire_payloads=[];lock=Lock()
     def request(gateway,wire,schema,current,attempt,**kwargs):
         if schema.__name__=='SourcePrioritySelection':
             return schema.model_validate(dict(ordered_insight_ids=['finding-1','finding-2'],
                 reasons={ref:'Synthetic owner protocol check.' for ref in ['finding-1','finding-2']}))
-        payload=decode_records(json.loads(wire[-1]['content'].split('\n',1)[1].rsplit('\n',1)[0]))
+        serialized=wire[-1]['content'].split('\n',1)[1].rsplit('\n',1)[0]
+        with lock:wire_payloads.append(serialized)
+        payload=decode_records(json.loads(serialized))
         iid=payload['owned_insight_id']
         try:
             barrier.wait(timeout=10)
@@ -137,3 +139,11 @@ def test_owned_authors_overlap_drain_failures_and_cannot_change_membership(monke
         assert draft.ordered_insight_ids==order
         assert all(d.page.title==d.insight_id for d in draft.decisions if d.decision=='include')
     assert set(finished)==set(order) and selected_record(result) is None
+    assert len(wire_payloads)==2
+    from adaptive_document_agent.utils.record_encoding import encode_records
+    source_json=json.dumps(encode_records(packet['source_pages']),ensure_ascii=False,separators=(',',':'))
+    stable_prefix='{"source_pages":'+source_json+','
+    assert all(serialized.startswith(stable_prefix) for serialized in wire_payloads)
+    assert decode_records(json.loads(wire_payloads[0]))['source_pages']==packet['source_pages']
+    assert decode_records(json.loads(wire_payloads[1]))['source_pages']==packet['source_pages']
+    assert wire_payloads[0]!=wire_payloads[1]

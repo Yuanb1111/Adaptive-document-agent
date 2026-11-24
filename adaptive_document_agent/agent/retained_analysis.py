@@ -15,7 +15,7 @@ from adaptive_document_agent.services.llm.exceptions import LLMResponseError
 from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
 from .presentation_insight_recovery import _linked_findings
 from .prompting import untrusted_document_message
-from .retained_page_sources import RetainedPage, page_sources, page_bindings
+from .retained_page_sources import MAX_RETAINED_FINDINGS, RetainedPage, page_sources, page_bindings
 
 SELECTION_CODE = 'presentation_retained_analysis_selection'
 
@@ -56,7 +56,7 @@ def selection_context(result, *, source_authoring=None):
     return {
         **(page_sources(result, linked) if source_authoring else {}),
         'scope': 'Previously model-selected analysis; not exhaustive extracted-series coverage',
-        'selection_capacity': min([8, *analysis_limits]),
+        'selection_capacity': min([MAX_RETAINED_FINDINGS, *analysis_limits]),
         'profile': profile,
         'report_outline': result.report_plan.model_dump(mode='json'),
         'findings': [dict(insight=item.model_dump(mode='json'), observation_ids=sorted(scope),
@@ -295,8 +295,31 @@ def _select_retained_analysis(gateway, result):
     # the first correction. Keep a finite fast-mode source revision allowance;
     # every round still consumes the same run deadline and earns new verdicts.
     max_copy_revisions = copy_revisions_left = (3 if getattr(gateway,'discovery_workers',1)>=8 else 2)
+    # A drained batch can retry a locally invalid page without using all the
+    # subsequent independent source-review rounds for its successful siblings.
+    local_copy_retries_left = 2 if getattr(gateway,'discovery_workers',1)>=8 else 0
+    final_owned_retry = getattr(gateway,'discovery_workers',1)>=8
     earlier_page_issues = (feedback or {}).get('earlier_page_issues', {})
     priority_draft = None
+
+    def revise_issues(issues, draft, prior_issues):
+        nonlocal copy_revisions_left, local_copy_retries_left
+        from .retained_page_revision_parallel import complete_owned_copy_revisions
+        offered = copy_revisions_left + local_copy_retries_left
+        try:
+            revised, remaining = complete_owned_copy_revisions(issues, offered,
+                lambda pending: revise_retained_pages(gateway, result, packet, aliases, draft, pending,
+                                                       earlier_issues=prior_issues))
+        except (ValueError, LLMResponseError):
+            # Failing the local contract does not authorize a full rewrite.
+            copy_revisions_left = 0
+            raise
+        spent = offered - remaining
+        local_retries = min(local_copy_retries_left, spent - 1)
+        local_copy_retries_left -= local_retries
+        copy_revisions_left -= spent - local_retries
+        return revised
+
     for attempt in range(3):
         schema = SourceAuthoredAnalysisSelection if source_authoring else RetainedAnalysisSelection
         reusing_source_draft = (attempt == 0 and feedback is not None and feedback.get('source_review')
@@ -340,12 +363,12 @@ def _select_retained_analysis(gateway, result):
             if source_authoring:
                 # Run both checks before choosing between selection and copy repair.
                 copy_review_ids = (feedback or {}).get('copy_review_ids', []) if reusing_draft else []
-                if reusing_source_draft:
+                pending_feedback = (feedback or {}).get('pending_copy_issues', {}) if reusing_draft else {}
+                if reusing_source_draft or pending_feedback:
                     # Final review accepted the selection and rejected only
                     # specific copy. Use the existing local correction budget;
                     # do not serialize every frozen page through the writer.
-                    copy_revisions_left -= 1
-                    revised = revise_retained_pages(gateway, result, packet, aliases, draft, earlier_page_issues)
+                    revised = revise_issues(pending_feedback or earlier_page_issues, draft, earlier_page_issues)
                     copy_review_ids = sorted(revised)
                     draft = {**draft, 'decisions': [
                         {**entry, 'page': revised[entry['insight_id']].model_dump(mode='json')}
@@ -391,18 +414,17 @@ def _select_retained_analysis(gateway, result):
                     # An addressed copy defect does not require regenerating
                     # every selected page first. Ranking changes still take
                     # the separate bounded priority-revision path.
+                    if (not copy_revisions_left and final_owned_retry and localizable
+                            and len(page_issues) == 1 and set(page_issues) == set(copy_review_ids)):
+                        # Only the last isolated page can receive a final sourced
+                        # correction. The normal recheck and shared deadline apply.
+                        copy_revisions_left = 1
+                        final_owned_retry = False
                     if not copy_revisions_left or not localizable or not page_issues:
                         raise ValueError('\n'.join(failures))
                     try:
-                        from .retained_page_revision_parallel import complete_owned_copy_revisions
-                        revised, copy_revisions_left = complete_owned_copy_revisions(
-                            page_issues, copy_revisions_left, lambda pending: revise_retained_pages(
-                                gateway, result, packet, aliases, draft, pending,
-                                earlier_issues=previous_issues))
+                        revised = revise_issues(page_issues, draft, previous_issues)
                     except (ValueError, LLMResponseError) as exc:
-                        # A failed copy round must not unlock the whole-selection
-                        # retry, even when the failed worker cannot return a draft.
-                        copy_revisions_left = 0
                         raise ValueError('\n'.join([*failures, f'Page revision failed: {exc}'])) from exc
                     copy_review_ids = sorted(revised)
                     for decision in selection.decisions:

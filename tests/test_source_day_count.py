@@ -66,3 +66,30 @@ def test_compiled_plan_rechecks_definition_parameters_without_licensing_another_
     slide.message = slide.message.replace('360', '365')
     with pytest.raises(ValueError, match='unsupported numeric claims'):
         PresentationPlanValidator().validate(result.presentation_plan, result)
+
+
+@pytest.mark.parametrize('mutation',[None,'other_proof','wrong_value','wrong_period','measured_days'])
+def test_declared_source_method_uses_only_its_own_exact_day_count_parameters(mutation):
+    result=_linked_result()
+    other_proof='The source discusses the calculation method without stating its parameters.'
+    result.document.pages[0].text+='\n'+DEFINITION+'\n'+other_proof
+    context=retained.selection_context(result,source_authoring=True)
+    insight,primary,_=next(iter(retained.findings(result,allow_new_copy=True).values()))
+    description='Describes the calculation as using 360 days for a given year and 180 days for a six-month period.'
+    if mutation=='wrong_value':
+        description=description.replace('360','365')
+    elif mutation=='wrong_period':
+        description=description.replace('360 days for a given year','360 days for a six-month period')
+    elif mutation=='measured_days':
+        description='Reports a measured turnover of 360 days for a given year.'
+    page=RetainedPage(title='Revenue',message='The company reports revenue.',
+        context_evidence=[dict(page=234,text=DEFINITION)] if mutation=='other_proof' else [],
+        source_context=[dict(scope='the reported method',description=description,
+            quote=dict(page=234,text=other_proof if mutation=='other_proof' else DEFINITION))])
+    if mutation:
+        with pytest.raises(ValueError,match='source_context must be'):
+            page_bindings(page,insight,primary,context,result,with_source_context=True)
+    else:
+        _,_,ids,reported=page_bindings(page,insight,primary,context,result,with_source_context=True)
+        assert ids==primary and '360 days for a given year' in reported[0]
+        assert '180 days for a six-month period' in reported[0]

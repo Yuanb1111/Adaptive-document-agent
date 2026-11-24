@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from adaptive_document_agent.agent.retained_copy_review import copy_review_payload
+from adaptive_document_agent.agent.retained_copy_review import copy_review_payload,source_first_wire_payload
 from adaptive_document_agent.utils.record_encoding import decode_records
 
 
@@ -59,6 +59,43 @@ def test_full_coverage_packet_remains_complete():
     full = packet()
     full['copy_review_ids'] = []
     assert copy_review_payload(full) is full
+
+
+def test_owned_review_separates_literal_proof_amounts_from_visible_context():
+    original=packet()
+    proof=dict(page=6,text='The source reports a duration of 304 days.')
+    page=dict(title='Reported trajectory',message='The report compares balances.',
+        context_evidence=[proof], source_context=[dict(scope='the reporting period',
+            description='Describes a longer duration.',quote=proof,
+            continuation_quotes=[dict(page=7,text='The following period was longer again.')])])
+    original['proposed_selection']['decisions'][0]['page']=page
+    before=deepcopy(original)
+    scoped=copy_review_payload(original)
+    visible=scoped['proposed_selection']['decisions'][0]['page']
+    assert '304' not in json.dumps(visible)
+    assert visible['source_context']==[dict(scope='the reporting period',description='Describes a longer duration.')]
+    assert scoped['retained_proofs']['edited']==dict(context_evidence=[proof],source_context=[dict(
+        quote=proof,continuation_quotes=page['source_context'][0]['continuation_quotes'])])
+    assert scoped['source_pages']==original['source_pages'] and original==before
+
+
+def test_source_first_wire_order_preserves_packet_and_common_prefix():
+    from adaptive_document_agent.utils.record_encoding import encode_records
+
+    source_pages=[dict(page=12,text='Complete original source page.'),
+                  dict(page=13,text='Complete related qualification.')]
+    first=dict(copy_review_ids=['a'],source_pages=source_pages,findings=[dict(id='a')])
+    second=dict(copy_review_ids=['b'],source_pages=source_pages,findings=[dict(id='b')])
+    before=(deepcopy(first),deepcopy(second))
+    encoded=[json.dumps(encode_records(source_first_wire_payload(item)),
+        ensure_ascii=False,separators=(',',':')) for item in (first,second)]
+    source_json=json.dumps(encode_records(source_pages),ensure_ascii=False,separators=(',',':'))
+    shared_prefix='{"source_pages":'+source_json+','
+
+    assert all(text.startswith(shared_prefix) for text in encoded)
+    assert encoded[0][:len(shared_prefix)]==encoded[1][:len(shared_prefix)]
+    assert [decode_records(json.loads(text)) for text in encoded]==[first,second]
+    assert (first,second)==before
 
 
 @pytest.mark.parametrize('target', ['unknown', 'omitted'])

@@ -265,3 +265,76 @@ def test_source_authored_chart_retains_dated_middle_values_and_qualifications():
     assert not is_source_authored_message(result,slide.model_copy(update={'message':copy[:40]}))
     assert not is_source_authored_message(result,slide.model_copy(update={'message':'Changed copy'}))
     assert not review_complete(result)
+
+
+def test_explicit_large_analysis_budget_renders_full_qualitative_copy_and_keeps_footer():
+    from pptx import Presentation
+    from adaptive_document_agent.agent.retained_page_sources import (
+        RetainedPage,authored_copy_limit,page_bindings,context_evidence_pages,
+    )
+    from adaptive_document_agent.document_model import DocumentIndex
+    from adaptive_document_agent.models import PresentationSlide
+    from adaptive_document_agent.models.customization import ReportRequirement,ReportRequirements
+    from adaptive_document_agent.services.slide_compositor import render_composed_slide
+    from adaptive_document_agent.services.pptx_export import _resolve_template_path,_source_footer
+
+    result=_linked_result()
+    result.charts=[]
+    scopes=['the manufacturing discussion','the supplier discussion',
+            'the delivery discussion','the customer discussion']
+    source_paragraphs=[]
+    source_context=[]
+    for index,scope in enumerate(scopes):
+        topic=['production planning','supplier coordination','shipment scheduling','customer service'][index]
+        sentence=(f'{topic.capitalize()} aligns operational planning with changing product requirements, '
+            'coordinates procurement and production schedules, maintains workable supply options, and '
+            'keeps delivery decisions connected to customer needs.')
+        proposition=' '.join([sentence]*3)
+        proof=f'The source describes how {proposition}'
+        source_paragraphs.append(proof)
+        source_context.append(dict(scope=scope,
+            description=f'describes how {proposition}',
+            quote=dict(page=234,text=proof)))
+    result.document.pages[0].text+='\n\n'+'\n\n'.join(source_paragraphs)
+    requirements=ReportRequirements(items=[
+        ReportRequirement(id='body-cap',request_quote='20 body slides',description='The report body has a 20-slide limit.',
+            kind='slide_limit',max_slides=20,slide_scope='body',slide_section='report'),
+        ReportRequirement(id='analysis-cap',request_quote='10 analysis slides',description='The analysis section has a 10-slide limit.',
+            kind='slide_limit',max_slides=10,slide_scope='body',slide_section='analysis'),
+    ])
+    result.profile.report_requirements=requirements
+    context=retained.selection_context(result,source_authoring=True)
+    insight,primary,_=next(iter(retained.findings(result,allow_new_copy=True).values()))
+    page=RetainedPage(title='Revenue',message='The source reports revenue.',source_context=source_context)
+
+    assert authored_copy_limit(requirements)==3000
+    title,copy,ids,reported=retained.page_bindings(page,insight,primary,context,result,
+        with_source_context=True)
+    from adaptive_document_agent.agent.retained_page_sources import authored_visible_copy
+    logical=authored_visible_copy(page,[])
+    assert 2000<len(logical)<=3000
+    source_pages=sorted(context_evidence_pages(page,context,result))
+    slide=PresentationSlide(id=insight.id,slide_type='analysis',title=title,message=copy,
+        bullets=[copy,*reported],bullet_observation_ids=[sorted(ids),*[[] for _ in reported]],
+        observation_ids=sorted(ids),source_pages=source_pages)
+
+    deck=Presentation(str(_resolve_template_path()))
+    slides_before=len(deck.slides)
+    pages=render_composed_slide(deck,slide,[],result,DocumentIndex(result.observations))
+    visible=' '.join(shape.text for rendered in pages for shape in rendered.shapes if shape.has_text_frame)
+    normalized=' '.join(visible.split())
+    assert len(pages)>=1 and len(deck.slides)==slides_before+len(pages)
+    assert source_pages==[234]
+    for paragraph in [copy,*reported]:
+        assert ' '.join(paragraph.split()) in normalized
+    assert _source_footer(source_pages) in visible
+    assert len(source_context)==4 and len(reported)>=1
+
+    for stricter in (
+        ReportRequirements(items=[requirements.items[0],requirements.items[1].model_copy(update={'max_slides':8})]),
+        ReportRequirements(items=[requirements.items[0]]),
+    ):
+        result.profile.report_requirements=stricter
+        assert authored_copy_limit(stricter)==2000
+        with pytest.raises(ValueError,match='2000-character page limit'):
+            retained.page_bindings(page,insight,primary,context,result,with_source_context=True)

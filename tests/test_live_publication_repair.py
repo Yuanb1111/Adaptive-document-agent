@@ -1,4 +1,5 @@
 """A single invocation may fix rejected copy, but must earn a new source verdict."""
+import json
 from copy import deepcopy
 
 import pytest
@@ -90,3 +91,43 @@ def test_material_copy_over_budget_uses_model_selection_then_fresh_source_verdic
     assert review_complete(result)
     assert [row['operation'] for row in llm.usage]==[
         'RetainedAnalysisReview','RetainedPageRevisions','RetainedAnalysisReview']
+
+
+def test_rejected_omission_routes_through_bounded_repair_and_earns_fresh_verdict(monkeypatch):
+    calls=measured(monkeypatch)
+    result,_=ready()
+    from adaptive_document_agent.agent import retained_omission_repair
+    repairs=[]
+    def repair(llm,current,review):
+        repairs.append((llm,current,review.omission_reason))
+        return True
+    monkeypatch.setattr(retained_omission_repair,'repair_retained_omission',repair)
+    llm=gateway([verdict(result,True,False),verdict(result,True,True)])
+
+    review_retained_analysis(llm,result,repair_copy=True)
+
+    assert repairs==[(llm,result,'Synthetic complete review.')]
+    assert review_complete(result) and result.failed_stage is None
+    assert calls==['audit','measure']
+    assert [u['operation'] for u in llm.usage]==['RetainedAnalysisReview','RetainedAnalysisReview']
+    audit=[w for w in result.validation_warnings if w.code=='presentation_retained_analysis_review']
+    assert len(audit)==2
+    assert json.loads(audit[0].message)['review']['omissions_accepted'] is False
+    assert json.loads(audit[1].message)['review']['omissions_accepted'] is True
+
+
+def test_rejected_omission_repair_without_eligible_candidate_fails_closed(monkeypatch):
+    measured(monkeypatch)
+    result,_=ready()
+    from adaptive_document_agent.agent import retained_omission_repair
+    repairs=[]
+    monkeypatch.setattr(retained_omission_repair,'repair_retained_omission',
+                        lambda *args: repairs.append(args) or False)
+    llm=gateway([verdict(result,True,False)])
+
+    with pytest.raises(ValueError,match='evidence review rejected'):
+        review_retained_analysis(llm,result,repair_copy=True)
+
+    assert len(repairs)==1
+    assert [u['operation'] for u in llm.usage]==['RetainedAnalysisReview']
+    assert not review_complete(result)
