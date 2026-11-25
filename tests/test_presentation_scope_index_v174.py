@@ -1,8 +1,10 @@
 """Chapter/index scope follows all shown periods and the authored topic names."""
 from copy import deepcopy
+from io import BytesIO
 import json
 
 import pytest
+from pptx import Presentation
 
 from adaptive_document_agent.document_model import DocumentIndex
 from adaptive_document_agent.models import ChartPlan, PresentationSlide, PresentationTopicSelection
@@ -133,3 +135,35 @@ def test_index_topic_period_scope_includes_every_planned_page_of_the_same_theme(
     assert entries[0]['periods'] == ['FY2020', 'FY2021', 'FY2023']
     assert entries[0]['observation_ids'] == ['0', '1', '2']
     assert result.model_dump() == before
+
+
+def test_saved_index_distinguishes_currency_scales_and_percentages_in_one_topic():
+    records = []
+    for metric, unit, raw_unit, scale in [
+        ('Revenue', 'currency', 'RMB', 1_000),
+        ('Operating costs', 'currency', 'RMB', 1_000_000),
+        ('Gross margin', 'percent', '%', 1),
+    ]:
+        item = observation(metric, metric, 12, 'FY2023', unit=unit)
+        item.currency = 'RMB' if unit == 'currency' else None
+        item.raw_unit = raw_unit
+        item.unit_scale = scale
+        item.value = 12 * scale
+        records.append(item)
+    result = result_for(records, [])
+    result.presentation_export_trace = [dict(planned_slide_id='analysis', chart_ids=[], slide_numbers=[4],
+                                             observation_ids=[r.id for r in records], source_pages=[3])]
+    original = [r.model_dump(mode='json') for r in records]
+    deck = blank_deck()
+    render_data_index(deck, result, DocumentIndex(records))
+    saved = BytesIO()
+    deck.save(saved)
+    page = Presentation(saved).slides[-1]
+    cells = [shape.text for shape in page.shapes if shape.name == 'data_index:entry']
+    assert len(cells) == 4
+    units = [label.strip().lower() for label in cells[1].split(';')]
+    assert any('rmb' in label and ('thousand' in label or "'000" in label) for label in units)
+    assert any('rmb' in label and 'million' in label for label in units)
+    assert '%' in units
+    assert json.loads(page.notes_slide.notes_text_frame.text)['data_index'][0]['observations'] == original
+    assert [r.model_dump(mode='json') for r in result.observations] == original

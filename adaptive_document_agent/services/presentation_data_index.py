@@ -1,5 +1,32 @@
 """Native navigation to selected chart evidence, without duplicating raw tables."""
 import json
+from math import isfinite
+
+from adaptive_document_agent.extraction.normalizer import infer_unit_defaults
+from adaptive_document_agent.extraction.numeric_parser import parse_number
+from adaptive_document_agent.models import Observation
+from .financial_formatter import split_unit_basis
+
+
+def _source_unit_label(observation: Observation) -> str | None:
+    """Show the reported scale even when the extractor stored it separately."""
+    label = observation.raw_unit or observation.unit
+    if observation.currency and label in {None, 'currency'}:
+        label = observation.currency
+    scale = observation.unit_scale
+    if not label or scale is None or scale == 1 or scale <= 0 or not isfinite(scale):
+        return label
+    if observation.unit in {'percent', 'multiple'} or infer_unit_defaults(label).scale is not None:
+        return label
+    numerator, basis = split_unit_basis(label)
+    # A cell can carry a compact scale such as "RMB m" instead of a table header.
+    parsed = parse_number(f'1 {numerator}')
+    if parsed and (parsed.scale != 1 or parsed.unit in {'percent', 'multiple'}):
+        return label
+    scale_name = {1_000: 'thousands', 1_000_000: 'millions', 1_000_000_000: 'billions'}.get(scale)
+    scaled = f'{numerator} in {scale_name}' if scale_name else f'{numerator} (×{scale})'
+    return f'{scaled}/{basis}' if basis else scaled
+
 
 def index_entries(result, index):
     """One entry per rendered analytical scope, retaining exact source metadata."""
@@ -43,7 +70,7 @@ def index_entries(result, index):
             # must cover their combined evidence, not just the last trace.
             'topic': source_scoped_heading(entry['topic'], observations),
             'metrics': unique(o.metric_original for o in observations),
-            'units': unique(o.raw_unit or o.unit for o in observations),
+            'units': unique(_source_unit_label(o) for o in observations),
             'periods': sorted(unique(o.period for o in observations), key=period_sort_key),
             'observation_ids': [o.id for o in observations],
             'observations': [o.model_dump(mode='json') for o in observations],
