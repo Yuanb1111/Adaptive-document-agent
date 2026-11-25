@@ -4,6 +4,35 @@
 MAX_COPY_REVIEW_REASON_CHARACTERS = 4000
 
 
+def changed_description_slots(previous, current):
+    """Identify current slots where the audience scope or description changed after an owner rejection."""
+    before = [(item.scope, item.description) for item in previous.source_context]
+    return [f'context-{i}' for i, item in enumerate(current.source_context)
+            if i >= len(before) or (item.scope, item.description) != before[i]]
+
+
+def published_description_changes(changes, context, selection, result):
+    from .retained_analysis import findings
+    from .retained_page_sources import page_bindings
+
+    current = {}
+    linked = findings(result, allow_new_copy=True)
+    for decision in selection.decisions:
+        owner = decision.insight_id
+        slots = changes.get(owner)
+        if not slots or owner not in context['copy_review_ids'] or decision.decision != 'include':
+            continue
+        insight, primary, _ = linked[owner]
+        rendered = {}
+        page_bindings(decision.page, insight, primary, context, result, rendered_descriptions=rendered)
+        if set(slots) - rendered.keys():
+            raise ValueError('A changed description must identify a current reader-facing source slot.')
+        current[owner] = {slot: dict(audience_text=rendered[slot],
+            source_pages=sorted({q.page for q in item.proof_quotes}))
+            for i,item in enumerate(decision.page.source_context) if (slot := f'context-{i}') in slots}
+    return current
+
+
 def source_first_wire_payload(payload: dict) -> dict:
     """Put shared complete source pages before owner-specific fields for prefix reuse."""
     if 'source_pages' not in payload:
@@ -19,6 +48,10 @@ def copy_review_payload(payload: dict) -> dict:
     the later publication gate. This packet cannot grant an omission verdict.
     """
     targets = set(payload.get('copy_review_ids', ()))
+    changes = {iid: slots for iid, slots in payload.get('revised_source_descriptions', {}).items()
+               if iid in targets and slots}
+    if 'revised_source_descriptions' in payload:
+        payload = {key: value for key, value in payload.items() if key != 'revised_source_descriptions'}
     if not targets:
         return payload
     findings = [f for f in payload['findings'] if f['insight']['id'] in targets]
@@ -45,7 +78,19 @@ def copy_review_payload(payload: dict) -> dict:
                          if key not in ('source_context', 'context_evidence')}
         if visible_context:
             audience_page['source_context'] = visible_context
-        audience_decisions.append({**decision, 'page': audience_page})
+        audience_decisions.append(dict(insight_id=decision['insight_id'], decision=decision['decision'],
+                                       page=audience_page))
+    # Once a page has been authored, provisional finding prose and objections
+    # to older drafts can contradict the copy under review. They stay in the
+    # selection/repair history. Keep the source and calculation links here.
+    evidence_fields = ('id', 'kind', 'metric', 'result_ids', 'evidence', 'driver_quote', 'driver_source_page')
+    review_findings = []
+    for finding in findings:
+        insight = finding['insight']
+        if insight['id'] in retained_proofs:
+            finding = {key: value for key, value in finding.items() if key != 'validated_copy'}
+            finding['insight'] = {key: insight[key] for key in evidence_fields if key in insight}
+        review_findings.append(finding)
     citations = [c for c in payload['planned_source_citations'] if c['insight_id'] in targets]
     ids = {oid for f in findings for oid in f['observation_ids']}
     ids.update(oid for c in citations for oid in c['observation_ids'])
@@ -75,9 +120,15 @@ def copy_review_payload(payload: dict) -> dict:
             related_copy.append(dict(insight_id=iid, title=page['title'], message=page['message'],
                 source_context=[{k: item[k] for k in ('scope', 'description')}
                                 for item in page.get('source_context', ())]))
+    # With literal copy proofs the reviewer can compare the current claim directly.
+    # Message-only pages still need the previous question to locate the qualification.
+    quote_bound_ids = {iid for iid, proof in retained_proofs.items()
+                       if proof['source_context'] or proof['context_evidence']}
     return {
         **payload,
-        'findings': findings,
+        'findings': review_findings,
+        'earlier_review_questions': {iid: questions for iid, questions in
+            payload.get('earlier_review_questions', {}).items() if iid in targets and iid not in quote_bound_ids},
         'unavailable_findings': [],
         'analysis_plan': [a for a in payload.get('analysis_plan', []) if a['id'] in tasks],
         'calculations': calculations,
@@ -99,4 +150,10 @@ def copy_review_payload(payload: dict) -> dict:
         # Qualitative qualifications can belong to a related measure. Never
         # trim these original pages to just the target's numeric row locations.
         'source_pages': payload.get('source_pages', []),
+        # Place the addressed audience text after the reference material. A
+        # reviewer can locate each proposed correction by its exact current copy.
+        'source_context_edit_slots': {d['insight_id']: {
+            f'context-{i}': item for i,item in enumerate(d['page'].get('source_context', ()))}
+            for d in audience_decisions if d.get('page')},
+        **(dict(revised_source_descriptions=changes) if changes else {}),
     }

@@ -13,6 +13,7 @@ from .presentation_topic_selector import PresentationTopicSelector
 def plan_outputs(
     gateway: LLMGateway | None, result: PipelineResult, *, timings: dict[str, int] | None = None,
     progress: Callable[[str], None] | None = None,
+    restored_report_plan: ReportPlan | None = None,
 ) -> tuple[ReportPlan, PresentationTopicSelection | None, Exception | None]:
     """Keep local/stateful clients serial; never invoke UI callbacks in workers."""
     from adaptive_document_agent.utils.timing import record_timing
@@ -46,8 +47,15 @@ def plan_outputs(
                 validate_authored_pages(selection, context, result)
             notify('Rechecking the retained report selection before presentation compilation')
             return result.report_plan, None, None
-        notify('Planning report from validated analysis findings')
-        report_plan = report()
+        insight_ids = {item.id for item in result.insights}
+        if restored_report_plan and restored_report_plan.sections and all(
+            insight_id in insight_ids for section in restored_report_plan.sections for insight_id in section.insight_ids
+        ):
+            notify('Reusing the report outline for the restored source-bound findings')
+            report_plan = restored_report_plan
+        else:
+            notify('Planning report from validated analysis findings')
+            report_plan = report()
         result.report_plan = report_plan
         try:
             with record_timing(timings, 'retained_analysis_selection'):

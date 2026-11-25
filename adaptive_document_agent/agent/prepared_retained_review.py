@@ -101,6 +101,25 @@ class PreparedRetainedReview:
         self.pool.shutdown(wait=True, cancel_futures=True)
 
 
+def _fits_before_review(result):
+    """Defer the source review when native pagination already requires a new selection."""
+    from adaptive_document_agent.services.slide_budgets import require_exported_budgets, resolved_limits
+    from .presentation_budget_refinement import measure
+
+    requirements = result.profile.report_requirements
+    if not any(resolved_limits(requirements, section=section) for section in ('report', 'introduction', 'analysis')):
+        return True
+    # Native measurement annotates the result's export trace. Source integration
+    # and its final measurement must see only their own snapshot.
+    preview = result.model_copy(deep=True)
+    try:
+        presentation, _ = measure(preview)
+        require_exported_budgets(presentation, preview)
+    except ValueError:
+        return False
+    return True
+
+
 @contextmanager
 def prepare_retained_review(gateway, result, *, previous=None):
     from .retained_analysis import selected_record
@@ -111,7 +130,7 @@ def prepare_retained_review(gateway, result, *, previous=None):
         yield None
         return
     saved = _saved_review(previous, result)
-    if saved is None and getattr(gateway, 'discovery_workers', 1) <= 1:
+    if saved is None and (getattr(gateway, 'discovery_workers', 1) <= 1 or not _fits_before_review(result)):
         yield None
         return
     prepared = saved or PreparedRetainedReview(gateway, result)

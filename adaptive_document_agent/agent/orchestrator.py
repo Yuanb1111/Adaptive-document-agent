@@ -1041,10 +1041,12 @@ class DocumentOrchestrator:
             if issue not in issues:
                 issues.append(issue)
         details = output.stage_details_ms
+        restored_report_plan = None
         with record_timing(details, "insights"):
             from .retained_selection_feedback import restore_rejected_findings
             if restore_rejected_findings(resume, output):
                 insights = output.insights
+                restored_report_plan = output.report_plan
                 notify('Repairing retained report selection with the original source-bound findings')
             else:
                 insight_generator = InsightGenerator(gateway)
@@ -1052,7 +1054,9 @@ class DocumentOrchestrator:
                 issues.extend(insight_generator.validation_issues)
         notify("Planning presentation evidence from validated analysis")
         output.insights = insights
-        report_plan, topic_selection, topic_error = plan_outputs(gateway, output, timings=details, progress=notify)
+        report_plan, topic_selection, topic_error = plan_outputs(
+            gateway, output, timings=details, progress=notify, restored_report_plan=restored_report_plan,
+        )
         output.report_plan, output.presentation_topics = report_plan, topic_selection
         if isinstance(gateway, IntroductionGuardedGateway):
             gateway.check()

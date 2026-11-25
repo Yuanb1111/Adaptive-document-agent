@@ -80,6 +80,17 @@ def test_full_coverage_packet_remains_complete():
     assert copy_review_payload(full) is full
 
 
+def test_current_review_delta_stays_with_its_owner_and_is_excluded_from_fresh_global_reviews():
+    original = packet()
+    changes = {owner: {'context-0': {'audience_text': f'The current statement for {owner}.', 'source_pages': [6]}}
+               for owner in ('edited','other')}
+    original['revised_source_descriptions'] = changes
+    assert copy_review_payload(original)['revised_source_descriptions'] == {'edited': changes['edited']}
+    original['copy_review_ids'] = []
+    assert 'revised_source_descriptions' not in copy_review_payload(original)
+    assert original['revised_source_descriptions'] == changes
+
+
 def test_owned_review_separates_literal_proof_amounts_from_visible_context():
     original=packet()
     proof=dict(page=6,text='The source reports a duration of 304 days.')
@@ -93,9 +104,34 @@ def test_owned_review_separates_literal_proof_amounts_from_visible_context():
     visible=scoped['proposed_selection']['decisions'][0]['page']
     assert '304' not in json.dumps(visible)
     assert visible['source_context']==[dict(scope='the reporting period',description='Describes a longer duration.')]
+    assert scoped['source_context_edit_slots']['edited'] == {'context-0': visible['source_context'][0]}
     assert scoped['retained_proofs']['edited']==dict(context_evidence=[proof],source_context=[dict(
         quote=proof,continuation_quotes=page['source_context'][0]['continuation_quotes'])])
     assert scoped['source_pages']==original['source_pages'] and original==before
+
+
+@pytest.mark.parametrize('still_in_copy', [True, False])
+def test_source_authored_review_reads_current_copy_and_original_evidence(still_in_copy):
+    original = packet()
+    stale = 'The whole reporting period incurred a new charge.'
+    current = stale if still_in_copy else 'The provision is a balance at period end.'
+    proof = dict(page=6, text='The table reports the provision at the reporting date.')
+    finding = original['findings'][0]
+    finding.update(validated_copy=stale)
+    finding['insight'].update(narrative=stale, watch_item=stale, evidence=[proof])
+    original['earlier_review_questions'] = {'edited': [stale], 'other': [stale]}
+    original['proposed_selection']['decisions'][0].update(reason=stale, page=dict(
+        title='Provision balance', message=current, context_evidence=[proof]))
+    before = deepcopy(original)
+
+    wire = copy_review_payload(original)
+
+    assert json.dumps(wire).count(stale) == int(still_in_copy)
+    assert wire['proposed_selection']['decisions'][0]['page']['message'] == current
+    assert wire['findings'][0]['insight']['evidence'] == [proof]
+    assert wire['retained_proofs']['edited']['context_evidence'] == [proof]
+    assert wire['source_pages'] == original['source_pages']
+    assert before == original
 
 
 def test_source_first_wire_order_preserves_packet_and_common_prefix():
@@ -214,6 +250,7 @@ def test_private_589_recheck_preserves_sources_and_reduces_request():
     from adaptive_document_agent.agent.retained_analysis import selection_context, selected_record, RetainedAnalysisSelection
     from adaptive_document_agent.agent.retained_selection_coverage import review_selection_coverage
     from tests.test_retained_analysis_v216 import gateway
+    from tests.test_retained_description_fidelity import accounts
 
     result = PipelineResult.model_validate_json(Path(path).read_bytes())
     selection = RetainedAnalysisSelection.model_validate(selected_record(result)['selection'])
@@ -221,10 +258,16 @@ def test_private_589_recheck_preserves_sources_and_reduces_request():
         if w.code == 'retained_selection_coverage'))['copy_review_ids']
     original = result.model_dump(include={'document', 'observations', 'analysis_results', 'insights'})
     context = selection_context(result)
-    mock = gateway([dict(accepted=True, reason='Synthetic request protocol check.')]*2)
+    responses = [dict(accepted=True, reason='Synthetic request protocol check.')]*2
+    if len(targets) == 1:
+        owned = next(d.page for d in selection.decisions if d.insight_id == targets[0])
+        if owned and owned.source_context:
+            responses.append(accounts(owned))
+    mock = gateway(responses)
     review_selection_coverage(mock, context, selection, result)
     review_selection_coverage(mock, {**context, 'copy_review_ids': targets}, selection, result)
-    full_wire, scoped_wire = [c[-1]['content'] for c in mock.client.calls]
+    full_wire, scoped_wire = [c[-1]['content'] for c, usage in zip(mock.client.calls, mock.usage)
+                              if usage['operation'] == 'RetainedSelectionCoverage']
     scoped = decode_records(json.loads(scoped_wire.split('\n', 1)[1].rsplit('\n', 1)[0]))
     assert scoped['source_pages'] == context['source_pages']
     assert {f['insight']['id'] for f in scoped['findings']} == set(targets)
@@ -245,6 +288,7 @@ def test_private_589_timeout_repairs_only_invalid_copy_before_reusing_reporting(
     from adaptive_document_agent.agent.brief_reporting_resume import retained_brief_reporting
     from adaptive_document_agent.agent.retained_analysis_review import review_complete
     from tests.test_retained_analysis_v216 import gateway
+    from tests.test_retained_description_fidelity import accounts
 
     saved = PipelineResult.model_validate_json(Path(path).read_bytes())
     context = selection_context(saved)
@@ -269,9 +313,10 @@ def test_private_589_timeout_repairs_only_invalid_copy_before_reusing_reporting(
     if not corrected:
         page = decision.page.model_dump()
     accepted = dict(accepted=True, reason='Synthetic copy-check protocol verdict.')
-    responses = [accepted, dict(pages={iid: page}), accepted]
+    checks = [accepted, accounts(decision.page)] if decision.page.source_context else [accepted]
+    responses = [*checks, dict(pages={iid: page}), *checks]
     if not corrected:
-        responses.extend([dict(pages={iid: page}), accepted])
+        responses.extend([dict(pages={iid: page}), *checks])
     mock = gateway(responses)
     current = PipelineResult(document=saved.document.model_copy(deep=True),
         profile=saved.profile.model_copy(deep=True), observations=saved.observations,
@@ -294,7 +339,8 @@ def test_private_589_timeout_repairs_only_invalid_copy_before_reusing_reporting(
         assert 'outside its bound evidence' in resumed.failure_details['message']
     operations = [u['operation'] for u in mock.usage]
     assert 'SourceAuthoredAnalysisSelection' not in operations
-    assert operations[:3] == ['RetainedSelectionCoverage', 'RetainedPageRevisions', 'RetainedSelectionCoverage']
+    assert [op for op in operations if op != 'RetainedDescriptionFidelity'][:3] == [
+        'RetainedSelectionCoverage', 'RetainedPageRevisions', 'RetainedSelectionCoverage']
     for call, op in zip(mock.client.calls, operations):
         if op == 'RetainedSelectionCoverage':
             packet = decode_records(json.loads(call[-1]['content'].split('\n', 1)[1].rsplit('\n', 1)[0]))

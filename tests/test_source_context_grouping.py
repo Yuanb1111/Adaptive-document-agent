@@ -40,6 +40,47 @@ def test_page_replacement_and_addressed_addition_both_keep_identical_adjacent_ow
     assert decode_records(json.loads(wire))['mergeable_existing_slots']==[['context-6','context-7']]
 
 
+def test_editing_composition_and_adding_a_later_outcome_keeps_both_proofs():
+    items, _ = source_items()
+    source = payload()
+    composition = dict(page=3, text='Refurbished units accounted for a larger share of shipments.')
+    outcome = dict(page=4, text='By October 31, 2024, most shipments held on June 30, 2024 had arrived.')
+    for item in items[6:]:
+        item['quote'] = composition
+        item.pop('continuation_quotes')
+    source['source_pages'].extend([composition, outcome])
+    source['pages_to_correct']['owned']['draft']['source_context'] = items
+    edit = 'Reports that refurbished units made up a larger share of shipments.'
+    addition = dict(scope='October 31, 2024', quote=outcome,
+                    description='Reports that most shipments held on June 30, 2024 had arrived.')
+    llm = base_gateway([dict(message=None, source_context=None,
+                             source_context_edits={'context-6': edit}, source_context_additions=[addition])])
+
+    page = compact_publication_copy(llm, 'owned', source, 2000, lambda _: {})['owned']
+
+    joined = {**items[6], 'description': edit + ' ' + items[7]['description']}
+    assert [item.model_dump() for item in page.source_context] == [*items[:6], joined, addition]
+    assert len(llm.usage) == 1
+
+
+def test_single_edit_targets_share_only_the_remaining_page_space():
+    from adaptive_document_agent.agent.compact_publication_copy import visible_copy_budget
+    from adaptive_document_agent.agent.retained_page_sources import RetainedPage
+
+    items, _ = source_items()
+    source = payload()
+    items[0]['description'] = 'Describes ' + 'a relevant qualification ' * 27 + '.'
+    source['pages_to_correct']['owned']['draft']['source_context'] = items
+    page = RetainedPage.model_validate(source['pages_to_correct']['owned']['draft'])
+    limit = visible_copy_budget(page, [], 3000)['total_characters'] + 25
+    llm = base_gateway([dict(message=None, source_context=None)])
+    compact_publication_copy(llm, 'owned', source, limit, lambda _: {})
+    wire = llm.client.calls[0][-1]['content'].split('\n', 1)[1].rsplit('\n', 1)[0]
+    targets = decode_records(json.loads(wire))['description_targets_for_single_edit']
+    assert targets == {f'context-{i}': min(700, len(item['description']) + 25)
+                       for i, item in enumerate(items)}
+
+
 @pytest.mark.parametrize('difference',['scope','page','quote','continuation_order','nonadjacent','invalid'])
 def test_grouping_requires_exact_ordered_ownership_and_valid_paragraphs(difference):
     items,addition=source_items()

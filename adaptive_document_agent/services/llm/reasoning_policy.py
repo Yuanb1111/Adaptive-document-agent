@@ -61,6 +61,10 @@ _SIMPLE_OPERATIONS = frozenset({("presentation", "IntroductionPages"), ("report"
                               # fresh full-source publication review still uses defaults.
                               ("presentation", "PriorityPagePatch"),
                               ("presentation", "RetainedPageRevisions"),
+                              ("presentation", "RetainedDescriptionRevision"),
+                              ("presentation", "RetainedDescriptionLengthRepair"),
+                              ("presentation", "RetainedDescriptionSpanRepair"),
+                              ("presentation", "RetainedDescriptionSentenceRepair"),
                               ("presentation", "IntroductionMeaningRevision"),
                               ("presentation", "IntroductionMeaningResolution"),
                               ("presentation", "SummaryCoverageReview"),

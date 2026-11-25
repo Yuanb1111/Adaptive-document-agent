@@ -161,21 +161,26 @@ def copy_contract_errors(replacements, packet, aliases, result):
 
 
 def revise_retained_pages(gateway, result, packet, aliases, draft, issues, *, earlier_issues=None,
-                          preserve_numeric_inputs=False, rejected_attempts=None):
+                          preserve_numeric_inputs=False, rejected_attempts=None, description_edits=None,
+                          prefer_sparse_descriptions=True, prefer_quoted_sentences=True):
     """Isolate flagged pages in fast cloud mode; no worker merges or approves copy."""
     if getattr(gateway, 'discovery_workers', 1) >= 8 and len(issues) > 1:
         from .retained_page_revision_parallel import revise_owned_pages
         return revise_owned_pages(issues, lambda own_issues: _revise_page_batch(
             gateway, result, packet, aliases, draft, own_issues,
             earlier_issues=earlier_issues, preserve_numeric_inputs=preserve_numeric_inputs,
+            description_edits=description_edits, prefer_sparse_descriptions=prefer_sparse_descriptions,
+            prefer_quoted_sentences=prefer_quoted_sentences,
             rejected_attempts={iid: rejected_attempts[iid] for iid in own_issues if iid in (rejected_attempts or {})}))
     return _revise_page_batch(gateway, result, packet, aliases, draft, issues,
         earlier_issues=earlier_issues, preserve_numeric_inputs=preserve_numeric_inputs,
-        rejected_attempts=rejected_attempts)
+        rejected_attempts=rejected_attempts, description_edits=description_edits,
+        prefer_sparse_descriptions=prefer_sparse_descriptions, prefer_quoted_sentences=prefer_quoted_sentences)
 
 
 def _revise_page_batch(gateway, result, packet, aliases, draft, issues, *, earlier_issues=None,
-                       preserve_numeric_inputs=False, rejected_attempts=None):
+                       preserve_numeric_inputs=False, rejected_attempts=None, description_edits=None,
+                       prefer_sparse_descriptions=True, prefer_quoted_sentences=True):
     from adaptive_document_agent.services.source_citations import evidence_pages
     from adaptive_document_agent.services.presentation_evidence import calculation_catalog
     findings = {f['insight']['id']: f for f in packet['findings']}
@@ -237,6 +242,23 @@ def _revise_page_batch(gateway, result, packet, aliases, draft, issues, *, earli
                                              if iid in issues})
     if use_owned_writer:
         from .compact_publication_copy import compact_publication_copy
+        purposes = (description_edits or {}).get(iid)
+        if purposes and set(purposes) <= {f'context-{i}' for i in range(len(original.source_context))}:
+            from .retained_description_revision import revise_descriptions
+            from .retained_page_sources import AuthoredPageErrors
+            from .reported_source_context import observation_context_labels
+            scoped_rows = [*by_page[iid]['primary_observations'], *by_page[iid]['source_rows']]
+            try:
+                candidate = revise_descriptions(gateway, original, purposes,
+                    source_pages=payload['source_pages'], periods=[row['period'] for row in scoped_rows if row.get('period')],
+                    limit=local_limits[iid], labels=observation_context_labels(scoped_rows),
+                    owner_issue='\n'.join(issues[iid]) if prefer_sparse_descriptions else None,
+                    prefer_quoted_sentences=prefer_quoted_sentences)
+            except ValueError as exc:
+                raise AuthoredPageErrors({iid: [str(exc)]}) from exc
+            if errors := copy_contract_errors({iid: candidate}, packet, aliases, result):
+                raise AuthoredPageErrors(errors)
+            return {iid: candidate}
         if attempts := (rejected_attempts or {}).get(iid):
             by_page[iid]['rejected_page_attempts'] = [attempt.model_dump(mode='json') for attempt in attempts]
         eligible_companions = {ref: observations[aliases[ref]].model_dump(mode='json')
@@ -335,7 +357,7 @@ def _revise_page_batch(gateway, result, packet, aliases, draft, issues, *, earli
              'Do not just say the source "discusses" or "addresses" the topic: retain the actual '
              'effect, such as pressure, slower activity or a shift in composition, attributed to '
              'the source. A material composition change needs its actual direction in words: '
-             'for example, "The source describes a shift toward [defined category] during '
+             'for example, "[defined category] made up a larger share of [population] during '
              '[literal interval]." Merely naming the category as adverse context loses that '
              'shift. Preserve its population and scope using exact context_evidence; this '
              'does not authorize a new numeric amount, rate or threshold. Attribute it to '
@@ -354,10 +376,8 @@ def _revise_page_batch(gateway, result, packet, aliases, draft, issues, *, earli
              + PERIOD_AND_ASSURANCE_RULES + LAYOUT_INSTRUCTIONS + INSTRUCTIONS),
         dict(role='user', content='Apply the requested local corrections and preserve the existing source-supported '
              'amounts and composition. '
-             'For a source-only composition shift with no eligible percentage row, explicitly write '
-             '"The source describes a shift toward [source-defined category] during [literal source scope]" '
-             'or "away from" as supported. Preserve its real adverse effect and exact context_evidence; '
-             'do not substitute "the share increased/decreased" as an unbound measurement predicate. '
+             'For a source-only change in composition, state which category made up a larger '
+             'or smaller share of which population, with the source scope and exact proof. '
              'Check that every bound numeric comparison names exactly one metric and its own '
              'literal endpoints for a comparison. Separate attributed drivers with their original paragraph scope '
              'into their own sentences. Verify feedback against the full source context; correct a feedback error '

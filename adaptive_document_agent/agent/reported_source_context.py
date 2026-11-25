@@ -33,6 +33,10 @@ _SCOPED_SOURCE_ATTRIBUTION=re.compile(
     rf'^(?:For|Within|During)\s+[^.!?\n]{{1,220}},\s+the source\s+(?:{_REPORTING_VERB}|links?)\b',re.I)
 _COMPANY_ATTRIBUTED_SENTENCE=re.compile(rf'^(?P<speaker>the company|it)\s+'
     rf'(?P<verb>{_REPORTING_VERB})\s+(?P<predicate>.+[.!?])$',re.I)
+_EXPLICIT_SOURCE_SPEAKER=re.compile(
+    rf"^(?:(?:the|an?|our|their|its)\s+(?:[\w’'-]+\s+){{1,8}}|management\s+)"
+    rf"(?:{_REPORTING_VERB}|reported|stated|said|says?|found|finds?|saw|sees?|"
+    r"consider(?:s|ed)?|believ(?:es?|ed)|judg(?:es?|ed)|assess(?:es|ed)?|conclud(?:es?|ed))\b", re.I)
 _SOURCE_SENTENCE_BOUNDARY=re.compile(r'(?<=[.!?])\s+')
 _AMBIGUOUS_QUOTING=re.compile(r'["“”‘]|(?<!\w)[\'’]')
 _AMBIGUOUS_ABBREVIATION=re.compile(r'\b(?:e\.g|i\.e|etc|vs|approx|no|fig|dr|mr|mrs|ms|inc|ltd|co)\.',re.I)
@@ -51,6 +55,8 @@ _STANDARD_REFERENCE=re.compile(r'\b(?P<prefix>(?:under|in\s+accordance\s+with|pu
     r'as\s+required\s+by|complies\s+with)\s+)?(?P<code>(?:IAS|IFRS|HKAS|HKFRS)\s+\d{1,2})\b',re.I)
 _STANDARD_VALUATION_TAIL=re.compile(r'^(?:\s+|\s*:\s*)(?:lower[- ]of[- ]cost|'
     r'lower\s+cost(?=\s*/\s*NRV\b)|net\s+realizable\s+value|(?:impairment\s+)?test(?:s|ing)?)\b',re.I)
+_STANDARD_MEASUREMENT_BASIS=re.compile(r'^\s+measurement\s+at\s+(?:the\s+)?'
+    r'(?P<basis>(?:lower\s+of\s+cost\s+and\s+)?net\s+reali[sz]able\s+value)\b',re.I)
 _STANDARD_MEASURE_TAIL=re.compile(r'^\s*(?:years?|months?|weeks?|days?|hours?|units?|'
     r'thousands?|millions?|billions?|percent(?:age)?|basis\s+points?)\b',re.I)
 _PROOF_PAGE_PREFIX=re.compile(r'^(?:p\.|page)\s*(?P<page>[1-9]\d*)\s*:\s*',re.I)
@@ -283,15 +289,38 @@ def qualified_source_scope(item):
     return re.sub(r'^(?:(?:For|In|During|Within)\s+)+','',item.scope.strip(),flags=re.I)
 
 
-def qualified_source_statement(item):
-    """Normalize grammar only; never rewrite the source quotation or its meaning."""
+def _source_statement_forms(item):
+    """Return publication wording and, if different, its previous rendered form."""
     scope=qualified_source_scope(item)
     description=_description_without_owned_page_prefix(item)
     prefix_removed=description!=item.description.strip()
     description=description[:1].lower()+description[1:]
     if prefix_removed and not _SOURCE_SENTENCE_START.match(description):
         description='reports that '+description
-    return f'For {scope}, the source {description}'+('' if description.endswith(('.','!','?')) else '.')
+    end='' if description.endswith(('.','!','?')) else '.'
+    standard=f'For {scope}, the source {description}{end}'
+    if not prefix_removed and _EXPLICIT_SOURCE_SPEAKER.match(description):
+        return f'For {scope}, {description}{end}',standard
+    return standard,None
+
+
+def qualified_source_statement(item):
+    """Use the description's explicit speaker, or supply the source as subject of a reporting verb."""
+    return _source_statement_forms(item)[0]
+
+
+def normalize_embedded_source_subjects(text,items,periods):
+    """Recognize a complete stored statement from the previous renderer without changing its raw page."""
+    if 'the source ' not in text:
+        return text
+    for item in items:
+        current,legacy=_source_statement_forms(item)
+        if legacy:
+            previous=bound_period_dates(legacy,periods)
+            if previous in text:
+                pattern=r'(^|(?<=[.!?])\s+)'+re.escape(previous)+r'(?=\s|$)'
+                text=re.sub(pattern,lambda m:m[1]+bound_period_dates(current,periods),text)
+    return text
 
 
 def source_context_scope_prefixes(items,periods):
@@ -300,7 +329,7 @@ def source_context_scope_prefixes(items,periods):
         (item.scope,bound_period_dates(f'For {qualified_source_scope(item)}, ',periods)) for item in items}
 
 
-def source_context_paragraphs(parts, *, scope_prefixes=None):
+def source_context_paragraphs(parts, *, scope_prefixes=None, rendered_statements=None):
     """Pack adjacent statements into at most four audience paragraphs."""
     scoped=scope_prefixes or {}
     groups=[[part] for part in parts]
@@ -319,9 +348,12 @@ def source_context_paragraphs(parts, *, scope_prefixes=None):
         statements=[]
         for group in groups[index*len(groups)//count:(index+1)*len(groups)//count]:
             for statement in group:
+                original=statement
                 scope=scoped.get(statement)
                 if scope and scope==previous and statement.startswith(scope[1]+'the source '):
                     statement='The source also '+statement[len(scope[1]+'the source '):]
+                if rendered_statements is not None:
+                    rendered_statements[original]=statement
                 statements.append(statement)
                 previous=scope
         paragraphs.append(' '.join(statements))
@@ -371,8 +403,10 @@ def _mask_source_standard_identifiers(text,proof):
     def replace(match):
         code=' '.join(match['code'].split()).casefold()
         tail=text[match.end():]
+        basis=_STANDARD_MEASUREMENT_BASIS.match(tail)
+        cited_basis=basis is not None and normalize_quote(basis['basis']) in normalize_quote(proof)
         if (code not in owned or _STANDARD_MEASURE_TAIL.match(tail)
-                or not (match['prefix'] or _STANDARD_VALUATION_TAIL.match(tail))):
+                or not (match['prefix'] or _STANDARD_VALUATION_TAIL.match(tail) or cited_basis)):
             return match[0]
         return match[0][:match.start('code')-match.start()]+' '*len(match['code'])
 
@@ -462,7 +496,8 @@ def reported_source_components(text,quotes,*,periods=(),labels=(),declared=()):
              and any(normalize_quote(m['quote']) in source for source in sources)]
     spans=[(m.start('clause'),m.end('clause'),m['clause']) for m in matches]
     for item in declared:
-        statement=bound_period_dates(qualified_source_statement(item),periods)
+        current,legacy=_source_statement_forms(item)
+        statement=bound_period_dates(current,periods)
         from .source_context_periods import mask_source_periods
         description=bound_period_dates(mask_source_periods(_description_without_owned_page_prefix(item),
             item.proof_text,periods=periods),periods,mask=True)
@@ -475,8 +510,10 @@ def reported_source_components(text,quotes,*,periods=(),labels=(),declared=()):
                 or not all(any(q.page==proof.page and normalize_quote(proof.text)
                            in normalize_quote(q.text) for q in quotes) for proof in item.proof_quotes)):
             continue
-        pattern=r'(?:^|(?<=[.!?])\s+)(?P<clause>'+re.escape(statement)+r')(?=\s|$)'
-        spans.extend((m.start('clause'),m.end('clause'),m['clause']) for m in re.finditer(pattern,text))
+        variants=[statement, bound_period_dates(legacy,periods)] if legacy else [statement]
+        for variant in variants:
+            pattern=r'(?:^|(?<=[.!?])\s+)(?P<clause>'+re.escape(variant)+r')(?=\s|$)'
+            spans.extend((m.start('clause'),m.end('clause'),statement) for m in re.finditer(pattern,text))
     spans=sorted(set(spans))
     if not spans:
         return text,[]

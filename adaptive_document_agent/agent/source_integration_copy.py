@@ -393,7 +393,8 @@ def revise_reopened_additions(gateway, messages, previous, sections, original_co
         mapped = [{**e, 'loc': ['additions', int(e['loc'][0][5:]) - original_count, e['loc'][1]]}
                   for e in errors]
         use_sentence_versions = len(previous.additions) >= min(4, 7 - original_count)
-        repaired = (_scoped_overflow_tables(gateway, request, schema, values, errors, entry)
+        repaired = (_scoped_overflow_tables(gateway, request, schema, values, errors, entry,
+                    {key: value['current_item']['text'] for key, value in addressed.items()})
                     if use_sentence_versions else None)
         if repaired is None:
             revised = shorten_additions(gateway, messages, SourceIntegrationDraft, (raw, mapped), entry,
@@ -410,7 +411,7 @@ def revise_reopened_additions(gateway, messages, previous, sections, original_co
     return revised
 
 
-def _scoped_overflow_tables(gateway, request, schema, values, errors, entry):
+def _scoped_overflow_tables(gateway, request, schema, values, errors, entry, reviewed_text):
     """Use the existing copy correction to put dense source conditions in a visible table."""
     from .presentation_budget_output import complete_budget_output
     from .source_integration_review import SOURCE_OUTPUT_TOKEN_LIMITS
@@ -439,7 +440,7 @@ def _scoped_overflow_tables(gateway, request, schema, values, errors, entry):
                                     **item_fields), ...)
         originals[key] = {name: values[key].get(name) for name in ('text', 'evidence')}
     repair = create_model('ReopenedSourceOverflowTable', __config__=ConfigDict(extra='forbid'), **fields)
-    reply = complete_budget_output(gateway, [
+    table_request = [
         *request,
         untrusted_document_message(json.dumps(originals, ensure_ascii=False)),
         dict(role='user', content='The preceding copy exceeds the displayed body limit. Return '
@@ -449,9 +450,18 @@ def _scoped_overflow_tables(gateway, request, schema, values, errors, entry):
              'triggers or exceptions in the table, using only phrases covered by the same item’s '
              'locked evidence. Preserve which trigger applies to which party or consequence. '
              'Do not repeat table facts in the body or add unsupported claims. Preserve evidence '
-             'and all other fields exactly. The whole briefing still needs independent review.')],
-        repair, entry, audit_key='overflow_table_output_attempts', token_limits=SOURCE_OUTPUT_TOKEN_LIMITS,
-        stage='report')
+             'and all other fields exactly. The whole briefing still needs independent review.')]
+    try:
+        reply = complete_budget_output(gateway, table_request, repair, entry,
+            audit_key='overflow_table_output_attempts', token_limits=SOURCE_OUTPUT_TOKEN_LIMITS, stage='report')
+    except LLMStructuredOutputError as error:
+        if getattr(error.response.usage, 'finish_reason', None) != 'stop':
+            raise
+        from .source_overflow_table_recovery import recover_overflow_tables
+        try:
+            return recover_overflow_tables(error, request, schema, repair, values, reviewed_text, entry)
+        except (ValueError, TypeError, KeyError, IndexError):
+            raise error
     repaired = {**values}
     for key, edited in reply.model_dump(mode='json').items():
         repaired[key] = {**values[key], **edited}
@@ -459,7 +469,7 @@ def _scoped_overflow_tables(gateway, request, schema, values, errors, entry):
 
 
 def shorten_additions(gateway, messages, schema, pending, entry, original_count, *,
-                      sentence_compress=False, split_overlong_labels=False):
+                      sentence_compress=False, split_overlong_labels=False, prior_copy_fields=None):
     draft, errors = pending
     fields = {}
     targets = {}
@@ -586,18 +596,35 @@ def shorten_additions(gateway, messages, schema, pending, entry, original_count,
                            for label, body in zip(choice['labels'], breaks[choice['split_at']], strict=True)]
     if sentence_compress:
         try:
+            remaining_parts = {}
             for error in errors:
                 _, index, field = error['loc']
                 key = f'addition_{index}_{field}'
                 if field == 'text':
-                    values[key] = _fitting_copy_text(values[key], error['ctx']['max_length'],
-                        entry.setdefault('copy_candidate_lengths', {}).setdefault(key, {}))
+                    maximum = error['ctx']['max_length']
+                    try:
+                        values[key] = _fitting_copy_text(values[key], maximum,
+                            entry.setdefault('copy_candidate_lengths', {}).setdefault(key, {}))
+                    except ValueError:
+                        # A complete alternatives envelope can still contain two
+                        # overlong copies. Retain every fitting sibling. Repair
+                        # one measured sentence per unresolved field only.
+                        if not isinstance(values[key],dict):
+                            raise
+                        submitted = _SubmittedCopyVersions.model_validate(values[key]).model_dump()
+                        alternatives = [v if isinstance(v,str) else ' '.join(v) for v in submitted.values()]
+                        if any(len(v)<=maximum for v in alternatives):
+                            raise
+                        remaining_parts[key] = ([targets[key]['original'], *alternatives], maximum)
+            if remaining_parts:
+                from .source_addition_parts import repair_source_parts
+                values.update(repair_source_parts(gateway, remaining_parts, entry, targets, prior_copy_fields))
             values = patch.model_validate(values).model_dump()
         except (ValueError, TypeError):
-            if raw_error is not None:
+            if raw_error is not None and 'source_part_targets' not in entry:
                 raise raw_error
             raise
-        if raw_error is not None:
+        if raw_error is not None and not remaining_parts:
             entry['recovered_measured_copy'] = True
     entry['shortened_fields'] = values
     for error in errors:

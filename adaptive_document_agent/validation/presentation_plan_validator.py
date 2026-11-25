@@ -21,11 +21,14 @@ class PresentationPlanValidator:
         qualitative_pages = retained_context_citations(result)
         qualitative_dates = retained_context_dates(result, checked_citations=qualitative_pages)
         qualitative_day_counts = retained_context_day_counts(result, checked_citations=qualitative_pages)
-        from adaptive_document_agent.agent.retained_page_sources import reported_context_bullet_positions
-        reported_positions=(reported_context_bullet_positions(result,plan) if any(
-            any(not ids for ids in s.bullet_observation_ids) for s in plan.slides) else {})
+        from adaptive_document_agent.agent.retained_page_sources import (
+            bound_authored_context, bound_message_horizons, reported_context_bullet_positions)
+        authored_context = bound_authored_context(result, plan) if plan.themes or qualitative_pages else {}
+        reported_positions = reported_context_bullet_positions(result, plan, checked_context=authored_context)
+        horizon_messages = bound_message_horizons(plan, authored_context)
         calculations = plan_calculation_catalog(result,plan) if any(s.calculation_ids for s in plan.slides) else {}
-        errors.extend(validate_narrative_plan(plan, result, calculations, qualitative_pages=qualitative_pages))
+        errors.extend(validate_narrative_plan(plan, result, calculations, qualitative_pages=qualitative_pages,
+                                              authored_context=authored_context))
         slide_ids = [slide.id for slide in plan.slides]
         if len(slide_ids) != len(set(slide_ids)):
             errors.append("slide IDs must be unique")
@@ -435,8 +438,14 @@ class PresentationPlanValidator:
                     reason, referenced_pages.intersection(slide.source_pages, valid_pages))
                 errors.extend(f"slide {slide.id} {error}" for error in citation_errors)
                 from .flow_date_notation import normalize_bound_flow_dates
-                fields = (slide.title, copies.get(slide.message, slide.message), slide.analytical_question,
-                          reason, *(copies.get(b, b) for index,b in enumerate(slide.bullets)
+                def display_copy(text):
+                    if text == slide.message and slide.id in horizon_messages:
+                        return horizon_messages[slide.id]
+                    return copies.get(text, text)
+                if reason == slide.message and slide.id in horizon_messages:
+                    reason = horizon_messages[slide.id]
+                fields = (slide.title, display_copy(slide.message), slide.analytical_question,
+                          reason, *(display_copy(b) for index,b in enumerate(slide.bullets)
                                     if index not in reported_positions.get(slide.id,set())), *block_titles)
                 from adaptive_document_agent.services.source_day_count import mask_day_count_conventions
                 conventions = set().union(*(qualitative_day_counts.get(iid, set()) for iid in insight_ids))

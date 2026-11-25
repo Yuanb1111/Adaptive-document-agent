@@ -80,20 +80,22 @@ def test_owned_copy_repair_cannot_return_unapproved_siblings_without_a_complete_
 
 
 @pytest.mark.parametrize('workers',[1,4,8])
-def test_fast_dispatch_preserves_per_page_bounds_and_flags(monkeypatch,workers):
+@pytest.mark.parametrize('prefer_sparse', [True, False])
+def test_fast_dispatch_preserves_per_page_bounds_and_flags(monkeypatch,workers,prefer_sparse):
     from types import SimpleNamespace
     from adaptive_document_agent.agent import retained_page_revision as module
     calls=[]
     feedback={iid:[RejectedPageAttempt(page=RetainedPage(title='Prior copy',message=f'Candidate for {iid}.'),
                    errors=[f'Unbound claim on {iid}'])] for iid in ('a','b')}
     def batch(gateway,result,packet,aliases,draft,issues,**kwargs):
-        assert kwargs==dict(earlier_issues={'a':['Prior question']},preserve_numeric_inputs=True,
-                            rejected_attempts={iid:feedback[iid] for iid in issues})
+        assert kwargs==dict(earlier_issues={'a':['Prior question']},preserve_numeric_inputs=True,description_edits=None,
+                            rejected_attempts={iid:feedback[iid] for iid in issues},
+                            prefer_sparse_descriptions=prefer_sparse,prefer_quoted_sentences=True)
         calls.append(set(issues))
         return {iid:'Unapproved' for iid in issues}
     monkeypatch.setattr(module,'_revise_page_batch',batch)
     result=module.revise_retained_pages(SimpleNamespace(discovery_workers=workers),None,{}, {}, {},
         {'a':['Current question'],'b':['Other question']},earlier_issues={'a':['Prior question']},
-        preserve_numeric_inputs=True,rejected_attempts=feedback)
+        preserve_numeric_inputs=True,rejected_attempts=feedback,prefer_sparse_descriptions=prefer_sparse)
     assert result=={'a':'Unapproved','b':'Unapproved'}
     assert calls==[{'a'},{'b'}] if workers==8 else calls==[{'a','b'}]

@@ -124,6 +124,12 @@ def test_literal_ordered_year_comparison_can_be_repeated_in_its_description():
      'Production expanded in 2022, and logistics changed.',False),
     ('The shift followed since 2022 units were shipped.',
      'Production moved in-house since 2022, and logistics changed.',False),
+    ('Since 2022 the service has offered repairs.',
+     'We have offered repairs since 2022.',True),
+    ('Since 2022 the service has offered repairs.',
+     'In 2022 the service offered repairs.',False),
+    ('Since 2022 the service has offered repairs.',
+     'Demand changed since 2022 units were returned.',False),
 ])
 def test_since_year_followed_by_a_predicate_still_needs_literal_timing(text,proof,accepted):
     assert ('2022' not in mask_source_periods(text,proof)) is accepted

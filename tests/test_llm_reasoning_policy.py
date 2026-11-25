@@ -24,6 +24,18 @@ class Answer(BaseModel):
     value: int
 
 
+@pytest.mark.parametrize('operation', ['RetainedDescriptionRevision', 'RetainedDescriptionLengthRepair',
+                                       'RetainedDescriptionSpanRepair', 'RetainedDescriptionSentenceRepair'])
+def test_scoped_luna_copy_edits_reduce_reasoning_only_when_configured(operation):
+    settings = LLMSettings(provider=ProviderName.OPENAI, model='gpt-6-luna', simple_task_reasoning='reduced')
+    def options(operation):
+        return request_reasoning_policy(settings, stage='presentation', operation=operation, model=settings.model)['options']
+    assert options(operation) == {'reasoning_effort': 'low'}
+    assert options('RetainedSelectionCoverage') == {}
+    settings = settings.model_copy(update={'simple_task_reasoning': 'provider_default'})
+    assert options(operation) == {}
+
+
 @pytest.mark.parametrize('setting', ['reduced', 'provider_default'])
 def test_semantic_recovery_is_bounded_and_respects_reasoning_opt_out(setting):
     settings = LLMSettings(provider=ProviderName.DEEPSEEK, simple_task_reasoning=setting)

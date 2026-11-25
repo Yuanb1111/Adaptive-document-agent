@@ -12,6 +12,30 @@ from tests.test_live_publication_repair import ready, verdict, measured
 from tests.test_retained_analysis_v216 import gateway
 
 
+def test_over_budget_native_deck_defers_model_review_until_final_selection(monkeypatch):
+    from adaptive_document_agent.agent import presentation_budget_refinement
+    from adaptive_document_agent.models.customization import ReportRequirement, ReportRequirements
+    from adaptive_document_agent.services import slide_budgets
+
+    result, _ = ready()
+    limit = ReportRequirement(id='analysis-limit', request_quote='At most two analysis pages',
+        description='Analysis pages', kind='slide_limit', resolution='resolved', max_slides=2,
+        slide_section='analysis', slide_scope='body')
+    result.profile.report_requirements = ReportRequirements(items=[limit])
+    measured = []
+    def measure(preview):
+        assert preview is not result
+        preview.presentation_slide_counts['analysis'] = 3
+        measured.append(preview)
+        return object(), {}
+    monkeypatch.setattr(presentation_budget_refinement, 'measure', measure)
+    monkeypatch.setattr(slide_budgets, 'exported_slide_numbers', lambda *args: [1, 2, 3])
+    with prepare_retained_review(SimpleNamespace(discovery_workers=2), result) as early:
+        assert early is None
+    assert len(measured) == 1 and 'analysis' not in result.presentation_slide_counts
+    assert not review.review_complete(result)
+
+
 @pytest.mark.parametrize('change',['none','brief','source','observation','slide'])
 def test_isolated_review_attaches_only_at_identical_final_context(monkeypatch,change):
     result,_=ready();started=Event();release=Event()

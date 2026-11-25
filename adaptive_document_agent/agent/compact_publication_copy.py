@@ -158,7 +158,7 @@ def visible_copy_budget(page: RetainedPage,periods: list[str],limit: int) -> dic
 
 
 def _source_description_capacity_request(page, measured, limit, required_changes, rejected_descriptions=(),
-                                         editable_indexes=None):
+                                         editable_indexes=None, original_page=None):
     """Build the existing correction request around the only editable fields."""
     from adaptive_document_agent.services.source_day_count import (
         literal_day_count_conventions, mask_day_count_conventions,
@@ -235,6 +235,14 @@ def _source_description_capacity_request(page, measured, limit, required_changes
                  'literal_day_count_phrases':phrases,
                  'description_requires_qualitative_rewrite':index in rejected_descriptions}
            for (index,(item,phrases)),cap,words in zip(editable.items(),caps,word_targets,strict=True)}
+    if original_page is not None:
+        for index,(item,_) in editable.items():
+            if index >= len(original_page.source_context):
+                continue
+            prior=original_page.source_context[index]
+            if (prior.scope==item.scope and prior.proof_quotes==item.proof_quotes
+                    and prior.description!=item.description):
+                items[f'context_{index+1}']['prior_same_source_description']=prior.description
     paragraph_instruction=(
         'All eight source slots are occupied. Return exactly ONE paragraph for each scope in both '
         'versions. Combine related clauses under a shared subject in this paragraph. When the '
@@ -272,6 +280,11 @@ def _source_description_capacity_request(page, measured, limit, required_changes
         'application’s source attribution and scope. '
         'For any description flagged for qualitative rewrite, preserve its actual source meaning '
         'and replace unbound amounts, rates or counts with faithful qualitative language. '
+        'If prior_same_source_description is present, compare the two versions against their '
+        'shared proof. Keep earlier qualifications that still apply, including the basis of '
+        'the displayed series and its relationship to the source discussion. Carry the new '
+        'corrections forward. Express each category share with its named population and '
+        'retain the source-stated timing and purpose of any transition. '
         'Keep names of sources and speakers where they affect meaning. Remove printed or '
         'physical page labels from prose because the application renders the retained citations. '
         'Remove repeated introductions, framing phrases '
@@ -312,7 +325,7 @@ def _source_description_capacity_request(page, measured, limit, required_changes
     return schema,messages
 
 
-def _source_capacity_values(page,response,periods,limit,labels=()):
+def _source_capacity_values(page,response,periods,limit,labels=(),*,size_only=False):
     """Fit whole model-written alternatives without changing their scopes or proof."""
     from adaptive_document_agent.services.calendar_claims import bound_period_dates,literal_calendar_dates
     from .reported_source_context import reported_source_components
@@ -329,7 +342,8 @@ def _source_capacity_values(page,response,periods,limit,labels=()):
 
     primary=version_groups(response)
     original=merge(primary)
-    if (alternative:=getattr(response,'condensed',None)) is None:
+    alternative=getattr(response,'condensed',None)
+    if alternative is None and not size_only:
         return original
 
     evidence=page.all_context_evidence
@@ -343,8 +357,18 @@ def _source_capacity_values(page,response,periods,limit,labels=()):
             periods=periods,labels=labels,declared=group)
         return all(statement in qualified for statement in statements)
 
-    choices=[[(index,group) for index,group in enumerate((full,short)) if valid_group(group)]
-             for full,short in zip(primary,version_groups(alternative),strict=True)]
+    versions=[primary]
+    if alternative is not None:
+        versions.append(version_groups(alternative))
+    choices=[]
+    for item,groups in zip(page.source_context,zip(*versions,strict=True),strict=True):
+        usable=[(index,group) for index,group in enumerate(groups) if valid_group(group)]
+        # This step was asked only to shorten the draft. If all rewrites break
+        # binding, its own complete original wording is still a candidate. The
+        # assembled page must fit and pass the same checks and independent review.
+        if not usable and size_only and valid_group([item]):
+            usable=[(len(groups),[item])]
+        choices.append(usable)
     for selection in sorted(product(*choices),key=lambda groups:sum(index for index,_ in groups)):
         candidate=merge(group for _,group in selection)
         try:
@@ -493,21 +517,46 @@ def _overlong_description_candidate(candidate, indexes, schema, original, source
     draft=frozen.model_copy(update={'source_context':[
         item.model_copy(update={'description':overlong[index]}) if index in overlong else item
         for index,item in enumerate(frozen.source_context)]})
-    return frozen,draft
+    return draft
 
 
-def _overlong_capacity_request(draft,indexes,periods,limit,required_changes,*,grouped=False):
-    """Keep valid siblings when the offending fields have normal drafting room."""
+def _qualitative_description_valid(item,evidence,periods,labels):
+    from adaptive_document_agent.services.calendar_claims import bound_period_dates
+    from .reported_source_context import reported_source_components
+
+    statement=bound_period_dates(qualified_source_statement(item),periods)
+    _,qualified=reported_source_components('Reported levels. '+statement,evidence,
+        periods=periods,labels=labels,declared=[item])
+    return statement in qualified
+
+
+def _overlong_capacity_request(draft,indexes,periods,limit,required_changes,labels,original):
+    """Repair length and qualitative copy together, keeping each scope and proof frozen."""
+    from adaptive_document_agent.services.calendar_claims import literal_calendar_dates
+
+    evidence=draft.all_context_evidence
+    dates=set().union(*(literal_calendar_dates(quote.text) for quote in evidence))
+    periods=[*periods,*dates]
+    rejected=[]
+    for index,item in enumerate(draft.source_context):
+        if _qualitative_description_valid(item,evidence,periods,labels):
+            continue
+        probe=item.model_copy(update={'description':'describes the source discussion'})
+        if not _qualitative_description_valid(probe,evidence,periods,labels):
+            return None  # A description-only repair cannot correct the scope.
+        rejected.append(index)
+
+    editable=set(indexes).union(rejected)
     measured=visible_copy_budget(draft,periods,limit)
-    offending_length=sum(len(draft.source_context[i].description) for i in indexes)
-    room=limit-(measured['total_characters']-offending_length)
-    # Some drafts exceed the shared limit by only a few characters as well as
-    # exceeding the field maximum. A normal one-eighth drafting margin on
-    # the offending fields can absorb that without rewriting sibling copy.
-    capped_length=700*len(indexes)
-    targeted=(grouped or measured['total_characters']<=limit or room>=capped_length-capped_length//8)
-    return _source_description_capacity_request(draft,measured,limit,required_changes,
-        editable_indexes=indexes if targeted else None)
+    lengths=[len(draft.source_context[i].description) for i in editable]
+    room=limit-(measured['total_characters']-sum(lengths))
+    capped_length=sum(min(length,700) for length in lengths)
+    if room<capped_length-capped_length//8:
+        # The affected fields alone would need severe cuts. Share the reduction
+        # across descriptions, including when two adjacent slots were joined.
+        editable=set(range(len(draft.source_context)))
+    return _source_description_capacity_request(draft,measured,limit,required_changes,rejected,
+        editable_indexes=editable,original_page=original)
 
 
 def compact_publication_copy(gateway, iid, payload, limit, validate, *, preserve_inputs=True,
@@ -632,8 +681,13 @@ def compact_publication_copy(gateway, iid, payload, limit, validate, *, preserve
             grouped=group_adjacent_source_context(entries[index:index+2],max_items=1)
             if len(grouped)==1 and len(grouped[0]['description'])<=700:
                 mergeable_slots.append([f'context-{index}',f'context-{index+1}'])
-    payload={**payload,'visible_copy_budget':visible_copy_budget(original,periods,limit),
+    budget=visible_copy_budget(original,periods,limit)
+    remaining_characters=limit-budget['total_characters']
+    edit_targets={slot:max(0,min(700,len(original.source_context[index].description)+remaining_characters))
+                  for slot,index in edit_slots.items()}
+    payload={**payload,'visible_copy_budget':budget,
              'mergeable_existing_slots':mergeable_slots,
+             'description_targets_for_single_edit':edit_targets,
              'target_total_visible_characters':int(min(target,limit,STANDARD_AUTHORED_COPY_CHARACTERS)*.9),
              'source_context_edit_slots':{key:original.source_context[index].scope for key,index in edit_slots.items()},
              'literal_proof_locations':proof_locations,
@@ -656,17 +710,26 @@ def compact_publication_copy(gateway, iid, payload, limit, validate, *, preserve
         'edit slots. For description-only edits, give the replacement text. If the reviewer asks for a '
         'more precise period for an existing explanation, edit that slot with an object containing its '
         'corrected scope and optional description. Read the original proof to locate the exact period. '
-        'Keep all other wording fixed. If the review asks for a distinct missing explanation, '
+        'Keep all other wording fixed. When the current objections concern an existing item '
+        'and its proof already contains the requested information, correct that slot alone. '
+        'description_targets_for_single_edit estimates the characters available for its replacement '
+        'with all other text fixed. Each estimate uses the same remaining page space. '
+        'For a change in composition, identify the whole population for each category, using '
+        'a shared explicit subject if several categories use the same denominator. For an '
+        'operational transition, retain what changed from and to what, its source-stated start '
+        'date, its purpose and its effect. If the review asks for a distinct missing explanation, '
         'use source_context_additions for it and leave source_context null. Address each requested '
         'missing cause, test basis, offset, or qualification in the visible description itself. '
         'Before adding an explanation, check whether the current page already states it under the '
         'same scope and proof. Keep it once. If the draft repeats the same disclosure, return a '
         'complete source_context list with the duplicate merged, preserving the complete meaning. '
         'Keep additions under 700 characters per item and at most eight items in the merged page. '
-        'When the only requested change is a new explanation and mergeable_existing_slots lists '
-        'a pair, send just the new source_context_additions item with source_context null. '
-        'The application can fit a new slot by joining those two existing descriptions word for word '
-        'under their identical scope and literal proof. All visible text still shares the page limit. '
+        'When a new explanation and a correction to existing copy are both required, send '
+        'source_context_additions and source_context_edits together with source_context null. '
+        'If mergeable_existing_slots lists a pair, the application can join those adjacent '
+        'descriptions after the edits, preserving their identical scope and proof. Keep the '
+        'combined description within 700 characters. Give a distinct later outcome its own '
+        'scope and exact passage. All visible text still shares the page limit. '
         'When only one slot remains, shorten the new text to fit in that one item. '
         'When an existing slot needs new proof, send its complete scope, description, quote and all '
         'required continuation_quotes in that edit slot. When inputs are frozen the original literal '
@@ -826,6 +889,7 @@ def compact_publication_copy(gateway, iid, payload, limit, validate, *, preserve
                 'unchanged unless it has a binding defect. '
                 'Shorten redundant wording throughout instead of appending to the rejected copy.')])
     capacity_page=None
+    size_only=False
     rejected=[]
     for attempt in range(2):
         errors=[]
@@ -877,21 +941,19 @@ def compact_publication_copy(gateway, iid, payload, limit, validate, *, preserve
             if indexes:=_overlong_description_indexes(exc):
                 original_items=candidate.get('source_context')
                 grouped_items=group_adjacent_source_context(original_items)
-                grouped=grouped_items is not original_items
-                if grouped:
+                if grouped_items is not original_items:
                     candidate={**candidate,'source_context':grouped_items}
-                candidate_pages=_overlong_description_candidate(candidate,indexes,schema,original,
+                draft=_overlong_description_candidate(candidate,indexes,schema,original,
                     payload.get('source_pages',[]))
-                if candidate_pages is not None:
-                    frozen,draft=candidate_pages
-                    request=_overlong_capacity_request(draft,indexes,periods,limit,own['errors'],grouped=grouped)
+                if draft is not None:
+                    request=_overlong_capacity_request(draft,indexes,periods,limit,own['errors'],labels,original)
                     if request is not None:
                         schema,messages=request
-                        capacity_page=frozen
+                        capacity_page=draft
+                        size_only=True
                         continue
             correct(candidate,errors)
             continue
-        grouped=False
         if capacity_page is None:
             values=original.model_dump(mode='json')
             values.update(response.model_dump(mode='json',exclude_none=True,
@@ -905,10 +967,9 @@ def compact_publication_copy(gateway, iid, payload, limit, validate, *, preserve
                     contexts[edit_slots[slot]].update(updated)
             contexts.extend(item.model_dump(mode='json') for item in response.source_context_additions or ())
             grouped_items=group_adjacent_source_context(contexts)
-            grouped=grouped_items is not contexts
             values['source_context']=split_overlong_source_descriptions(grouped_items)
         else:
-            values=_source_capacity_values(capacity_page,response,periods,limit,labels)
+            values=_source_capacity_values(capacity_page,response,periods,limit,labels,size_only=size_only)
         companions = [eligible_companions[ref] for ref in values['companion_ids']
                       if ref in eligible_companions]
         values['message'] = expand_coordinated_directions(values['message'], primary_rows, companions)
@@ -918,14 +979,14 @@ def compact_publication_copy(gateway, iid, payload, limit, validate, *, preserve
             page=RetainedPage.model_validate(values)
         except ValidationError as exc:
             if not attempt and (indexes:=_description_length_errors(exc.errors(include_url=False))):
-                candidate_pages=_overlong_description_candidate(values,indexes,RetainedPage,original,
+                draft=_overlong_description_candidate(values,indexes,RetainedPage,original,
                                                                  payload.get('source_pages',[]))
-                if candidate_pages is not None:
-                    frozen,draft=candidate_pages
-                    request=_overlong_capacity_request(draft,indexes,periods,limit,own['errors'],grouped=grouped)
+                if draft is not None:
+                    request=_overlong_capacity_request(draft,indexes,periods,limit,own['errors'],labels,original)
                     if request is not None:
                         schema,messages=request
-                        capacity_page=frozen
+                        capacity_page=draft
+                        size_only=True
                         continue
             errors.append('The complete merged page failed its bounded schema: '+json.dumps(
                 exc.errors(include_input=False,include_url=False),default=str))
@@ -953,10 +1014,7 @@ def compact_publication_copy(gateway, iid, payload, limit, validate, *, preserve
                         # Test the frozen scope and proofs separately. The
                         # placeholder is never retained or sent as page copy.
                         probe=item.model_copy(update={'description':'describes the source discussion'})
-                        scoped=bound_period_dates(qualified_source_statement(probe),[*periods,*dates])
-                        _,scopes=reported_source_components('Reported levels. '+scoped,page.all_context_evidence,
-                            periods=[*periods,*dates],labels=labels,declared=[probe])
-                        if scoped in scopes:
+                        if _qualitative_description_valid(probe,page.all_context_evidence,[*periods,*dates],labels):
                             rejected_descriptions.append(index)
                     errors.append('source_context must preserve qualitative meaning without unbound '
                         'numbers, rates or counts. Keep exact bound dates and scopes; the quote '
@@ -970,7 +1028,8 @@ def compact_publication_copy(gateway, iid, payload, limit, validate, *, preserve
             if (not attempt and capacity is not None and len(errors)==2+len(rejected_descriptions)
                     and all('complete authored copy exceeds the' in error and error.endswith('page limit')
                             for error in copy_errors)):
-                request=_source_description_capacity_request(page,capacity,limit,own['errors'],rejected_descriptions)
+                request=_source_description_capacity_request(page,capacity,limit,own['errors'],rejected_descriptions,
+                    original_page=original)
                 if request is not None:
                     schema,messages=request
                     capacity_page=page

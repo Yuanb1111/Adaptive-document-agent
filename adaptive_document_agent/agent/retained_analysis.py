@@ -302,14 +302,20 @@ def _select_retained_analysis(gateway, result):
     earlier_page_issues = (feedback or {}).get('earlier_page_issues', {})
     priority_draft = None
 
-    def revise_issues(issues, draft, prior_issues):
+    def revise_issues(issues, draft, prior_issues, description_edits=None):
         nonlocal copy_revisions_left, local_copy_retries_left
         from .retained_page_revision_parallel import complete_owned_copy_revisions
         offered = copy_revisions_left + local_copy_retries_left
+
+        def revise_pending(pending, attempts):
+            nonlocal description_edits
+            addressed = description_edits
+            description_edits = None  # A failed scoped edit uses ordinary repair on the next allowed round.
+            return revise_retained_pages(gateway, result, packet, aliases, draft, pending,
+                earlier_issues=prior_issues, rejected_attempts=attempts, description_edits=addressed)
+
         try:
-            revised, remaining = complete_owned_copy_revisions(issues, offered,
-                lambda pending, attempts: revise_retained_pages(gateway, result, packet, aliases, draft, pending,
-                    earlier_issues=prior_issues, rejected_attempts=attempts))
+            revised, remaining = complete_owned_copy_revisions(issues, offered, revise_pending)
         except (ValueError, LLMResponseError):
             # Failing the local contract does not authorize a full rewrite.
             copy_revisions_left = 0
@@ -362,6 +368,8 @@ def _select_retained_analysis(gateway, result):
                 raise ValueError(f'The corrected selection must retain the independently chosen priorities: {reviewed_priorities}')
             if source_authoring:
                 # Run both checks before choosing between selection and copy repair.
+                from .retained_copy_review import changed_description_slots
+                rejected_source_pages = {}
                 copy_review_ids = (feedback or {}).get('copy_review_ids', []) if reusing_draft else []
                 pending_feedback = (feedback or {}).get('pending_copy_issues', {}) if reusing_draft else {}
                 if reusing_source_draft or pending_feedback:
@@ -369,6 +377,8 @@ def _select_retained_analysis(gateway, result):
                     # specific copy. Use the existing local correction budget;
                     # do not serialize every frozen page through the writer.
                     revised = revise_issues(pending_feedback or earlier_page_issues, draft, earlier_page_issues)
+                    rejected_source_pages = {d.insight_id: d.page for d in selection.decisions
+                                             if d.page is not None and d.insight_id in revised}
                     copy_review_ids = sorted(revised)
                     draft = {**draft, 'decisions': [
                         {**entry, 'page': revised[entry['insight_id']].model_dump(mode='json')}
@@ -380,7 +390,7 @@ def _select_retained_analysis(gateway, result):
                                 'companion_ids': [aliases.get(ref, ref) for ref in page.companion_ids]})
                     context_page_corrections.extend(rebind_context_evidence(selection, context, result))
                 while True:
-                    failures, page_issues = [], {}
+                    failures, page_issues, description_edits = [], {}, {}
                     localizable = True
                     try:
                         validate_authored_pages(selection, context, result)
@@ -389,19 +399,36 @@ def _select_retained_analysis(gateway, result):
                         localizable = isinstance(exc, AuthoredPageErrors)
                         if localizable:
                             page_issues = exc.by_insight
+                    changed = {}
+                    if not failures:
+                        for decision in selection.decisions:
+                            previous = rejected_source_pages.get(decision.insight_id)
+                            if previous is not None and decision.page is not None:
+                                slots = changed_description_slots(previous, decision.page)
+                                if slots:
+                                    changed[decision.insight_id] = slots
+                    rejected_source_pages = {}
                     try:
                         review_selection_coverage(gateway, {**context, 'reviewed_priorities': reviewed_priorities,
                                                            'earlier_review_questions': earlier_page_issues,
                                                            'copy_validation_errors': failures,
+                                                           **(dict(changed_description_slots=changed) if changed else {}),
                                                            'copy_review_ids': copy_review_ids},
                                                   selection, result)
                     except SelectionCoverageError as exc:
                         failures.append(str(exc))
+                        if exc.page_issues and not exc.priority_ids and (copy_review_ids or
+                                getattr(gateway,'discovery_workers',1)>=8):
+                            rejected_ids = {issue.insight_id for issue in exc.page_issues}
+                            rejected_source_pages = {d.insight_id: d.page for d in selection.decisions
+                                                     if d.page is not None and d.insight_id in rejected_ids}
                         if exc.priority_ids:
                             reviewed_priorities = exc.priority_ids
                             priority_change = True
                             localizable = False
                         for issue in exc.page_issues:
+                            if issue.description_edits and issue.insight_id not in page_issues:
+                                description_edits[issue.insight_id] = issue.description_edits
                             page_issues.setdefault(issue.insight_id, []).append(issue.reason)
                     except ValueError as exc:
                         failures.append(str(exc))
@@ -415,15 +442,15 @@ def _select_retained_analysis(gateway, result):
                     # every selected page first. Ranking changes still take
                     # the separate bounded priority-revision path.
                     if (not copy_revisions_left and final_owned_retry and localizable
-                            and len(page_issues) == 1 and set(page_issues) == set(copy_review_ids)):
-                        # Only the last isolated page can receive a final sourced
-                        # correction. The normal recheck and shared deadline apply.
+                            and len(page_issues) == 1 and page_issues.keys() <= set(copy_review_ids)):
+                        # Spend the final correction on the sole unresolved page
+                        # from this review. Accepted siblings keep their reviewed copy.
                         copy_revisions_left = 1
                         final_owned_retry = False
                     if not copy_revisions_left or not localizable or not page_issues:
                         raise ValueError('\n'.join(failures))
                     try:
-                        revised = revise_issues(page_issues, draft, previous_issues)
+                        revised = revise_issues(page_issues, draft, previous_issues, description_edits)
                     except (ValueError, LLMResponseError) as exc:
                         raise ValueError('\n'.join([*failures, f'Page revision failed: {exc}'])) from exc
                     copy_review_ids = sorted(revised)
@@ -504,6 +531,10 @@ def compile_retained_analysis(result):
         if decision.page is not None:
             title, copy, ids, reported = page_bindings(decision.page, insight, primary, context, result,
                                                       with_source_context=True)
+        # A selection decision can compare a finding with other candidates and
+        # cite details outside its authored page. Keep that decision in the
+        # selection audit. Carry the complete approved finding into the plan.
+        reason = copy if decision.page else decision.reason
         observations = [o for o in result.observations if o.id in ids]
         # Exact provenance only. Prefer one complete existing visual; otherwise
         # native observation rendering retains all inputs on the same page.
@@ -519,7 +550,7 @@ def compile_retained_analysis(result):
             section_id=sid, section_title=title, message=copy, bullets=[copy,*reported],
             bullet_observation_ids=[sorted(ids),*[[] for _ in reported]], observation_ids=sorted(ids),
             insight_ids=[iid], chart_ids=chart_ids, source_pages=pages,
-            theme_id=sid, analytical_question=title, selection_reason=decision.reason)
+            theme_id=sid, analytical_question=title, selection_reason=reason)
         if not chart_ids:
             # Data-only findings still own complete reviewed prose. Route them
             # through the paginating compositor, not the legacy data subtitle
@@ -548,7 +579,7 @@ def compile_retained_analysis(result):
             raise ValueError('Retained finding exceeds complete calculation capacity')
         slides.append(slide)
         plan.themes.append(PresentationTheme(id=sid, title=title, question=title,
-            rationale=decision.reason if decision.page else insight.narrative, chart_ids=chart_ids, observation_ids=sorted(ids),
+            rationale=reason if decision.page else insight.narrative, chart_ids=chart_ids, observation_ids=sorted(ids),
             insight_ids=[iid], source_pages=pages))
     insertion = next((i for i, s in enumerate(plan.slides)
                       if s.slide_type in {'risks', 'data_quality', 'appendix'}), len(plan.slides))

@@ -24,6 +24,41 @@ def fixture():
     return result, context, selection
 
 
+def test_authored_finding_keeps_selection_comparisons_in_audit_and_binds_only_its_horizon():
+    from adaptive_document_agent.models.executive_brief import BriefQuote
+    from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
+    result, _, selection = fixture()
+    source = 'Management expects available resources to be sufficient for the next 12 months.'
+    result.document.pages[0].text += ' ' + source
+    decision = selection.decisions[0]
+    decision.reason = 'Other candidates cover 7777 transactions.'
+    decision.page.message = source
+    decision.page.context_evidence = [BriefQuote(page=234, text=source)]
+    context = retained.selection_context(result, source_authoring=True)
+    insight, primary, _ = retained.findings(result, allow_new_copy=True)[decision.insight_id]
+    from adaptive_document_agent.agent.retained_page_sources import page_bindings
+    for unsupported in ('The next 13 months.', 'The next 12 days.', 'The count was 12.'):
+        changed = decision.page.model_copy(update={'message': unsupported})
+        with pytest.raises(ValueError, match='outside its bound evidence'):
+            page_bindings(changed, insight, primary, context, result)
+    retained.select_retained_analysis(gateway([selection.model_dump(),
+        dict(accepted=True, reason='Synthetic source review.')]), result)
+    plan = retained.compile_retained_analysis(result)
+    slide, = (s for s in plan.slides if s.slide_type == 'analysis')
+    assert slide.message == slide.selection_reason == plan.themes[0].rationale == source
+    assert retained.selected_record(result)['selection']['decisions'][0]['reason'] == decision.reason
+    for claim in ('The next 13 months.', 'The next 12 days.', 'The count was 12.'):
+        changed = plan.model_copy(deep=True)
+        changed_slide = next(s for s in changed.slides if s.id == slide.id)
+        changed_slide.bullets.append(claim)
+        changed_slide.bullet_observation_ids.append(changed_slide.observation_ids)
+        with pytest.raises(ValueError, match='unsupported numeric claims'):
+            PresentationPlanValidator().validate(changed, result)
+    plan.themes[0].rationale = 'The company reported 12 transactions.'
+    with pytest.raises(ValueError, match='theme .*unsupported numeric claims'):
+        PresentationPlanValidator().validate(plan, result)
+
+
 def test_compiler_and_export_validation_preserve_literal_related_context(monkeypatch):
     from adaptive_document_agent.validation.presentation_plan_validator import PresentationPlanValidator
     from adaptive_document_agent.agent.audit_source_layout import audit_source_page

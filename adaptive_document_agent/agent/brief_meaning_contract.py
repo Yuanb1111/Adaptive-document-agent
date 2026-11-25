@@ -17,7 +17,7 @@ def displayed_quantity_contract(item):
 
 
 def check_meaning_contract(original, candidate, indices, *, result, excerpts, inventories, periods,
-                           assurance_bindings=None):
+                           assurance_bindings=None, qualification_bindings=None, qualification_options=None):
     """Return exact violations and whether one narrow protocol correction is possible.
 
     A quoted but newly enumerated table cell remains forbidden. Its presence in
@@ -30,7 +30,10 @@ def check_meaning_contract(original, candidate, indices, *, result, excerpts, in
         before, item = original.items[index], items[index]
         raw_shown = {canonical_quantity(*q) for q in _quantities(item.text) | _quantities(item.label)}
         aliases = original_period_identities(before, inventories[index], result=result)
-        checked_text = quantity_text_with_bound_dates(item.text, periods[index], inventories[index],
+        from .brief_reviewed_qualifications import mask_reviewed_qualifications
+        checked_body, binding_errors = mask_reviewed_qualifications(item.text,
+            (qualification_bindings or {}).get(index, []), (qualification_options or {}).get(index, {}))
+        checked_text = quantity_text_with_bound_dates(checked_body, periods[index], inventories[index],
                                                      original_periods=aliases)
         shown = {canonical_quantity(*q) for q in _quantities(checked_text)}
         shown.update(canonical_quantity(*q) for q in _quantities(item.label))
@@ -46,7 +49,9 @@ def check_meaning_contract(original, candidate, indices, *, result, excerpts, in
                 representations.append(representation)
         items[index] = item.model_copy(update={'quantity_representations': representations})
         introduced = shown - permitted
-        item_errors = []
+        item_errors = [f'item_{index}: {detail}' for detail in binding_errors]
+        if binding_errors:
+            recoverable = False
         if introduced:
             item_errors.append(f'item_{index}: meaning correction introduced new quantities: {sorted(introduced)}')
             context = quoted_table_context(before, result, excerpts=excerpts)

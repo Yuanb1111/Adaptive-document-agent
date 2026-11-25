@@ -333,6 +333,54 @@ def test_capacity_wire_keeps_usable_alternative_to_an_overlong_source_paragraph(
     assert actual==page
 
 
+def test_capacity_compares_prior_wording_only_under_its_original_scope_and_proof():
+    import json
+    from adaptive_document_agent.agent.compact_publication_copy import (
+        _source_description_capacity_request, visible_copy_budget)
+
+    original = RetainedPage(title='Shipments', message='Reported levels.', source_context=contexts(4))
+    draft = original.model_copy(deep=True)
+    for item in draft.source_context:
+        item.description = 'Describes changing operating conditions.'
+    draft.source_context[1].scope = 'a different reporting window'
+    draft.source_context[2].quote.page += 1
+    draft.source_context[3].continuation_quotes = [draft.source_context[2].quote]
+    _, messages = _source_description_capacity_request(
+        draft, visible_copy_budget(draft, [], 1400), 1400, [], original_page=original)
+    wire = json.loads(messages[-1]['content'].split('\n', 1)[1].rsplit('\n', 1)[0])
+    assert [item.get('prior_same_source_description') for item in wire['source_context'].values()] == [
+        original.source_context[0].description, None, None, None]
+
+
+@pytest.mark.parametrize('usable_original', [True, False])
+def test_size_only_repair_can_keep_the_qualified_original_when_both_short_versions_fail(usable_original):
+    from adaptive_document_agent.agent.compact_publication_copy import (
+        _source_capacity_values, _source_description_capacity_request, visible_copy_budget)
+
+    dated = 'Reports that a substantial portion of goods held on June 30, 2024 had arrived by October 31, 2024.'
+    source = 'By October 31, 2024, 47% of goods held on June 30, 2024 had arrived.'
+    page = RetainedPage(title='Delivery', message='Reported levels.', source_context=[
+        dict(scope='subsequent deliveries', description=dated if usable_original else dated.replace(
+            'a substantial portion', '47%'), quote=dict(page=3, text=source)),
+        *contexts(4)])
+    for item in page.source_context[1:]:
+        item.description *= 5
+    limit = 500
+    schema, _ = _source_description_capacity_request(page, visible_copy_budget(page, [], limit), limit, [])
+    short = {f'context_{i}': ['Describes a source qualification.'] for i in range(2, 6)}
+    response = schema.model_validate({**short, 'context_1': ['Reports that 47% of goods had arrived.'],
+        'condensed': {**short, 'context_1': ['Reports that 50% of goods had arrived.']}})
+
+    values = _source_capacity_values(page, response, [], limit, size_only=True)
+    repaired = RetainedPage.model_validate(values)
+    if usable_original:
+        assert repaired.source_context[0] == page.source_context[0]
+        assert visible_copy_budget(repaired, [], limit)['total_characters'] <= limit
+    else:
+        # The caller sees and rejects the failed candidate, including its unbound quantity.
+        assert repaired.source_context[0].description == response.context_1[0]
+
+
 @pytest.mark.parametrize('usable_version',['primary','condensed','neither'])
 def test_full_page_chooses_only_a_source_version_that_fits_its_last_slot(usable_version):
     from pydantic import ValidationError
@@ -725,6 +773,58 @@ def test_overlong_merged_edit_compresses_only_that_description_when_page_fits():
     assert page.source_context[0].description==shorter
     assert page.source_context[1].model_dump()==fixed
     assert [call['operation'] for call in llm.usage]==['RetainedPageRevisions','RetainedSourceDescriptionCapacity']
+
+
+@pytest.mark.parametrize('tight_shared_budget', [False, True])
+def test_joined_description_and_unbound_sibling_share_one_correction(tight_shared_budget):
+    import json
+    from tests.test_source_context_grouping import source_items
+
+    original, addition = source_items()
+    source = payload()
+    source['source_pages'][0]['text'] += ' ' + original[6]['continuation_quotes'][0]['text']
+    original[0]['description'] = 'Describes ' + ('local operating conditions ' * 14) + '.'
+    source['pages_to_correct']['owned']['draft']['source_context'] = original
+    edits = {'context-3': 'Reports that the affected share reached 40%.',
+             'context-6': 'Describes ' + ('a product qualification ' * 18) + '.',
+             'context-7': 'Reports ' + ('a related operating condition ' * 14) + '.'}
+    first = dict(message=None, source_context=None, source_context_edits=edits, source_context_additions=[addition])
+    joined = 'Describes a product qualification and related operating condition.'
+    qualified = 'Reports that a substantial share was affected.'
+    changes = dict(context_4=qualified, context_7=joined)
+    if tight_shared_budget:
+        changes = {**{f'context_{i}': 'Describes local operating conditions.' for i in range(1, 9)}, **changes}
+    llm = base_gateway([first, changes])
+
+    page = compact_publication_copy(llm, 'owned', source, 1050 if tight_shared_budget else 2500, lambda _: {})['owned']
+
+    assert [u['operation'] for u in llm.usage] == ['RetainedPageRevisions', 'RetainedSourceDescriptionCapacity']
+    wire = json.loads(llm.client.calls[-1][-1]['content'].split('\n', 1)[1].rsplit('\n', 1)[0])
+    assert set(wire['source_context']) == set(changes)
+    assert {key for key, item in wire['source_context'].items()
+            if item['description_requires_qualitative_rewrite']} == {'context_4'}
+    assert wire['required_changes'] == []
+    assert page.source_context[3].description == qualified
+    assert page.source_context[6].description == joined
+    for item, draft in zip(page.source_context, [*original[:7], addition], strict=True):
+        assert item.model_dump(exclude={'description'}) == {k: v for k, v in draft.items() if k != 'description'}
+    if not tight_shared_budget:
+        assert page.source_context[0].description == original[0]['description']
+
+
+def test_invalid_sibling_scope_alongside_overlong_copy_requires_scope_capable_writer():
+    source = payload()
+    proof = dict(page=2, text=source['source_pages'][0]['text'])
+    valid = [dict(scope='measurement basis', description='Describes the methodology.', quote=proof),
+             dict(scope='review period', description='Reports the source assessment.', quote=proof)]
+    source['pages_to_correct']['owned']['draft']['source_context'] = valid
+    first = dict(message=None, source_context=None,
+                 source_context_edits={'context-0': 'Describes ' + 'the reported methodology ' * 32 + '.',
+                                       'context-1': dict(scope='FY2099', description='Reports a share of 40%.')})
+    llm = base_gateway([first, dict(message=None, source_context=valid)])
+    page = compact_publication_copy(llm, 'owned', source, 1500, lambda _: {})['owned']
+    assert [u['operation'] for u in llm.usage] == ['RetainedPageRevisions'] * 2
+    assert [item.model_dump() for item in page.source_context] == valid
 
 
 @pytest.mark.parametrize('shared_overflow',[0,23])

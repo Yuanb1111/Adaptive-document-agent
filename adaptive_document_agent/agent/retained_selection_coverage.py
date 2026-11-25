@@ -1,6 +1,6 @@
 """Check material omissions before writing a briefing from retained findings."""
 import json
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field,create_model
 
@@ -21,6 +21,10 @@ class RetainedPageIssue(BaseModel):
         'All actionable material corrections for this page. State each missing or '
         'incorrect fact, what it qualifies or explains, and its original source scope.')
     assurance_changes: list[AssuranceChange] | None = Field(default=None, max_length=40)
+    description_edits: dict[str, Annotated[str, Field(min_length=1, max_length=4000)]] | None = Field(
+        default=None, max_length=8, description='Optional for an owned copy review. When ALL defects '
+        'can be corrected inside existing source_context descriptions under their unchanged scope '
+        'and literal proof, map each supplied context slot to its specific correction. Otherwise omit.')
 
 
 class RetainedSelectionCoverage(BaseModel):
@@ -67,6 +71,14 @@ def _coverage_payload(context,selection,result):
     numeric_ids=set().union(*cited_ids.values())
     derived=[c for c in scoped_calculation_catalog(result.observations,cited_ids.values()).values()
              if set(c['observation_ids'])<=numeric_ids]
+    if 'changed_description_slots' in context:
+        context=dict(context)
+        changes=context.pop('changed_description_slots')
+        if changes and context.get('copy_review_ids') and not context.get('copy_validation_errors'):
+            from .retained_copy_review import published_description_changes
+            rendered=published_description_changes(changes,context,selection,result)
+            if rendered:
+                context['revised_source_descriptions']=rendered
     return dict(context,proposed_selection=selection.model_dump(mode='json',exclude_none=True),
         bound_calculations=derived,
         source_row_assurance=source_row_assurance(result,{row['id']:row['id']
@@ -129,12 +141,31 @@ def _review_selection_coverage(gateway, context, selection, result,*,priority_on
         'locate the exact separate verification quotations. A number found only in those quotations '
         'is not displayed. When finding a displayed amount or timing defect, quote its exact words '
         'from the visible fields. '
+        'Before reporting an omission from an addressed description, read its entire current text '
+        'under source_context_edit_slots. If it already distinguishes the cases in question, identify '
+        'the specific remaining factual gap and which source words establish it. Assess meaning across '
+        'all sentences, including those with a shared subject. '
+        'For every visible source description compare each judgement to its literal quotation. Check '
+        'who made it, exactly what was judged, and which part a negation or materiality qualifier '
+        'modifies. Check that each share uses the original denominator even when a pronoun follows '
+        'a narrower subgroup. Report every material change of meaning in this pass, including '
+        'defects in different slots. In description_edits give the correction each slot needs. '
         'Start with source_reading_pages when supplied, including their full discussions, and '
         'use the other supplied original pages for related context. Do not reopen the selection or critique '
         'unchanged pages in this pass. Leave both selection ID lists empty. The later publication '
         'review still checks all pages and omissions independently. '
         if copy_review_ids else ''
     )
+    if wire_payload.get('revised_source_descriptions') and copy_review_ids and not priority_only:
+        review_scope += (
+            'revised_source_descriptions identifies the current audience wording of slots that changed '
+            'after an independent review. Use it to locate those edits. Review the entire current page '
+            'against all its sources, including unchanged slots and newly discovered material defects. '
+            'Prior silence and the presence of an edit carry no approval. Before requesting another '
+            'change, explain the concrete difference between what the audience would understand from '
+            'the current words and what the source establishes. An omitted fact warrants correction '
+            'when it materially changes that understanding. An accurate paraphrase alone needs no '
+            'change of wording. ')
     messages = [
         dict(role='system', content=
              'Independently assess the proposed report selection against the document purpose, user '
@@ -314,6 +345,21 @@ def _review_selection_coverage(gateway, context, selection, result,*,priority_on
             missing_insight_ids=missing, prioritized_insight_ids=priorities,
             reason='Source-checked review still requires corrections.' if missing or active
             else 'No actionable issues in the source-checked review.'))
+    fidelity = None
+    if effective.accepted and not priority_only and len(copy_review_ids) == 1:
+        from .retained_description_fidelity import review_description_fidelity
+        owner, = copy_review_ids
+        page = next(d.page for d in selection.decisions if d.insight_id == owner)
+        if page and page.source_context:
+            # Keep the original full-source verdict in the audit. Record effective
+            # acceptance only after the literal-proof check completes successfully.
+            fidelity = dict(slots_checked=len(page.source_context))
+            try:
+                review_description_fidelity(gateway, page, owner, audit=fidelity)
+            except SelectionCoverageError as exc:
+                effective = effective.model_copy(update=dict(accepted=False, page_issues=exc.page_issues,
+                    reason='The current source description materially changes or obscures the meaning of its literal proof.'))
+            fidelity['accepted'] = effective.accepted
     result.validation_warnings.append(ValidationIssue(code='retained_selection_coverage',
         stage='presentation', severity='info', message=json.dumps(dict(
             input_fingerprint=fingerprint(payload), review=review.model_dump(mode='json', exclude_none=True),
@@ -328,6 +374,7 @@ def _review_selection_coverage(gateway, context, selection, result,*,priority_on
                 wire_fingerprint=fingerprint(wire_payload))) if copy_review_ids else {}),
             **(dict(effective_review=effective.model_dump(mode='json', exclude_none=True))
                if effective is not review else {}),
+            **(dict(description_fidelity=fidelity) if fidelity else {}),
             **(dict(contradicted_assurance_issue_ids=contradicted) if contradicted else {}),
             output_attempts=[{k: v for k, v in attempt.items() if k != 'raw_response'}
                              for attempt in audit['output_attempts']],

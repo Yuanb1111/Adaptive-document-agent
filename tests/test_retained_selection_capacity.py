@@ -89,6 +89,35 @@ def current_snapshot(previous):
         ('document', 'profile', 'observations', 'analysis_plan', 'analysis_results')})
 
 
+@pytest.mark.parametrize('restored', ['matching', 'missing', 'stale'])
+def test_retained_retry_only_replans_an_unavailable_outline(monkeypatch, restored):
+    from adaptive_document_agent.agent import output_planning, retained_analysis
+    from adaptive_document_agent.models import ReportPlan, ReportSection
+
+    previous = truncated_checkpoint()
+    section = ReportSection(title='Performance', purpose='Explain the finding', insight_ids=[previous.insights[0].id])
+    previous.report_plan = ReportPlan(title='Saved outline', sections=[section])
+    current = current_snapshot(previous)
+    assert restore_rejected_findings(previous, current)
+    if restored == 'stale':
+        current.report_plan.sections[0].insight_ids = ['removed-finding']
+    saved = current.report_plan if restored != 'missing' else None
+    generated = ReportPlan(title='New outline')
+    calls = []
+
+    def plan(self, profile, insights):
+        calls.append('outline')
+        return generated
+
+    monkeypatch.setattr(retained_analysis, 'can_reuse', lambda gateway, result: True)
+    monkeypatch.setattr(retained_analysis, 'select_retained_analysis', lambda gateway, result: calls.append('selection'))
+    monkeypatch.setattr(output_planning.DynamicReportPlanner, 'plan', plan)
+    outcome, _, error = output_planning.plan_outputs(object(), current, restored_report_plan=saved)
+    assert error is None
+    assert outcome is (saved if restored == 'matching' else generated)
+    assert calls == (['selection'] if restored == 'matching' else ['outline', 'selection'])
+
+
 def test_truncated_selection_restores_only_source_identical_provisional_findings():
     previous = truncated_checkpoint()
     current = current_snapshot(previous)

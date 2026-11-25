@@ -17,13 +17,17 @@ def expanded_observation_ids(owner, charts) -> set[str]:
     return ids
 
 
-def validate_narrative_plan(plan, result, calculations=None, *, qualitative_pages=None) -> list[str]:
+def validate_narrative_plan(plan, result, calculations=None, *, qualitative_pages=None,
+                            authored_context=None) -> list[str]:
     from .presentation_plan_validator import PresentationPlanValidator
 
     errors = []
     if qualitative_pages is None:
         from adaptive_document_agent.agent.retained_page_sources import retained_context_citations
         qualitative_pages = retained_context_citations(result)
+    if authored_context is None:
+        from adaptive_document_agent.agent.retained_page_sources import bound_authored_context
+        authored_context = bound_authored_context(result, plan) if plan.themes else {}
     observations = {o.id: o for o in result.observations}
     charts = {c.id: c for c in result.charts}
     insights = {i.id: i for i in result.insights}
@@ -64,8 +68,20 @@ def validate_narrative_plan(plan, result, calculations=None, *, qualitative_page
                 allowed_numbers.update(PresentationPlanValidator._numbers(insights[insight_id].narrative))
         from .flow_date_notation import normalize_bound_flow_dates
         members = [observations[i] for i in ids if i in observations]
+        # An exact copy of this theme's own finding already passed page_bindings
+        # against its persisted original quotes, observations and calculated
+        # values. A changed rationale or an unrelated slide has no such proof.
+        same_verified_finding = any(slide.id in authored_context and slide.slide_type == 'analysis'
+            and slide.theme_id == theme.id and authored_context[slide.id].message == slide.message == theme.rationale
+            and slide.insight_ids == theme.insight_ids
+            and set(slide.chart_ids) == set(theme.chart_ids)
+            and set(slide.source_pages) == set(theme.source_pages)
+            and expanded_observation_ids(slide, charts) == ids for slide in plan.slides)
+        fields = [theme.title, theme.question, *theme.caveats]
+        if not same_verified_finding:
+            fields.append(theme.rationale)
         claimed = set().union(*(PresentationPlanValidator._numbers(normalize_bound_flow_dates(text, members, result))
-                                for text in (theme.title, theme.question, theme.rationale, *theme.caveats)))
+                                for text in fields))
         unsupported = claimed - allowed_numbers
         if unsupported:
             errors.append(f"theme {theme.id} contains unsupported numeric claims: {sorted(unsupported)}")

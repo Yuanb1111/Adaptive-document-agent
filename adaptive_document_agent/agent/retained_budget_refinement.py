@@ -1,5 +1,6 @@
 """Model-owned whole-finding selection after final briefing costs are known."""
 import json
+from collections import defaultdict
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -85,12 +86,20 @@ def refine_retained_budget(gateway, result, *, progress=None):
         progress('Refining retained findings using the complete final physical slide costs')
     selection = RetainedAnalysisSelection.model_validate(record['selection'])
     slides = [s for s in result.presentation_plan.slides if s.slide_type == 'analysis']
-    trace = {r['planned_slide_id']: r['slide_numbers'] for r in result.presentation_export_trace}
+    trace = defaultdict(set)
+    for row in result.presentation_export_trace:
+        trace[row['planned_slide_id']].update(row['slide_numbers'])
+    chart_numbers = {number for number, page in enumerate(deck.slides, 1)
+                     if any(shape.has_chart for shape in page.shapes)}
+    candidate_numbers = set().union(*(trace[s.id] for s in slides))
     page_numbers = {p for s in slides for p in s.source_pages}
     context = dict(measured_counts=counts, budget_failure=failure,
         requirements=result.profile.report_requirements.model_dump(mode='json'),
+        native_chart_slide_numbers_outside_candidates=sorted(chart_numbers - candidate_numbers),
         candidates=[dict(insight_id=s.insight_ids[0], title=s.title, message=s.message,
-            physical_slides=len(trace.get(s.id, [])), source_pages=s.source_pages,
+            physical_slides=len(trace[s.id]), physical_slide_numbers=sorted(trace[s.id]),
+            native_chart_pages=len(chart_numbers & trace[s.id]),
+            native_chart_slide_numbers=sorted(chart_numbers & trace[s.id]), source_pages=s.source_pages,
             original_reason=next(d.reason for d in selection.decisions if d.insight_id == s.insight_ids[0]))
             for s in slides],
         existing_audience=dict(introduction=result.presentation_plan.company.summary_pages,
@@ -108,6 +117,10 @@ def refine_retained_budget(gateway, result, *, progress=None):
         'reader value; the complete raw analysis remains available in data exports. A supported fact can '
         'have lower display priority without being redundant. Consider material counterevidence and '
         'what the existing briefing already explains. Each finding may cost several physical pages. '
+        'When the original user requirements specify a chart-page target, weigh the candidates’ '
+        'measured native chart pages against that target within every hard slide cap and its stated '
+        'scope. Count distinct physical slide numbers; a continuation may have no chart and a page '
+        'with multiple charts counts once. Explain any material tradeoff in the relevant decisions. '
         'The proposed selection still requires actual native measurement and independent full-source '
         'review of every omission; neither a model assertion nor measured fit grants semantic approval.'),
         untrusted_document_message(json.dumps(context, ensure_ascii=False))]

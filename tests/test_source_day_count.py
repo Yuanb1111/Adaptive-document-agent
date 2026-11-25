@@ -66,6 +66,10 @@ def test_compiled_plan_rechecks_definition_parameters_without_licensing_another_
     slide.message = slide.message.replace('360', '365')
     with pytest.raises(ValueError, match='unsupported numeric claims'):
         PresentationPlanValidator().validate(result.presentation_plan, result)
+    from adaptive_document_agent.validation.narrative_plan_validator import validate_narrative_plan
+    result.presentation_plan.themes[0].rationale = slide.message
+    assert any('365' in error and 'unsupported numeric claims' in error
+               for error in validate_narrative_plan(result.presentation_plan, result))
 
 
 @pytest.mark.parametrize('mutation',[None,'other_proof','wrong_value','wrong_period','measured_days'])

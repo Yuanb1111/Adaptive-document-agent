@@ -15,6 +15,43 @@ from tests.test_retained_analysis_v216 import gateway,verdict
 QUOTE='The decrease in deposits partially offset the increase in net current assets.'
 
 
+@pytest.mark.parametrize('description,expected', [
+    ('The research team saw no significant sampling issue.', 'the research team saw no significant sampling issue.'),
+    ('An assessor found a potential bias.', 'an assessor found a potential bias.'),
+    ('Management believed the estimate was sufficient.', 'management believed the estimate was sufficient.'),
+    ('Reports a potential gap in the source data.', 'the source reports a potential gap in the source data.'),
+])
+def test_explicit_speaker_owns_the_rendered_statement_and_verb_led_copy_keeps_its_attribution(description,expected):
+    from adaptive_document_agent.agent.reported_source_context import QualifiedSourceCopy, qualified_source_statement
+
+    item=QualifiedSourceCopy(scope='the review period',description=description,
+        quote=BriefQuote(page=7,text='The research team found no significant sampling problem in the study.'))
+    assert qualified_source_statement(item) == 'For the review period, '+expected
+    assert item.description == description
+
+
+@pytest.mark.parametrize('unbound', [False, True])
+def test_previous_double_subject_rendering_matches_only_the_same_declared_verified_statement(unbound):
+    from adaptive_document_agent.agent.reported_source_context import QualifiedSourceCopy, qualified_source_statement
+    from adaptive_document_agent.agent.retained_page_sources import RetainedPage,authored_message,authored_visible_copy
+
+    quote=BriefQuote(page=7,text='The research team found no significant sampling issue.')
+    desc='The research team saw a rate of 45%.' if unbound else 'The research team saw no significant sampling issue.'
+    item=QualifiedSourceCopy(scope='the review period',description=desc,quote=quote)
+    previous='For the review period, the source '+desc[:1].lower()+desc[1:]
+    main='The evaluation covers the sampling process.'
+    page=RetainedPage(title='Sampling',message=main+' '+previous,source_context=[item])
+    original=page.model_dump()
+    canonical=qualified_source_statement(item)
+    assert authored_message(page,[]) == authored_visible_copy(page,[]) == main+' '+canonical
+    for rendered in (previous,canonical):
+        stripped,parts=reported_source_components(main+' '+rendered,[quote],declared=[item])
+        assert parts == ([] if unbound else [canonical])
+        assert stripped == (main+' '+rendered if unbound else main)
+        assert reported_source_components(main+' '+rendered,[],declared=[item])[1] == []
+    assert page.model_dump()==original
+
+
 @pytest.mark.parametrize('description,scope,extra_proof,accepted', [
     ('describes inventory held at June 30 as subsequently sold.',
      '2024-06-30 and 2024-10-31','',True),
@@ -242,6 +279,16 @@ def test_worded_axis_category_needs_exact_modifier_and_source_product_noun(
      'Inventories are stated at the lower of cost and net realizable value in accordance with IAS 2.',True),
     ('describes IAS 2 lower-of-cost/NRV tests',
      'Inventories are stated at the lower of cost and net realizable value in accordance with IAS 2.',True),
+    ('describes IAS 2 measurement at the lower of cost and net realizable value',
+     'In accordance with IAS 2, inventories are stated at the lower of cost and net realizable value.',True),
+    ('describes IAS 2 measurement at the lower of cost and net realizable value',
+     'IAS 2 is referenced in the accounting policy.',False),
+    ('describes IAS 3 measurement at the lower of cost and net realizable value',
+     'IAS 2 applies to measurement at the lower of cost and net realizable value.',False),
+    ('describes IAS 2 measurement at the lower of cost and net realizable value with an unbound 4% provision',
+     'In accordance with IAS 2, inventories are stated at the lower of cost and net realizable value.',False),
+    ('describes IAS 2 measurement at 30 days',
+     'IAS 2 is cited. Items were held for 30 days.',False),
     ('describes IAS 2: lower cost/NRV; tests assess recoverability',
      'Inventories are stated at the lower of cost and net realizable value in accordance with IAS 2.',True),
     ('describes IAS 2: lower cost/NRV; inventories aged 30 days',

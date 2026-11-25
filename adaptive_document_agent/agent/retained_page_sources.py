@@ -1,5 +1,6 @@
 """Bind source-authored analysis pages to their calculation and companion rows."""
 import re
+from typing import NamedTuple
 
 from pydantic import BaseModel, ConfigDict, Field,model_serializer,model_validator
 from adaptive_document_agent.models.executive_brief import BriefQuote
@@ -29,6 +30,10 @@ def authored_copy_limit(requirements):
 
 
 SOURCE_SHARE_RULES = (
+    'When the source describes a change in composition, name both the category and the '
+    'whole it belongs to, including in shortened copy. For example, "[category] made up a '
+    'larger share of [population]" preserves a change in mix. A rise in the amount of that '
+    'category alone does not establish a change in mix. '
     'For a material share of a population, check this item’s own literal passage. If it states '
     'that a majority was affected, or explicitly gives a share clearly above half for that same '
     'population and event, preserve the source-reported majority in words. Keep the exact '
@@ -175,11 +180,9 @@ PERIOD_AND_ASSURANCE_RULES = (
     'Keep the stated role without adding a favorable or adverse judgment the source '
     'does not make. Preserve a material composition shift toward or away from a source-defined '
     'category in attributed words, with its literal interval and exact supporting quotation. '
-    'When that composition has no eligible numeric row, use the qualitative nominal form '
-    '"The source describes a shift toward [category] during [literal source scope]" '
-    '(or "away from" when supported). Do not recast it as "the share increased/decreased", '
-    'which asserts a separate unbound measurement comparison. The source meaning and '
-    'material adverse effect must remain; only its numerical-predicate framing changes. '
+    'In source_context, describe the category as making up a larger or smaller share of the '
+    'named population when its own literal proof establishes that change. Keep any unbound '
+    'percentages out of the description and the main quantitative message. '
     'Do not replace that shift with a generic mention of adverse context. Numeric comparisons '
     'require bound rows and explicit endpoints; distinguish them from a literally supported '
     'source-attributed qualitative explanation. Do not turn prose-only factors into additional '
@@ -397,7 +400,13 @@ def retained_context_citations(result):
             for d in selection.decisions if d.decision == 'include'}
 
 
-def _bound_authored_context(result, plan):
+class BoundAuthoredContext(NamedTuple):
+    message: str
+    reported_paragraphs: list[str]
+    message_proofs: list[str]
+
+
+def bound_authored_context(result, plan):
     """Recognize exact compiled model copy; this is never semantic approval.
 
     Generic chart-share retrieval cannot interpret source-only qualifications.
@@ -414,13 +423,16 @@ def _bound_authored_context(result, plan):
     selection = RetainedAnalysisSelection.model_validate(record['selection'])
     linked = findings(result, allow_new_copy=True)
     bound = {}
+    proofs = {}
     for decision in selection.decisions:
         if decision.decision != 'include' or decision.page is None:
             continue
         insight, primary, _ = linked[decision.insight_id]
         bound[decision.insight_id] = page_bindings(decision.page, insight, primary, context, result,
                                                  with_source_context=True)
-    return {s.id:bound[s.insight_ids[0]][3] for s in plan.slides if s.slide_type == 'analysis' and len(s.insight_ids) == 1
+        proofs[decision.insight_id] = [q.text for q in decision.page.context_evidence]
+    return {s.id:BoundAuthoredContext(s.message, bound[s.insight_ids[0]][3], proofs[s.insight_ids[0]]) for s in plan.slides
+            if s.slide_type == 'analysis' and len(s.insight_ids) == 1
             and s.insight_ids[0] in bound
             and (s.title, s.message, set(s.observation_ids)) == bound[s.insight_ids[0]][:3]
             and (not bound[s.insight_ids[0]][3] or
@@ -428,13 +440,36 @@ def _bound_authored_context(result, plan):
 
 
 def bound_authored_slide_ids(result,plan):
-    return set(_bound_authored_context(result,plan))
+    return set(bound_authored_context(result,plan))
 
 
-def reported_context_bullet_positions(result,plan):
+def bound_message_horizons(plan, authored_context):
+    """Mask only matching future durations in the exact proof-bound main copy."""
+    messages = {}
+    for slide in plan.slides:
+        if slide.id not in authored_context:
+            continue
+        proved = authored_context[slide.id]
+        if proved.message != slide.message:
+            continue
+        masked = _mask_proved_horizons(slide.message, proved.message_proofs)
+        if masked != slide.message:
+            messages[slide.id] = masked
+    return messages
+
+
+def _mask_proved_horizons(text, proofs):
+    from .source_context_periods import mask_source_horizons
+    for proof in proofs:
+        text = mask_source_horizons(text, proof)
+    return text
+
+
+def reported_context_bullet_positions(result,plan, *, checked_context=None):
     """Only exact compiled, source-bound qualitative quotations have no row scope."""
-    return {sid:set(range(1,len(parts)+1)) for sid,parts in _bound_authored_context(result,plan).items()
-            if parts}
+    context = bound_authored_context(result, plan) if checked_context is None else checked_context
+    return {sid:set(range(1, len(value.reported_paragraphs) + 1)) for sid, value in context.items()
+            if value.reported_paragraphs}
 
 
 def retained_context_dates(result, *, checked_citations=None):
@@ -493,8 +528,8 @@ def page_sources(result, linked, *, include_neighbors=True):
 
 def authored_message(page,periods):
     from adaptive_document_agent.services.calendar_claims import bound_period_dates
-    from .reported_source_context import qualified_source_statement
-    copy=bound_period_dates(page.message,periods)
+    from .reported_source_context import normalize_embedded_source_subjects,qualified_source_statement
+    copy=normalize_embedded_source_subjects(bound_period_dates(page.message,periods),page.source_context,periods)
     for item in page.source_context:
         statement=bound_period_dates(qualified_source_statement(item),periods)
         if statement not in copy:
@@ -505,16 +540,16 @@ def authored_message(page,periods):
 def authored_visible_copy(page,periods):
     """Measure the same scope grouping the audience sees."""
     from adaptive_document_agent.services.calendar_claims import bound_period_dates
-    from .reported_source_context import source_context_paragraphs,source_context_scope_prefixes
+    from .reported_source_context import normalize_embedded_source_subjects,source_context_paragraphs,source_context_scope_prefixes
 
-    message=bound_period_dates(page.message,periods)
+    message=normalize_embedded_source_subjects(bound_period_dates(page.message,periods),page.source_context,periods)
     scopes=source_context_scope_prefixes(page.source_context,periods)
     statements=[statement for statement in scopes if statement not in message]
     return ' '.join([message,*source_context_paragraphs(statements,scope_prefixes=scopes)])
 
 
 def page_bindings(page, insight, primary, context, result, *, _copy_errors=None,
-                  with_source_context=False):
+                  with_source_context=False, rendered_descriptions=None):
     """Bind provenance first; optionally collect copy failures for combined diagnostics."""
     from .presentation_insight_recovery import _numeric_support
     from adaptive_document_agent.services.calendar_claims import bound_period_dates, literal_calendar_dates
@@ -559,7 +594,8 @@ def page_bindings(page, insight, primary, context, result, *, _copy_errors=None,
                 f'Rejected declaration: {item.model_dump(mode="json")}. Scope binding feedback: {scope_hint}')
     for field, text in [('title', title), ('message', copy)]:
         diagnostics = []
-        if not _numeric_support(text, obs, diagnostics=diagnostics, context_dates=context_dates,
+        checked = _mask_proved_horizons(text, (q.text for q in page.context_evidence)) if field == 'message' else text
+        if not _numeric_support(checked, obs, diagnostics=diagnostics, context_dates=context_dates,
                                 context_day_counts=day_counts):
             error = (f'{insight.id}.{field}: amount, date or rate outside its bound evidence: {text}. '
                 f'Details: {diagnostics}. Exact quoted day-count parameters: {sorted(day_counts)}. '
@@ -591,9 +627,14 @@ def page_bindings(page, insight, primary, context, result, *, _copy_errors=None,
             _copy_errors.append(f'{insight.id}.{field}: {exc}')
     from .reported_source_context import source_context_paragraphs,source_context_scope_prefixes
     scopes=source_context_scope_prefixes(page.source_context,[*periods,*context_dates])
-    paragraphs=source_context_paragraphs(reported,scope_prefixes=scopes)
+    rendered={} if rendered_descriptions is not None else None
+    paragraphs=source_context_paragraphs(reported,scope_prefixes=scopes,rendered_statements=rendered)
     if len(' '.join([copy,*paragraphs]))>limit:
         raise ValueError(f'{insight.id}: complete authored copy exceeds the {limit}-character page limit')
+    if rendered_descriptions is not None:
+        for i,item in enumerate(page.source_context):
+            key=bound_period_dates(qualified_source_statement(item),[*periods,*context_dates])
+            rendered_descriptions[f'context-{i}']=rendered[key]
     return (title,copy,ids,paragraphs) if with_source_context else (title,copy,ids)
 
 

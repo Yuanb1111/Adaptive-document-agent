@@ -37,6 +37,77 @@ def test_missing_ids_compile_only_from_the_independent_models_complete_priority_
     assert review['missing_insight_ids']==['indispensable'] and review['page_issues']==[]
 
 
+@pytest.mark.parametrize('slot', ['context-1', 'context-01', None])
+def test_owned_review_routes_description_correction_and_rechecks_full_evidence(monkeypatch, slot):
+    from adaptive_document_agent.agent import retained_analysis, retained_source_authoring_parallel
+    from adaptive_document_agent.agent.reported_source_context import QualifiedSourceCopy
+    from tests.test_retained_description_fidelity import accounts
+
+    result, _, selection = fixture()
+    owner, = selection.ordered_insight_ids
+    page = selection.decisions[0].page
+    proofs = ['Management describes how the orders are received.',
+              'The company reports a larger share of orders arriving early.']
+    result.document.pages[0].text += '\n' + '\n'.join(proofs)
+    page.source_context = [
+        QualifiedSourceCopy(scope='orders', description='Describes how orders are received.',
+                            quote=dict(page=234, text=proofs[0])),
+        QualifiedSourceCopy(scope='order timing', description='Reports earlier orders.',
+                            quote=dict(page=234, text=proofs[1])),
+    ]
+    expected = page.model_copy(deep=True)
+    replacement = 'Reports a larger share of orders arriving early.'
+    expected.source_context[1].description = replacement
+    original_inputs = result.model_dump(include={'document', 'observations', 'insights', 'analysis_results'})
+    objection = dict(insight_id=owner, reason='Clarify that the share of orders changed.')
+    if slot is not None:
+        objection['description_edits'] = {slot: objection['reason']}
+
+    scoped = slot == 'context-1'
+    writer_reply = {'context-1': replacement} if scoped else dict(
+        message=None, source_context=None, source_context_edits={'context-1': replacement},
+        companion_ids=[], context_evidence=[])
+    llm = gateway([
+        dict(accepted=True, prioritized_insight_ids=[], reason='Selection covers the source.'),
+        dict(accepted=False, page_issues=[objection], reason='The order mix needs clarification.'),
+        writer_reply, dict(accepted=True, reason='The revised order mix matches the source.'), accounts(expected),
+    ])
+    monkeypatch.setattr(type(llm), 'discovery_workers', property(lambda self: 8))
+    monkeypatch.setattr(retained_source_authoring_parallel, 'select_owned_source_pages', lambda *args: selection)
+
+    retained_analysis.select_retained_analysis(llm, result)
+
+    assert [entry['operation'] for entry in llm.usage] == [
+        'RetainedPriorityCoverage', 'RetainedSelectionCoverage',
+        'RetainedDescriptionRevision' if scoped else 'RetainedPageRevisions', 'RetainedSelectionCoverage',
+        'RetainedDescriptionFidelity']
+    selected, = retained_analysis.selected_record(result)['selection']['decisions']
+    assert selected['page'] == expected.model_dump(mode='json', exclude_none=True)
+    assert result.model_dump(include=set(original_inputs)) == original_inputs
+    packets = [decode_records(json.loads(call[-1]['content'].split('\n', 1)[1].rsplit('\n', 1)[0]))
+               for call in llm.client.calls]
+    _, before, writer, after, fidelity = packets
+    assert fidelity['context-1']['description'] == replacement
+    assert before['source_context_edit_slots'][owner] == {
+        'context-0': {'scope': 'orders', 'description': 'Describes how orders are received.'},
+        'context-1': {'scope': 'order timing', 'description': 'Reports earlier orders.'},
+    }
+    assert after['source_context_edit_slots'][owner]['context-1']['description'] == replacement
+    assert 'revised_source_descriptions' not in before
+    assert after['revised_source_descriptions'] == {
+        owner: {'context-1': {'audience_text': 'For order timing, the source reports a larger share of orders arriving early.',
+                              'source_pages': [234]}}}
+    if scoped:
+        assert list(writer['addressed_descriptions']) == ['context-1']
+        assert writer['addressed_descriptions']['context-1']['literal_proof'] == [dict(page=234, text=proofs[1])]
+    else:
+        assert owner in writer['pages_to_correct']
+    assert before['retained_proofs'] == after['retained_proofs']
+    assert before['source_pages'] == after['source_pages']
+    assert before['proposed_selection']['decisions'][0]['page']['source_context'][1]['description'] == 'Reports earlier orders.'
+    assert after['proposed_selection']['decisions'][0]['page']['source_context'][1]['description'] == replacement
+
+
 @pytest.mark.parametrize('reject_priority',[False,True])
 def test_fast_initial_review_requires_priority_verdict_then_every_owned_source_verdict(monkeypatch,reject_priority):
     from adaptive_document_agent.agent import retained_copy_review
@@ -116,3 +187,62 @@ def test_owned_coverage_builds_evidence_once_per_round_and_preserves_every_revie
             assert requests[iid]==source_first_wire_payload(copy_review_payload(expected[iid]))
             assert requests[iid]['source_pages']==context['source_pages']
             assert audit['copy_review_packet']['wire_fingerprint']==fingerprint(requests[iid])
+
+
+@pytest.mark.parametrize('accept_last', [True, False])
+def test_last_unresolved_owner_in_a_reviewed_batch_gets_one_final_correction(monkeypatch, accept_last):
+    from adaptive_document_agent.agent import (
+        coverage_verdict_format, retained_analysis, retained_page_revision, retained_source_authoring_parallel,
+    )
+    from adaptive_document_agent.agent.retained_page_sources import RetainedPage
+
+    result, _, selection = fixture()
+    owner = selection.ordered_insight_ids[0]
+    sibling = 'another-finding'
+    result.insights.append(result.insights[0].model_copy(update={'id': sibling}))
+    selection.decisions.append(selection.decisions[0].model_copy(deep=True, update={'insight_id': sibling}))
+    selection.ordered_insight_ids.append(sibling)
+    monkeypatch.setattr(retained_source_authoring_parallel, 'select_owned_source_pages', lambda *args: selection)
+
+    revisions = []
+    wording = ['The source reports revenue.', 'The company reports revenue.',
+               'The report presents revenue.', 'The issuer discloses revenue.']
+
+    def revise(gateway, result, packet, aliases, draft, issues, **kwargs):
+        revised = {}
+        for decision in draft['decisions']:
+            iid = decision['insight_id']
+            if iid in issues:
+                revised[iid] = RetainedPage.model_validate({**decision['page'], 'message': wording[len(revisions)]})
+        revisions.append(revised)
+        return revised
+
+    def verdict(gateway, messages, schema, audit, *args, **kwargs):
+        audit['output_attempts'] = []
+        packet = decode_records(json.loads(messages[-1]['content'].split('\n', 1)[1].rsplit('\n', 1)[0]))
+        if not packet['copy_review_ids']:
+            return schema(accepted=True, prioritized_insight_ids=[], reason='The selected findings cover the source.')
+        iid, = packet['copy_review_ids']
+        accepted = (iid == sibling and len(revisions) == 3) or (len(revisions) == 4 and accept_last)
+        return schema(accepted=accepted, reason='Checked this finding against the source.',
+                      page_issues=[] if accepted else [dict(insight_id=iid, reason='Clarify the attribution.')])
+
+    monkeypatch.setattr(retained_page_revision, 'revise_retained_pages', revise)
+    monkeypatch.setattr(coverage_verdict_format, 'complete_coverage_verdict', verdict)
+    gateway = SimpleNamespace(discovery_workers=8)
+    if accept_last:
+        retained_analysis.select_retained_analysis(gateway, result)
+        final_draft = retained_analysis.selected_record(result)['selection']
+    else:
+        with pytest.raises(ValueError, match='Clarify the attribution'):
+            retained_analysis.select_retained_analysis(gateway, result)
+        assert retained_analysis.selected_record(result) is None
+        final_draft = json.loads(result.validation_warnings[-1].message)['rejected_draft']
+
+    assert [set(batch) for batch in revisions] == [{owner, sibling}] * 3 + [{owner}]
+    final_pages = {decision['insight_id']: decision['page'] for decision in final_draft['decisions']}
+    assert final_pages[sibling] == revisions[2][sibling].model_dump(mode='json', exclude_none=True)
+    assert final_pages[owner] == revisions[3][owner].model_dump(mode='json', exclude_none=True)
+    reviews = [json.loads(w.message) for w in result.validation_warnings if w.code == 'retained_selection_coverage']
+    assert reviews[-1]['copy_review_ids'] == [owner]
+    assert reviews[-1]['review']['accepted'] is accept_last

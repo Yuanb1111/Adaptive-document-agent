@@ -36,3 +36,7 @@ def test_negative_calculated_cagr_compiles_and_cannot_become_positive():
     slide.message=slide.message.replace('-7.3%','7.3%')
     with pytest.raises(ValueError,match='unsupported numeric claims|contradict'):
         PresentationPlanValidator().validate(plan,result)
+    # Matching edited copies cannot reuse approval of the actual signed page.
+    from adaptive_document_agent.validation.narrative_plan_validator import validate_narrative_plan
+    plan.themes[0].rationale=slide.message
+    assert any('unsupported numeric claims' in error for error in validate_narrative_plan(plan,result))

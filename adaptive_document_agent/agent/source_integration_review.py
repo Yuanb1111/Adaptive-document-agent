@@ -361,6 +361,7 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
                 review=dict(verdicts=[v.model_dump(mode='json') for v in scoped_retry[0].values()])))
         from .source_integration_copy import overlong_additions, shorten_additions, revise_reopened_additions
         pending_copy = None
+        prior_copy_fields = None
         semantic_corrections = format_corrections = 0
         length_progress_used = False
         # The initial proposal can get a schema correction. Later semantic
@@ -374,14 +375,20 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
                 if attempt == 0 and scoped_retry is not None:
                     draft = revise_reopened_additions(gateway, messages, prior_review[0], scoped_retry[1],
                                                       len(brief.items), entry)
+                elif attempt and (append_sections := audit['attempts'][-2].get('append_only_sections')):
+                    from .source_integration_append import append_reviewed_findings
+                    draft = append_reviewed_findings(gateway, prior_review[0], prior_review[1], append_sections,
+                                                     len(brief.items), checks, pages, entry)
                 elif attempt and (edit_sections := audit['attempts'][-2].get('reopened_sections')
                                   or audit['attempts'][-2].get('capacity_repair_sections')):
                     draft = revise_reopened_additions(gateway, messages, prior_review[0], edit_sections,
                                                       len(brief.items), entry)
                 elif pending_copy is not None:
                     draft = shorten_additions(gateway, messages, SourceIntegrationDraft, pending_copy,
-                        entry, len(brief.items), sentence_compress=length_progress_used)
+                        entry, len(brief.items), sentence_compress=length_progress_used,
+                        prior_copy_fields=prior_copy_fields)
                     pending_copy = None
+                    prior_copy_fields = None
                 elif attempt and scoped_retry is not None and prior_review is not None:
                     # The retry is already scoped to existing additions. Its
                     # source/meaning correction must keep that same bounded transport
@@ -411,6 +418,14 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
                     entry['submitted_draft'] = submitted
                 merged = _validate(draft, result, brief, checks)
                 review_context = merged_review_context(context, draft, merged)
+                if entry.get('appended_source_items'):
+                    # The author's coverage map is not a source verdict. Judge
+                    # each prior obligation afresh on the exact amended display.
+                    review_context['previous_rejected_source_verdicts'] = [
+                        v.model_dump(mode='json') for v in prior_review[1].values() if not v.accepted]
+                    review_context['source_recheck'] = ('Verify every previously identified omission and '
+                        'carry-forward qualification against the supplied original and amended audience text '
+                        'or table cells. Check every new assertion independently and report any residual gap.')
                 entry['resolved_source_bindings'] = review_context['resolved_source_bindings']
                 review = review_output(gateway, [
                     {'role': 'system', 'content': 'Independently judge every proposed source disposition and added '
@@ -420,6 +435,9 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
                      'do not carry the meaning. Page citation alone is not coverage. Return exactly one verdict per '
                      'section_id, with a source-specific reason; assess all additions bound to that section. Do not '
                      'accept on the writer\'s assurance or infer comprehensive document review. '
+                     'Check whether each statement is limited to a historical reporting period or effective '
+                     'date, and whether an obligation is triggered by an interest of the named party or a '
+                     'related party. Preserve these material time and actor limits in the audience copy. '
                      'For each rejected section, say which specific source-supported claims and qualifications '
                      'in its current additions must survive alongside the corrections. Describe the exact '
                      'predicate governed by an omitted trigger, limit or exception. An editor needs both the '
@@ -450,6 +468,10 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
                         # The same final bounded patch covers all current
                         # rejections; passing sections remain immutable.
                         entry['reopened_sections'] = sorted(rejected)
+                    elif semantic_corrections == 1 and prior_review is not None and entry.get('capacity_repair_sections'):
+                        from .source_integration_append import can_append_after_review
+                        if can_append_after_review(prior_review, draft, verdicts, rejected, len(brief.items)):
+                            entry['append_only_sections'] = sorted(rejected)
                     prior_review = draft, verdicts
                     raise ValueError('; '.join(v.reason for v in verdicts.values() if not v.accepted))
                 audit.update(draft=entry['draft'], review=entry['review'], fingerprint=_fingerprint(result, merged))
@@ -460,13 +482,19 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
                 entry['error'] = str(exc)
                 if isinstance(exc, SourceReviewContractError):
                     raise
-                if 'targeted_format_failure' in entry and 'review' not in entry:
+                if ('targeted_format_failure' in entry or 'append_only_operation' in entry) and 'review' not in entry:
                     raise  # A failed targeted format correction cannot reopen the full writer.
                 if isinstance(exc, LLMStructuredOutputError):
                     if pending_copy is not None and not length_progress_used:
                         from .source_integration_copy import shorter_copy_retry
                         shorter = shorter_copy_retry(exc, pending_copy)
                         if shorter is not None:
+                            # The scoped response changes text only. Keep the original
+                            # proposal's exact wording paired with these same bindings.
+                            original, failures = pending_copy
+                            prior_copy_fields = {
+                                f'addition_{index}_{field}': original['additions'][index][field]
+                                for failure in failures for _, index, field in [failure['loc']]}
                             pending_copy = shorter
                             length_progress_used = True
                             entry['length_progress_retry'] = True
@@ -505,7 +533,7 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
                     raise  # A format correction cannot gain a new source-repair route.
                 # A format-only correction has not yet used the single
                 # source/meaning correction for a complete proposal.
-                if semantic_corrections and not entry.get('reopened_sections'):
+                if semantic_corrections and not entry.get('reopened_sections') and not entry.get('append_only_sections'):
                     raise
                 semantic_corrections += 1
                 format_corrections = 0

@@ -13,7 +13,7 @@ _YEAR_COMPARISON=re.compile(rf'(?<![\w-]){_YEAR}\s+compared\s+with\s+{_YEAR}'
 _PROVED_YEAR_COMPARISON=re.compile(r'\b(?:in|during|for)\s+(?P<pair>'+_YEAR_COMPARISON.pattern+r')',re.I)
 _CAUSAL_PREDICATE=r'(?:contributed|contributes|affected|affects|supported|supports|led|leads)'
 _SOURCE_SINCE_YEAR=re.compile(rf'\bsince\s+(?P<year>{_YEAR})'
-    rf'(?=\s*(?:[,.;:]|$|\b{_CAUSAL_PREDICATE}\b))',re.I)
+    rf'(?=\s*(?:[,.;:]|$|\b{_CAUSAL_PREDICATE}\b)|\s+(?:we|they|it|the)\b)',re.I)
 _SOURCE_IN_YEAR_BEFORE_PREDICATE=re.compile(rf'\bin\s+(?P<year>{_YEAR})'
     rf'(?=\s+{_CAUSAL_PREDICATE}\b)',re.I)
 _LEADING=re.compile(rf'(?:^|(?<=;))\s*(?:(?:For|Within|During|In)\s+)?(?P<years>{_YEARS})'

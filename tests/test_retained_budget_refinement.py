@@ -1,4 +1,6 @@
 from copy import deepcopy
+import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -36,7 +38,8 @@ def native_fixture(monkeypatch):
         slides = [s for s in result.presentation_plan.slides if s.slide_type == 'analysis']
         result.presentation_export_trace = [dict(planned_slide_id=s.id, slide_numbers=[n + 2])
                                             for n, s in enumerate(slides)]
-        return object(), dict(body=1 + len(slides), analysis=len(slides), introduction=0)
+        deck = SimpleNamespace(slides=[SimpleNamespace(shapes=[]) for _ in range(1 + len(slides))])
+        return deck, dict(body=1 + len(slides), analysis=len(slides), introduction=0)
     def require(_deck, result):
         if sum(s.slide_type == 'analysis' for s in result.presentation_plan.slides) > 1:
             raise ValueError('Native body has three slides; maximum is two.')
@@ -58,6 +61,52 @@ def test_model_owned_native_reduction_preserves_all_source_and_kept_copy_and_nee
     assert len(retained.selected_record(result)['selection']['ordered_insight_ids']) == 1
     with pytest.raises(ValueError, match='Retained-analysis evidence'):
         require_topic_coverage(result)
+
+
+def test_retained_budget_reports_actual_distinct_chart_pages_and_original_target(monkeypatch):
+    from pptx import Presentation
+    from pptx.chart.data import CategoryChartData
+    from pptx.enum.chart import XL_CHART_TYPE
+    from pptx.util import Inches
+    from adaptive_document_agent.agent import presentation_budget_refinement as native
+    result = prepared()
+    # A different chart target would change the model's choice, never this measurement.
+    request = 'Retain one analytical chart page within the report cap.'
+    result.profile.report_requirements.original_request = request
+    ids = [s.id for s in result.presentation_plan.slides if s.slide_type == 'analysis']
+    deck = Presentation()
+    for number in range(1, 5):
+        page = deck.slides.add_slide(deck.slide_layouts[6])
+        for _ in range({1: 1, 2: 2}.get(number, 0)):
+            data = CategoryChartData()
+            data.categories = ['Period']
+            data.add_series('Metric', [1])
+            page.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, Inches(1), Inches(1),
+                                  Inches(2), Inches(2), data)
+
+    native_fixture(monkeypatch)
+    projected_measure = native.measure
+    def measure(candidate):
+        if candidate is not result:
+            return projected_measure(candidate)
+        result.presentation_export_trace = [
+            dict(planned_slide_id=ids[0], slide_numbers=[2]),
+            dict(planned_slide_id=ids[0], slide_numbers=[2, 3]),
+            dict(planned_slide_id=ids[1], slide_numbers=[4])]
+        return deck, dict(body=4, analysis=3, introduction=0)
+    monkeypatch.setattr(native, 'measure', measure)
+    llm = gateway([proposal(result)])
+    assert refine_retained_budget(llm, result)
+    prompt = llm.client.calls[0]
+    context = json.loads(prompt[-1]['content'].split('<UNTRUSTED_DOCUMENT_CONTENT>', 1)[1]
+                         .split('</UNTRUSTED_DOCUMENT_CONTENT>', 1)[0])
+    assert context['requirements']['original_request'] == request
+    assert context['measured_counts']['analysis'] == 3
+    assert context['native_chart_slide_numbers_outside_candidates'] == [1]
+    first, second = context['candidates']
+    assert (first['physical_slides'], first['native_chart_pages']) == (2, 1)
+    assert (first['physical_slide_numbers'], first['native_chart_slide_numbers']) == ([2, 3], [2])
+    assert (second['physical_slides'], second['native_chart_pages']) == (1, 0)
 
 
 def test_two_unfitting_proposals_never_truncate_or_apply_a_selection(monkeypatch):

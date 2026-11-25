@@ -68,6 +68,10 @@ def test_incomplete_ambiguous_or_over_capacity_replies_cannot_supply_a_patch(sha
         wire = json.dumps({'addition_1_text': dict(complete=boundary_clauses(), concise=['Short.'],
                                                   third=['Foreign variant.'])})
     outputs = [response(wire)]
+    if shape == 'both_over':
+        # Both author-supplied versions exceed the measured limit. A targeted
+        # follow-up with no replacement clauses still cannot produce a patch.
+        outputs.append(response('{}'))
     if shape == 'truncated':
         outputs = [response(wire[:-1], finish='length') for _ in range(2)]
     with pytest.raises((ValueError, LLMStructuredOutputError)):
