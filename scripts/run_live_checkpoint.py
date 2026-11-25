@@ -211,7 +211,7 @@ if __name__ == '__main__':
     parser.add_argument('--analysis-timeout-seconds', type=float, help='One shared attempt budget, 60–7200 seconds; default ANALYSIS_TIMEOUT_SECONDS or 900')
     parser.add_argument('--workers', type=int, choices=range(1, 9), help='Shared cloud request limit (1–8); local and stateful clients remain serial')
     parser.add_argument('--openai-fast-mode', action=argparse.BooleanOptionalAction, default=None,
-                        help='Request Fast for direct OpenAI GPT-6 Luna calls at twice the Standard token price. '
+                        help='Request Fast for supported models on the direct OpenAI API. Pricing varies by model. '
                              'Use --no-openai-fast-mode for the project default. Overrides OPENAI_FAST_MODE.')
     parser.add_argument('--brief-findings', type=int, choices=range(3, 8), help='Initial material brief finding capacity (3–7), preserving reserved supplementary capacity')
     parser.add_argument('--skip-probe', action='store_true', help='Reuse an already verified connection; all analysis requests remain real')

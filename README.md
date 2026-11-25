@@ -29,7 +29,7 @@ Use the sidebar for a single session, or copy [.env.example](.env.example) to `.
 | Local Only | `ollama` | Start Ollama with an installed model and set `LLM_BASE_URL=http://localhost:11434`. |
 | Local Only | `openai_compatible` | Start a local server such as vLLM and set its endpoint, e.g. `LLM_BASE_URL=http://localhost:8000/v1`. |
 
-For direct OpenAI GPT-6 Luna requests, choose **Fast** under **GPT-6 Luna API speed** or set `OPENAI_FAST_MODE=true`. Fast uses the same model and reasoning settings at twice the Standard token price. **Project default** follows your OpenAI project's speed setting, normally Standard. [OpenAI model pricing](https://developers.openai.com/api/docs/models/gpt-6-luna)
+Click the lightning bolt beside **Model** to turn Fast on for supported OpenAI models. Click it again to use your project's default speed. Set `OPENAI_FAST_MODE=true` to start with Fast enabled. Fast pricing varies by model. [OpenAI Fast pricing](https://openai.com/api-fast-mode/)
 
 Set `LOCAL_ONLY=true` for either local configuration. Model requests are restricted to loopback endpoints, and a local failure stops the run. Keep API keys out of Git. For a public Streamlit deployment, set `PUBLIC_DEPLOYMENT=true` so each visitor supplies their own key. [Deployment details](docs/FOURIER_STREAMLIT_UI.md#deployment)
 

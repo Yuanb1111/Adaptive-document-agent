@@ -75,7 +75,7 @@ def test_deepseek_live_models_are_loaded_from_models_endpoint(monkeypatch):
 class SidebarUI:
     sidebar = nullcontext()
 
-    def container(self):
+    def container(self, **kwargs):
         return nullcontext()
 
     def __init__(self, provider: str):
@@ -270,7 +270,7 @@ def test_manual_model_is_available_to_stages_and_main_model_clears_override(monk
     assert "gpt-4o" in ui.stage_options["Discovery model"]
 
 
-def test_luna_speed_selection_follows_the_main_or_stage_route(monkeypatch):
+def test_fast_bolt_switches_once_and_follows_the_main_or_stage_route(monkeypatch):
     from streamlit.testing.v1 import AppTest
     from adaptive_document_agent.ui.app import _analysis_scope_key
 
@@ -288,15 +288,23 @@ st.session_state["settings"] = render_sidebar(st, public_deployment=False)
 
     original = app.session_state["settings"]
     assert not original.openai_fast_mode
-    selected = choose("openai_luna_speed", "Fast")
+    bolt = lambda: app.button(key="openai_fast_button")
+    assert bolt().label == "Enable Fast mode" and not bolt().disabled
+    bolt().click().run()
+    selected = app.session_state["settings"]
     assert selected.openai_fast_mode and selected.simple_task_reasoning == original.simple_task_reasoning
     assert _analysis_scope_key(b"pdf", "", original) == _analysis_scope_key(b"pdf", "", selected)
-    other = choose("model_select_openai", "gpt-6.2-sol")
-    assert not other.openai_fast_mode
-    assert "openai_luna_speed" not in {widget.key for widget in app.selectbox}
-    choose("stage_model_openai_report", "gpt-6-luna")
-    selected = choose("openai_luna_speed", "Fast")
-    assert selected.openai_fast_mode and selected.stage_models["report"] == "gpt-6-luna"
+    assert bolt().label == "Turn off Fast mode"
+    assert choose("model_select_openai", "gpt-6.2-sol").openai_fast_mode
+    bolt().click().run()
+    assert not app.session_state["settings"].openai_fast_mode
+    choose("model_select_openai", "Enter a model ID manually…")
+    app.text_input(key="custom_model_openai").input("gpt-5-nano").run()
+    assert bolt().disabled and not app.session_state["settings"].openai_fast_mode
+    choose("stage_model_openai_report", "gpt-6.2-sol")
+    assert not bolt().disabled and "only to these stages: report" in bolt().help
+    bolt().click().run()
+    assert app.session_state["settings"].openai_fast_mode
 
 
 def test_public_session_requires_visitor_to_opt_in_to_fast(monkeypatch):
@@ -309,5 +317,5 @@ import streamlit as st
 from adaptive_document_agent.ui.sidebar import render_sidebar
 st.session_state["settings"] = render_sidebar(st, public_deployment=True)
 """, default_timeout=15).run()
-    assert app.selectbox(key="openai_luna_speed").value == "Project default"
+    assert app.button(key="openai_fast_button").label == "Enable Fast mode"
     assert not app.session_state["settings"].openai_fast_mode

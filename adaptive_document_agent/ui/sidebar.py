@@ -29,6 +29,31 @@ def _session_state(st) -> MutableMapping:
     return state if isinstance(state, MutableMapping) else {}
 
 
+def _fast_mode_button(st, settings: LLMSettings, default: bool) -> bool:
+    state = _session_state(st)
+    main_supported = supports_openai_fast_mode(settings.provider, settings.base_url, settings.model)
+    supported_stages = [stage for stage, model in settings.stage_models.items()
+                        if supports_openai_fast_mode(settings.provider, settings.base_url, model)]
+    available = main_supported or bool(supported_stages)
+    enabled = available and state.get("openai_fast_enabled", default)
+    if available:
+        label = "Turn off Fast mode" if enabled else "Enable Fast mode"
+        scope = ("Applies to supported OpenAI models in this run." if main_supported
+                 else "Applies only to these stages: " + ", ".join(supported_stages) + ".")
+        help_text = f"{label}. Fast uses higher token rates. {scope}"
+    else:
+        label = "Fast mode unavailable"
+        help_text = "Fast is unavailable for the selected model and stage routes."
+
+    def change_speed():
+        state["openai_fast_enabled"] = not enabled
+
+    st.button(label, key="openai_fast_button", icon=":material/bolt:",
+              type="primary" if enabled else "secondary", help=help_text, disabled=not available,
+              on_click=change_speed, width=38)
+    return bool(enabled)
+
+
 def _available_models(
     st,
     provider: ProviderName,
@@ -142,7 +167,11 @@ def render_sidebar(st, *, public_deployment: bool | None = None) -> LLMSettings:
         if preferred_model and preferred_model not in models:
             models = [preferred_model, *models][:3]
         options = [*models, _MANUAL_MODEL]
+        show_speed = provider == ProviderName.OPENAI and mode_label != "Local Only"
         with model_controls:
+            model_row = (st.container(key="openai_model_row", horizontal=True, vertical_alignment="bottom",
+                                      gap=None) if show_speed else model_controls)
+        with model_row:
             selected_model = st.selectbox(
                 "Model",
                 options,
@@ -150,6 +179,7 @@ def render_sidebar(st, *, public_deployment: bool | None = None) -> LLMSettings:
                 key=model_key,
                 help="Up to three recent models; your configured selection is retained. Use manual entry for other IDs.",
             )
+        with model_controls:
             if selected_model == _MANUAL_MODEL:
                 model = st.text_input(
                     "Custom model ID",
@@ -214,20 +244,9 @@ def render_sidebar(st, *, public_deployment: bool | None = None) -> LLMSettings:
             timeout_seconds=defaults.timeout_seconds,
             temperature=defaults.temperature,
         )
-        if privacy != PrivacyMode.LOCAL_ONLY and any(
-            supports_openai_fast_mode(provider, base_url, routed_model)
-            for routed_model in (model, *stage_models.values())
-        ):
-            with model_controls:
-                speed = st.selectbox(
-                    "GPT-6 Luna API speed", ["Project default", "Fast"],
-                    index=int(defaults.openai_fast_mode and not public_deployment),
-                    key="openai_luna_speed",
-                    help="Project default normally uses Standard. Fast generates tokens faster at "
-                         "twice the Standard token price and uses the same reasoning settings. Applies to new "
-                         "GPT-6 Luna requests in this run.",
-                )
-            settings.openai_fast_mode = speed == "Fast"
+        if show_speed:
+            with model_row:
+                settings.openai_fast_mode = _fast_mode_button(st, settings, defaults.openai_fast_mode and not public_deployment)
         if settings.is_local:
             st.success("Local model")
             if privacy == PrivacyMode.LOCAL_ONLY:

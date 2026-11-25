@@ -27,6 +27,16 @@ RECOMMENDED_MODELS: dict[ProviderName, tuple[str, ...]] = {
     ProviderName.MOCK: ("mock",),
 }
 
+# Chat Completions models in the Fast pricing table:
+# https://developers.openai.com/api/docs/pricing.md
+_OPENAI_FAST_MODELS = frozenset({
+    "gpt-6.2-astra", "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6.1-terra",
+    "gpt-6-astra", "gpt-6-sol", "gpt-6-luna",
+    "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
+    "gpt-5.4-mini", "gpt-5.2", "gpt-5.1", "gpt-5", "gpt-5-mini",
+    "gpt-4.1", "gpt-4.1-mini", "gpt-4o", "gpt-4o-mini", "o3",
+})
+
 _NON_TEXT_MARKERS = (
     "audio",
     "embedding",
@@ -47,11 +57,18 @@ class ModelCatalogError(RuntimeError):
     """A model catalog could not be retrieved or parsed."""
 
 
+def openai_model_family(model: str) -> str:
+    """Identify an OpenAI alias or its dated snapshot, preserving variant suffixes."""
+    return re.sub(r"-\d{4}-\d{2}-\d{2}$", "", model.removeprefix("openai/"))
+
+
 def supports_openai_fast_mode(provider: ProviderName, base_url: str | None, model: str) -> bool:
-    """The direct OpenAI Luna route on which the app offers paid Fast processing."""
+    """Whether this Chat Completions route has a published OpenAI Fast rate."""
     return (provider == ProviderName.OPENAI
             and provider_endpoint(provider, base_url) == DEFAULT_ENDPOINTS[ProviderName.OPENAI]
-            and re.fullmatch(r"gpt-6-luna(?:-\d{4}-\d{2}-\d{2})?", model.removeprefix("openai/")) is not None)
+            and openai_model_family(model) in _OPENAI_FAST_MODELS
+            # This snapshot was shut down while the GPT-4o alias remained available.
+            and model.removeprefix("openai/") != "gpt-4o-2024-05-13")
 
 
 def recommended_models(provider: ProviderName) -> list[str]:

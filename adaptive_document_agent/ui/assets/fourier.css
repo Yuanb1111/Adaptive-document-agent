@@ -15,6 +15,19 @@
 [data-testid="stSidebar"] h2 { font-size: 1.05rem; letter-spacing: 0; }
 [data-testid="stSidebar"] [data-testid="stSidebarContent"] { padding-top: .6rem; }
 [data-testid="stSidebar"] [data-testid="stCaptionContainer"] { line-height: 1.5; }
+.st-key-openai_model_row { flex-wrap: nowrap; column-gap: 6px; }
+.st-key-openai_model_row .stSelectbox { min-width: 0; }
+.st-key-openai_fast_button button {
+  width: 38px; height: 38px; padding: 0; gap: 0; border-radius: 9px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.st-key-openai_fast_button button [data-testid="stMarkdownContainer"] {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip-path: inset(50%); white-space: nowrap;
+}
+.st-key-openai_fast_button button[kind="secondary"] { color: #575562; }
+.st-key-openai_fast_button button[kind="primary"] { background: #6222b8; color: #fff; }
+.st-key-openai_fast_button button:disabled { color: #97959d; }
 .fourier-brand { margin: 0 0 .3rem; transform: translateY(-5px); }
 .fourier-brand img { width: 180px; max-width: 100%; height: auto; display: block; }
 .fourier-brand-guide { display: inline-flex; align-items: center; min-height: 1.25rem; margin: .35rem 0 0 19px; color: #5F1BCE; font-size: .77rem; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }

@@ -10,6 +10,7 @@ from pydantic import BaseModel, SecretStr
 from adaptive_document_agent.services.llm import LLMGateway, LLMSettings, ProviderName
 from adaptive_document_agent.services.llm.exceptions import LLMTransportError
 from adaptive_document_agent.services.llm.litellm_provider import LiteLLMProvider
+from adaptive_document_agent.services.llm.model_catalog import supports_openai_fast_mode
 from adaptive_document_agent.services.llm.usage_export import usage_rows
 from adaptive_document_agent.utils.caching import DiskCache
 
@@ -53,7 +54,10 @@ def settings(**overrides):
     (ProviderName.OPENAI, None, "gpt-6-luna", False, None),
     (ProviderName.OPENAI, "https://api.openai.com/v1/", "openai/gpt-6-luna", True, "fast"),
     (ProviderName.OPENAI, None, "gpt-6-luna-2026-09-22", True, "fast"),
-    (ProviderName.OPENAI, None, "gpt-6.2-sol", True, None),
+    (ProviderName.OPENAI, None, "gpt-6.2-sol", True, "fast"),
+    (ProviderName.OPENAI, None, "gpt-6.2-astra", True, "fast"),
+    (ProviderName.OPENAI, None, "gpt-4.1-mini-2025-04-14", True, "fast"),
+    (ProviderName.OPENAI, None, "gpt-5-nano", True, None),
     (ProviderName.OPENAI, "https://proxy.invalid/v1", "gpt-6-luna", True, None),
     (ProviderName.OPENAI_COMPATIBLE, "https://proxy.invalid/v1", "gpt-6-luna", True, None),
 ])
@@ -69,6 +73,40 @@ def test_serialized_stage_requests(wire, provider, base_url, stage_model, enable
     assert row["requested_service_tier"] == expected
     assert row["service_tier"] == "priority"
     assert row["estimated_cost"] is None
+
+
+@pytest.mark.parametrize(("model", "temperature"), [
+    ("gpt-4.1", 0.7),
+    ("openai/gpt-6-luna-2026-09-22", None),
+])
+def test_fast_switch_changes_only_delivery_on_the_wire(wire, model, temperature):
+    calls, _ = wire
+    for enabled in (False, True):
+        config = settings(model=model, temperature=0.7, openai_fast_mode=enabled)
+        gateway = LLMGateway(LiteLLMProvider(config), config)
+        gateway.generate_structured([], Answer, stage="report")
+    project, fast = calls
+    assert fast == {**project, "service_tier": "fast"}
+    assert fast.get("temperature") == temperature
+
+
+@pytest.mark.parametrize("model", [
+    "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-astra", "gpt-6-sol",
+    "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+    "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.1", "gpt-5", "gpt-5-mini",
+    "gpt-4o-2024-11-20", "gpt-4o-mini", "o3",
+])
+def test_fast_capability_for_other_priced_chat_models(model):
+    assert supports_openai_fast_mode(ProviderName.OPENAI, None, model)
+
+
+@pytest.mark.parametrize("model", [
+    "gpt-6-luna-preview", "gpt-8-sol", "gpt-5.5-pro", "ft:gpt-4.1:org:model",
+    "gpt-4o-2024-05-13", "gpt-4.1-nano", "o4-mini", "text-embedding-3-small",
+    "gpt-5.3-codex", "gpt-6.2-astra-healthcare", "openai/openai/gpt-6.2-sol",
+])
+def test_unlisted_retired_and_other_endpoint_models_have_no_fast_capability(model):
+    assert not supports_openai_fast_mode(ProviderName.OPENAI, None, model)
 
 
 @pytest.mark.parametrize("flag, expected", [("true", True), ("false", False)])
