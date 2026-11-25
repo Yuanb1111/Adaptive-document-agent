@@ -17,6 +17,7 @@ from .prompting import untrusted_document_message
 from .presentation_budget_output import complete_budget_output
 from .structured_output_correction import schema_feedback, format_correction_messages
 from .source_integration_output import review_output, SourceReviewContractError
+from .source_table_cells import SOURCE_CELL_INSTRUCTIONS
 from .source_integration_bindings import (MERGED_BRIEF_INSTRUCTIONS, SOURCE_MATERIALITY_RULES, bind_unique_inclusions,
     keep_accepted_dispositions, merged_review_context)
 from .source_integration_quotes import SourceQuoteCapacityError, SourceQuoteBindingError, bind_source_quotes, numbered_source_pages
@@ -316,12 +317,13 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
             'in text; place the complete supporting cases or basis in 2–4 short columns and at most '
             '8 rows. Every body cell must be a contiguous literal phrase from that item\'s own '
             'quotes, at most 180 characters. Use separate short cells for a condition and its '
-            'scope. Use the exact @phrase references from table_cell_reference_options '
+            'scope. Use @phrase references from table_cell_reference_options '
             'for EVERY body cell, including the first column: Python restores that exact source '
             'phrase after checking that your own evidence quotes cover it. '
             'The directory preview is abbreviated; read the complete original source before '
             'selecting a phrase. Python restores the full continuous phrase, never the preview. '
             'Use descriptive column headers, not invented category labels in body cells. References grant no approval. '
+            + SOURCE_CELL_INSTRUCTIONS +
             'Choose coherent complete clauses, pairing each condition with its own scope. Do not '
             'cut one condition across several rows or pair fragments from different conditions. '
             'Never paraphrase cells, invent values or pack a whole paragraph into one cell. '
@@ -341,7 +343,7 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
         prior_review = None
         retained = _retry_draft(previous, result, brief, checks, pages)
         from .source_integration_resume import (editable_rejected_sections, rejected_addition_sections,
-                                                rejected_matching_proposal)
+                                                rejected_matching_proposal, retry_unreviewed_source_table)
         scoped_retry = rejected_addition_sections(previous, retained, checks, len(brief.items))
         notes = _revision_notes(previous, context)
         if notes:
@@ -373,8 +375,12 @@ def review_supplementary_sources(gateway, result, brief, *, progress=None, previ
             draft = None
             try:
                 if attempt == 0 and scoped_retry is not None:
-                    draft = revise_reopened_additions(gateway, messages, prior_review[0], scoped_retry[1],
-                                                      len(brief.items), entry)
+                    draft = retry_unreviewed_source_table(scoped_retry, retained, messages, pages, result, brief, checks)
+                    if draft is not None:
+                        entry['recovered_writer_table'] = True
+                    else:
+                        draft = revise_reopened_additions(gateway, messages, prior_review[0], scoped_retry[1],
+                                                          len(brief.items), entry)
                 elif attempt and (append_sections := audit['attempts'][-2].get('append_only_sections')):
                     from .source_integration_append import append_reviewed_findings
                     draft = append_reviewed_findings(gateway, prior_review[0], prior_review[1], append_sections,

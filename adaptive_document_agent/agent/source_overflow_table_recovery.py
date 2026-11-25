@@ -7,14 +7,8 @@ from pydantic import create_model
 from .brief_patch_capacity import complete_patch
 from .prompting import untrusted_document_message
 from .source_addition_parts import _sentence_spans
+from .source_phrase_ranges import numbered_page_text, offered_phrase_span, phrase_coordinates
 from .source_table_cells import source_cell_item_schema
-
-
-def _coordinates(ref):
-    match = re.fullmatch(r'@phrase\[(\d+):(\d+)-(\d+)\]', ref)
-    if not match:
-        raise ValueError('Expected an original phrase reference.')
-    return tuple(map(int, match.groups()))
 
 
 def _source_directory(messages):
@@ -27,35 +21,10 @@ def _source_directory(messages):
         if not isinstance(data, dict):
             continue
         for page in data.get('source_pages', []):
-            number, lines = page['page'], []
-            crlf = set(page.get('crlf_line_endings', []))
-            for i, line in enumerate(page.get('lines', []), 1):
-                prefix = f'{i} | '
-                if not line.startswith(prefix):
-                    raise ValueError('Physical line numbering differs from the supplied page.')
-                lines.append(line[len(prefix):] + ('\r\n' if i in crlf else '\n'))
-            pages[number] = ''.join(lines)
-            options[number] = {_coordinates(o['ref'])[1:] for o in page.get('table_cell_reference_options', [])}
+            number = page['page']
+            pages[number] = numbered_page_text(page)
+            options[number] = {phrase_coordinates(o['ref'])[1:] for o in page.get('table_cell_reference_options', [])}
     return pages, options
-
-
-def _offered_span(ref, owned, pages, options):
-    page, start, end = _coordinates(ref)
-    if page not in owned or not 0 <= start < end <= len(pages[page]):
-        raise ValueError('Phrase is outside its own physical source.')
-    # Accept a compound selection only if its endpoints cover a complete
-    # sequence of offered phrases, with physical whitespace between them.
-    source = pages[page]
-    position = start
-    for a, b in sorted(options[page]):
-        if a < start or b > end:
-            continue
-        if position > a or source[position:a].strip():
-            break
-        position = b
-    if position != end or not any(a == start for a, _ in options[page]):
-        raise ValueError('Phrase endpoints are not supported by the source menu.')
-    return page, start, end
 
 
 def _word_key(text):
@@ -82,7 +51,7 @@ def _restore_table(table, owned, pages, options, authored):
     for row in rows:
         if not isinstance(row, list):
             raise ValueError('Invalid source row.')
-        cells = [_offered_span(ref, owned, pages, options) for ref in row]
+        cells = [offered_phrase_span(ref, owned, pages, options) for ref in row]
         if len(cells) > width:
             tail = cells[width-1:]
             for (p, _, end), (q, start, _) in zip(tail, tail[1:]):

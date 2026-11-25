@@ -98,6 +98,49 @@ def test_wire_addition_restores_literal_comparison_cells_and_evidence_together()
     assert proposal.additions[0].comparison_table.rows[0][0].startswith('@phrase[')
 
 
+def test_writer_and_targeted_retry_keep_one_predicate_across_adjacent_offered_clauses():
+    from adaptive_document_agent.agent.source_integration_copy import revise_reopened_additions
+    from tests.test_budget_output_v145 import gateway, response
+
+    subject = 'For the compact model,'
+    predicate = ('the unit cannot detect motion, connect to external devices, '
+                 'or be adjusted except through a workstation.')
+    page = subject + ' ' + predicate + '\r\nOther models have a different interface.'
+    pages = {3: page}
+    first = len(subject) + 1
+    cell = f'@phrase[3:{first}-{first + len(predicate)}]'
+    numbered = numbered_source_pages([dict(page=3, text=page)])
+    options = numbered[0]['table_cell_reference_options']
+    assert cell not in {o['ref'] for o in options}
+    messages = [untrusted_document_message(json.dumps(dict(
+        checks=[dict(section_id='interfaces', pages=[3])], source_pages=numbered)))]
+    item = dict(label='Product limits', text='The compact model has interface restrictions.',
+                evidence=[dict(page=3, text='@lines[1]')])
+    table = dict(headers=['Model', 'Restrictions'], rows=[[options[0]['ref'], cell]])
+    decision = dict(section_id='interfaces', disposition='include', reason='Material product differences.',
+                    brief_item_indexes=[2], evidence=item['evidence'])
+    schema = source_draft_schema(messages, SourceIntegrationDraft)
+    draft = schema.model_validate(dict(decisions=[decision], additions=[{**item, 'comparison_table': table}]))
+    assert bind_source_quotes(draft, pages).additions[0].comparison_table.rows == [[subject, predicate]]
+
+    # A complete authored patch takes the identical source-bound path without spending a format call.
+    earlier = SourceIntegrationDraft(decisions=[decision], additions=[item])
+    llm, client = gateway([response(json.dumps({'item_2': {**item, 'comparison_table': table}}))])
+    repaired = revise_reopened_additions(llm, messages, earlier, ['interfaces'], 2, {})
+    assert bind_source_quotes(repaired, pages).additions[0].comparison_table.rows == [[subject, predicate]]
+    assert len(client.requests) == 1
+
+    for invalid in (f'@phrase[3:{first + 1}-{first + len(predicate)}]',
+                    f'@phrase[3:{first}-{len(page)}]', cell.replace('[3:', '[4:')):
+        with pytest.raises(ValidationError):
+            schema.model_validate(dict(decisions=[decision], additions=[{**item, 'comparison_table':
+                {**table, 'rows': [[options[0]['ref'], invalid]]}}]))
+    uncovered = draft.model_dump(mode='json')
+    uncovered['additions'][0]['evidence'] = [dict(page=3, text='@lines[2]')]
+    with pytest.raises(ValueError, match='own quoted evidence'):
+        bind_source_quotes(schema.model_validate(uncovered), pages)
+
+
 def test_oversized_single_line_remains_available_as_literal_substring():
     text = 'Literal source detail. ' * 120
     messages = [untrusted_document_message(json.dumps(dict(source_pages=numbered_source_pages([

@@ -200,7 +200,7 @@ def revise_reopened_additions(gateway, messages, previous, sections, original_co
         raise ValueError('A reopened source section must own its additions exclusively.')
     messages = scoped_copy_sources(messages, sections)
     from .source_reference_schema import referenced_evidence_model
-    from .source_table_cells import source_cell_item_schema
+    from .source_table_cells import SOURCE_CELL_INSTRUCTIONS, source_cell_item_schema
     from typing import get_args
     wire_item = source_cell_item_schema(messages)
     fields = {}
@@ -258,7 +258,8 @@ def revise_reopened_additions(gateway, messages, previous, sections, original_co
         'finding. When multiple cases or conditions crowd the body, you may create a comparison_table '
         'even if the current item has none. Write the overall finding in the body and use rows to pair '
         'each material trigger with its own consequence or exception. Choose literal cells from the '
-        'owning pages’ table_cell_reference_options (@phrase references). Do not duplicate the rows '
+        'owning pages’ table_cell_reference_options (@phrase references). '
+        + SOURCE_CELL_INSTRUCTIONS + 'Do not duplicate the rows '
         'in the body. Give the item its own page evidence for both the body and table: select the '
         'corresponding exact @lines references from each numbered page’s evidence_reference_options.')]
     try:
@@ -333,7 +334,7 @@ def revise_reopened_additions(gateway, messages, previous, sections, original_co
                 copy_character_counts(exc.response.text).items() if key in bad_keys}
             for error in table_errors:
                 if error['type'] == 'literal_error':
-                    error['msg'] = 'Select an exact premeasured table_cell_reference_options reference.'
+                    error['msg'] = 'Select a supplied reference or a fitting contiguous range of complete same-sentence phrases.'
                     error.pop('ctx', None)
             text_rule = ''
             if separate_body:
@@ -415,7 +416,7 @@ def _scoped_overflow_tables(gateway, request, schema, values, errors, entry, rev
     """Use the existing copy correction to put dense source conditions in a visible table."""
     from .presentation_budget_output import complete_budget_output
     from .source_integration_review import SOURCE_OUTPUT_TOKEN_LIMITS
-    from .source_table_cells import source_cell_item_schema
+    from .source_table_cells import SOURCE_CELL_INSTRUCTIONS, source_cell_item_schema
 
     wire_item = source_cell_item_schema(request)
     # The table path requires an available literal phrase directory. The old
@@ -445,7 +446,8 @@ def _scoped_overflow_tables(gateway, request, schema, values, errors, entry, rev
         untrusted_document_message(json.dumps(originals, ensure_ascii=False)),
         dict(role='user', content='The preceding copy exceeds the displayed body limit. Return '
              'only fields in this repair schema. Each comparison_table is required for its named '
-             'item. Use two to four columns of exact @phrase references. The body names the material '
+             'item. Use two to four columns of @phrase references. ' + SOURCE_CELL_INSTRUCTIONS +
+             'The body names the material '
              'conclusion and its scope in at most 550 characters. Put supported detailed cases, '
              'triggers or exceptions in the table, using only phrases covered by the same item’s '
              'locked evidence. Preserve which trigger applies to which party or consequence. '

@@ -93,8 +93,8 @@ def _source_cell(selection, allowed, pages, refs):
         raise ValueError('Every appended table cell must select its own offered physical source phrase.')
     if len(parts) == 1:
         return parts[0]
-    from .source_overflow_table_recovery import _coordinates
-    spans = [_coordinates(ref) for ref in parts]
+    from .source_phrase_ranges import phrase_coordinates
+    spans = [phrase_coordinates(ref) for ref in parts]
     page, first, _ = spans[0]
     for (_, _, end), (next_page, start, _) in zip(spans, spans[1:]):
         if page != next_page or start < end or pages[page][end:start].strip():

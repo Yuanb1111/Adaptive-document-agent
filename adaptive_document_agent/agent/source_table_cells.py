@@ -3,6 +3,15 @@ import re
 import json
 
 from adaptive_document_agent.services.source_quotes import normalize_quote
+from .source_phrase_ranges import PHRASE_PATTERN, adjacent_clause_cell, numbered_page_text, phrase_coordinates
+
+
+SOURCE_CELL_INSTRUCTIONS = (
+    'A complete condition can span adjacent offered clauses. You may combine their first start '
+    'and last end into one @phrase[page:start-end] cell if the clauses are consecutive on the same '
+    'page, belong to one sentence and fit 180 characters. Read the complete source behind each '
+    'reference. Keep a negation or restriction with its predicate and pair it with the subject it governs. '
+)
 
 
 def phrase_cell_options(page, text):
@@ -48,11 +57,11 @@ def phrase_cell_options(page, text):
 
 
 def source_cell_item_schema(messages):
-    """Constrain new table-cell transport to the premeasured supplied options."""
-    from typing import Literal
-    from pydantic import BaseModel, create_model, model_validator
+    """Validate menu references and fitting whole-clause spans without enumerating all combinations."""
+    from typing import Annotated, Literal
+    from pydantic import BaseModel, BeforeValidator, Field, TypeAdapter, create_model, model_validator
     from adaptive_document_agent.models.executive_brief import ExecutiveBriefItem, BriefComparisonTable
-    refs = set()
+    refs, pages, spans = set(), {}, {}
     for message in messages:
         content = message.get('content', '')
         if not isinstance(content, str) or not content.startswith('<UNTRUSTED_DOCUMENT_CONTENT>\n'):
@@ -60,12 +69,28 @@ def source_cell_item_schema(messages):
         try:
             value = json.loads(content.split('\n', 1)[1].rsplit('\n', 1)[0])
             for page in value.get('source_pages', []):
-                refs.update(option['ref'] for option in page.get('table_cell_reference_options', []))
+                offered = [option['ref'] for option in page.get('table_cell_reference_options', [])]
+                refs.update(offered)
+                if offered and page.get('lines'):
+                    number = page['page']
+                    pages[number] = numbered_page_text(page)
+                    spans[number] = {phrase_coordinates(ref)[1:] for ref in offered}
         except (ValueError, KeyError, TypeError, AttributeError):
             continue
     if not refs:
         return ExecutiveBriefItem
     cell = Literal[tuple(sorted(refs))]
+    if pages:
+        menu = TypeAdapter(cell)
+        def validate_reference(value):
+            if isinstance(value, str) and value not in refs:
+                try:
+                    return adjacent_clause_cell(value, pages, spans)
+                except ValueError:
+                    pass
+            return menu.validate_python(value)  # Keep exact menu errors in targeted format repairs.
+        wire = cell | Annotated[str, Field(pattern=PHRASE_PATTERN)]
+        cell = Annotated[str, BeforeValidator(validate_reference, json_schema_input_type=wire)]
     table = create_model('ReferencedSourceTable', __base__=BriefComparisonTable,
                          rows=(list[list[cell]], ...))
     def plain_item(value):
@@ -96,8 +121,12 @@ def _bind_selected_phrase_evidence(item, page, first, last, source):
                and normalize_quote(q.text) in normalize_quote(source) for q in item.evidence):
         return False
     ref = f'@phrase[{page}:{first}-{last}]'
-    if ref not in {o['ref'] for o in phrase_cell_options(page, source)}:
-        return False
+    offered = {o['ref'] for o in phrase_cell_options(page, source)}
+    if ref not in offered:
+        try:
+            adjacent_clause_cell(ref, {page: source}, {page: {phrase_coordinates(r)[1:] for r in offered}})
+        except ValueError:
+            return False
     separators = list(re.finditer(r'\n\s*\n', source))
     start = max((m.end() for m in separators if m.end() <= first), default=0)
     end = min((m.start() for m in separators if m.start() >= last), default=len(source))
