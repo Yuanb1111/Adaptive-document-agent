@@ -92,3 +92,32 @@ def test_complete_literal_duration_cell_can_restore_unit_from_explicit_header():
     assert brief.model_dump() == before
     item.comparison_table.rows[1][1] = '61'
     assert validate_executive_brief(brief, result)
+
+
+def test_budgeted_comparison_paginates_whole_qualified_rows_under_the_actual_title():
+    from adaptive_document_agent.services.presentation_brief import BriefItem
+    from tests.test_presentation_brief import blank_deck
+
+    rows = [[f'Region {i}: ' + 'whole items enter the weekly count after verification ' * 2,
+             'The count is current at the end of the week and may change when more items are returned.']
+            for i in range(7)]
+    table = BriefComparisonTable(headers=['Case under review', 'Method applied to observations'], rows=rows)
+    item = BriefItem('Collection conditions',
+                     'The counts depend on the collection date and include each returning participant once. ' * 5,
+                     [5], table=table, conditions='Collected as of the stated date.')
+    ordinary = render_complete_summary(blank_deck(), 'Conclusion', [item])
+    assert len(ordinary) == 3
+    compact = render_complete_summary(blank_deck(), 'Conclusion', [item], fit_page_budget=True)
+    assert len(compact) == 2
+    visible_rows = []
+    for slide in compact:
+        heading = next(s for s in slide.shapes if s.name == 'brief:heading')
+        assert all(p.top + p.height < heading.top for p in slide.placeholders if p.has_text_frame and p.text.strip())
+        native = next(s.table for s in slide.shapes if s.has_table)
+        assert [cell.text for cell in native.rows[0].cells] == table.headers
+        visible_rows.extend([cell.text for cell in row.cells] for row in list(native.rows)[1:])
+        assert all(c.text_frame.paragraphs[0].font.size.pt >= 14 for row in native.rows for c in row.cells)
+        assert any(s.has_text_frame and s.text == item.conditions for s in slide.shapes)
+    assert visible_rows == rows
+    body = next(s for s in compact[0].shapes if s.name == 'brief:body')
+    assert body.text == item.text and body.text_frame.paragraphs[0].font.size.pt >= 14

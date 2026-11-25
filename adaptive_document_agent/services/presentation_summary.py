@@ -124,7 +124,8 @@ def render_complete_summary(presentation: Any, title: str, items: list[BriefItem
                                          single_column=single_column, fit_page_budget=fit_page_budget) if plain else []
         for item in items:
             if item.table:
-                slides.extend(render_comparison(presentation, title, item, notes=notes + authored))
+                slides.extend(render_comparison(presentation, title, item, notes=notes + authored,
+                                                fit_page_budget=fit_page_budget))
         return slides
 
     remaining = [item for item in items if item.title.strip() or item.text.strip()]

@@ -242,10 +242,10 @@ def _revise_page_batch(gateway, result, packet, aliases, draft, issues, *, earli
                                              if iid in issues})
     if use_owned_writer:
         from .compact_publication_copy import compact_publication_copy
+        from .retained_page_sources import AuthoredPageErrors
         purposes = (description_edits or {}).get(iid)
         if purposes and set(purposes) <= {f'context-{i}' for i in range(len(original.source_context))}:
             from .retained_description_revision import revise_descriptions
-            from .retained_page_sources import AuthoredPageErrors
             from .reported_source_context import observation_context_labels
             scoped_rows = [*by_page[iid]['primary_observations'], *by_page[iid]['source_rows']]
             try:
@@ -263,9 +263,19 @@ def _revise_page_batch(gateway, result, packet, aliases, draft, issues, *, earli
             by_page[iid]['rejected_page_attempts'] = [attempt.model_dump(mode='json') for attempt in attempts]
         eligible_companions = {ref: observations[aliases[ref]].model_dump(mode='json')
                                for ref in findings[iid]['allowed_companion_rows']}
-        return compact_publication_copy(gateway, iid, payload, local_limits[iid],
-            lambda pages: copy_contract_errors(pages, packet, aliases, result),
-            preserve_inputs=preserve_numeric_inputs, eligible_companions=eligible_companions)
+        def validate(pages):
+            return copy_contract_errors(pages, packet, aliases, result)
+
+        try:
+            return compact_publication_copy(gateway, iid, payload, local_limits[iid], validate,
+                preserve_inputs=preserve_numeric_inputs, eligible_companions=eligible_companions)
+        except AuthoredPageErrors as exc:
+            from .retained_qualitative_recovery import revise_rejected_descriptions
+            revised = revise_rejected_descriptions(gateway, iid, exc, original=original,
+                payload=payload, limit=local_limits[iid], validate=validate)
+            if revised is None:
+                raise
+            return revised
     messages = [
         dict(role='system', content=
              'Revise only the flagged analysis pages. Return edits keyed by each supplied insight ID '

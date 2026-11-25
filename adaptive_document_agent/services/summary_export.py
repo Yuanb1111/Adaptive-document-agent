@@ -21,7 +21,7 @@ def bind_summary_items(slide, page):
     bind_summary_pages([slide], page)
 
 
-def bind_summary_pages(slides, page, *, texts=None):
+def bind_summary_pages(slides, page, *, texts=None, additional_pages=()):
     """A logical introductory page may occupy several complete-item slides."""
     from collections import defaultdict, Counter
     bodies = defaultdict(list)
@@ -33,7 +33,11 @@ def bind_summary_pages(slides, page, *, texts=None):
                     raise ValueError('Summary native body is empty: ' + page.id)
                 bodies[normalize_quote(display_text(shape.text))].append(shape)
                 ordered.append(shape)
-    texts = texts if texts is not None else [item.text for item in page.items]
+    owners = [(source, index, item) for source in (page, *additional_pages)
+              for index, item in enumerate(source.items)]
+    texts = texts if texts is not None else [item.text for _, _, item in owners]
+    if len(texts) != len(owners):
+        raise ValueError('Summary native copy does not cover every authored item')
     expected = Counter(normalize_quote(display_text(text)) for text in texts)
     bindings = []
     if expected == Counter({key:len(values) for key,values in bodies.items()}):
@@ -60,12 +64,12 @@ def bind_summary_pages(slides, page, *, texts=None):
                 raise ValueError('Summary fact lacks complete ordered visible native copy: ' + page.id)
         if offset != len(ordered):
             raise ValueError('Summary native copy has unbound extra text: ' + page.id)
-    for index, item in enumerate(page.items):
-        for segment_index, shape in enumerate(bindings[index]):
+    for (source, index, item), segments in zip(owners, bindings):
+        for segment_index, shape in enumerate(segments):
             properties = shape.element.xpath('.//p:cNvPr')[0]
-            properties.set('descr', _PREFIX + json.dumps({'page_id': page.id, 'item_index': index,
+            properties.set('descr', _PREFIX + json.dumps({'page_id': source.id, 'item_index': index,
                 'part_ids': item.part_ids, 'segment_index': segment_index,
-                'segment_count': len(bindings[index])}, ensure_ascii=False))
+                'segment_count': len(segments)}, ensure_ascii=False))
 
 
 def verify_summary_export(presentation, result):

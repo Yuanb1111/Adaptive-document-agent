@@ -16,6 +16,20 @@ def test_simple_reasoning_policy_invalidates_completed_result_cache():
     assert app._analysis_scope_key(b"pdf", "", settings) != reduced
 
 
+def test_presentation_revision_changes_finished_result_and_native_export_cache_keys(monkeypatch):
+    from adaptive_document_agent.services.export import _build_cache_key
+    from adaptive_document_agent.utils import pipeline_version
+    result = PipelineResult(document=ParsedDocument(document_id="example", sha256="hash",
+                safe_filename="example.pdf", page_count=1), profile=DocumentProfile())
+    settings = LLMSettings(model="test")
+    scope = app._analysis_scope_key(b"pdf", "", settings)
+    native = _build_cache_key(result, "template")
+    monkeypatch.setattr(app, "PRESENTATION_VERSION", "changed-layout")
+    monkeypatch.setattr(pipeline_version, "PRESENTATION_VERSION", "changed-layout")
+    assert scope != app._analysis_scope_key(b"pdf", "", settings)
+    assert native != _build_cache_key(result, "template")
+
+
 def test_new_output_contract_rebuilds_result_without_clearing_other_caches(tmp_path, monkeypatch):
     settings = LLMSettings(model="test")
     cache = DiskCache(tmp_path)

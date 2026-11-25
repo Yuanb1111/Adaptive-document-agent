@@ -203,12 +203,12 @@ def _put_text(slide, text: str, rect: Rect, *, size=12, bold=False, color=DARK):
     return shape
 
 
-def _put_commentary(slide, text: str, rect: Rect) -> str:
-    capacity = max(1, int((rect.h - .10) * 72 / COMMENTARY_LINE_PT))
+def _put_commentary(slide, text: str, rect: Rect, *, size=COMMENTARY_PT, leading=COMMENTARY_LINE_PT) -> str:
+    capacity = max(1, int((rect.h - .10) * 72 / leading))
     # Partition the original string, preserving paragraphs and even long IDs.
     # Inserted line breaks would split phrases; joining wrapped words would
     # erase paragraph boundaries and could corrupt identifiers at a page break.
-    lines = _lines(text, rect.w - .18, COMMENTARY_PT)
+    lines = _lines(text, rect.w - .18, size)
     from .pptx_export import _rule
     cut = sum(len(line) for line in lines[:capacity])
     if cut < len(text):
@@ -220,15 +220,15 @@ def _put_commentary(slide, text: str, rect: Rect) -> str:
             cut = boundaries[-1]
     _rule(slide, rect.x, rect.y + .03, .035, min(rect.h - .06, .62), PURPLE)
     body = _put_text(slide, text[:cut],
-                     Rect(rect.x + .18, rect.y, rect.w - .18, rect.h), size=COMMENTARY_PT)
+                     Rect(rect.x + .18, rect.y, rect.w - .18, rect.h), size=size)
     from pptx.util import Pt
     for paragraph in body.text_frame.paragraphs:
-        paragraph.line_spacing = Pt(COMMENTARY_LINE_PT)
+        paragraph.line_spacing = Pt(leading)
     # A sentence-boundary cut can leave most of the allocated sidebar empty.
     # Retain exactly the same copy, wrapping and font while exposing that real
     # whitespace to the subsequent lossless continuation-packing pass.
     from pptx.util import Inches
-    used_height = len(_lines(text[:cut], rect.w - .18, COMMENTARY_PT)) * COMMENTARY_LINE_PT / 72 + .12
+    used_height = len(_lines(text[:cut], rect.w - .18, size)) * leading / 72 + .12
     body.height = Inches(min(rect.h, used_height))
     # Reflow on the next page, whose text column can be wider than this slot.
     return text[cut:]
@@ -320,7 +320,9 @@ def render_composed_slide(presentation, slide_plan: PresentationSlide, charts: l
     from .composition_pagination import compact_support_pages
     rendered = compact_support_pages(presentation, slide_plan, charts, result, index, rendered)
     from .composition_commentary_packing import pack_commentary_pages
-    return pack_commentary_pages(presentation, rendered, charts, index)
+    rendered = pack_commentary_pages(presentation, rendered, charts, index)
+    from .chart_commentary_layout import fit_bounded_chart_copy
+    return fit_bounded_chart_copy(presentation, rendered, slide_plan, charts, result, index, preserve_charts)
 
 
 def _paginate_chart_slide(presentation, slide_plan: PresentationSlide,
@@ -365,7 +367,8 @@ def _paginate_chart_slide(presentation, slide_plan: PresentationSlide,
 
 def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: list[ChartPlan],
                            result: PipelineResult, index, *, preserve_charts=False,
-                           compact_header=False, support_sidebar=False, full_width_chart=False) -> list:
+                           compact_header=False, support_sidebar=False, full_width_chart=False,
+                           compact_narrative=False) -> list:
     """Render all requested charts, explicit KPI/table facts and retained commentary."""
     from .pptx_export import _add_native_chart, _source_footer, _unit_label, _display_source_unit
     from adaptive_document_agent.document_model.metric_semantic_classifier import classify_metric, format_metric_display_value
@@ -576,6 +579,15 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
         # A capacity retry must reclaim vertical plot space too. The complete
         # displaced header goes beside the plot even if it is a short caption.
         prefer_side_commentary=compact_header, support_sidebar=support_sidebar)
+    lower_copy = None
+    copy_type = {}
+    if compact_narrative:
+        from .chart_commentary_layout import chart_copy_geometry
+        if support or not text or len(charts) != 1:
+            raise _ChartCapacityError('The alternate layout requires one chart and narrative only.')
+        geometry, lower_copy = chart_copy_geometry(geometry, top, spaces[charts[0].id],
+            presentation.slide_height.inches - 1.02 - context_h - convention_h)
+        copy_type = dict(size=14, leading=17)
     if context_h:
         context = _put_text(slide, context_copy,
             Rect(.55, presentation.slide_height.inches - 1.02 - context_h - convention_h + .04,
@@ -915,7 +927,9 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
         new_top = min(commentary_rect.y, used_bottom + GUTTER)
         commentary_rect = Rect(commentary_rect.x, new_top, commentary_rect.w,
                                commentary_rect.y + commentary_rect.h - new_top)
-    remaining = text if full_width_chart else _put_commentary(slide, text, commentary_rect) if text else ""
+    remaining = text if full_width_chart else _put_commentary(slide, text, commentary_rect, **copy_type) if text else ""
+    if remaining and lower_copy is not None:
+        remaining = _put_commentary(slide, remaining, lower_copy, **copy_type)
     visible_observations = support + [index.get(oid) for oid in chart_obs if index.get(oid)]
     footnote = _source_footer(pages)
     if any("*" in format_observation_period(o) for o in visible_observations):
@@ -934,7 +948,7 @@ def _render_composed_slide(presentation, slide_plan: PresentationSlide, charts: 
             if not overflow and remaining and bottom - text_top >= .75:
                 remaining = _put_commentary(continuation, remaining, Rect(full.x, text_top, full.w, bottom - text_top))
         elif remaining:
-            remaining = _put_commentary(continuation, remaining, full)
+            remaining = _put_commentary(continuation, remaining, full, **copy_type)
         _put_text(continuation, footnote, geometry.footer, size=FOOTNOTE_PT, color=MUTED)
         slides.append(continuation)
     return slides

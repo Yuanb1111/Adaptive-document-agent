@@ -174,9 +174,9 @@ def _build_cache_key(result: PipelineResult, template_digest: str, artwork: byte
     # Bump the version when generation rules change. All facts, source evidence,
     # narrative, charts, warnings and plan fields participate in invalidation.
     content = result.model_dump_json(exclude={"llm_usage", "timings_ms", "stage_details_ms", "pipeline_total_ms", "export_timings_ms", "customization_report"}).encode()
-    from adaptive_document_agent.utils.pipeline_version import PIPELINE_VERSION
+    from adaptive_document_agent.utils.pipeline_version import PIPELINE_VERSION, PRESENTATION_VERSION
     image_digest = hashlib.sha256(source_pdf).digest() if source_pdf is not None else b""
-    return (f"ppt-build-v14:{PIPELINE_VERSION}", template_digest,
+    return (f"{PRESENTATION_VERSION}:{PIPELINE_VERSION}", template_digest,
             hashlib.sha256(content + b"\0" + (artwork or b"") + b"\0" + image_digest).hexdigest())
 
 

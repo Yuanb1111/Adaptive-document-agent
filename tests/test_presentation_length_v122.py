@@ -128,7 +128,15 @@ def test_supporting_appendix_retains_every_source_part_in_native_slides():
         deck.slides._sldIdLst.remove(identifier)
     slide_plan = PresentationSlide(id='intro', slide_type='company_overview', title='Introduction')
     _add_company_at_a_glance(deck, result, slide_plan)
-    assert len(deck.slides) == 3
+    # Adjacent same-title drafts can share a physical body page. All three
+    # reviewed body drafts must remain visible before appending the source detail.
+    import json
+    from adaptive_document_agent.services.summary_export import _PREFIX
+    assert len(deck.slides) == 2
+    body_ids = {json.loads(value[len(_PREFIX):])['page_id'] for slide in deck.slides
+                for shape in slide.shapes for props in shape.element.xpath('.//p:cNvPr')
+                if (value := props.get('descr', '')).startswith(_PREFIX)}
+    assert body_ids == {p.id for p in company.summary_pages if p.placement == 'body'}
     import pytest
     with pytest.raises(ValueError, match='does not cover'):
         verify_summary_export(deck, result)

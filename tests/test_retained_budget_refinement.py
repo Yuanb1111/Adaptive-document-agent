@@ -1,6 +1,5 @@
 from copy import deepcopy
 import json
-from types import SimpleNamespace
 
 import pytest
 
@@ -32,13 +31,16 @@ def proposal(result, *, keep_all=False):
 
 
 def native_fixture(monkeypatch):
+    from pptx import Presentation
     from adaptive_document_agent.agent import presentation_budget_refinement as native
     import adaptive_document_agent.agent.retained_budget_refinement as module
     def measure(result):
         slides = [s for s in result.presentation_plan.slides if s.slide_type == 'analysis']
         result.presentation_export_trace = [dict(planned_slide_id=s.id, slide_numbers=[n + 2])
                                             for n, s in enumerate(slides)]
-        deck = SimpleNamespace(slides=[SimpleNamespace(shapes=[]) for _ in range(1 + len(slides))])
+        deck = Presentation()
+        for _ in range(1 + len(slides)):
+            deck.slides.add_slide(deck.slide_layouts[6])
         return deck, dict(body=1 + len(slides), analysis=len(slides), introduction=0)
     def require(_deck, result):
         if sum(s.slide_type == 'analysis' for s in result.presentation_plan.slides) > 1:
@@ -130,3 +132,15 @@ def test_duplicate_or_unknown_budget_decisions_cannot_change_retained_inputs():
     with pytest.raises(ValueError, match='exactly once'):
         project_retained_budget(result, RetainedPhysicalBudgetSelection.model_validate(value), {'body': 3})
     assert result.model_dump_json() == original
+
+
+def test_feasible_chart_combinations_count_distinct_physical_pages_and_all_caps():
+    from adaptive_document_agent.agent.retained_budget_refinement import measured_chart_options
+    def finding(iid, pages, charts):
+        return dict(insight_id=iid, physical_slide_numbers=pages, native_chart_slide_numbers=charts)
+    candidates = [finding('a', [3, 4], [3]), finding('b', [5], [5]),
+                  finding('c', [6, 7], [6]), finding('d', [6], [6])]
+    options = measured_chart_options(candidates, [(set(range(1, 9)), 6), ({3, 4, 5, 6, 7}, 3)])
+    assert options['maximum_analysis_chart_pages'] == 2
+    assert {tuple(row['insight_ids']) for row in options['combinations_at_maximum']} == {
+        ('a', 'b'), ('a', 'd'), ('b', 'c'), ('b', 'd'), ('b', 'c', 'd')}

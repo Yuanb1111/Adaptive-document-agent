@@ -7,7 +7,9 @@ from adaptive_document_agent.agent.orchestrator import DocumentOrchestrator
 from adaptive_document_agent.services.llm import LLMGateway
 from adaptive_document_agent.services.llm.routing import create_llm_client
 from adaptive_document_agent.utils.hashing import sha256_bytes
-from adaptive_document_agent.utils.pipeline_version import PIPELINE_VERSION, ANALYSIS_VERSION, EXTRACTION_VERSION
+from adaptive_document_agent.utils.pipeline_version import (
+    PIPELINE_VERSION, ANALYSIS_VERSION, EXTRACTION_VERSION, PRESENTATION_VERSION,
+)
 
 from . import analysis, branding, data, deliverables, overview, quality, sources, technical
 from .deployment import cache_for_session, is_public_deployment
@@ -26,6 +28,7 @@ def _analysis_scope_key(raw_pdf: bytes, analysis_focus: str, settings) -> str:
         "|".join(
             (
                 PIPELINE_VERSION,
+                PRESENTATION_VERSION,
                 ANALYSIS_VERSION,
                 EXTRACTION_VERSION,
                 sha256_bytes(raw_pdf),

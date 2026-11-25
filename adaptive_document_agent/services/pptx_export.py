@@ -757,8 +757,11 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
             presentation.slides[-1].notes_slide.notes_text_frame.text += (
                 '\n\nComplete Summary reading and omission decisions:\n'
                 + plan.company.summary_review.model_dump_json())
+        from .slide_budgets import report_budget
+        bounded_body = placement == 'body' and report_budget(result) is not None
+        paired_index = None
         for index, page in enumerate(plan.company.summary_pages):
-            if page.placement != placement:
+            if index == paired_index or page.placement != placement:
                 continue
             from .summary_visual_layout import summary_brief_items
             from .localized_summary_copy import localized_label
@@ -768,6 +771,20 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
             if index == 0:
                 notes += '\n\nComplete Summary reading and decisions:\n' + (
                     plan.company.summary_review.model_dump_json())
+            from .summary_export import bind_summary_pages
+            if bounded_body and page.compact and index + 1 < len(plan.company.summary_pages):
+                following = plan.company.summary_pages[index + 1]
+                if following.compact and following.placement == placement and following.title == page.title:
+                    from .summary_visual_layout import render_structured_profile_group
+                    pair_items = items + summary_brief_items(result, following)
+                    shared = render_structured_profile_group(presentation, title, pair_items,
+                        notes=notes + '\n\n' + following.model_dump_json(), compact_pair=True)
+                    if shared is not None:
+                        bind_summary_pages([shared], page, additional_pages=(following,),
+                                           texts=[item.text for item in pair_items])
+                        shared._ada_section_label = page.title
+                        paired_index = index + 1
+                        continue
             source_visual = getattr(presentation, '_ada_source_visual', None)
             if page.compact or plan.company.summary_review.max_intro_slides is not None:
                 rendered = render_profile(presentation,title,items,notes=notes)
@@ -776,7 +793,6 @@ def _add_company_at_a_glance(presentation: Any, result: PipelineResult, slide_pl
                 rendered = render_profile_with_source(presentation, title, items, source_visual, notes=notes)
             else:
                 rendered = render_profile(presentation, title, items, notes=notes)
-            from .summary_export import bind_summary_pages
             bind_summary_pages(rendered, page, texts=[item.text for item in items])
             for slide in rendered:
                 slide._ada_section_label = page.title

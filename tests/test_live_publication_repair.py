@@ -46,6 +46,12 @@ def test_live_rejection_is_corrected_without_loading_checkpoint_or_restarting_an
     assert 'omissions_accepted concerns ONLY whether excluded FINDINGS' in prompt
     assert 'reject that slide' in prompt
     assert 'must be corrected and receive a fresh independent review' in prompt
+    recheck = llm.client.calls[-1][-1]['content'].split('<UNTRUSTED_DOCUMENT_CONTENT>', 1)[1]
+    packet = json.loads(recheck.split('</UNTRUSTED_DOCUMENT_CONTENT>', 1)[0])
+    slides = [s for s in result.presentation_plan.slides if s.slide_type == 'analysis']
+    assert packet['slides'] == [s.model_dump(mode='json') for s in slides]
+    assert packet['previous_review_questions'] == [
+        dict(slide_id=s.id, question='Clarify source attribution.') for s in slides]
     assert review_complete(result) and result.failed_stage is None
     assert calls==['audit','measure']
     assert [u['operation'] for u in llm.usage]==['RetainedAnalysisReview','RetainedPageRevisions','RetainedAnalysisReview']

@@ -1,56 +1,53 @@
 """Readable editable tables for model-authored literal source comparisons."""
 from pptx.util import Inches, Pt
 from pptx.dml.color import RGBColor
+from .brief_comparison_layout import comparison_layout, page_tops, table_geometries
 from .presentation_brief import BODY_PT, _copy_height
 
 
-def render_comparison(presentation, title, item, *, notes=''):
+def render_comparison(presentation, title, item, *, notes='', fit_page_budget=False):
     """Fit complete comparisons by measured column widths, preserving conditions."""
     from .slide_compositor import _base
     from .pptx_export import _source_footer, _text, FOURIER_DARK, FOURIER_MUTED, FOURIER_PURPLE, FOURIER_BG_CARD
-    from .text_capacity import wrap_copy
-    remaining = list(item.table.rows)
-    slides = []
     width = presentation.slide_width.inches - 1.3
-    def row_height(row, widths):
-        return max(.45, max(len(wrap_copy(cell, w - .18, 14)) for cell, w in zip(row, widths)) * 17 / 72 + .12)
-    fractions = [1 / len(item.table.headers), .4, .45, .5, .55]
-    choices = []
-    for fraction in fractions:
-        widths = [width * fraction] + [width * (1 - fraction) / (len(item.table.headers) - 1)] * (len(item.table.headers) - 1)
-        heights = [row_height(row, widths) for row in [item.table.headers, *remaining]]
-        choices.append((sum(heights), abs(fraction - 1 / len(widths)), widths, heights[0]))
-    _, _, widths, header_height = min(choices)
+    geometries = table_geometries(tuple(item.table.headers), tuple(map(tuple, item.table.rows)), width)
+    heading_h = _copy_height(item.title, width, 18) + .04
+    condition_h = _copy_height(item.conditions, width, 12) + .04 if item.conditions else 0
+    bottom = presentation.slide_height.inches - 1.1 - heading_h - .08 - condition_h
+    if item.conditions:
+        bottom -= .05
+    body_heights = {size: _copy_height(item.text, width, size) + .06 if item.text else 0
+                    for size in (BODY_PT, 15, 14)}
+    first_slide, top = _base(presentation, title, '')
+    first_tops = page_tops(first_slide, top, fit_page_budget)
+    layout = comparison_layout(geometries, body_heights, first_tops, first_tops, bottom)
+    slides = [first_slide]
+    later_tops = first_tops
+    if len(layout[3]) > 1:
+        # The continuation title can wrap differently. Measure its actual
+        # placeholder before choosing the final column widths and page breaks.
+        continuation, top = _base(presentation, title + ' (continued)', '')
+        slides.append(continuation)
+        later_tops = page_tops(continuation, top, fit_page_budget)
+        layout = comparison_layout(geometries, body_heights, first_tops, later_tops, bottom)
+    geometry, body_pt, spacing, ends = layout
+    widths, header_height = geometry.widths, geometry.header_height
     full = '\n'.join(' | '.join(row) for row in [item.table.headers, *item.table.rows])
-    while remaining:
-        slide, top = _base(presentation, title + (' (continued)' if slides else ''), '')
-        heading_h = _copy_height(item.title, width, 18) + .04
-        condition_h = _copy_height(item.conditions, width, 12) + .04 if item.conditions else 0
-        body_copy = '' if slides else item.text
-        body_pt = BODY_PT
-        # Keep a complete small comparison together at readable sizes when its
-        # narrative would otherwise repeat across several single-row pages.
-        total_rows = sum(row_height(row, widths) for row in remaining)
-        for size in (BODY_PT, 15, 14):
-            body_h = _copy_height(body_copy, width, size) + .06 if body_copy else 0
-            if top + heading_h + body_h + .08 + header_height + total_rows + condition_h <= presentation.slide_height.inches - 1.1:
-                body_pt = size
-                break
-        body_h = _copy_height(body_copy, width, body_pt) + .06 if body_copy else 0
+    start = 0
+    for page, end in enumerate(ends):
+        if page >= len(slides):
+            continuation, _ = _base(presentation, title + ' (continued)', '')
+            slides.append(continuation)
+        slide = slides[page]
+        top = (later_tops if page else first_tops)[spacing]
+        body_copy = '' if page else item.text
+        body_h = 0 if page else body_heights[body_pt]
         _text(slide, item.title, .65, top, width, heading_h, size=18, bold=True, color=FOURIER_PURPLE).name = 'brief:heading'
         if body_copy:
             _text(slide, body_copy, .65, top + heading_h, width, body_h, size=body_pt, color=FOURIER_DARK).name = 'brief:body'
         table_top = top + heading_h + body_h + .08
-        capacity = presentation.slide_height.inches - 1.1 - table_top - condition_h
-        group, heights = [], []
-        for row in remaining:
-            height = row_height(row, widths)
-            if header_height + sum(heights) + height > capacity:
-                break
-            group.append(row)
-            heights.append(height)
-        if not group:
-            raise ValueError('Brief comparison row and qualifications exceed readable page capacity.')
+        group = item.table.rows[start:end]
+        heights = geometry.row_heights[start:end]
         shape = slide.shapes.add_table(len(group) + 1, len(item.table.headers), Inches(.65), Inches(table_top),
                                       Inches(width), Inches(header_height + sum(heights)))
         shape.name = 'brief:comparison_table'
@@ -78,6 +75,5 @@ def render_comparison(presentation, title, item, *, notes=''):
         _text(slide, _source_footer(item.pages), .55, presentation.slide_height.inches - .82,
               width, .20, size=9, color=FOURIER_MUTED)
         slide.notes_slide.notes_text_frame.text = '\n\n'.join([notes, item.title, item.text, item.conditions, full, _source_footer(item.pages)])
-        slides.append(slide)
-        remaining = remaining[len(group):]
+        start = end
     return slides

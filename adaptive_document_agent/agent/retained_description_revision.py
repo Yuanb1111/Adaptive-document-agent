@@ -134,7 +134,8 @@ def select_description_span_page(original, slots, sparse, previous, periods, lab
     raise UnusableDescriptionSpans('No literal edit alternative satisfies the source and visible-copy limits.')
 
 
-def _repair_length(gateway, page, slots, addressed, values, repair_slots, periods, labels, limit, *, allow_span_repair=True):
+def _repair_length(gateway, page, slots, addressed, values, repair_slots, periods, labels, limit, *,
+                   allow_span_repair=True, allow_qualitative_copy=False):
     preserved = {slot: text for slot, text in values.items() if slot not in repair_slots}
     fixed_page = _replace_descriptions(page, slots, preserved)
     if bad := _invalid_descriptions(fixed_page, slots, preserved, periods, labels):
@@ -198,6 +199,11 @@ def _repair_length(gateway, page, slots, addressed, values, repair_slots, period
     fitting = _first_fitting_page(fixed_page, slots, repair_slots, combinations, periods, labels, limit)
     if fitting is not None:
         return fitting
+    if allow_qualitative_copy and not expanded:
+        from .retained_qualitative_copy import qualitative_copy
+        revised = qualitative_copy(gateway, fixed_page, slots, addressed, values, alternatives, periods, labels, limit)
+        if revised is not None:
+            return revised
     if expanded and allow_span_repair:
         # Full replacements failed after several addressed fields shared the allowance.
         # A single final edit may patch their original clauses without re-authoring the page.
@@ -214,7 +220,8 @@ def _repair_length(gateway, page, slots, addressed, values, repair_slots, period
 
 def revise_descriptions(gateway, page: RetainedPage, purposes: dict[str, str], *, source_pages,
                         periods, limit: int, labels=(), prior_page: RetainedPage | None = None,
-                        owner_issue: str | None = None, prefer_quoted_sentences: bool = True) -> RetainedPage:
+                        owner_issue: str | None = None, prefer_quoted_sentences: bool = True,
+                        allow_qualitative_copy: bool = False) -> RetainedPage:
     """Return one unapproved candidate. Callers validate the full page and request independent review."""
     slots = {f'context-{index}': index for index in range(len(page.source_context))}
     if not purposes or purposes.keys() - slots.keys() or any(
@@ -317,7 +324,7 @@ def revise_descriptions(gateway, page: RetainedPage, purposes: dict[str, str], *
             addressed[slot]['local_validation_error'] = QUALITATIVE_REPAIR
         # The existing repair also checks the shared page allowance and freezes all valid siblings.
         return _repair_length(gateway, revised, slots, addressed, values, invalid, bound_periods, labels, limit,
-                              allow_span_repair=not sparse_first)
+                              allow_span_repair=not sparse_first, allow_qualitative_copy=allow_qualitative_copy)
     used = visible_copy_budget(revised, bound_periods, limit)['total_characters']
     if used > limit:
         # Measure how many edits contributed to the overflow using the actual rendered

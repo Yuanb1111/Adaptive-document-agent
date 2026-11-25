@@ -64,9 +64,9 @@ def display_segments(text, display=None):
     return pieces or [text]
 
 
-def _column_geometry(parts, width, capacity, *, gaps=(.12, .08, .04)):
+def _column_geometry(parts, width, capacity, *, gaps=(.12, .08, .04), size=BODY_PT):
     """Measure all breaks before drawing, retaining author reading order."""
-    heights = [_copy_height(text, width, BODY_PT) + .02 for text in parts]
+    heights = [_copy_height(text, width, size) + .02 for text in parts]
     for gap in gaps:
         used = sum(heights) + gap * max(0, len(parts) - 1)
         if used <= capacity + 1e-6:
@@ -131,8 +131,8 @@ def _render_pair_panels(slide, items, top, width, capacity):
     return True
 
 
-def _render_pair_columns(slide, items, top, width, capacity):
-    """Fit unequal complete sections without shrinking or rewriting their copy."""
+def _render_pair_columns(slide, items, top, width, capacity, *, size=BODY_PT, join_sentences=False):
+    """Measure unequal columns at their actual type size before drawing either one."""
     from .pptx_export import _text, FOURIER_DARK, FOURIER_PURPLE
     gap = .44
     for ratio in (.5, .55, .6, .625, .65, .45, .4, .375, .35):
@@ -140,8 +140,8 @@ def _render_pair_columns(slide, items, top, width, capacity):
         plans = []
         for item, column_width in zip(items, widths):
             heading = _heading_height(item.title, column_width)
-            parts = display_segments(item.text, item.display)
-            geometry = _column_geometry(parts, column_width, capacity - heading - .08)
+            parts = [item.text] if join_sentences else display_segments(item.text, item.display)
+            geometry = _column_geometry(parts, column_width, capacity - heading - .08, size=size)
             if geometry is None:
                 break
             plans.append((item, column_width, heading, parts, geometry))
@@ -158,16 +158,16 @@ def _render_pair_columns(slide, items, top, width, capacity):
         y = top + heading_height + .08
         heights, _, gap_y = geometry
         for text, height in zip(parts, heights):
-            body = _text(slide, text, x, y, column_width, height, size=BODY_PT, color=FOURIER_DARK)
+            body = _text(slide, text, x, y, column_width, height, size=size, color=FOURIER_DARK)
             body.name = 'brief:body'
             for paragraph in body.text_frame.paragraphs:
-                paragraph.line_spacing = Pt(BODY_PT * LINE_HEIGHT_FACTOR)
+                paragraph.line_spacing = Pt(size * LINE_HEIGHT_FACTOR)
             y += height + gap_y
         x += column_width + gap
     return True
 
 
-def render_structured_profile_group(presentation, title, items, *, notes=''):
+def render_structured_profile_group(presentation, title, items, *, notes='', compact_pair=False):
     """Keep each item's supported structure local within a multi-item page.
 
     Separate source assertions never acquire a shared chronology or relationship
@@ -182,8 +182,14 @@ def render_structured_profile_group(presentation, title, items, *, notes=''):
     slide, top = _base(presentation, title, '')
     width = presentation.slide_width.inches - 1.3
     capacity = presentation.slide_height.inches - 1.28 - top
+    flexible_paragraphs = compact_pair and all(not item.display or
+        (item.display.layout in {'paragraphs', 'comparison'} and not item.display.break_after)
+        for item in items)
     if len(items) == 2 and (_render_pair_panels(slide, items, top, width, capacity)
-                           or _render_pair_columns(slide, items, top, width, capacity)):
+                           or _render_pair_columns(slide, items, top, width, capacity)
+                           or (flexible_paragraphs and any(_render_pair_columns(
+                               slide, items, top, width, capacity, size=size, join_sentences=True)
+                               for size in (BODY_PT, 15, 14)))):
         pages = sorted({page for item in items for page in item.pages})
         _text(slide, _source_footer(pages), .55, presentation.slide_height.inches - .82,
               presentation.slide_width.inches - 1.1, .20, size=9, color=FOURIER_MUTED)

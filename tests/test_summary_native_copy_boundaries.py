@@ -49,6 +49,43 @@ def native_segments(deck, texts, *, separate_slides=False):
     return shapes
 
 
+@pytest.mark.parametrize(('bounded', 'same_title', 'count'), [
+    (True, True, 1), (True, False, 2), (False, True, 2),
+])
+def test_adjacent_reviewed_intro_pages_keep_their_individual_bindings(monkeypatch, bounded, same_title, count):
+    from adaptive_document_agent.models.customization import ReportRequirement, ReportRequirements
+    from adaptive_document_agent.services.pptx_export import _add_company_at_a_glance
+
+    texts = ['The first group excludes unmeasured samples. ' * 11,
+             'The second group has a different scope and retains the original limitations. ' * 12]
+    result, page = summary_result(texts)
+    first, second = [page.model_copy(update={'id': f'page-{i}', 'compact': True, 'items': [item]})
+                     for i, item in enumerate(page.items)]
+    if not same_title:
+        second.title = 'Additional source findings'
+    company = result.presentation_plan.company
+    company.summary_pages = [first, second]
+    if bounded:
+        result.profile.report_requirements = ReportRequirements(items=[
+            ReportRequirement(id='cap', kind='slide_limit', request_quote='At most 20 body pages.',
+                              description='Limit report body.', slide_scope='body', max_slides=20)])
+    # This test starts at native export; the synthetic items have no upstream model receipts.
+    monkeypatch.setattr('adaptive_document_agent.services.company_summary.validate_summary',
+                        lambda company, result: [])
+    deck = blank_deck()
+    _add_company_at_a_glance(deck, result, None)
+    stream = BytesIO()
+    deck.save(stream)
+    reopened = Presentation(stream)
+    assert len(reopened.slides) == count
+    mapping = verify_summary_export(reopened, result)
+    assert set(mapping['part-0']) == {1}
+    assert set(mapping['part-1']) == {count}
+    if count == 1:
+        assert first.id in reopened.slides[0].notes_slide.notes_text_frame.text
+        assert second.id in reopened.slides[0].notes_slide.notes_text_frame.text
+
+
 @pytest.mark.parametrize('layout', ['paragraphs', 'comparison', 'timeline', 'relationship', 'key_metrics'])
 @pytest.mark.parametrize('copy', [
     '实验涵盖两个样本组。结果仅适用于已测量的参与者。未测量的群体不在研究范围内。',
