@@ -304,10 +304,12 @@ class LLMGateway:
 
     def _record_failure(self, exc: LLMTransportError, stage: str, *, operation: str = "text",
                         request_metadata: dict[str, str | int] | None = None) -> None:
+        last_attempt = exc.attempts[-1] if exc.attempts else {}
         with self._usage_lock:
             self.usage.append({**_request_metadata(request_metadata), "stage": stage, "provider": self.settings.provider.value,
                                "operation": operation, "input_tokens": None, "output_tokens": None,
                                "estimated_cost": None,
+                               "requested_service_tier": last_attempt.get("requested_service_tier"),
                                "model": self.settings.model_for(stage), "status": "request_failed",
                                "attempts": exc.attempts})
 

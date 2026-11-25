@@ -16,6 +16,7 @@ from .capabilities import ModelCapabilities
 from .config import LLMSettings, ProviderName
 from .credentials import DEFAULT_ENDPOINTS, provider_endpoint
 from .exceptions import LLMConfigurationError, LLMTransportError, LLMStructuredOutputError
+from .model_catalog import supports_openai_fast_mode
 from .structured import validate_structured_text
 from .usage import LLMUsage
 from .usage_parser import get_field, usage_counters
@@ -111,15 +112,16 @@ class LiteLLMProvider(LLMClient):
             version = "v1alpha" if "gemini-3" in selected_model else "v1beta"
             base_url = f"{base_url}/{version}"
         request_kwargs = {name: value for name, value in kwargs.items() if value is not None}
+        fast_mode = self.settings.openai_fast_mode and supports_openai_fast_mode(self.settings.provider, base_url, selected_model)
+        if fast_mode:
+            request_kwargs["service_tier"] = "fast"
         # These exact models on the official OpenAI endpoint reject sampling
         # temperature in Chat Completions. Keep custom endpoints on the normal
         # compatibility-retry path because their parameter support can differ.
-        if (
+        if fast_mode or (
             self.settings.provider == ProviderName.OPENAI
             and base_url == DEFAULT_ENDPOINTS[ProviderName.OPENAI]
-            and selected_model.removeprefix("openai/") in {
-                "gpt-6.2-sol", "gpt-6.2-astra", "gpt-6-luna"
-            }
+            and selected_model.removeprefix("openai/") in {"gpt-6.2-sol", "gpt-6.2-astra", "gpt-6-luna"}
         ):
             request_kwargs.pop("temperature", None)
         transient_retries = 0
@@ -131,6 +133,8 @@ class LiteLLMProvider(LLMClient):
                      "started_at": datetime.now(timezone.utc).isoformat(),
                      "kind": "network_retry" if transient_retries else "compatibility_retry" if compatibility_retry_used else "initial"}
             event["reasoning_parameters"] = reasoning_parameters(request_kwargs)
+            if "service_tier" in request_kwargs:
+                event["requested_service_tier"] = request_kwargs["service_tier"]
             try:
                 with self._request_client() as client_options:
                     result = completion(
@@ -145,6 +149,8 @@ class LiteLLMProvider(LLMClient):
                         **request_kwargs,
                     )
                 event["status"] = "success"
+                if isinstance(service_tier := get_field(result, "service_tier"), str):
+                    event["service_tier"] = service_tier
                 return result
             except Exception as exc:
                 event.update(status="failed", error_type=type(exc).__name__)
@@ -307,11 +313,14 @@ class LiteLLMProvider(LLMClient):
                 policy["status"] = "compatibility_downgrade"
             thinking = policy["applied"].get("thinking", {}).get("type")
             text = raw.choices[0].message.content or ""
+            last_attempt = attempt_log[-1] if attempt_log else {}
             usage = LLMUsage(
                 provider=self.settings.provider.value,
                 model=model or self.settings.model,
                 **usage_counters(raw),
                 resolved_model=get_field(raw, "model"),
+                requested_service_tier=last_attempt.get("requested_service_tier"),
+                service_tier=last_attempt.get("service_tier"),
                 started_at=started_at,
                 completed_at=datetime.now(timezone.utc).isoformat(),
                 finish_reason=get_field(raw.choices[0], "finish_reason"),

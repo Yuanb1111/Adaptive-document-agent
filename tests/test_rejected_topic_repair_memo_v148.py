@@ -79,6 +79,8 @@ def test_schema_and_client_identity_changes_invalidate_the_request_key():
     class Second(BaseModel): value: int
     key = memo.key(gateway, [{'role': 'user', 'content': 'owned evidence'}], First, 'source')
     assert key is not None
+    gateway.settings.openai_fast_mode = True
+    assert key == memo.key(gateway, [{'role': 'user', 'content': 'owned evidence'}], First, 'source')
     assert key != memo.key(gateway, [{'role': 'user', 'content': 'owned evidence'}], Second, 'source')
     gateway.client = MockLLMClient()
     assert key != memo.key(gateway, [{'role': 'user', 'content': 'owned evidence'}], First, 'source')

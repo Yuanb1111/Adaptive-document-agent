@@ -25,7 +25,7 @@ class RejectedTopicRepairMemo:
             if client_settings is not settings:
                 return None
             value = dict(gateway=id(gateway), client=id(gateway.client),
-                settings=settings.model_dump(mode='json', exclude={'api_key'}),
+                settings=settings.model_dump(mode='json', exclude={'api_key', 'openai_fast_mode'}),
                 credential_digest=sha256(credential.encode()).hexdigest(),
                 capabilities=gateway.client.capabilities.model_dump(mode='json'),
                 request_policy=gateway.client.request_policy(stage='presentation',

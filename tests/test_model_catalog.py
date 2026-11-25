@@ -268,3 +268,46 @@ def test_manual_model_is_available_to_stages_and_main_model_clears_override(monk
     assert settings.model == "gpt-4o"
     assert settings.stage_models == {}
     assert "gpt-4o" in ui.stage_options["Discovery model"]
+
+
+def test_luna_speed_selection_follows_the_main_or_stage_route(monkeypatch):
+    from streamlit.testing.v1 import AppTest
+    from adaptive_document_agent.ui.app import _analysis_scope_key
+
+    defaults = LLMSettings(provider=ProviderName.OPENAI, model="gpt-6-luna")
+    monkeypatch.setattr(LLMSettings, "from_env", lambda: defaults)
+    app = AppTest.from_string("""
+import streamlit as st
+from adaptive_document_agent.ui.sidebar import render_sidebar
+st.session_state["settings"] = render_sidebar(st, public_deployment=False)
+""", default_timeout=15).run()
+    def choose(key, value):
+        app.selectbox(key=key).select(value).run()
+        assert not app.exception
+        return app.session_state["settings"]
+
+    original = app.session_state["settings"]
+    assert not original.openai_fast_mode
+    selected = choose("openai_luna_speed", "Fast")
+    assert selected.openai_fast_mode and selected.simple_task_reasoning == original.simple_task_reasoning
+    assert _analysis_scope_key(b"pdf", "", original) == _analysis_scope_key(b"pdf", "", selected)
+    other = choose("model_select_openai", "gpt-6.2-sol")
+    assert not other.openai_fast_mode
+    assert "openai_luna_speed" not in {widget.key for widget in app.selectbox}
+    choose("stage_model_openai_report", "gpt-6-luna")
+    selected = choose("openai_luna_speed", "Fast")
+    assert selected.openai_fast_mode and selected.stage_models["report"] == "gpt-6-luna"
+
+
+def test_public_session_requires_visitor_to_opt_in_to_fast(monkeypatch):
+    from streamlit.testing.v1 import AppTest
+
+    defaults = LLMSettings(provider=ProviderName.OPENAI, model="gpt-6-luna", openai_fast_mode=True)
+    monkeypatch.setattr(LLMSettings, "from_env", lambda: defaults)
+    app = AppTest.from_string("""
+import streamlit as st
+from adaptive_document_agent.ui.sidebar import render_sidebar
+st.session_state["settings"] = render_sidebar(st, public_deployment=True)
+""", default_timeout=15).run()
+    assert app.selectbox(key="openai_luna_speed").value == "Project default"
+    assert not app.session_state["settings"].openai_fast_mode

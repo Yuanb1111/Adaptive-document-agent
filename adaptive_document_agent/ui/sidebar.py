@@ -13,6 +13,7 @@ from adaptive_document_agent.services.llm.model_catalog import (
     list_provider_models,
     recommended_models,
     shortlist_models,
+    supports_openai_fast_mode,
 )
 
 from .deployment import is_public_deployment
@@ -213,6 +214,20 @@ def render_sidebar(st, *, public_deployment: bool | None = None) -> LLMSettings:
             timeout_seconds=defaults.timeout_seconds,
             temperature=defaults.temperature,
         )
+        if privacy != PrivacyMode.LOCAL_ONLY and any(
+            supports_openai_fast_mode(provider, base_url, routed_model)
+            for routed_model in (model, *stage_models.values())
+        ):
+            with model_controls:
+                speed = st.selectbox(
+                    "GPT-6 Luna API speed", ["Project default", "Fast"],
+                    index=int(defaults.openai_fast_mode and not public_deployment),
+                    key="openai_luna_speed",
+                    help="Project default normally uses Standard. Fast generates tokens faster at "
+                         "twice the Standard token price and uses the same reasoning settings. Applies to new "
+                         "GPT-6 Luna requests in this run.",
+                )
+            settings.openai_fast_mode = speed == "Fast"
         if settings.is_local:
             st.success("Local model")
             if privacy == PrivacyMode.LOCAL_ONLY:

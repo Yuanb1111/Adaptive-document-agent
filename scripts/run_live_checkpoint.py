@@ -78,6 +78,7 @@ def settings_for(path: Path, provider: str, model: str) -> LLMSettings:
         discovery_workers=int(values.get('LLM_DISCOVERY_WORKERS', '4')),
         brief_initial_findings=int(values.get('LLM_BRIEF_INITIAL_FINDINGS', '7')),
         simple_task_reasoning=values.get('LLM_SIMPLE_TASK_REASONING', 'reduced'),
+        openai_fast_mode=values.get('OPENAI_FAST_MODE', 'false'),
         presentation_strategy='retained_analysis')
 
 
@@ -93,7 +94,8 @@ def run(args) -> dict:
         raise ValueError('Original PDF does not match the saved checkpoint')
     settings = settings_for(args.env, args.provider, args.model)
     overrides = {key: getattr(args, argument) for key, argument in (
-        ('discovery_workers', 'workers'), ('brief_initial_findings', 'brief_findings'))
+        ('discovery_workers', 'workers'), ('brief_initial_findings', 'brief_findings'),
+        ('openai_fast_mode', 'openai_fast_mode'))
         if getattr(args, argument, None) is not None}
     if overrides:
         settings = settings.model_copy(update=overrides)
@@ -208,6 +210,9 @@ if __name__ == '__main__':
     parser.add_argument('--fresh', action='store_true', help='Read only the original PDF; ignore checkpoints and start from ingestion without any saved analysis')
     parser.add_argument('--analysis-timeout-seconds', type=float, help='One shared attempt budget, 60–7200 seconds; default ANALYSIS_TIMEOUT_SECONDS or 900')
     parser.add_argument('--workers', type=int, choices=range(1, 9), help='Shared cloud request limit (1–8); local and stateful clients remain serial')
+    parser.add_argument('--openai-fast-mode', action=argparse.BooleanOptionalAction, default=None,
+                        help='Request Fast for direct OpenAI GPT-6 Luna calls at twice the Standard token price. '
+                             'Use --no-openai-fast-mode for the project default. Overrides OPENAI_FAST_MODE.')
     parser.add_argument('--brief-findings', type=int, choices=range(3, 8), help='Initial material brief finding capacity (3–7), preserving reserved supplementary capacity')
     parser.add_argument('--skip-probe', action='store_true', help='Reuse an already verified connection; all analysis requests remain real')
     parser.add_argument('--render-node', type=Path)

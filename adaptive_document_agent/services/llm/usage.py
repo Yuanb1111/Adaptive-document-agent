@@ -11,6 +11,8 @@ class LLMUsage(BaseModel):
     latency_ms: int | None = Field(default=None, ge=0)
     estimated_cost: float | None = Field(default=None, ge=0)
     resolved_model: str | None = None
+    requested_service_tier: str | None = None
+    service_tier: str | None = None
     started_at: str | None = None
     completed_at: str | None = None
     cached_input_tokens: int | None = Field(default=None, ge=0)

@@ -10,6 +10,7 @@ from urllib.error import URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .config import ProviderName
+from .credentials import DEFAULT_ENDPOINTS, provider_endpoint
 
 
 RECOMMENDED_MODELS: dict[ProviderName, tuple[str, ...]] = {
@@ -44,6 +45,13 @@ _NON_TEXT_MARKERS = (
 
 class ModelCatalogError(RuntimeError):
     """A model catalog could not be retrieved or parsed."""
+
+
+def supports_openai_fast_mode(provider: ProviderName, base_url: str | None, model: str) -> bool:
+    """The direct OpenAI Luna route on which the app offers paid Fast processing."""
+    return (provider == ProviderName.OPENAI
+            and provider_endpoint(provider, base_url) == DEFAULT_ENDPOINTS[ProviderName.OPENAI]
+            and re.fullmatch(r"gpt-6-luna(?:-\d{4}-\d{2}-\d{2})?", model.removeprefix("openai/")) is not None)
 
 
 def recommended_models(provider: ProviderName) -> list[str]:

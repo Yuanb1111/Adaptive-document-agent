@@ -9,17 +9,28 @@ from adaptive_document_agent.services.llm import LLMSettings,ProviderName,MockLL
 from scripts import run_live_checkpoint as live
 
 
-def test_fresh_entry_reads_only_original_pdf_and_uses_one_clock(tmp_path,monkeypatch):
+def test_live_driver_reads_openai_fast_mode_from_its_env_file(tmp_path, monkeypatch):
+    monkeypatch.delenv("OPENAI_FAST_MODE", raising=False)
+    config = tmp_path / ".env"
+    config.write_text("OPENAI_API_KEY=test-only\nOPENAI_FAST_MODE=true\n", encoding="utf-8")
+    assert live.settings_for(config, "openai", "gpt-6-luna").openai_fast_mode
+    monkeypatch.setenv("OPENAI_FAST_MODE", "false")
+    assert not live.settings_for(config, "openai", "gpt-6-luna").openai_fast_mode
+
+
+@pytest.mark.parametrize('speed', [None, False, True])
+def test_fresh_entry_reads_only_original_pdf_and_uses_one_clock(tmp_path,monkeypatch,speed):
     from adaptive_document_agent.agent.orchestrator import DocumentOrchestrator
     pdf=tmp_path/'original.pdf';pdf.write_bytes(b'%PDF synthetic test only')
     args=SimpleNamespace(fresh=True,checkpoint=tmp_path/'MUST-NOT-BE-READ.json',pdf=pdf,
         env=Path('unused'),provider='openai',model='gpt-6-luna',output=tmp_path/'run',
-        analysis_timeout_seconds=2700,skip_probe=True,export_pptx=False)
-    monkeypatch.setattr(live,'settings_for',lambda *a:LLMSettings(provider=ProviderName.MOCK,model='mock'))
+        analysis_timeout_seconds=2700,skip_probe=True,export_pptx=False,openai_fast_mode=speed)
+    monkeypatch.setattr(live,'settings_for',lambda *a:LLMSettings(provider=ProviderName.MOCK,model='mock',openai_fast_mode=True))
     monkeypatch.setattr(live,'create_llm_client',lambda *a:MockLLMClient())
     calls=[]
     def analyse(self,raw,*,resume,progress):
         assert raw==pdf.read_bytes() and resume is None and not self.gateway.cache_enabled
+        assert self.gateway.settings.openai_fast_mode == (True if speed is None else speed)
         calls.append(self.gateway.run_deadline)
         return PipelineResult(document=ParsedDocument(document_id='test',sha256=hashlib.sha256(raw).hexdigest(),
             safe_filename='test.pdf',page_count=1),profile=DocumentProfile())
