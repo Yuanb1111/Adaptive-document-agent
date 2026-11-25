@@ -166,7 +166,7 @@ def build_presentation(result: PipelineResult, template_path: str | Path | None 
     return stream.getvalue()
 
 
-def presentation_for_copy(result: PipelineResult):
+def presentation_for_copy(result: PipelineResult, *, source_pdf: bytes | None = None):
     """Private display-copy inventory; never an export or a validation verdict.
 
     Source tables are literal and do not need translating. Their layout or an
@@ -179,7 +179,7 @@ def presentation_for_copy(result: PipelineResult):
         draft.profile.report_requirements = ReportRequirements()
     draft.profile.report_requirements.copy_translations = {}
     draft.profile.report_requirements.summary_copy_translations = {}
-    presentation = _compose_presentation(draft, source_tables=False, validate_plan=False)
+    presentation = _compose_presentation(draft, source_pdf=source_pdf, source_tables=False, validate_plan=False)
     from .requested_tables import requested_table_catalog
     if requested_table_catalog(draft):
         _base_slide(presentation, 'Data Index: Source tables', '')

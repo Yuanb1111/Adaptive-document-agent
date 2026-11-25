@@ -16,6 +16,7 @@ from .report_audit_scope import require_report_audit_scope
 def retry_final_layout(
     previous: PipelineResult, gateway: LLMGateway | None, *, requested_focus: str | None = None,
     scope: AnalysisScopePreview | None = None, progress: Callable[[str], None] | None = None,
+    source_pdf: bytes | None = None,
 ) -> PipelineResult | None:
     """Reuse only a source-valid report with current independent approvals."""
     if (previous.failed_stage != 'final_presentation_layout'
@@ -43,7 +44,7 @@ def retry_final_layout(
     started = perf_counter()
     notify = progress or (lambda _: None)
     notify('Retrying final display preparation with source-reviewed report content')
-    prepare_report_language(gateway, candidate, progress=notify)
+    prepare_report_language(gateway, candidate, progress=notify, source_pdf=source_pdf)
     check_requirements(candidate)
     if check_final_presentation_layout(candidate):
         candidate.pipeline_state = 'complete'

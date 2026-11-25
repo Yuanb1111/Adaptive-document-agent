@@ -146,7 +146,7 @@ class DocumentOrchestrator:
             analysis_focus = profile.analysis_focus
             from .final_layout_resume import retry_final_layout
             final_display = retry_final_layout(resume, self.gateway, requested_focus=requested_focus,
-                                               scope=scope, progress=notify)
+                                               scope=scope, progress=notify, source_pdf=raw)
             if final_display is not None:
                 run_state['result'] = final_display
                 return final_display
@@ -980,7 +980,7 @@ class DocumentOrchestrator:
                     review_content_requirements(self.gateway, final_result)
             # Source-language fallback applies even without custom instructions.
             with record_timing(final_result.stage_details_ms, 'report_localization'):
-                prepare_report_language(self.gateway, final_result, progress=notify)
+                prepare_report_language(self.gateway, final_result, progress=notify, source_pdf=raw)
             if final_result.profile.report_requirements:
                 with record_timing(final_result.stage_details_ms, 'customization_checks'):
                     check_requirements(final_result)

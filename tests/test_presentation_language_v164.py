@@ -85,6 +85,31 @@ def test_actual_display_requires_complete_review_and_current_target():
         require_consistent_language(deck, result)
 
 
+def test_uploaded_source_caption_and_plain_layout_are_both_reviewed(monkeypatch):
+    from adaptive_document_agent.agent.report_localization import CopyTranslations, prepare_report_language
+    from adaptive_document_agent.services import pptx_export
+
+    result, plain = deck_result(['Company overview', 'Source: Document disclosures (p. 2)'])
+    _, illustrated = deck_result(['Company overview', 'Source: Document disclosures (p. 1, 2)',
+                                  'Source image: document p. 1'])
+    def inventory(result, *, source_pdf=None):
+        if source_pdf is None:
+            return plain
+        assert source_pdf == b'matching PDF'
+        return illustrated
+
+    def review(messages, model, **kwargs):
+        rows = json.loads(messages[-1]['content'].split('\n', 1)[1].rsplit('\n', 1)[0])
+        if model is CopyTranslations:
+            return model(items=[dict(id=r['id'], text=r['original']) for r in rows])
+        return model(items=[dict(id=r['id'], accepted=True, reason='Faithful English copy') for r in rows])
+
+    monkeypatch.setattr(pptx_export, 'presentation_for_copy', inventory)
+    prepare_report_language(SimpleNamespace(generate_structured=review), result, source_pdf=b'matching PDF')
+    require_consistent_language(plain, result)
+    require_consistent_language(illustrated, result)
+
+
 def test_unlocalized_intro_binding_is_not_a_language_exemption():
     result, deck = deck_result(['中文介绍'])
     shape = deck.slides[0].shapes[-1]

@@ -34,7 +34,7 @@ class TranslationReview(BaseModel):
     items: list[TranslationVerdict] = Field(default_factory=list)
 
 
-def prepare_report_language(gateway, result, *, progress=None):
+def prepare_report_language(gateway, result, *, progress=None, source_pdf: bytes | None = None):
     from types import SimpleNamespace
     from adaptive_document_agent.models.customization import ReportRequirements
     from adaptive_document_agent.services.presentation_language import resolve_language
@@ -72,6 +72,12 @@ def prepare_report_language(gateway, result, *, progress=None):
         from adaptive_document_agent.services.localized_summary_copy import summary_copy_units, retain_summary_translations
         with record_timing(details, 'localization_copy_inventory'):
             presentation = presentation_for_copy(result)
+            # Export supports both variants. Source artwork can change the profile
+            # layout, citations and captions even when the report prose is identical.
+            display_strings = audience_copy(presentation, exclude_summary_items=True)
+            if source_pdf is not None:
+                presentation = presentation_for_copy(result, source_pdf=source_pdf)
+                display_strings.extend(audience_copy(presentation, exclude_summary_items=True))
             presentation._ada_translation_name_evidence = evidence
             from adaptive_document_agent.services.presentation_language import language_key
             presentation._ada_source_language = language_key(result.profile.language or '')
@@ -80,7 +86,7 @@ def prepare_report_language(gateway, result, *, progress=None):
             # Exclude by actual bound shape role, never by shared text value:
             # the same paragraph may also appear in an ordinary briefing box
             # and needs its own reviewed display-copy binding there.
-            strings = list(dict.fromkeys([*audience_copy(presentation, exclude_summary_items=True),
+            strings = list(dict.fromkeys([*display_strings,
                                          *[text for page in (result.presentation_plan.company.summary_pages
                                              if result.presentation_plan else []) for text in
                                              (page.title, *[item.label for item in page.items]) if text.strip()],
