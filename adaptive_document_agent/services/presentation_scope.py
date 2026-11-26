@@ -81,9 +81,13 @@ def scope_items(result):
     from .company_extractor import is_company_identity_resolved
     if not is_company_identity_resolved(plan.company):
         add("Identity limitation", "Company identity remains unresolved in the retained identity evidence.")
-    withheld = {w.code for w in result.validation_warnings}
-    if "conflicting_values" in withheld:
-        add("Source validation limit", "The analysis retains unresolved source-conflict warnings. Only validated selected evidence is shown; the original analysis records the remaining warnings.")
+    conflicts = [issue for issue in result.validation_warnings if issue.code == "conflicting_values"]
+    if conflicts:
+        noun = "warning" if len(conflicts) == 1 else "warnings"
+        stage = " during extraction" if all(issue.stage == "extraction" for issue in conflicts) else ""
+        add("Source validation limit",
+            f"The analysis validation log recorded {len(conflicts)} {noun} about potentially conflicting values{stage}. "
+            "See the log for the affected records.")
     # Rejected draft wording is an internal validation event, not a source
     # limitation. Claim-withheld diagnostics remain in scope_audit_notes; real
     # coverage boundaries, missing topics and source conflicts stay visible.

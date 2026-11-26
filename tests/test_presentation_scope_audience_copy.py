@@ -87,3 +87,18 @@ def test_audit_only_claim_rejections_do_not_hide_real_source_limits_or_conflicts
     assert any(item.title == "Source validation limit" for item in items)
     assert not any(item.title == "Interpretation limit" for item in items)
     assert result.model_dump() == before
+
+
+@pytest.mark.parametrize(("stages", "description"), [
+    (["extraction"], "1 warning about potentially conflicting values during extraction"),
+    (["extraction", "extraction"], "2 warnings about potentially conflicting values during extraction"),
+    (["extraction", "validation"], "2 warnings about potentially conflicting values"),
+])
+def test_conflict_notice_reports_what_the_validation_log_records(stages, description):
+    result = _result()
+    result.validation_warnings = [
+        ValidationIssue(code="conflicting_values", stage=stage, message="Reported values disagree.")
+        for stage in stages
+    ] + [ValidationIssue(code="coverage_gap", stage="extraction", message="Some rows remain unassigned.")]
+    notice, = [item for item in scope_items(result) if item.title == "Source validation limit"]
+    assert notice.text == f"The analysis validation log recorded {description}. See the log for the affected records."

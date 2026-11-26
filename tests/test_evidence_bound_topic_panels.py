@@ -273,6 +273,15 @@ def test_percent_symbols_use_only_own_literal_unambiguous_source():
     assert restore_percentage_symbols('Value 41.4.', [quote, 'Price was RMB 41.4.']) == 'Value 41.4.'
 
 
+@pytest.mark.parametrize('word', ['per cent', 'per\u00a0cent', 'percent'])
+def test_spelled_percentage_keeps_its_unit_in_checked_and_exported_copy(word):
+    from adaptive_document_agent.services.executive_brief import _quantities
+    claim = f'The share was 31.9 {word} of revenue.'
+    assert _quantities(claim) == frozenset({('', '31.9', 'percent')})
+    assert restore_percentage_symbols(claim, ['Share of revenue: 31.9%']) == claim
+    assert restore_percentage_symbols('The share was 31.9.', [claim]) == 'The share was 31.9%.'
+
+
 @pytest.mark.parametrize('change', [None, 'column', 'cell', 'alignment', 'competing_unit'])
 def test_bare_table_percentages_require_own_quoted_resolved_source_column(change):
     from adaptive_document_agent.services.executive_brief import brief_items

@@ -24,7 +24,7 @@ _UNIT_ONLY_LABEL = re.compile(
 _QUANTITY = re.compile(
     r"(?i)(?<![A-Za-z0-9_.])(?P<currency>US\$|HK\$|RMB|CNY|USD|HKD|EUR|GBP|人民币|美元|港元|欧元|\$|€|£|¥|￥)?\s*"
     r"(?P<value>(?>[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?))\s*"
-    r"(?P<unit>trillion|billion|million|thousand|bn|mn|[mkb]|%|percent\b|万亿|十亿|百万|亿|万|千)?"
+    r"(?P<unit>trillion|billion|million|thousand|bn|mn|[mkb]|%|per[^\S\r\n]*cent\b|万亿|十亿|百万|亿|万|千)?"
     r"(?P<currency_suffix>美元|港元|欧元|人民币|元)?(?![A-Za-z0-9_])"
 )
 
@@ -50,7 +50,7 @@ def _quantities(text: str) -> frozenset[tuple[str, str, str]]:
     money_spans = [match.span() for match in money_matches]
     output = {((match['currency'] or match['currency_suffix'] or '').casefold(),
                PresentationPlanValidator._normalize_number(match['value']),
-               (match['unit'] or '').casefold()) for match in _QUANTITY.finditer(text)
+               ''.join((match['unit'] or '').casefold().split())) for match in _QUANTITY.finditer(text)
               if not any(start <= match.start() and match.end() <= end for start, end in money_spans)}
     for match in money_matches:
         value = PresentationPlanValidator._normalize_number(match['value'])

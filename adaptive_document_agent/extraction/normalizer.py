@@ -3,6 +3,8 @@
 import re
 from dataclasses import dataclass
 
+from adaptive_document_agent.utils.unit_notation import QUOTED_THOUSANDS
+
 
 @dataclass(frozen=True)
 class UnitSignature:
@@ -98,7 +100,7 @@ _CURRENCIES: tuple[tuple[str, str], ...] = (
 _SCALES: tuple[tuple[str, float], ...] = (
     (r"billions?|bn\b|十亿", 1_000_000_000.0),
     (r"millions?|mn\b|百万", 1_000_000.0),
-    (r"thousands?|['’`]\s*0{3}\b|千元", 1_000.0),
+    (rf"thousands?|{QUOTED_THOUSANDS}|千元", 1_000.0),
 )
 
 
@@ -114,16 +116,17 @@ def infer_unit_defaults(text: str) -> UnitDefaults:
     lowered = compact.casefold()
     curr_first_pattern = re.compile(
         r"(?i)(?P<currency>rmb|cny|hk\s*\$|hkd|us\s*\$|usd|sgd|s\s*\$|eur|gbp|人民币|港元)"
-        r"\s*(?:in\s*)?(?P<scale>['’`]\s*0{3}|thousands?|millions?|billions?|千元|百万|十亿)"
+        rf"\s*(?:in\s*)?(?P<scale>{QUOTED_THOUSANDS}|thousands?|millions?|billions?|千元|百万|十亿)"
     )
     scale_first_pattern = re.compile(
-        r"(?i)(?:in\s+)?(?P<scale>['’`]\s*0{3}|thousands?|millions?|billions?|千元|百万|十亿)"
+        rf"(?i)(?:in\s+)?(?P<scale>{QUOTED_THOUSANDS}|thousands?|millions?|billions?|千元|百万|十亿)"
         r"\s*(?:of\s+)?(?P<currency>rmb|cny|hk\s*\$|hkd|us\s*\$|usd|sgd|s\s*\$|eur|gbp|人民币|港元)"
     )
     declarations = list(curr_first_pattern.finditer(compact)) or list(scale_first_pattern.finditer(compact))
     declaration_match = declarations[-1] if declarations else None
     declaration = declaration_match.group(0).strip() if declaration_match else None
-    currency = next((code for pattern, code in _CURRENCIES if re.search(pattern, declaration or lowered, re.I)), None)
+    currency_text = declaration_match.group('currency') if declaration_match else lowered
+    currency = next((code for pattern, code in _CURRENCIES if re.search(pattern, currency_text, re.I)), None)
     scale_text = declaration_match.group("scale").casefold() if declaration_match else lowered
     scale = next((amount for pattern, amount in _SCALES if re.search(pattern, scale_text, re.I)), None)
     percent_declaration = bool(re.search(r"(?i)\b(?:in\s+%)|(?:in\s+percent(?:age)?s?)\b|\((?:%|percent)\)", compact))

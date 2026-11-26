@@ -13,6 +13,7 @@ from adaptive_document_agent.services.pptx_export import (
 @pytest.mark.parametrize("raw, expected", [
     ("RMB in thousands/unit", "RMB '000/unit"),
     ("RMB in thousands / unit", "RMB '000/unit"),
+    ("HKD 000’ / unit", "HK$ '000/unit"),
     ("USD per customer", "USD/customer"),
     ("USD per hour", "USD/hour"),
     ("MWh per employee", "MWh/employee"),

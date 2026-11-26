@@ -9,6 +9,8 @@ import math
 import re
 from typing import Any
 
+from adaptive_document_agent.utils.unit_notation import QUOTED_THOUSANDS
+
 # Canonical currency symbols / abbreviations for client presentation
 _CURRENCY_SYMBOLS: dict[str, str] = {
     "CNY": "RMB",
@@ -139,7 +141,7 @@ def normalize_raw_unit(raw_unit: str | None, *, default_currency: str | None = N
         return f"{curr_str} billion".strip()
     if re.search(r"(?i)(?:millions?|mn|百万)", text):
         return f"{curr_str} million".strip()
-    if re.search(r"(?i)(?:thousands?|['’`]\s*000|千元|inthousands)", text):
+    if re.search(rf"(?i)(?:thousands?|{QUOTED_THOUSANDS}|千元|inthousands)", text):
         return f"{curr_str} '000".strip()
 
     # Generic cleanup: separate concatenated words like "RMBinthousands"
@@ -171,7 +173,7 @@ def format_compact_currency(
     elif is_base_value is False:
         if unit_scale and unit_scale > 1.0:
             val = val * unit_scale
-        elif raw_unit and any(term in raw_unit.lower() for term in ("thousand", "'000", "inthousands")):
+        elif raw_unit and re.search(rf"thousand|{QUOTED_THOUSANDS}", raw_unit, re.I):
             val = val * 1000.0
         elif raw_unit and any(term in raw_unit.lower() for term in ("billion", "bn", "十亿")):
             val = val * 1_000_000_000.0
@@ -181,7 +183,7 @@ def format_compact_currency(
         # Backward-compatible auto-detection for standalone unscaled numbers passed without flag
         if unit_scale and unit_scale > 1.0 and abs(val) < 20_000_000:
             val = val * unit_scale
-        elif raw_unit and any(term in raw_unit.lower() for term in ("thousand", "'000", "inthousands")) and abs(val) < 20_000_000:
+        elif raw_unit and abs(val) < 20_000_000 and re.search(rf"thousand|{QUOTED_THOUSANDS}", raw_unit, re.I):
             val = val * 1000.0
 
     is_negative = val < 0

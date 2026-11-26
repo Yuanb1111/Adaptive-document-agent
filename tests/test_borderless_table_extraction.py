@@ -1,4 +1,5 @@
 from adaptive_document_agent.extraction.borderless_table_extractor import BorderlessTableExtractor
+from adaptive_document_agent.extraction.normalizer import infer_unit_defaults
 from adaptive_document_agent.extraction.observation_extractor import ObservationExtractor
 
 
@@ -100,6 +101,29 @@ Gross profit .... 4,000 5,000
     assert revenue.unit_scale == 1_000
     assert revenue.value == 10_000_000
     assert revenue.raw_unit == "RMB’000"
+
+
+def test_trailing_apostrophe_scales_only_amount_columns() -> None:
+    class MixedUnitPage:
+        def extract_text(self, **_):
+            return """Product revenue
+Year ended December 31,
+2023 2024
+RMB 000’ % RMB 000’ %
+Hardware .... 125,200 62.6 144,640 56.5
+Services .... 74,800 37.4 111,360 43.5
+"""
+
+    table = BorderlessTableExtractor().extract(MixedUnitPage(), 5)[0]
+    observations = ObservationExtractor()._table_observations(table)
+    amount = next(o for o in observations if o.raw_value == '125,200')
+    share = next(o for o in observations if o.raw_value == '62.6')
+    assert (amount.unit, amount.raw_unit, amount.unit_scale, amount.value) == ('currency', 'RMB 000’', 1000, 125_200_000)
+    assert (share.unit, share.unit_scale, share.value) == ('percent', 1, 62.6)
+
+
+def test_quoted_currency_amount_does_not_set_the_table_scale() -> None:
+    assert infer_unit_defaults("the stated price was ‘RMB 5,000’").scale is None
 
 
 def test_collapsed_headers_preserve_full_year_and_interim_periods_and_nearest_scale() -> None:
