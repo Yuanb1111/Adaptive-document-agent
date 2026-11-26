@@ -20,9 +20,13 @@ class SentenceAlternatives(BaseModel):
     shorter: str = Field(min_length=5, max_length=700)
 
 
+def quoted_fragments(text):
+    return [(m.start(), next(group for group in m.groups() if group)) for m in _QUOTED.finditer(text)]
+
+
 def quoted_description_sentences(addressed, owner_issue):
     """Return offsets only for unambiguous literal quoted fragments in each original description."""
-    quotations = [(m.start(), next(group for group in m.groups() if group)) for m in _QUOTED.finditer(owner_issue)]
+    quotations = quoted_fragments(owner_issue)
     references = list(_SLOT.finditer(owner_issue))
     targets = {}
     for slot, item in addressed.items():

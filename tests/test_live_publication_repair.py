@@ -35,6 +35,39 @@ def measured(monkeypatch):
     return calls
 
 
+def test_initial_review_exposes_each_slides_visible_continuation_by_name():
+    from adaptive_document_agent.agent.reported_source_context import QualifiedSourceCopy
+    from adaptive_document_agent.utils.record_encoding import decode_records
+
+    result, _, selection = fixture()
+    explanation = 'Management identified payment delays in the export business.'
+    result.document.pages[0].text += ' ' + explanation
+    first = selection.decisions[0]
+    sibling = 'another-finding'
+    result.insights.append(result.insights[0].model_copy(update={'id': sibling}))
+    selection.decisions.append(first.model_copy(deep=True, update={'insight_id': sibling}))
+    selection.ordered_insight_ids.append(sibling)
+    first.page.source_context.append(QualifiedSourceCopy(scope='export business',
+        description='reports that management identified payment delays', quote={'page': 234, 'text': explanation}))
+    retained.select_retained_analysis(gateway([selection.model_dump(),
+        dict(accepted=True, reason='Source-backed findings.')]), result)
+    result.presentation_plan = retained.compile_retained_analysis(result)
+    llm = gateway([verdict(result)])
+    review_retained_analysis(llm, result)
+
+    wire = llm.client.calls[0][-1]['content'].split('\n', 1)[1].rsplit('\n', 1)[0]
+    packet = json.loads(wire)
+    slides = [s for s in result.presentation_plan.slides if s.slide_type == 'analysis']
+    assert packet['slides'] == [s.model_dump(mode='json') for s in slides]
+    assert len(slides) == 2 and 'payment delays' in packet['slides'][0]['bullets'][1]
+    assert 'payment delays' not in packet['slides'][0]['message']
+    assert 'payment delays' not in ' '.join(packet['slides'][1]['bullets'])
+    assert any(explanation in p['text'] for p in decode_records(packet['source_pages']))
+    assert review_complete(result)
+    slides[0].bullets.pop()
+    assert not review_complete(result)
+
+
 def test_live_rejection_is_corrected_without_loading_checkpoint_or_restarting_analysis(monkeypatch):
     calls=measured(monkeypatch)
     result,iid=ready();before=deepcopy(result)

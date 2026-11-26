@@ -169,8 +169,12 @@ def test_failed_local_source_edit_returns_complete_previous_checkpoint(monkeypat
         review_retained_analysis(review_gateway([dict(verdicts=rejected, omissions_accepted=True,
             omission_reason='The selection covers the available evidence.')]), source)
     monkeypatch.setattr(retained_selection_feedback, 'can_retry_source_review', lambda _: True)
+    source.presentation_export_trace = [{'planned_slide_id': 'stale', 'slide_numbers': [999]}]
     original = source.model_copy(deep=True)
     def fail(_gateway, candidate, _previous):
+        costs = {tr['planned_slide_id']: tr['slide_numbers'] for tr in candidate.presentation_export_trace
+                 if tr.get('planned_slide_id')}
+        assert 'stale' not in costs and all(costs[v['slide_id']] for v in rejected)
         candidate.presentation_plan.slides[0].title = 'Partially merged invalid copy'
         raise ValueError('Exact source binding rejected the edit.')
     monkeypatch.setattr(retained_source_retry, 'repair_retained_source_copy', fail)

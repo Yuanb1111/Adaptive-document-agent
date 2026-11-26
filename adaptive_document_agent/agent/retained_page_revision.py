@@ -3,13 +3,15 @@ import json
 import re
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model, model_validator
 
 from adaptive_document_agent.utils.record_encoding import INSTRUCTIONS, encode_records
 from .audit_source_layout import LAYOUT_INSTRUCTIONS, audit_source_page
 from .prompting import untrusted_document_message
 from .retained_page_sources import PERIOD_AND_ASSURANCE_RULES, RetainedPage, authored_copy_limit
 from adaptive_document_agent.models.executive_brief import BriefQuote
+from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
+from adaptive_document_agent.services.llm.structured import unique_json_object
 
 
 _REVIEW_PAGE_REFERENCE = re.compile(
@@ -117,12 +119,85 @@ class RetainedPageRevisions(BaseModel):
         description='Exact before/after span edits keyed by the flagged insight IDs.')
 
 
-def merge_page_revisions(revision, decisions, expected):
+class PublishedPageEdits(RetainedPageEdits):
+    source_context_descriptions: dict[str, Annotated[str, Field(min_length=10, max_length=700)]] = Field(
+        default_factory=dict, max_length=8, description='Complete replacement descriptions keyed by supplied '
+        'context-N slots on this page. Their scopes and literal physical-page proofs stay fixed.')
+
+
+PublishedPageRevisions = create_model('RetainedPageRevisions', __base__=RetainedPageRevisions,
+    edits=(dict[str, PublishedPageEdits], Field(default_factory=dict)))
+
+
+def _recover_misplaced_edits(error, expected, schema=RetainedPageRevisions, *, current=None, published=None, pages=None):
+    """Rebind complete, uniquely keyed edits or an exact application-rendered scope."""
+    response = error.response
+    if response.usage is None or response.usage.finish_reason != 'stop':
+        raise error
+    try:
+        root = json.loads(response.text, object_pairs_hook=unique_json_object)
+        if not isinstance(root, dict) or root.get('pages', {}) != {}:
+            raise error
+        edits = root.get('edits')
+        misplaced = {key: value for key, value in root.items() if key not in {'edits', 'pages'}}
+        if (not isinstance(edits, dict) or not edits or edits.keys() & misplaced.keys()
+                or edits.keys() | misplaced.keys() != expected):
+            raise error
+        combined = {**edits, **misplaced}
+        normalized = False
+        if schema is PublishedPageRevisions and published:
+            from .published_description_edits import recover_display_prefix
+            for iid, edit in combined.items():
+                if recover_display_prefix(iid, edit, current, published, pages):
+                    normalized = True
+        if not misplaced and not normalized:
+            raise error
+        return schema.model_validate({'edits': combined})
+    except (ValueError, TypeError, KeyError, IndexError):
+        raise error
+
+
+def _unchanged_copy_errors(revision, current, proposed):
+    """A writer who echoes every replacement must revisit the flagged spans."""
+    errors = {}
+    for iid, edits in revision.edits.items():
+        original = current[iid]['page']
+        page = proposed[iid]
+        if (page.title != original['title'] or page.message != ' '.join([original['message'], *edits.message_append])
+                or page.model_dump(mode='json').get('source_context', []) != original.get('source_context', [])
+                or page.companion_ids != original.get('companion_ids', [])
+                or [q.model_dump(mode='json') for q in page.context_evidence] != original.get('context_evidence', [])):
+            continue  # A real edit to this page still goes to independent review.
+        for field in ('title', 'message'):
+            requested = getattr(edits, field)
+            if not requested:
+                continue
+            spans = {s['id']: s['text'] for s in copy_span_catalog(current[iid]['page'][field])}
+            for edit in requested:
+                before = spans[edit.span_id] if edit.span_id is not None else edit.before
+                if before == edit.after:
+                    errors.setdefault(iid, []).append(
+                        f'The proposed edit left the {field} span {before!r} unchanged. '
+                        'The draft below precedes that edit. Address the original review question. '
+                        'For a dated multi-leg comparison, name the metric and both endpoints in each leg. '
+                        'If the only change needed is a missing qualification, submit just that addition. '
+                        'Check the existing visible source context and keep each supported explanation once.')
+    return errors
+
+
+def merge_page_revisions(revision, decisions, expected, *, published_descriptions=None):
     """Compile one response against the same immutable draft used by its writer."""
     if (revision.pages.keys() & revision.edits.keys()
             or (revision.pages.keys() | revision.edits.keys()) != expected):
         raise ValueError('Page revision must replace exactly the flagged insight IDs')
     replacements = dict(revision.pages)
+    addressed = published_descriptions or {}
+    for iid in revision.pages.keys() & addressed.keys():
+        original = RetainedPage.model_validate(decisions[iid]['page'])
+        previous = [s.model_dump(exclude={'description'}) for s in original.source_context]
+        supplied = [s.model_dump(exclude={'description'}) for s in revision.pages[iid].source_context]
+        if previous != supplied:
+            raise CopySpanError('Published source slots keep their original order; the scope and proof are fixed.')
     for iid, edits in revision.edits.items():
         original = RetainedPage.model_validate(decisions[iid]['page'])
         values = original.model_dump(mode='json')
@@ -130,6 +205,11 @@ def merge_page_revisions(revision, decisions, expected):
             values[field] = apply_copy_edits(values[field], getattr(edits, field))
         if edits.message_append:
             values['message'] = ' '.join([values['message'], *edits.message_append])
+        for slot, description in getattr(edits, 'source_context_descriptions', {}).items():
+            if slot not in addressed.get(iid, {}):
+                raise CopySpanError(f'Unknown published source description {slot!r} for {iid}.')
+            index = int(slot.removeprefix('context-'))
+            values['source_context'][index]['description'] = description
         for field in ('companion_ids', 'context_evidence'):
             value = getattr(edits, field)
             if value is not None:
@@ -162,8 +242,9 @@ def copy_contract_errors(replacements, packet, aliases, result):
 
 def revise_retained_pages(gateway, result, packet, aliases, draft, issues, *, earlier_issues=None,
                           preserve_numeric_inputs=False, rejected_attempts=None, description_edits=None,
-                          prefer_sparse_descriptions=True, prefer_quoted_sentences=True):
+                          prefer_sparse_descriptions=True, prefer_quoted_sentences=True, published_descriptions=None):
     """Isolate flagged pages in fast cloud mode; no worker merges or approves copy."""
+    publication = {'published_descriptions': published_descriptions} if published_descriptions else {}
     if getattr(gateway, 'discovery_workers', 1) >= 8 and len(issues) > 1:
         from .retained_page_revision_parallel import revise_owned_pages
         return revise_owned_pages(issues, lambda own_issues: _revise_page_batch(
@@ -171,16 +252,18 @@ def revise_retained_pages(gateway, result, packet, aliases, draft, issues, *, ea
             earlier_issues=earlier_issues, preserve_numeric_inputs=preserve_numeric_inputs,
             description_edits=description_edits, prefer_sparse_descriptions=prefer_sparse_descriptions,
             prefer_quoted_sentences=prefer_quoted_sentences,
-            rejected_attempts={iid: rejected_attempts[iid] for iid in own_issues if iid in (rejected_attempts or {})}))
+            rejected_attempts={iid: rejected_attempts[iid] for iid in own_issues if iid in (rejected_attempts or {})},
+            **publication))
     return _revise_page_batch(gateway, result, packet, aliases, draft, issues,
         earlier_issues=earlier_issues, preserve_numeric_inputs=preserve_numeric_inputs,
         rejected_attempts=rejected_attempts, description_edits=description_edits,
-        prefer_sparse_descriptions=prefer_sparse_descriptions, prefer_quoted_sentences=prefer_quoted_sentences)
+        prefer_sparse_descriptions=prefer_sparse_descriptions, prefer_quoted_sentences=prefer_quoted_sentences,
+        **publication)
 
 
 def _revise_page_batch(gateway, result, packet, aliases, draft, issues, *, earlier_issues=None,
                        preserve_numeric_inputs=False, rejected_attempts=None, description_edits=None,
-                       prefer_sparse_descriptions=True, prefer_quoted_sentences=True):
+                       prefer_sparse_descriptions=True, prefer_quoted_sentences=True, published_descriptions=None):
     from adaptive_document_agent.services.source_citations import evidence_pages
     from adaptive_document_agent.services.presentation_evidence import calculation_catalog
     findings = {f['insight']['id']: f for f in packet['findings']}
@@ -207,6 +290,9 @@ def _revise_page_batch(gateway, result, packet, aliases, draft, issues, *, earli
                             source_page_numbers=sorted(page_numbers & pages.keys()))
     source_pages = {n for page in by_page.values() for n in page['source_page_numbers']} | {
         p['page'] for p in packet.get('source_pages', [])}
+    published = {iid: slots for iid, slots in (published_descriptions or {}).items() if iid in by_page and slots}
+    for iid, slots in published.items():
+        by_page[iid]['published_source_descriptions'] = slots
     use_owned_writer = getattr(gateway, 'discovery_workers', 1) >= 8 and len(issues) == 1
     if use_owned_writer:
         iid, = issues
@@ -276,6 +362,7 @@ def _revise_page_batch(gateway, result, packet, aliases, draft, issues, *, earli
             if revised is None:
                 raise
             return revised
+    schema = PublishedPageRevisions if published else RetainedPageRevisions
     messages = [
         dict(role='system', content=
              'Revise only the flagged analysis pages. Return edits keyed by each supplied insight ID '
@@ -396,20 +483,59 @@ def _revise_page_batch(gateway, result, packet, aliases, draft, issues, *, earli
              'must be a complete literal date in its selected context_evidence quotation.'),
         untrusted_document_message(json.dumps(encode_records(payload), ensure_ascii=False, separators=(',', ':'))),
     ]
+    if published:
+        messages[0]['content'] += (
+            ' Each published_source_descriptions entry is actual visible slide text compiled from the matching '
+            'source_context slot in the draft. To correct wording there, put a complete replacement description '
+            'in edits[insight ID].source_context_descriptions[context-N]; check its frozen scope and literal '
+            'proof. Correct the field containing the questioned wording. Appending to the main message leaves '
+            'the old explanatory bullet on screen. When the main message already repeats these causes, use '
+            'its copy_spans to remove the duplicate clauses (after can be empty) while keeping the complete '
+            'supported explanation once in its source slot. Preserve each distinct source qualification. '
+            'The corrected page still undergoes independent source review.')
     replacements, current = {}, decisions
     active = issues.keys()
+    def check_candidate(iid, page):
+        if len(page.message) > local_limits[iid] or not set(decisions[iid]['page']['companion_ids']) <= set(page.companion_ids):
+            return ['Keep the frozen numeric inputs and the current page character limit.']
+        return copy_contract_errors({iid: page}, packet, aliases, result).get(iid, [])
+
     for attempt in range(2):
-        revision = gateway.generate_structured(messages, RetainedPageRevisions, stage='presentation',
-                                               allow_repair=False, max_tokens=12000)
+        alternates, pending = None, {}
         try:
-            proposed = merge_page_revisions(revision, current, active)
+            revision = gateway.generate_structured(messages, schema, stage='presentation',
+                                                   allow_repair=False, max_tokens=12000)
+        except LLMStructuredOutputError as exc:
+            try:
+                revision = _recover_misplaced_edits(exc, active, schema, current=current, published=published, pages=pages)
+            except LLMStructuredOutputError:
+                if not preserve_numeric_inputs:
+                    raise
+                from .retained_revision_choices import mixed_revision_output
+                alternates = mixed_revision_output(exc, active)
+        else:
+            if (preserve_numeric_inputs and revision.pages.keys() & revision.edits.keys()
+                    and revision.pages.keys() | revision.edits.keys() == active):
+                alternates = revision.model_dump(mode='json')
+        if alternates is not None:
+            from .retained_revision_choices import choose_revision_candidates
+            revision, pending = choose_revision_candidates(
+                gateway, alternates, schema, current, active, published, issues, check_candidate)
+        try:
+            proposed = merge_page_revisions(revision, current, active, published_descriptions=published)
         except (CopySpanError, ValidationError) as exc:
             if attempt or not revision.edits:
                 raise
             errors = {iid: [str(exc)] for iid in active}
         else:
             replacements.update(proposed)
-            errors = copy_contract_errors(proposed, packet, aliases, result) if revision.edits else {}
+            errors = copy_contract_errors(proposed, packet, aliases, result) if revision.edits or published else {}
+            unchanged = _unchanged_copy_errors(revision, current, proposed)
+            from .published_description_edits import unresolved_published_comparisons
+            for iid in published.keys() & revision.edits.keys():
+                reasons = unresolved_published_comparisons(revision.edits[iid], proposed[iid], by_page[iid], issues[iid])
+                if reasons:
+                    errors.setdefault(iid, []).extend(reasons)
             if preserve_numeric_inputs:
                 for iid, page in proposed.items():
                     if len(page.message) > local_limits[iid]:
@@ -423,12 +549,22 @@ def _revise_page_batch(gateway, result, packet, aliases, draft, issues, *, earli
                         errors.setdefault(iid, []).append(
                             'Existing numeric inputs are frozen: retain every original companion_id '
                             f'{decisions[iid]["page"]["companion_ids"]}; add only eligible source rows if needed.')
+            for iid, reasons in unchanged.items():
+                if not attempt and revision.edits[iid].message_append:
+                    # The next writer sees the intact draft. Offending clauses
+                    # from its discarded appendix do not locate current spans.
+                    errors[iid] = reasons
+                else:
+                    errors.setdefault(iid, []).extend(reasons)
+            errors.update(pending)
             if not errors:
                 return replacements
             if attempt:
                 from .retained_page_sources import AuthoredPageErrors
                 raise AuthoredPageErrors(errors)
-            current = {iid: {**current[iid], 'page': page.model_dump(mode='json')}
+            # A no-op on a flagged span can come with a redundant, unapproved
+            # appendix. Let its writer work from the last intact draft.
+            current = {iid: current[iid] if iid in unchanged else {**current[iid], 'page': page.model_dump(mode='json')}
                        for iid, page in proposed.items()}
         # Span/length repair and deterministic binding share one correction.
         # Valid siblings stay frozen; neither attempt grants source approval.

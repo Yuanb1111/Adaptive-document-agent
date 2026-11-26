@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from adaptive_document_agent.agent.retained_page_revision import (
-    RetainedCopyEdit, apply_copy_edits, revise_retained_pages, copy_span_catalog,
+    RetainedCopyEdit, _recover_misplaced_edits, apply_copy_edits, revise_retained_pages, copy_span_catalog,
 )
 from adaptive_document_agent.agent.retained_page_sources import source_row_assurance, writer_context
 from adaptive_document_agent.agent.retained_selection_feedback import (
@@ -15,6 +15,9 @@ from adaptive_document_agent.agent.retained_selection_feedback import (
 )
 from adaptive_document_agent.agent import retained_analysis as retained
 from adaptive_document_agent.models import PipelineResult
+from adaptive_document_agent.services.llm.base import LLMResponse
+from adaptive_document_agent.services.llm.exceptions import LLMStructuredOutputError
+from adaptive_document_agent.services.llm.usage import LLMUsage
 from tests.test_retained_analysis_v216 import gateway
 from tests.test_retained_source_citations import fixture
 
@@ -27,6 +30,72 @@ def test_disjoint_edits_use_the_original_offsets_and_preserve_other_qualificatio
     assert final == ('The buffer is reported for FY2023. The adverse aging qualification remains. '
                      'Management monitors the reported balance.')
     assert apply_copy_edits(original, list(reversed(edits))) == final
+
+
+@pytest.mark.parametrize('problem', [
+    None, 'unknown', 'missing', 'collision', 'duplicate_json_key', 'truncated', 'invalid_edit', 'full_page',
+])
+def test_recover_only_complete_unambiguous_spilled_edit_map(problem):
+    a = {'title': [{'span_id': 'copy-0', 'after': 'Reported balance'}]}
+    b = {'message': [{'span_id': 'copy-1', 'after': 'Separate source qualification.'}]}
+    value = {'pages': {}, 'edits': {'finding-a': a}, 'finding-b': b}
+    if problem == 'unknown':
+        value['unknown'] = value.pop('finding-b')
+    elif problem == 'missing':
+        del value['finding-b']
+    elif problem == 'collision':
+        value['finding-a'] = b
+    elif problem == 'invalid_edit':
+        b['message'][0]['before'] = 'Another locator'
+    elif problem == 'full_page':
+        value['pages'] = {'another': {}}
+    raw = json.dumps(value)
+    if problem == 'duplicate_json_key':
+        raw = raw[:-1] + ', "finding-b": {}}'
+    failure = LLMStructuredOutputError('Invalid bounded response', response=LLMResponse(
+        text=raw, usage=LLMUsage(provider='mock', model='mock', finish_reason='length' if problem=='truncated' else 'stop')))
+    if problem:
+        with pytest.raises(LLMStructuredOutputError) as caught:
+            _recover_misplaced_edits(failure, {'finding-a', 'finding-b'})
+        assert caught.value is failure
+    else:
+        recovered = _recover_misplaced_edits(failure, {'finding-a', 'finding-b'})
+        assert recovered.pages == {}
+        assert {iid: e.model_dump(exclude_unset=True) for iid, e in recovered.edits.items()} == {
+            'finding-a': a, 'finding-b': b}
+
+
+def test_unchanged_flagged_span_retries_original_draft_with_its_question():
+    result, context, selection = fixture()
+    iid = selection.ordered_insight_ids[0]
+    packet, aliases = writer_context(context)
+    packet['source_row_assurance'] = source_row_assurance(result, aliases)
+    original = selection.decisions[0].page.message
+    repeated = {'before': original, 'after': original}
+    qualification = 'This provisional addition repeats the source context.'
+    fixed = 'The source reports the revenue balance.'
+    llm = gateway([{'edits': {iid: {'message': [repeated], 'message_append': [qualification]}}},
+                   {'edits': {iid: {'message': [{'before': original, 'after': fixed}]}}}])
+    issue = 'Clarify the reported balance.'
+    revised = revise_retained_pages(llm, result, packet, aliases, selection.model_dump(), {iid: [issue]})
+    assert revised[iid].message == fixed
+    correction = str(llm.client.calls[1])
+    assert 'unchanged' in correction and issue in correction and qualification not in correction
+    assert selection.decisions[0].page.message == original
+
+
+def test_echoed_title_does_not_discard_a_genuine_message_correction():
+    result, context, selection = fixture()
+    iid = selection.ordered_insight_ids[0]
+    packet, aliases = writer_context(context)
+    packet['source_row_assurance'] = source_row_assurance(result, aliases)
+    original = selection.decisions[0].page
+    changed = 'The source reports the revenue balance.'
+    llm = gateway([{'edits': {iid: {'title': [{'before': original.title, 'after': original.title}],
+                                   'message': [{'before': original.message, 'after': changed}]}}}])
+    revised = revise_retained_pages(llm, result, packet, aliases, selection.model_dump(),
+                                    {iid: ['Clarify the reported balance.']})
+    assert revised[iid].message == changed and len(llm.client.calls) == 1
 
 
 @pytest.mark.parametrize('before', ['Missing passage.', 'Repeated.'])

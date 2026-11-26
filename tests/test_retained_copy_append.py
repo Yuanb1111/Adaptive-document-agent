@@ -42,3 +42,25 @@ def test_multisentence_append_uses_the_complete_page_limit():
     patch = RetainedPageRevisions(edits={'finding': dict(message_append=[paragraph])})
     page = merge_page_revisions(patch, original(), {'finding'})['finding']
     assert page.message == original()['finding']['page']['message'] + ' ' + paragraph
+
+
+def test_published_description_cannot_edit_unoffered_slot_or_replace_its_proof():
+    from adaptive_document_agent.agent.retained_page_revision import PublishedPageRevisions, CopySpanError
+    decisions = original()
+    context = {'scope': 'quality', 'description': 'reports a qualification',
+               'quote': {'page': 4, 'text': 'The source identifies a qualification.'}}
+    decisions['finding']['page']['source_context'] = [context]
+    published = {'finding': {'context-0': 'For quality, the source reports a qualification.'}}
+    patch = PublishedPageRevisions(edits={'finding': {
+        'source_context_descriptions': {'context-1': 'reports a different qualification'}}})
+    with pytest.raises(CopySpanError, match='Unknown published source description'):
+        merge_page_revisions(patch, decisions, {'finding'}, published_descriptions=published)
+    patch = PublishedPageRevisions(pages={'finding': {**decisions['finding']['page'], 'source_context': []}})
+    with pytest.raises(CopySpanError, match='scope and proof are fixed'):
+        merge_page_revisions(patch, decisions, {'finding'}, published_descriptions=published)
+    kept = {**context, 'description': 'reports a more specific qualification'}
+    patch = PublishedPageRevisions(pages={'finding': {**decisions['finding']['page'], 'source_context': [kept]}})
+    page = merge_page_revisions(patch, decisions, {'finding'}, published_descriptions=published)['finding']
+    assert page.source_context[0].description == kept['description']
+    with pytest.raises(ValidationError):
+        PublishedPageRevisions(edits={'finding': {'source_context_descriptions': {'context-0': 'x' * 701}}})

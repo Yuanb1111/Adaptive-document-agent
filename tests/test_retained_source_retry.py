@@ -78,6 +78,57 @@ def test_local_source_fix_cannot_introduce_ineligible_companion_rows(monkeypatch
         repair_retained_source_copy(None, previous.model_copy(deep=True), previous)
 
 
+def test_failed_writer_transport_stays_out_of_source_questions():
+    import json
+    from adaptive_document_agent.utils.record_encoding import decode_records
+    previous, iid = rejected_checkpoint()
+    previous.failure_details.update(error_type='LLMStructuredOutputError', message='Bounded response failed schema validation')
+    current = previous.model_copy(deep=True)
+    mock = gateway([dict(edits={iid: dict(message=[dict(span_id='copy-0', after='The source reports revenue.')])}),
+                    dict(edits={iid: dict(message=[dict(span_id='copy-0', after='Revenue is reported.')])})])
+    repair_retained_source_copy(mock, current, previous)
+    body = mock.client.calls[0][-1]['content'].split('\n', 1)[1].rsplit('\n', 1)[0]
+    assert decode_records(json.loads(body))['earlier_review_questions'][iid] == ['Original-page review failed']
+    audit = next(w for w in reversed(current.validation_warnings) if w.code == 'retained_selection_retry_feedback')
+    assert json.loads(audit.message)['rejected']['diagnostic'] == previous.failure_details['message']
+
+
+def test_fix_rewrites_published_source_bullet_and_removes_repeated_main_copy():
+    import json
+    from adaptive_document_agent.agent.reported_source_context import QualifiedSourceCopy
+    from adaptive_document_agent.utils.record_encoding import decode_records
+    result, _, selection = fixture()
+    iid = selection.ordered_insight_ids[0]
+    original = selection.decisions[0].page
+    repeated = 'The source describes payment delays.'
+    original.message += ' ' + repeated
+    proof = 'Management identified payment delays in the export business.'
+    result.document.pages[0].text += '\n' + proof
+    item = QualifiedSourceCopy(scope='export business', description='describes payment delays',
+                                 quote={'page': 234, 'text': proof})
+    original.source_context.append(item)
+    retained.select_retained_analysis(gateway([selection.model_dump(), dict(
+        accepted=True, reason='The selected finding and proof match the source.')]), result)
+    result.presentation_plan = retained.compile_retained_analysis(result)
+    slide = next(s for s in result.presentation_plan.slides if s.slide_type == 'analysis')
+    with pytest.raises(ValueError, match='evidence review rejected'):
+        review_retained_analysis(gateway([dict(verdicts=[dict(slide_id=slide.id, accepted=False,
+            reason='Name the speaker in the explanatory bullet and remove the duplicate in the main text.')],
+            omissions_accepted=True, omission_reason='Selection accepted.')]), result)
+    before = slide.model_copy(deep=True)
+    revised = 'reports that management identified payment delays'
+    llm = gateway([dict(edits={iid: dict(message=[dict(before=repeated, after='')],
+                                        source_context_descriptions={'context-0': revised})})])
+    repair_retained_source_copy(llm, result)
+    packet = decode_records(json.loads(llm.client.calls[0][-1]['content'].split('\n',1)[1].rsplit('\n',1)[0]))
+    assert packet['pages_to_correct'][iid]['published_source_descriptions'] == {'context-0': before.bullets[1]}
+    assert repeated not in slide.message and revised in slide.bullets[1] and len(slide.bullets) == 2
+    assert slide.bullet_observation_ids == before.bullet_observation_ids and slide.source_pages == before.source_pages
+    stored = retained.selected_record(result)['selection']['decisions'][0]['page']['source_context'][0]
+    assert stored['description'] == revised and stored['quote'] == {'page': 234, 'text': proof}
+    assert stored['scope'] == item.scope and not review_complete(result)
+
+
 def test_native_preparation_preserves_exact_source_authored_qualifications_without_approving_them():
     from adaptive_document_agent.services.presentation_claim_evidence import prepare_presentation_claims
     from adaptive_document_agent.services.pipeline_completion import require_topic_coverage

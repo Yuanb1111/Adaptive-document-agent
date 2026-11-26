@@ -139,6 +139,10 @@ def retained_brief_reporting(previous, current, gateway, requested_focus=None, s
             from adaptive_document_agent.services.llm.exceptions import LLMResponseError
             try:
                 if verdict.omissions_accepted:
+                    # The rebuilt shell has no native pagination trace. Measure its
+                    # actual slides before the writer applies single-page copy limits.
+                    from .presentation_budget_refinement import measure
+                    measure(candidate)
                     repair_retained_source_copy(gateway, candidate, previous)
                 else:
                     from .retained_omission_repair import repair_retained_omission

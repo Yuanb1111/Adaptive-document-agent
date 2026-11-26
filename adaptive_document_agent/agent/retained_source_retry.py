@@ -32,9 +32,10 @@ def repair_retained_source_copy(gateway, result, previous=None):
     selection = RetainedAnalysisSelection.model_validate(record['selection'])
     linked = findings(result, allow_new_copy=True)
     from .reported_source_context import (reported_source_components,observation_context_labels,
-                                          source_context_paragraphs,source_context_scope_prefixes)
+        source_context_paragraphs,source_context_scope_prefixes,qualified_source_statement)
     from adaptive_document_agent.services.calendar_claims import bound_period_dates,literal_calendar_dates
     original_parts={}
+    published_descriptions = {}
     for decision in selection.decisions:
         if decision.decision!='include' or decision.page is None:
             continue
@@ -48,16 +49,27 @@ def repair_retained_source_copy(gateway, result, previous=None):
             declared=decision.page.source_context)
         main,parts=original_parts[decision.insight_id]
         scopes=source_context_scope_prefixes(decision.page.source_context,[*periods,*dates])
-        original_parts[decision.insight_id]=(main,source_context_paragraphs(parts,scope_prefixes=scopes))
+        rendered = {}
+        original_parts[decision.insight_id]=(main,source_context_paragraphs(
+            parts,scope_prefixes=scopes,rendered_statements=rendered))
+        if decision.insight_id in issues and decision.page.source_context:
+            published_descriptions[decision.insight_id] = {
+                f'context-{i}': rendered[bound_period_dates(qualified_source_statement(item), [*periods, *dates])]
+                for i, item in enumerate(decision.page.source_context)}
     draft = selection.model_dump(mode='json')
     for decision in draft['decisions']:
         if decision['page']:
             decision['page']['companion_ids'] = [reverse.get(k, k) for k in decision['page']['companion_ids']]
     previous_contract = feedback['rejected'].get('diagnostic', '')
+    failure = (previous if previous is not None else result).failure_details
+    if failure.get('error_type') in {'LLMStructuredOutputError', 'LLMTransportError'}:
+        # The attempt diagnostic remains in feedback. It is not a new
+        # source objection against every page on a resumed writer request.
+        previous_contract = 'Original-page review failed'
     revised = revise_retained_pages(gateway, result, packet, aliases, draft, issues,
                                    earlier_issues={iid: [previous_contract] for iid in issues}
                                    if previous_contract else None,
-                                   preserve_numeric_inputs=True)
+                                   preserve_numeric_inputs=True, published_descriptions=published_descriptions)
     for decision in selection.decisions:
         if decision.insight_id not in revised:
             continue
