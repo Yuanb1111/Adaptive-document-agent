@@ -35,6 +35,40 @@ def _text(slide):
     return "\n".join(shape.text for shape in slide.shapes if shape.has_text_frame)
 
 
+def test_legacy_overview_title_uses_legal_name_printed_on_both_title_pages():
+    from adaptive_document_agent.services.company_evidence import recover_cover_identity
+    alias = "An overview of the sensor and automation company"
+    result = _resolved_result(alias)
+    result.profile.overview_title = alias
+    result.presentation_plan.company.summary_review = None
+    result.document.pages[0].text = "N O R T H S T A R LTD.(A company incorporated under local law)"
+    result.document.pages.insert(1, DocumentPage(page_number=2, text=(
+        "IMPORTANT\nNORTHSTAR LTD.\n(A company incorporated under local law)\nSponsors\nAnother Bank Limited")))
+    recover_cover_identity(result)
+    company = result.presentation_plan.company
+    assert company.name == "NORTHSTAR LTD."
+    assert company.field_source_pages['name'] == [1, 2]
+    assert result.profile.overview_title == alias
+
+
+@pytest.mark.parametrize("cover,title_page", [
+    ("NORTHSTAR LTD. Holdings", "NORTHSTAR LTD.\n(A company incorporated under local law)"),
+    ("NORTHSTAR LTD.", "NORTHSTAR LTD.\nBookrunner"),
+    ("NORTHSTAR LTD.\nHARBOR LIMITED", "NORTHSTAR LTD.\nIncorporated in A\nHARBOR LIMITED\nIncorporated in B"),
+    ("Original title", "Original title\nNORTHSTAR LTD.\n(A company incorporated under local law)"),
+])
+def test_legacy_title_identity_recovery_requires_unambiguous_issuer_evidence(cover, title_page):
+    from adaptive_document_agent.services.company_evidence import recover_cover_identity
+    result = _resolved_result("Original title")
+    result.profile.overview_title = "Original title"
+    result.presentation_plan.company.summary_review = None
+    result.document.pages[0].text = cover
+    result.document.pages.insert(1, DocumentPage(page_number=2, text=title_page))
+    before = result.presentation_plan.company.model_dump()
+    recover_cover_identity(result)
+    assert result.presentation_plan.company.model_dump() == before
+
+
 @pytest.mark.parametrize("name,topic", [
     ("Northstar Instruments Limited", "Equipment Operations Review"),
     ("Harbor Software Corporation", "Platform Services Annual Review"),

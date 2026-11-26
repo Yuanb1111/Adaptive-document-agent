@@ -83,6 +83,29 @@ def test_nonmonetary_intermediate_observation_keeps_its_exact_raw_precision():
     assert records == result.observations
 
 
+def test_native_closing_table_preserves_the_reported_percentage_denominator():
+    result, plan = _fixture((15000, 35000))
+    shares = []
+    for source, value in zip(result.observations, (12.2, 18.1)):
+        source.evidence[0].column_label = 'Amount'
+        share = source.model_copy(deep=True, update={
+            'id': source.id + '-share', 'metric_original': 'Available resources: % of assets',
+            'metric_canonical': 'Available resources', 'dimensions': {'column_role': 'percentage'},
+            'value': value, 'raw_value': str(value), 'raw_unit': '%', 'unit': 'percentage',
+            'unit_scale': 1, 'currency': None,
+        })
+        share.evidence[0].column_label = '% of assets'
+        shares.append(share)
+    result.observations.extend(shares)
+    plan.observation_ids.extend(point.id for point in shares)
+    plan.bullet_observation_ids = [list(plan.observation_ids)]
+
+    slides = render_closing(blank_deck(), result, plan)
+    labels = {shape.table.cell(0, 0).text: shape.table.cell(1, 0).text for shape in _tables(slides)}
+    assert labels == {'Reported values (US$ million)': 'Available resources',
+                      'Reported values (%)': 'Available resources: % of assets'}
+
+
 def test_long_selected_series_continues_all_periods_without_sampling_or_alignment():
     result, plan = _fixture(tuple(range(12, 24)), monetary=False)
     tables, _ = closing_evidence(result, plan)

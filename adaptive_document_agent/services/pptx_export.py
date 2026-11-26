@@ -197,7 +197,9 @@ def _compose_presentation(result, template_path=None, *, artwork=None, source_pd
     except ImportError as exc:  # pragma: no cover - deployment configuration failure
         raise RuntimeError("PowerPoint export requires python-pptx.") from exc
 
+    from .company_evidence import recover_cover_identity
     from .source_scope_completeness import prepare_cached_source_scopes
+    recover_cover_identity(result)
     prepare_cached_source_scopes(result)
     from .presentation_claim_evidence import prepare_presentation_claims
     prepare_presentation_claims(result)

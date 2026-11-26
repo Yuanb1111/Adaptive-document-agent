@@ -1,5 +1,6 @@
 """One output-language decision shared by authors, localization and export."""
 from dataclasses import dataclass
+import re
 
 
 def language_key(value: str) -> str:
@@ -10,6 +11,15 @@ def language_key(value: str) -> str:
         '简体中文': 'chinese', 'simplified chinese': 'chinese',
     }
     return aliases.get(value, value)
+
+
+def primary_display_language(value: str) -> str:
+    """Read the prose language separately from notes about names or literal quotations."""
+    primary = re.split(r'[(（]|\s+(?:with|including)\s+', value, maxsplit=1, flags=re.I)[0]
+    key = language_key(primary)
+    if re.search(r'中文|\bchinese\b|^zh(?:-|$)', key):
+        return 'chinese'
+    return key
 
 
 @dataclass(frozen=True)

@@ -2,11 +2,12 @@
 import re
 
 from .display_copy_tokens import display_text
+from .presentation_language import primary_display_language
 
 
 def protect_quantities(text: str, language: str) -> tuple[str, dict[str, str]]:
     from .executive_brief import _MONEY_QUANTITY
-    chinese = bool(re.search(r'(?i)中文|chinese|^zh(?:-|$)', language))
+    primary = primary_display_language(language)
     atoms = {}
     def replace(match):
         literal = match[0]
@@ -18,7 +19,7 @@ def protect_quantities(text: str, language: str) -> tuple[str, dict[str, str]]:
         if token in text:
             raise ValueError('Source copy collides with a protected translation token')
         value = literal
-        if chinese:
+        if primary == 'chinese':
             from .brief_table_evidence import canonical_quantity
             currency, _, unit = canonical_quantity(match['prefix'] or match['suffix'], match['value'], match['unit'])
             unit = {'million': '百万元', 'thousand': '千元', 'billion': '十亿元',
@@ -30,7 +31,7 @@ def protect_quantities(text: str, language: str) -> tuple[str, dict[str, str]]:
                 # source sign/parentheses. No currency or scale conversion.
                 value = (currency + (match['open'] or '') + (match['sign'] or '')
                          + match['value'] + unit + (')' if match['open'] else ''))
-        elif language.strip().casefold() in {'english', 'en', 'en-us', 'en-gb', '英文'}:
+        elif primary == 'english':
             from .brief_table_evidence import canonical_quantity
             currency, _, unit = canonical_quantity(match['prefix'] or match['suffix'], match['value'], match['unit'])
             currency = {'rmb': 'RMB', 'usd': 'USD', 'us$': 'USD', 'hkd': 'HKD',

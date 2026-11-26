@@ -9,6 +9,7 @@ from adaptive_document_agent.document_model import display_metric_name
 from adaptive_document_agent.document_model.series import metric_identity_key
 from adaptive_document_agent.document_model.period_semantic_validator import format_observation_period
 from adaptive_document_agent.document_model.metric_semantic_classifier import classify_metric
+from adaptive_document_agent.extraction.column_roles import explicit_percentage
 from adaptive_document_agent.validation.presentation_provenance import insight_inputs
 from .presentation_evidence import evidence_groups
 from .single_metric_analysis import single_metric_analysis
@@ -41,9 +42,7 @@ def closing_evidence(result, plan):
                      if series else [[o] for o in group])
             for pair in pairs:
                 periods = tuple(format_observation_period(o) or "Period unspecified" for o in pair)
-                source_labels = {e.row_label.strip() for o in pair for e in o.evidence if e.row_label and e.row_label.strip()}
-                # A literal source row is more precise than a cached parent label.
-                label = next(iter(source_labels)) if len(source_labels) == 1 else display_metric_name(pair[0])
+                label = _table_metric_label(pair)
                 if pair[0].category_dimensions:
                     qualifiers = [value for value in pair[0].category_dimensions.values()
                                   if value.strip().casefold() != label.casefold()]
@@ -56,6 +55,30 @@ def closing_evidence(result, plan):
                 pages = sorted({e.page for o in pair for e in o.evidence})
                 tables[(periods, unit)].append((label, values, pages))
     return list(tables.items()), records
+
+
+def _table_metric_label(points) -> str:
+    metric = display_metric_name(points[0])
+    evidence = [e for point in points for e in point.evidence if e.row_label and e.row_label.strip()]
+    rows = {e.row_label.strip() for e in evidence}
+    if len(rows) != 1:
+        return metric
+    row = rows.pop()
+    columns = {(e.column_label or '').strip() for e in evidence}
+    if len(columns) != 1:
+        return row
+    column = columns.pop()
+    if not column:
+        return row
+    # In an amount/share grid the row identifies the subject and the column
+    # identifies the measure. Only a retained header can qualify the row.
+    qualified = (f'{row}: {column}', f'{row} {column}', f'{row} ({column})')
+    if metric.casefold() in {label.casefold() for label in qualified}:
+        return metric
+    if (all(point.dimensions.get('column_role') == 'percentage' for point in points)
+            and explicit_percentage(column) and column.casefold() not in row.casefold()):
+        return qualified[0]
+    return row
 
 
 def _exact_closing_value(item, semantic) -> str:

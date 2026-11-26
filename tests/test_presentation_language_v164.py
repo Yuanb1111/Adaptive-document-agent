@@ -225,6 +225,27 @@ def test_english_quantity_translation_preserves_coefficient_and_scale():
     assert not translation_errors(source, translated)
 
 
+@pytest.mark.parametrize('policy', ['English (with Chinese names)', 'en-GB with Chinese names'])
+def test_english_report_with_chinese_names_keeps_english_monetary_units(policy):
+    from adaptive_document_agent.services.report_language import requested_language_errors
+    from adaptive_document_agent.services.translation_atoms import protect_quantities, restore_quantities
+    copy = 'Revenue was RMB276,562 thousand.'
+    masked, atoms = protect_quantities(copy, policy)
+    restored = restore_quantities(masked, atoms)
+    assert restored == 'Revenue was RMB 276,562 thousand.'
+    assert not requested_language_errors(restored, policy)
+
+
+def test_chinese_report_with_english_names_still_uses_chinese_monetary_units():
+    from adaptive_document_agent.services.report_language import requested_language_errors
+    from adaptive_document_agent.services.translation_atoms import protect_quantities, restore_quantities
+    policy = 'Traditional Chinese (with English names)'
+    copy = 'RMB276,562 thousand'
+    masked, atoms = protect_quantities(copy, policy)
+    assert restore_quantities(masked, atoms) == '人民币276,562千元'
+    assert requested_language_errors(copy, policy)
+
+
 def test_physical_speed_is_not_a_monetary_million_suffix():
     from adaptive_document_agent.services.report_language import translation_errors
     assert not translation_errors('速度1米/秒，标准0.25米/秒。', 'Speed 1 m/s; standard 0.25 m/s.')

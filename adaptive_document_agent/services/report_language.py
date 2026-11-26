@@ -4,6 +4,7 @@ import re
 
 from .text_capacity import wrap_copy
 from .display_copy_tokens import display_text, copy_tokens
+from .presentation_language import primary_display_language
 
 
 def original_language(language):
@@ -124,7 +125,7 @@ def translation_errors(source, translated):
 
 def requested_language_errors(translated, language):
     """Unambiguous monetary unit words are prose, not retained proper names."""
-    if not re.search(r'(?i)中文|chinese|^zh(?:-|$)', language):
+    if primary_display_language(language) != 'chinese':
         return []
     from .executive_brief import _MONEY_QUANTITY
     if any((match['prefix'] or match['suffix']) and
@@ -140,7 +141,7 @@ def apply_report_language(presentation, result):
         return
     mapping = {display_text(k): display_text(v) for k,v in requirements.copy_translations.items()}
     from .presentation_language import resolve_language
-    chinese = resolve_language(result.profile).language == 'chinese'
+    chinese = primary_display_language(resolve_language(result.profile).language) == 'chinese'
     checked_values = set(mapping.values())
     # Native chart wrapping may happen after inventory capture. Rebind only
     # whitespace-equivalent, unambiguous strings; never use fuzzy matching.
@@ -212,7 +213,7 @@ def localize_source_wrappers(presentation, result):
     """Translate standard UI provenance labels; literal source annotations stay intact."""
     requirements = result.profile.report_requirements
     if not requirements or not any(r.kind=='output_language' and r.resolution=='resolved'
-        and r.language_scope in {'body','all'} and re.search(r'(?i)中文|chinese|^zh(?:-|$)',r.language)
+        and r.language_scope in {'body','all'} and primary_display_language(r.language) == 'chinese'
         for r in requirements.items):
         return
     for slide in presentation.slides:
